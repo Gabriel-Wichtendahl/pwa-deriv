@@ -7,8 +7,7 @@ let soundEnabled = false;
 let signalCount = 0;
 
 let buffer = {};
-let fired = {};
-let lastMinuteSignal = {};
+let evaluatedMinute = null;
 
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
@@ -44,58 +43,65 @@ function connect() {
 
     if (data.tick) processTick(data.tick);
   };
-
-  ws.onerror = () => {
-    statusEl.textContent = "❌ Error de conexión";
-  };
 }
 
 function subscribe(symbol) {
-  ws.send(JSON.stringify({
-    ticks: symbol,
-    subscribe: 1
-  }));
+  ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
 }
 
 function processTick(tick) {
   const symbol = tick.symbol;
-  const t = Math.floor(tick.epoch);
-  const minute = Math.floor(t / 60);
-  const sec = t % 60;
+  const epoch = Math.floor(tick.epoch);
+  const minute = Math.floor(epoch / 60);
+  const sec = epoch % 60;
 
-  if (!buffer[symbol]) buffer[symbol] = {};
-  if (!buffer[symbol][minute]) buffer[symbol][minute] = [];
+  if (!buffer[minute]) buffer[minute] = {};
+  if (!buffer[minute][symbol]) buffer[minute][symbol] = [];
 
-  buffer[symbol][minute].push(tick.quote);
+  buffer[minute][symbol].push(tick.quote);
 
-  const key = symbol + "_" + minute;
-
-  if (sec >= 45 && sec <= 46 && !fired[key]) {
-    fired[key] = true;
-    analyze(symbol, minute);
+  // 🔥 Evaluamos SOLO una vez por minuto en seg 45
+  if (sec === 45 && evaluatedMinute !== minute) {
+    evaluatedMinute = minute;
+    evaluateMinute(minute);
   }
 }
 
-function analyze(symbol, minute) {
-  if (lastMinuteSignal[symbol] === minute) return;
+function evaluateMinute(minute) {
+  const data = buffer[minute];
+  if (!data) return;
 
-  const prices = buffer[symbol][minute];
-  if (!prices || prices.length < 5) return;
+  let best = null;
 
-  const move = prices[prices.length - 1] - prices[0];
-  if (Math.abs(move) < 0.12) return;
+  for (const symbol of Object.keys(data)) {
+    const prices = data[symbol];
+    if (prices.length < 5) continue;
 
-  const direction = move > 0 ? "CALL" : "PUT";
-  lastMinuteSignal[symbol] = minute;
+    const move = prices[prices.length - 1] - prices[0];
+    const score = Math.abs(move);
 
+    if (!best || score > best.score) {
+      best = {
+        symbol,
+        move,
+        score
+      };
+    }
+  }
+
+  if (!best || best.score < 0.12) return;
+
+  const direction = best.move > 0 ? "CALL" : "PUT";
+  showSignal(minute, best.symbol, direction);
+}
+
+function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
-  showSignal(symbol, minute, direction);
-}
-
-function showSignal(symbol, minute, direction) {
-  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+  const time = new Date(minute * 60000)
+    .toISOString()
+    .substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
@@ -109,8 +115,8 @@ function showSignal(symbol, minute, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       btn.disabled = true;
-      const c = row.querySelector("input").value || "";
-      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${c}\n`;
+      const comment = row.querySelector("input").value || "";
+      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
     };
   });
 
