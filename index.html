@@ -1,23 +1,32 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Deriv Señales</title>
-  <link rel="stylesheet" href="style.css" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0e0e0e">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <h2 id="status">Conectando…</h2>
+
 <button id="soundBtn">🔊 Activar sonido</button>
 <div id="counter">Señales: 0</div>
 
 <div id="signals"></div>
 
 <h3>Feedback</h3>
-<textarea id="feedback"></textarea>
+<textarea id="feedback" placeholder="Se copia solo…"></textarea>
 <button id="copyFeedback">Copiar feedback</button>
 
-<audio id="alertSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
+<audio id="alertSound" preload="auto">
+  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg">
+</audio>
 
 <script src="app.js"></script>
 </body>
