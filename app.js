@@ -1,13 +1,12 @@
-const APP_ID = 1089;
-const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 let ws;
 let soundEnabled = false;
 let signalCount = 0;
 
-let buffer = {};
-let evaluatedMinute = null;
+let minuteData = {};
+let lastEvaluatedMinute = null;
 
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
@@ -30,50 +29,43 @@ function connect() {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
-    ws.send(JSON.stringify({ authorize: "anonymous" }));
+    statusEl.textContent = "Conectado – Analizando";
+    SYMBOLS.forEach(sym => {
+      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
+    });
   };
 
   ws.onmessage = e => {
     const data = JSON.parse(e.data);
-
-    if (data.msg_type === "authorize") {
-      statusEl.textContent = "Conectado – Analizando en vivo";
-      SYMBOLS.forEach(subscribe);
-    }
-
-    if (data.tick) processTick(data.tick);
+    if (data.tick) onTick(data.tick);
   };
 }
 
-function subscribe(symbol) {
-  ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
-}
-
-function processTick(tick) {
-  const symbol = tick.symbol;
+function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
   const sec = epoch % 60;
+  const symbol = tick.symbol;
 
-  if (!buffer[minute]) buffer[minute] = {};
-  if (!buffer[minute][symbol]) buffer[minute][symbol] = [];
+  if (!minuteData[minute]) minuteData[minute] = {};
+  if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
 
-  buffer[minute][symbol].push(tick.quote);
+  minuteData[minute][symbol].push(tick.quote);
 
-  // 🔥 Evaluamos SOLO una vez por minuto en seg 45
-  if (sec === 45 && evaluatedMinute !== minute) {
-    evaluatedMinute = minute;
+  // 👉 evaluamos SOLO UNA VEZ, después del segundo 45
+  if (sec >= 45 && lastEvaluatedMinute !== minute) {
+    lastEvaluatedMinute = minute;
     evaluateMinute(minute);
   }
 }
 
 function evaluateMinute(minute) {
-  const data = buffer[minute];
+  const data = minuteData[minute];
   if (!data) return;
 
   let best = null;
 
-  for (const symbol of Object.keys(data)) {
+  for (const symbol in data) {
     const prices = data[symbol];
     if (prices.length < 5) continue;
 
@@ -81,15 +73,12 @@ function evaluateMinute(minute) {
     const score = Math.abs(move);
 
     if (!best || score > best.score) {
-      best = {
-        symbol,
-        move,
-        score
-      };
+      best = { symbol, move, score };
     }
   }
 
-  if (!best || best.score < 0.12) return;
+  // umbral BAJO para que SI salgan
+  if (!best || best.score < 0.02) return;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   showSignal(minute, best.symbol, direction);
@@ -114,9 +103,9 @@ function showSignal(minute, symbol, direction) {
 
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
-      btn.disabled = true;
       const comment = row.querySelector("input").value || "";
       feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+      btn.disabled = true;
     };
   });
 
@@ -129,5 +118,3 @@ function showSignal(minute, symbol, direction) {
 }
 
 connect();
-
-
