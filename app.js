@@ -1,6 +1,13 @@
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
+const NORMALIZATION = {
+  R_10: 1,
+  R_25: 2,
+  R_50: 3,
+  R_75: 4
+};
+
 let ws;
 let soundEnabled = false;
 let signalCount = 0;
@@ -52,7 +59,7 @@ function onTick(tick) {
 
   minuteData[minute][symbol].push(tick.quote);
 
-  // 👉 evaluamos SOLO UNA VEZ, después del segundo 45
+  // Evaluar una sola vez por minuto, desde seg 45
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     evaluateMinute(minute);
@@ -70,15 +77,20 @@ function evaluateMinute(minute) {
     if (prices.length < 5) continue;
 
     const move = prices[prices.length - 1] - prices[0];
-    const score = Math.abs(move);
+    const rawScore = Math.abs(move);
+    const normScore = rawScore / (NORMALIZATION[symbol] || 1);
 
-    if (!best || score > best.score) {
-      best = { symbol, move, score };
+    if (!best || normScore > best.score) {
+      best = {
+        symbol,
+        move,
+        score: normScore
+      };
     }
   }
 
-  // umbral BAJO para que SI salgan
-  if (!best || best.score < 0.02) return;
+  // umbral bajo para no matar señales
+  if (!best || best.score < 0.015) return;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   showSignal(minute, best.symbol, direction);
