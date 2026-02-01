@@ -1,39 +1,47 @@
-// ==============================
-// CONFIG
-// ==============================
 const APP_ID = 1089;
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 let socket;
+let soundEnabled = false;
+let lastSignalMinute = {}; // 1 señal por símbolo por minuto
+let signalCount = 0;
 
-// ==============================
-// ESTADO
-// ==============================
-let minuteBuckets = {};      // ticks por símbolo y minuto
-let bestCandidate = {};      // mejor señal por símbolo y minuto
-let emitted = {};            // evitar duplicados
+const statusEl = document.getElementById("status");
+const signalsEl = document.getElementById("signals");
+const counterEl = document.getElementById("counter");
+const feedbackEl = document.getElementById("feedback");
+const sound = document.getElementById("alertSound");
 
-// ==============================
-// CONEXIÓN
-// ==============================
+document.getElementById("soundBtn").onclick = () => {
+  sound.play().then(() => {
+    soundEnabled = true;
+    alert("🔊 Sonido activado");
+  });
+};
+
+document.getElementById("copyFeedback").onclick = () => {
+  navigator.clipboard.writeText(feedbackEl.value);
+};
+
 function connect() {
   socket = new WebSocket(WS_URL);
 
   socket.onopen = () => {
-    setStatus("Conectado a Deriv - Analizando en vivo");
-    SYMBOLS.forEach(subscribe);
+    statusEl.textContent = "Conectado - Analizando en vivo";
+    SYMBOLS.forEach(s => subscribe(s));
   };
 
-  socket.onmessage = (e) => {
+  socket.onerror = () => {
+    statusEl.textContent = "❌ Error de conexión";
+  };
+
+  socket.onmessage = e => {
     const data = JSON.parse(e.data);
-    if (data.tick) handleTick(data.tick);
+    if (data.tick) processTick(data.tick);
   };
 }
 
-// ==============================
-// SUBSCRIBE
-// ==============================
 function subscribe(symbol) {
   socket.send(JSON.stringify({
     ticks: symbol,
@@ -41,94 +49,71 @@ function subscribe(symbol) {
   }));
 }
 
-// ==============================
-// TICKS
-// ==============================
-function handleTick(tick) {
+let buffer = {};
+
+function processTick(tick) {
   const symbol = tick.symbol;
-  const price = tick.quote;
   const time = Math.floor(tick.epoch);
-  const minuteKey = Math.floor(time / 60);
-  const second = time % 60;
+  const minute = Math.floor(time / 60);
+  const sec = time % 60;
 
-  const key = `${symbol}_${minuteKey}`;
+  if (!buffer[symbol]) buffer[symbol] = {};
+  if (!buffer[symbol][minute]) buffer[symbol][minute] = [];
 
-  if (!minuteBuckets[key]) minuteBuckets[key] = [];
-  minuteBuckets[key].push({ second, price });
+  buffer[symbol][minute].push({ sec, price: tick.quote });
 
-  // SOLO ANALIZAMOS HASTA SEG 45
-  if (second === 45) {
-    analyzeMinute(symbol, minuteKey);
-    emitIfExists(symbol, minuteKey);
-  }
+  // ANALISIS EXACTO EN SEGUNDO 45
+  if (sec === 45) analyze(symbol, minute);
 }
 
-// ==============================
-// ANALISIS
-// ==============================
-function analyzeMinute(symbol, minuteKey) {
-  const key = `${symbol}_${minuteKey}`;
-  const ticks = minuteBuckets[key];
-  if (!ticks || ticks.length < 10) return;
+function analyze(symbol, minute) {
+  if (lastSignalMinute[symbol] === minute) return;
 
-  const window = ticks.filter(t => t.second <= 45);
-  if (window.length < 10) return;
+  const data = buffer[symbol][minute];
+  if (!data || data.length < 10) return;
 
-  const start = window[0].price;
-  const end = window[window.length - 1].price;
-  const dir = end > start ? "CALL" : end < start ? "PUT" : null;
-  if (!dir) return;
+  const p0 = data[0].price;
+  const p45 = data[data.length - 1].price;
 
-  // SCORE DE FLUIR
-  let advance = Math.abs(end - start);
-  let retrace = 0;
+  const move = p45 - p0;
+  if (Math.abs(move) < 0.3) return; // sin tendencia clara
 
-  for (let i = 1; i < window.length; i++) {
-    const delta = window[i].price - window[i - 1].price;
-    if ((dir === "CALL" && delta < 0) || (dir === "PUT" && delta > 0)) {
-      retrace += Math.abs(delta);
-    }
-  }
+  const direction = move > 0 ? "CALL" : "PUT";
 
-  const score = advance - retrace;
+  lastSignalMinute[symbol] = minute;
+  signalCount++;
+  counterEl.textContent = `Señales: ${signalCount}`;
 
-  if (!bestCandidate[key] || score > bestCandidate[key].score) {
-    bestCandidate[key] = {
-      symbol,
-      minuteKey,
-      direction: dir,
-      score
+  showSignal(symbol, minute, direction);
+}
+
+function showSignal(symbol, minute, direction) {
+  const d = new Date(minute * 60000);
+  const time = d.toISOString().substr(11, 8) + " UTC";
+
+  const row = document.createElement("div");
+  row.className = "row";
+  row.innerHTML = `
+    ${time} | ${symbol} | ${direction}
+    <button data-v="like">👍</button>
+    <button data-v="dislike">👎</button>
+    <input placeholder="comentario">
+  `;
+
+  row.querySelectorAll("button").forEach(btn => {
+    btn.onclick = () => {
+      btn.disabled = true;
+      const comment = row.querySelector("input").value || "";
+      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
     };
-  }
-}
-
-// ==============================
-// EMITIR SOLO UNA
-// ==============================
-function emitIfExists(symbol, minuteKey) {
-  const key = `${symbol}_${minuteKey}`;
-  if (emitted[key]) return;
-
-  const best = bestCandidate[key];
-  if (!best) return;
-
-  emitted[key] = true;
-
-  const d = new Date(minuteKey * 60000);
-  const timeStr =
-    String(d.getUTCHours()).padStart(2, "0") + ":" +
-    String(d.getUTCMinutes()).padStart(2, "0") + ":00 UTC";
-
-  addSignal({
-    time: timeStr,
-    symbol: best.symbol,
-    direction: best.direction
   });
 
-  playAlert();
+  signalsEl.prepend(row);
+
+  if (soundEnabled) {
+    sound.currentTime = 0;
+    sound.play();
+  }
 }
 
-// ==============================
-// START
-// ==============================
 connect();
