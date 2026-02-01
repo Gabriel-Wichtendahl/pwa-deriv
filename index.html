@@ -1,35 +1,44 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Deriv Señales</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>Deriv Signals</title>
 
   <!-- PWA -->
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#0e0e0e">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0b132b" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
 
-  <link rel="stylesheet" href="style.css">
+  <!-- iOS icon (opcional pero recomendable) -->
+  <link rel="apple-touch-icon" href="icon-192.png" />
 </head>
 <body>
 
-<h2 id="status">Conectando…</h2>
+  <!-- TU UI EXISTENTE -->
+  <div id="status"></div>
+  <button id="soundBtn">🔊 Sonido</button>
+  <div id="counter">Señales: 0</div>
+  <div id="signals"></div>
 
-<button id="soundBtn">🔊 Activar sonido</button>
-<div id="counter">Señales: 0</div>
+  <textarea id="feedback"></textarea>
+  <button id="copyFeedback">Copiar feedback</button>
 
-<div id="signals"></div>
+  <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-<h3>Feedback</h3>
-<textarea id="feedback" placeholder="Se copia solo…"></textarea>
-<button id="copyFeedback">Copiar feedback</button>
+  <!-- TU JS ACTUAL -->
+  <script src="app.js"></script>
 
-<audio id="alertSound" preload="auto">
-  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg">
-</audio>
+  <!-- Registro del Service Worker -->
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js");
+    }
+  </script>
 
-<script src="app.js"></script>
 </body>
 </html>
-
 
