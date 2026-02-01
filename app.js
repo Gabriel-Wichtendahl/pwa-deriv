@@ -4,7 +4,8 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 let socket;
 let soundEnabled = false;
-let lastSignalMinute = {}; // 1 señal por símbolo por minuto
+let lastSignalMinute = {};
+let firedMinute = {};
 let signalCount = 0;
 
 const statusEl = document.getElementById("status");
@@ -29,7 +30,7 @@ function connect() {
 
   socket.onopen = () => {
     statusEl.textContent = "Conectado - Analizando en vivo";
-    SYMBOLS.forEach(s => subscribe(s));
+    SYMBOLS.forEach(subscribe);
   };
 
   socket.onerror = () => {
@@ -62,8 +63,13 @@ function processTick(tick) {
 
   buffer[symbol][minute].push({ sec, price: tick.quote });
 
-  // ANALISIS EXACTO EN SEGUNDO 45
-  if (sec === 45) analyze(symbol, minute);
+  const key = symbol + "_" + minute;
+
+  // DISPARO SEGURO EN 45–46
+  if (sec >= 45 && sec <= 46 && !firedMinute[key]) {
+    firedMinute[key] = true;
+    analyze(symbol, minute);
+  }
 }
 
 function analyze(symbol, minute) {
@@ -74,9 +80,9 @@ function analyze(symbol, minute) {
 
   const p0 = data[0].price;
   const p45 = data[data.length - 1].price;
-
   const move = p45 - p0;
-  if (Math.abs(move) < 0.3) return; // sin tendencia clara
+
+  if (Math.abs(move) < 0.12) return; // tendencia mínima realista
 
   const direction = move > 0 ? "CALL" : "PUT";
 
