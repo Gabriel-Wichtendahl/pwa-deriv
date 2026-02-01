@@ -3,24 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <title>Deriv Señales</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<div class="top">
-  <div id="status">Conectando...</div>
-  <button id="soundBtn">🔊 Activar sonido</button>
-  <div id="counter">Señales: 0</div>
-</div>
+<h2 id="status">Conectando…</h2>
+<button id="soundBtn">🔊 Activar sonido</button>
+<div id="counter">Señales: 0</div>
 
 <div id="signals"></div>
 
-<textarea id="feedback" readonly></textarea>
-<button id="copyFeedback">📋 Copiar feedback</button>
+<h3>Feedback</h3>
+<textarea id="feedback"></textarea>
+<button id="copyFeedback">Copiar feedback</button>
 
-<audio id="alertSound">
-  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg">
-</audio>
+<audio id="alertSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg"></audio>
 
 <script src="app.js"></script>
 </body>
