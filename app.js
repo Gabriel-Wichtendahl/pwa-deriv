@@ -2,11 +2,13 @@ const APP_ID = 1089;
 const WS_URL = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
-let socket;
+let ws;
 let soundEnabled = false;
-let lastSignalMinute = {};
-let firedMinute = {};
 let signalCount = 0;
+
+let buffer = {};
+let fired = {};
+let lastMinuteSignal = {};
 
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
@@ -26,67 +28,66 @@ document.getElementById("copyFeedback").onclick = () => {
 };
 
 function connect() {
-  socket = new WebSocket(WS_URL);
+  ws = new WebSocket(WS_URL);
 
-  socket.onopen = () => {
-    statusEl.textContent = "Conectado - Analizando en vivo";
-    SYMBOLS.forEach(subscribe);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ authorize: "anonymous" }));
   };
 
-  socket.onerror = () => {
-    statusEl.textContent = "❌ Error de conexión";
-  };
-
-  socket.onmessage = e => {
+  ws.onmessage = e => {
     const data = JSON.parse(e.data);
+
+    if (data.msg_type === "authorize") {
+      statusEl.textContent = "Conectado – Analizando en vivo";
+      SYMBOLS.forEach(subscribe);
+    }
+
     if (data.tick) processTick(data.tick);
+  };
+
+  ws.onerror = () => {
+    statusEl.textContent = "❌ Error de conexión";
   };
 }
 
 function subscribe(symbol) {
-  socket.send(JSON.stringify({
+  ws.send(JSON.stringify({
     ticks: symbol,
     subscribe: 1
   }));
 }
 
-let buffer = {};
-
 function processTick(tick) {
   const symbol = tick.symbol;
-  const time = Math.floor(tick.epoch);
-  const minute = Math.floor(time / 60);
-  const sec = time % 60;
+  const t = Math.floor(tick.epoch);
+  const minute = Math.floor(t / 60);
+  const sec = t % 60;
 
   if (!buffer[symbol]) buffer[symbol] = {};
   if (!buffer[symbol][minute]) buffer[symbol][minute] = [];
 
-  buffer[symbol][minute].push({ sec, price: tick.quote });
+  buffer[symbol][minute].push(tick.quote);
 
   const key = symbol + "_" + minute;
 
-  // DISPARO SEGURO EN 45–46
-  if (sec >= 45 && sec <= 46 && !firedMinute[key]) {
-    firedMinute[key] = true;
+  if (sec >= 45 && sec <= 46 && !fired[key]) {
+    fired[key] = true;
     analyze(symbol, minute);
   }
 }
 
 function analyze(symbol, minute) {
-  if (lastSignalMinute[symbol] === minute) return;
+  if (lastMinuteSignal[symbol] === minute) return;
 
-  const data = buffer[symbol][minute];
-  if (!data || data.length < 10) return;
+  const prices = buffer[symbol][minute];
+  if (!prices || prices.length < 5) return;
 
-  const p0 = data[0].price;
-  const p45 = data[data.length - 1].price;
-  const move = p45 - p0;
-
-  if (Math.abs(move) < 0.12) return; // tendencia mínima realista
+  const move = prices[prices.length - 1] - prices[0];
+  if (Math.abs(move) < 0.12) return;
 
   const direction = move > 0 ? "CALL" : "PUT";
+  lastMinuteSignal[symbol] = minute;
 
-  lastSignalMinute[symbol] = minute;
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
@@ -94,8 +95,7 @@ function analyze(symbol, minute) {
 }
 
 function showSignal(symbol, minute, direction) {
-  const d = new Date(minute * 60000);
-  const time = d.toISOString().substr(11, 8) + " UTC";
+  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
@@ -109,8 +109,8 @@ function showSignal(symbol, minute, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       btn.disabled = true;
-      const comment = row.querySelector("input").value || "";
-      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+      const c = row.querySelector("input").value || "";
+      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${c}\n`;
     };
   });
 
