@@ -130,3 +130,4 @@ function showSignal(minute, symbol, direction) {
 
 connect();
 
+
