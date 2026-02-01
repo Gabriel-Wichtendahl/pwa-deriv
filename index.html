@@ -1,33 +1,27 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Deriv Signals PWA</title>
-
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b0b0b">
-
-  <link rel="manifest" href="manifest.json">
+  <meta charset="UTF-8" />
+  <title>Deriv Señales</title>
   <link rel="stylesheet" href="style.css">
-
 </head>
 <body>
 
-  <h2>📊 Señales Deriv</h2>
-
-  <button id="enableSound">🔊 Activar alertas</button>
-
-  <div id="status">Conectando…</div>
+<div class="top">
+  <div id="status">Conectando...</div>
+  <button id="soundBtn">🔊 Activar sonido</button>
   <div id="counter">Señales: 0</div>
+</div>
 
-  <div id="signals"></div>
+<div id="signals"></div>
 
-  <script src="app.js"></script>
+<textarea id="feedback" readonly></textarea>
+<button id="copyFeedback">📋 Copiar feedback</button>
 
-  <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js");
-    }
-  </script>
+<audio id="alertSound">
+  <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg">
+</audio>
+
+<script src="app.js"></script>
 </body>
 </html>
