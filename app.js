@@ -118,3 +118,4 @@ function fireSignal(symbol, dir, minuteKey) {
 
 // ================= START =================
 connect();
+
