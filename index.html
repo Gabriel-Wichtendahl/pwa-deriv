@@ -17,6 +17,7 @@
   <div class="controls">
     <button id="soundBtn">🔊 Activar sonido</button>
     <button id="wakeBtn">🔓 Pantalla activa</button>
+    <button id="themeBtn">🌙 Oscuro</button>
   </div>
 
   <div id="counter">Señales: 0</div>
@@ -30,7 +31,7 @@
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
   <!-- 🔑 versionado del JS para evitar cache -->
-  <script src="app.js?v=1"></script>
+  <script src="app.js?v=2"></script>
 
   <script>
     if ("serviceWorker" in navigator) {
