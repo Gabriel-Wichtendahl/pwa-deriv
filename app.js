@@ -1,23 +1,27 @@
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
+/* =========================
+   Estado
+========================= */
 let ws;
 let soundEnabled = false;
 let signalCount = 0;
 
 let minuteData = {};
 let lastEvaluatedMinute = null;
-
 let lastSignalSymbol = null;
 
-// retry dentro del minuto (para que no monopolice R_75 por falta de ticks)
+// retry dentro del minuto
 let evalRetryTimer = null;
 
 const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-/* UI */
+/* =========================
+   UI
+========================= */
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
@@ -26,16 +30,13 @@ const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
 
 /* =========================
-   🔔 NOTIFICACIONES
+   🔔 Notificaciones
 ========================= */
 
-// Pedir permiso 1 vez (no molesta si ya está concedido/denegado)
-(function requestNotificationPermissionOnce() {
-  if (!("Notification" in window)) return;
-  if (Notification.permission === "default") {
-    Notification.requestPermission().catch(() => {});
-  }
-})();
+// Pedir permiso una sola vez
+if ("Notification" in window && Notification.permission === "default") {
+  Notification.requestPermission().catch(() => {});
+}
 
 function showNotification(symbol, direction) {
   if (!("Notification" in window)) return;
@@ -44,7 +45,6 @@ function showNotification(symbol, direction) {
   const title = "📈 Deriv Signal";
   const body = `${symbol} – ${direction}`;
 
-  // Usa el Service Worker para mostrar notificación del sistema
   navigator.serviceWorker.getRegistration().then(reg => {
     if (!reg) return;
 
@@ -54,13 +54,17 @@ function showNotification(symbol, direction) {
       badge: "icon-192.png",
       vibrate: [200, 100, 200],
       tag: "deriv-signal",
-      renotify: true
+      renotify: true,
+
+      // 🔥 mejora visibilidad (heads-up cuando el sistema lo permite)
+      requireInteraction: true,
+      silent: false
     });
   });
 }
 
 /* =========================
-   🔊 SONIDO
+   🔊 Sonido
 ========================= */
 document.getElementById("soundBtn").onclick = async () => {
   try {
@@ -75,8 +79,7 @@ document.getElementById("soundBtn").onclick = async () => {
     soundEnabled = true;
     alert("🔊 Sonido activado correctamente");
   } catch (e) {
-    alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
-    console.error(e);
+    alert("⚠️ Tocá nuevamente para habilitar sonido");
   }
 };
 
@@ -92,18 +95,14 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => {
-      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
-    });
+    SYMBOLS.forEach(sym =>
+      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }))
+    );
   };
 
   ws.onmessage = e => {
     const data = JSON.parse(e.data);
     if (data.tick) onTick(data.tick);
-  };
-
-  ws.onerror = () => {
-    statusEl.textContent = "Error WS – reconectando...";
   };
 
   ws.onclose = () => {
@@ -125,17 +124,15 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  // Evaluar una sola vez por minuto desde seg 45
+  // primer intento en segundo 45
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
-
     const ok = evaluateMinute(minute);
     if (!ok) scheduleRetry(minute);
   }
 
-  // limpieza para no crecer en memoria
-  const oldMinute = minute - 2;
-  if (minuteData[oldMinute]) delete minuteData[oldMinute];
+  // limpieza simple
+  delete minuteData[minute - 2];
 }
 
 function scheduleRetry(minute) {
@@ -151,8 +148,6 @@ function scheduleRetry(minute) {
 
 /* =========================
    Evaluación
-   - score = |move| / vol
-   - anti-monopolio suave
 ========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
@@ -169,7 +164,7 @@ function evaluateMinute(minute) {
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // volatilidad promedio por tick
+    // volatilidad promedio
     let vol = 0;
     for (let i = 1; i < prices.length; i++) {
       vol += Math.abs(prices[i] - prices[i - 1]);
@@ -180,7 +175,6 @@ function evaluateMinute(minute) {
     candidates.push({ symbol, move, score });
   }
 
-  // Si hay muy pocos símbolos listos, conviene reintentar
   if (readySymbols < MIN_SYMBOLS_READY) return false;
   if (candidates.length === 0) return false;
 
@@ -197,11 +191,9 @@ function evaluateMinute(minute) {
     best = second;
   }
 
-  // umbral bajo
   if (!best || best.score < 0.015) return true;
 
   lastSignalSymbol = best.symbol;
-
   const direction = best.move > 0 ? "CALL" : "PUT";
   showSignal(minute, best.symbol, direction);
 
@@ -215,7 +207,9 @@ function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
-  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+  const time = new Date(minute * 60000)
+    .toISOString()
+    .substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
@@ -229,7 +223,8 @@ function showSignal(minute, symbol, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
-      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+      feedbackEl.value +=
+        `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
       btn.disabled = true;
     };
   });
@@ -242,7 +237,7 @@ function showSignal(minute, symbol, direction) {
     sound.play().catch(() => {});
   }
 
-  // 📳 notificación del sistema
+  // 🔔 notificación
   showNotification(symbol, direction);
 }
 
@@ -263,9 +258,12 @@ wakeBtn.onclick = async () => {
       wakeBtn.textContent = "🔒 Pantalla activa";
       wakeBtn.classList.add("active");
     }
-  } catch (e) {
+  } catch {
     alert("No se pudo mantener la pantalla activa");
   }
 };
 
+/* =========================
+   Start
+========================= */
 connect();
