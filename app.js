@@ -1,13 +1,6 @@
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
-const NORMALIZATION = {
-  R_10: 1,
-  R_25: 2,
-  R_50: 3,
-  R_75: 4
-};
-
 let ws;
 let soundEnabled = false;
 let signalCount = 0;
@@ -15,9 +8,10 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
-// ✅ NUEVO: control de evaluación diferida
-const MIN_TICKS_PER_SYMBOL = 3;          // antes era 5 (esto ayudaba a sesgo)
-const pendingEval = {};                  // minute -> timeoutId
+// ✅ NUEVO: para debug visual y control de evaluación
+let evalTimers = {};                 // minute -> timeoutId
+let lastSignalSymbol = null;         // para anti-monopolio suave
+const MIN_TICKS_PER_SYMBOL = 2;      // para que no excluya a otros por frecuencia
 
 /* UI */
 const statusEl = document.getElementById("status");
@@ -27,16 +21,30 @@ const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
 
+// ✅ NUEVO: panel de ticks (se crea solo)
+let tickStatusEl = document.getElementById("tickStatus");
+if (!tickStatusEl) {
+  tickStatusEl = document.createElement("div");
+  tickStatusEl.id = "tickStatus";
+  tickStatusEl.style.fontSize = "12px";
+  tickStatusEl.style.opacity = "0.8";
+  tickStatusEl.style.margin = "6px 0";
+  tickStatusEl.style.padding = "6px";
+  tickStatusEl.style.border = "1px solid #334155";
+  tickStatusEl.style.borderRadius = "8px";
+  tickStatusEl.textContent = "Ticks este minuto: —";
+  // lo ponemos debajo del status
+  statusEl.insertAdjacentElement("afterend", tickStatusEl);
+}
+
 /* Sonido (PWA Android friendly) */
 document.getElementById("soundBtn").onclick = async () => {
   try {
     sound.muted = false;
     sound.volume = 1;
     sound.currentTime = 0;
-
     await sound.play();
     sound.pause();
-
     soundEnabled = true;
     alert("🔊 Sonido activado correctamente");
   } catch (e) {
@@ -55,18 +63,24 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => {
-      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
-    });
+    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
   };
 
   ws.onmessage = e => {
     const data = JSON.parse(e.data);
     if (data.tick) onTick(data.tick);
   };
+
+  ws.onerror = () => {
+    statusEl.textContent = "Error WS – reconectando...";
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "Desconectado – reconectando...";
+    setTimeout(connect, 1500);
+  };
 }
 
-/* Ticks */
 function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
@@ -75,101 +89,94 @@ function onTick(tick) {
 
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-
   minuteData[minute][symbol].push(tick.quote);
 
-  // ✅ Evaluar una sola vez por minuto desde seg 45, pero con "espera inteligente"
+  // ✅ Debug visual: mostrar cuántos ticks lleva cada símbolo este minuto
+  updateTickPanel(minute);
+
+  // ✅ Evaluación: se arma desde seg 45, pero ejecuta cerca de seg 55
+  // para que los otros símbolos alcancen ticks mínimos
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
-    scheduleEvaluate(minute);
+    scheduleEvaluate(minute, sec);
   }
 
-  // ✅ limpieza simple: borrar minutos viejos (no afecta nada)
+  // limpieza simple (no afecta lógica)
   const oldMinute = minute - 3;
   if (minuteData[oldMinute]) delete minuteData[oldMinute];
-  if (pendingEval[oldMinute]) {
-    clearTimeout(pendingEval[oldMinute]);
-    delete pendingEval[oldMinute];
+  if (evalTimers[oldMinute]) {
+    clearTimeout(evalTimers[oldMinute]);
+    delete evalTimers[oldMinute];
   }
 }
 
-/* ✅ NUEVO: espera a que haya ticks suficientes en varios símbolos */
-function scheduleEvaluate(minute) {
-  // Evitar múltiples timeouts para el mismo minuto
-  if (pendingEval[minute]) return;
-
-  const tryEval = () => {
-    // si cambió el minuto, abortar
-    const nowEpoch = Math.floor(Date.now() / 1000);
-    const nowMinute = Math.floor(nowEpoch / 60);
-    const nowSec = nowEpoch % 60;
-
-    if (nowMinute !== minute) {
-      pendingEval[minute] = null;
-      delete pendingEval[minute];
-      return;
-    }
-
-    // si ya estamos muy tarde en el minuto, evaluamos con lo que haya
-    // (para no quedarnos sin señal)
-    const late = nowSec >= 58;
-
-    const data = minuteData[minute] || {};
-    const readySymbols = SYMBOLS.filter(sym => (data[sym] || []).length >= MIN_TICKS_PER_SYMBOL);
-
-    // condición ideal: al menos 2 símbolos con data suficiente (reduce monopolio)
-    if (readySymbols.length >= 2 || late) {
-      pendingEval[minute] = null;
-      delete pendingEval[minute];
-      evaluateMinute(minute);
-      return;
-    }
-
-    // reintentar en 1s
-    pendingEval[minute] = setTimeout(tryEval, 1000);
-  };
-
-  // primer intento inmediato
-  pendingEval[minute] = setTimeout(tryEval, 0);
+function updateTickPanel(minute) {
+  const data = minuteData[minute] || {};
+  const parts = SYMBOLS.map(sym => `${sym}=${(data[sym] || []).length}`);
+  tickStatusEl.textContent = `Ticks este minuto: ${parts.join(" | ")}`;
 }
 
-/* Evaluación */
+function scheduleEvaluate(minute, currentSec) {
+  if (evalTimers[minute]) return;
+
+  // Queremos ejecutar aprox en segundo 55.
+  // Si llegamos al 45, esperamos ~10s; si llegamos al 52, esperamos ~3s, etc.
+  const targetSec = 55;
+  const delayMs = Math.max(0, (targetSec - currentSec) * 1000);
+
+  evalTimers[minute] = setTimeout(() => {
+    delete evalTimers[minute];
+    evaluateMinute(minute);
+  }, delayMs);
+}
+
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return;
 
-  let best = null;
-
-  for (const symbol in data) {
-    const prices = data[symbol];
-
-    // ✅ antes: <5 (sesgaba fuerte a R_75). Ahora usamos MIN_TICKS_PER_SYMBOL
+  // Solo consideramos símbolos con un mínimo de ticks
+  const candidates = [];
+  for (const symbol of SYMBOLS) {
+    const prices = data[symbol] || [];
     if (prices.length < MIN_TICKS_PER_SYMBOL) continue;
 
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // Normalización dinámica por volatilidad (promedio |delta|)
+    // Normalización dinámica por volatilidad (promedio de |delta|)
     let vol = 0;
-    for (let i = 1; i < prices.length; i++) {
-      vol += Math.abs(prices[i] - prices[i - 1]);
-    }
-    vol = vol / (prices.length - 1);
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
+    vol = vol / Math.max(1, (prices.length - 1));
 
     const score = rawMove / (vol || 1e-9);
-
-    if (!best || score > best.score) {
-      best = { symbol, move, score };
-    }
+    candidates.push({ symbol, move, score });
   }
 
-  // umbral bajo (mantenido)
+  if (candidates.length === 0) return;
+
+  candidates.sort((a, b) => b.score - a.score);
+  let best = candidates[0];
+
+  // ✅ Anti-monopolio suave:
+  // Si vuelve a ganar el mismo símbolo, y el 2° está a <=10% de diferencia,
+  // elegimos el 2° para diversificar (sin forzar cuando hay un claro ganador).
+  const second = candidates[1];
+  if (
+    second &&
+    best.symbol === lastSignalSymbol &&
+    second.score >= best.score * 0.90
+  ) {
+    best = second;
+  }
+
+  // Umbral muy bajo (mantener señales)
   if (!best || best.score < 0.015) return;
 
-  showSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT");
+  const direction = best.move > 0 ? "CALL" : "PUT";
+  lastSignalSymbol = best.symbol;
+  showSignal(minute, best.symbol, direction);
 }
 
-/* Mostrar señal */
 function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
@@ -232,5 +239,4 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-/* Start */
 connect();
