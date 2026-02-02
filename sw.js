@@ -1,11 +1,20 @@
-self.addEventListener("install", event => {
-  self.skipWaiting();
+const CACHE = "deriv-pwa-v1";
+
+self.addEventListener("install", e => {
+  e.waitUntil(
+    caches.open(CACHE).then(cache =>
+      cache.addAll([
+        "./",
+        "./index.html",
+        "./styles.css",
+        "./app.js"
+      ])
+    )
+  );
 });
 
-self.addEventListener("activate", event => {
-  event.waitUntil(self.clients.claim());
-});
-
-self.addEventListener("fetch", event => {
-  // passthrough – no cacheamos nada
+self.addEventListener("fetch", e => {
+  e.respondWith(
+    caches.match(e.request).then(res => res || fetch(e.request))
+  );
 });
