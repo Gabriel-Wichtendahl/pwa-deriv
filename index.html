@@ -1,47 +1,45 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-
+  <meta charset="UTF-8">
   <title>Deriv Signals</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- PWA -->
-  <link rel="manifest" href="./manifest.json" />
-  <meta name="theme-color" content="#0b132b" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0b1220">
 
-  <!-- Icono iOS (no molesta en Android) -->
-  <link rel="apple-touch-icon" href="./icon-192.png" />
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <!-- UI -->
-  <div id="status">Iniciando…</div>
-  <button id="soundBtn">🔊 Sonido</button>
-  <div id="counter">Señales: 0</div>
-  <div id="signals"></div>
+<header>
+  <h1>📈 Deriv Signals</h1>
+  <div id="status">Conectando…</div>
+</header>
 
-  <textarea id="feedback" placeholder="Feedback"></textarea>
-  <button id="copyFeedback">Copiar feedback</button>
+<section class="controls">
+  <button id="soundBtn">🔊 Activar sonido</button>
+  <span id="counter">Señales: 0</span>
+</section>
 
-  <!-- Audio (ya no es crítico, pero no molesta) -->
-  <audio id="alertSound" preload="auto"></audio>
+<section id="signals" class="signals"></section>
 
-  <!-- TU JS -->
-  <script src="./app.js"></script>
+<section class="feedback">
+  <h3>Feedback</h3>
+  <textarea id="feedback" readonly></textarea>
+  <button id="copyFeedback">📋 Copiar feedback</button>
+</section>
 
-  <!-- Service Worker -->
-  <script>
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js")
-          .then(() => console.log("SW registrado"))
-          .catch(err => console.error("SW error", err));
-      });
-    }
-  </script>
+<audio id="alertSound" src="alert.mp3" preload="auto"></audio>
+
+<script src="app.js"></script>
+
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js");
+  }
+</script>
 
 </body>
 </html>
