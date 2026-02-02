@@ -8,7 +8,14 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
-let lastSignalSymbol = null; // anti-monopolio suave
+let lastSignalSymbol = null;
+
+// retry dentro del minuto (para que no monopolice R_75 por falta de ticks)
+let evalRetryTimer = null;
+
+const MIN_TICKS = 3;
+const MIN_SYMBOLS_READY = 2;
+const RETRY_DELAY_MS = 5000;
 
 /* UI */
 const statusEl = document.getElementById("status");
@@ -18,14 +25,50 @@ const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
 
-/* 🔊 Sonido (PWA Android friendly) */
+/* =========================
+   🔔 NOTIFICACIONES
+========================= */
+
+// Pedir permiso 1 vez (no molesta si ya está concedido/denegado)
+(function requestNotificationPermissionOnce() {
+  if (!("Notification" in window)) return;
+  if (Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+})();
+
+function showNotification(symbol, direction) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  const title = "📈 Deriv Signal";
+  const body = `${symbol} – ${direction}`;
+
+  // Usa el Service Worker para mostrar notificación del sistema
+  navigator.serviceWorker.getRegistration().then(reg => {
+    if (!reg) return;
+
+    reg.showNotification(title, {
+      body,
+      icon: "icon-192.png",
+      badge: "icon-192.png",
+      vibrate: [200, 100, 200],
+      tag: "deriv-signal",
+      renotify: true
+    });
+  });
+}
+
+/* =========================
+   🔊 SONIDO
+========================= */
 document.getElementById("soundBtn").onclick = async () => {
   try {
     sound.muted = false;
     sound.volume = 1;
     sound.currentTime = 0;
 
-    // desbloqueo real
+    // desbloqueo real (PWA Android)
     await sound.play();
     sound.pause();
 
@@ -41,7 +84,9 @@ document.getElementById("copyFeedback").onclick = () => {
   navigator.clipboard.writeText(feedbackEl.value);
 };
 
-/* WebSocket */
+/* =========================
+   WebSocket
+========================= */
 function connect() {
   ws = new WebSocket(WS_URL);
 
@@ -67,7 +112,9 @@ function connect() {
   };
 }
 
-/* Ticks */
+/* =========================
+   Ticks
+========================= */
 function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
@@ -78,53 +125,69 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  // ✅ evaluar una sola vez por minuto desde seg 45
+  // Evaluar una sola vez por minuto desde seg 45
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
-    evaluateMinute(minute);
+
+    const ok = evaluateMinute(minute);
+    if (!ok) scheduleRetry(minute);
   }
 
-  // limpieza (mantener solo últimos 2 minutos)
+  // limpieza para no crecer en memoria
   const oldMinute = minute - 2;
   if (minuteData[oldMinute]) delete minuteData[oldMinute];
 }
 
-/* Evaluación */
+function scheduleRetry(minute) {
+  if (evalRetryTimer) clearTimeout(evalRetryTimer);
+
+  evalRetryTimer = setTimeout(() => {
+    const nowMinute = Math.floor(Date.now() / 1000 / 60);
+    if (nowMinute === minute) {
+      evaluateMinute(minute);
+    }
+  }, RETRY_DELAY_MS);
+}
+
+/* =========================
+   Evaluación
+   - score = |move| / vol
+   - anti-monopolio suave
+========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return;
+  if (!data) return false;
 
   const candidates = [];
+  let readySymbols = 0;
 
   for (const symbol of SYMBOLS) {
     const prices = data[symbol] || [];
-    if (prices.length < 3) continue;
+    if (prices.length >= MIN_TICKS) readySymbols++;
+    if (prices.length < MIN_TICKS) continue;
 
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // ✅ volatilidad: promedio de |delta| por tick
+    // volatilidad promedio por tick
     let vol = 0;
     for (let i = 1; i < prices.length; i++) {
       vol += Math.abs(prices[i] - prices[i - 1]);
     }
     vol = vol / Math.max(1, prices.length - 1);
 
-    // ✅ score: tendencia relativa al ruido
     const score = rawMove / (vol || 1e-9);
-
     candidates.push({ symbol, move, score });
   }
 
-  if (candidates.length === 0) return;
+  // Si hay muy pocos símbolos listos, conviene reintentar
+  if (readySymbols < MIN_SYMBOLS_READY) return false;
+  if (candidates.length === 0) return false;
 
-  // ordenar por mejor score
   candidates.sort((a, b) => b.score - a.score);
   let best = candidates[0];
 
-  // ✅ anti-monopolio suave:
-  // si el mismo símbolo vuelve a ganar y el 2° está muy cerca (<=10%),
-  // alternamos para evitar monopolio cuando están parejos.
+  // anti-monopolio suave
   const second = candidates[1];
   if (
     second &&
@@ -134,16 +197,20 @@ function evaluateMinute(minute) {
     best = second;
   }
 
-  // umbral bajo para no matar señales
-  if (!best || best.score < 0.015) return;
+  // umbral bajo
+  if (!best || best.score < 0.015) return true;
 
   lastSignalSymbol = best.symbol;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   showSignal(minute, best.symbol, direction);
+
+  return true;
 }
 
-/* Mostrar señal */
+/* =========================
+   Mostrar señal
+========================= */
 function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
@@ -169,13 +236,19 @@ function showSignal(minute, symbol, direction) {
 
   signalsEl.prepend(row);
 
+  // 🔊 sonido
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
+
+  // 📳 notificación del sistema
+  showNotification(symbol, direction);
 }
 
-/* 🔒 Wake Lock */
+/* =========================
+   🔒 Wake Lock
+========================= */
 let wakeLock = null;
 
 wakeBtn.onclick = async () => {
@@ -194,9 +267,5 @@ wakeBtn.onclick = async () => {
     alert("No se pudo mantener la pantalla activa");
   }
 };
-
-document.addEventListener("visibilitychange", () => {
-  // si querés re-adquirir al volver visible, lo podemos hacer luego (opcional)
-});
 
 connect();
