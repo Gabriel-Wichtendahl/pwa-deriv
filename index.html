@@ -21,7 +21,6 @@
   </div>
 
   <div id="counter">Señales: 0</div>
-
   <div id="signals"></div>
 
   <h3>Feedback</h3>
@@ -30,12 +29,11 @@
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- 🔑 versionado del JS para evitar cache -->
-  <script src="app.js?v=2"></script>
+  <script src="app.js"></script>
 
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js");
+      navigator.serviceWorker.register("./sw.js");
     }
   </script>
 
