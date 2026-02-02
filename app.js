@@ -94,14 +94,14 @@ function evaluateMinute(minute) {
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // ✅ Normalización dinámica por volatilidad (promedio de |delta| por tick)
+    // Normalización dinámica por volatilidad (promedio de |delta| por tick)
     let vol = 0;
     for (let i = 1; i < prices.length; i++) {
       vol += Math.abs(prices[i] - prices[i - 1]);
     }
     vol = vol / (prices.length - 1);
 
-    // Score robusto: movimiento neto relativo a la volatilidad del minuto
+    // Score robusto
     const score = rawMove / (vol || 1e-9);
 
     if (!best || score > best.score) {
@@ -109,24 +109,30 @@ function evaluateMinute(minute) {
     }
   }
 
-  // Umbral bajo para no matar señales (mantenido)
+  // Umbral (mantenido)
   if (!best || best.score < 0.015) return;
 
-  showSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT");
+  const direction = best.move > 0 ? "CALL" : "PUT";
+
+  // ✅ pasamos score a showSignal
+  showSignal(minute, best.symbol, direction, best.score);
 }
 
 /* Mostrar señal */
-function showSignal(minute, symbol, direction) {
+function showSignal(minute, symbol, direction, score) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
   const time =
     new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
+  // ✅ formato corto para mostrar (por ejemplo 2 decimales)
+  const scoreText = Number.isFinite(score) ? score.toFixed(2) : "—";
+
   const row = document.createElement("div");
   row.className = "row";
   row.innerHTML = `
-    ${time} | ${symbol} | ${direction}
+    ${time} | ${symbol} | ${direction} | score: <b>${scoreText}</b>
     <button data-v="like">👍</button>
     <button data-v="dislike">👎</button>
     <input placeholder="comentario">
@@ -135,8 +141,9 @@ function showSignal(minute, symbol, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
+      // ✅ guardamos también el score en feedback
       feedbackEl.value +=
-        `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+        `${time} | ${symbol} | ${direction} | score:${scoreText} | ${btn.dataset.v} | ${comment}\n`;
       btn.disabled = true;
     };
   });
