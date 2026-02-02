@@ -35,9 +35,17 @@ button {
   border-radius: 8px;
 }
 
+/* ✅ Estado activo (sonido/vibración/wakelock) */
+button.active {
+  background: #16a34a;
+  color: #ffffff;
+  border-color: #16a34a;
+}
+
+/* Mantengo por compatibilidad, pero ya lo cubre button.active */
 #wakeBtn.active {
   background: #16a34a;
-  color: white;
+  color: #ffffff;
   border-color: #16a34a;
 }
 
