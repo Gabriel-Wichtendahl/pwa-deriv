@@ -1,7 +1,24 @@
+/* Default: oscuro */
+:root {
+  --bg: #020617;
+  --text: #e5e7eb;
+  --border: #334155;
+  --btn-bg: #0f172a;
+  --btn-text: #e5e7eb;
+}
+
+body.light {
+  --bg: #f8fafc;
+  --text: #0f172a;
+  --border: #cbd5e1;
+  --btn-bg: #e2e8f0;
+  --btn-text: #0f172a;
+}
+
 body {
   font-family: system-ui, sans-serif;
-  background: #020617;
-  color: #e5e7eb;
+  background: var(--bg);
+  color: var(--text);
   padding: 10px;
 }
 
@@ -13,18 +30,28 @@ button {
   margin: 4px;
   padding: 6px 10px;
   font-size: 14px;
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 #wakeBtn.active {
   background: #16a34a;
   color: white;
+  border-color: #16a34a;
 }
 
 .row {
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid var(--border);
   padding: 4px 0;
 }
 
 textarea {
   width: 100%;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
 }
