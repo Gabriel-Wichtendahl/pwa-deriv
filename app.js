@@ -10,6 +10,7 @@ const NORMALIZATION = {
 
 let ws;
 let soundEnabled = false;
+let audioUnlocked = false;   // 🔑 NUEVO (solo para sonido)
 let signalCount = 0;
 
 let minuteData = {};
@@ -25,12 +26,22 @@ const sound = document.getElementById("alertSound");
    UI
 ===================== */
 
+/* 🔊 FIX REAL DE AUDIO PARA PWA / ANDROID */
 document.getElementById("soundBtn").onclick = () => {
+  if (audioUnlocked) return;
+
+  sound.volume = 0;
   sound.play().then(() => {
+    sound.pause();
+    sound.currentTime = 0;
+    sound.volume = 1;
+
+    audioUnlocked = true;
     soundEnabled = true;
-    alert("🔊 Sonido activado");
+
+    alert("🔊 Alertas sonoras activadas");
   }).catch(() => {
-    alert("Tocá la pantalla primero para habilitar sonido");
+    alert("Tocá nuevamente para habilitar sonido");
   });
 };
 
@@ -161,6 +172,7 @@ function showSignal(minute, symbol, direction) {
 
   signalsEl.prepend(row);
 
+  // 🔊 ALERTA SONORA (ahora sí funciona en PWA)
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
