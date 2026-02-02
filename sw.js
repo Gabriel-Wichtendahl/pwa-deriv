@@ -1,20 +1,22 @@
-const CACHE = "deriv-pwa-v1";
+const CACHE = "pwa-deriv-v1";
 
-self.addEventListener("install", e => {
-  e.waitUntil(
+self.addEventListener("install", event => {
+  event.waitUntil(
     caches.open(CACHE).then(cache =>
       cache.addAll([
-        "./",
-        "./index.html",
-        "./styles.css",
-        "./app.js"
+        "/pwa-deriv/",
+        "/pwa-deriv/index.html",
+        "/pwa-deriv/styles.css",
+        "/pwa-deriv/app.js"
       ])
     )
   );
 });
 
-self.addEventListener("fetch", e => {
-  e.respondWith(
-    caches.match(e.request).then(res => res || fetch(e.request))
+self.addEventListener("fetch", event => {
+  event.respondWith(
+    caches.match(event.request).then(
+      response => response || fetch(event.request)
+    )
   );
 });
