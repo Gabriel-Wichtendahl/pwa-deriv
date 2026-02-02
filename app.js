@@ -8,6 +8,8 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
+let lastSignalSymbol = null; // anti-monopolio suave
+
 /* UI */
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
@@ -15,36 +17,23 @@ const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
-const themeBtn = document.getElementById("themeBtn");
 
-/* ✅ TEMA OSCURO/CLARO */
-function applyTheme(theme) {
-  const isLight = theme === "light";
-  document.body.classList.toggle("light", isLight);
-  themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
-  localStorage.setItem("theme", theme);
-}
-applyTheme(localStorage.getItem("theme") || "dark");
-
-themeBtn.onclick = () => {
-  const current = document.body.classList.contains("light") ? "light" : "dark";
-  applyTheme(current === "light" ? "dark" : "light");
-};
-
-/* 🔊 Sonido (PWA Android OK) */
+/* 🔊 Sonido (PWA Android friendly) */
 document.getElementById("soundBtn").onclick = async () => {
   try {
     sound.muted = false;
     sound.volume = 1;
     sound.currentTime = 0;
 
-    await sound.play();   // desbloquea
+    // desbloqueo real
+    await sound.play();
     sound.pause();
 
     soundEnabled = true;
-    alert("🔊 Sonido activado");
+    alert("🔊 Sonido activado correctamente");
   } catch (e) {
-    alert("⚠️ Tocá nuevamente para habilitar sonido");
+    alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
+    console.error(e);
   }
 };
 
@@ -58,12 +47,18 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+    SYMBOLS.forEach(sym => {
+      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
+    });
   };
 
   ws.onmessage = e => {
     const data = JSON.parse(e.data);
     if (data.tick) onTick(data.tick);
+  };
+
+  ws.onerror = () => {
+    statusEl.textContent = "Error WS – reconectando...";
   };
 
   ws.onclose = () => {
@@ -72,6 +67,7 @@ function connect() {
   };
 }
 
+/* Ticks */
 function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
@@ -82,36 +78,72 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  if (sec >= 50 && lastEvaluatedMinute !== minute) {
+  // ✅ evaluar una sola vez por minuto desde seg 45
+  if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     evaluateMinute(minute);
   }
 
-  delete minuteData[minute - 2];
+  // limpieza (mantener solo últimos 2 minutos)
+  const oldMinute = minute - 2;
+  if (minuteData[oldMinute]) delete minuteData[oldMinute];
 }
 
+/* Evaluación */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return;
 
-  let best = null;
+  const candidates = [];
 
   for (const symbol of SYMBOLS) {
     const prices = data[symbol] || [];
     if (prices.length < 3) continue;
 
     const move = prices[prices.length - 1] - prices[0];
-    const score = Math.abs(move);
+    const rawMove = Math.abs(move);
 
-    if (!best || score > best.score) best = { symbol, move, score };
+    // ✅ volatilidad: promedio de |delta| por tick
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) {
+      vol += Math.abs(prices[i] - prices[i - 1]);
+    }
+    vol = vol / Math.max(1, prices.length - 1);
+
+    // ✅ score: tendencia relativa al ruido
+    const score = rawMove / (vol || 1e-9);
+
+    candidates.push({ symbol, move, score });
   }
 
-  if (!best || best.score < 0.01) return;
+  if (candidates.length === 0) return;
+
+  // ordenar por mejor score
+  candidates.sort((a, b) => b.score - a.score);
+  let best = candidates[0];
+
+  // ✅ anti-monopolio suave:
+  // si el mismo símbolo vuelve a ganar y el 2° está muy cerca (<=10%),
+  // alternamos para evitar monopolio cuando están parejos.
+  const second = candidates[1];
+  if (
+    second &&
+    best.symbol === lastSignalSymbol &&
+    second.score >= best.score * 0.90
+  ) {
+    best = second;
+  }
+
+  // umbral bajo para no matar señales
+  if (!best || best.score < 0.015) return;
+
+  lastSignalSymbol = best.symbol;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   showSignal(minute, best.symbol, direction);
 }
 
+/* Mostrar señal */
 function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
@@ -162,5 +194,9 @@ wakeBtn.onclick = async () => {
     alert("No se pudo mantener la pantalla activa");
   }
 };
+
+document.addEventListener("visibilitychange", () => {
+  // si querés re-adquirir al volver visible, lo podemos hacer luego (opcional)
+});
 
 connect();
