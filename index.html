@@ -6,10 +6,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
   <!-- PWA -->
-  <link rel="manifest" href="manifest.json">
+  <link rel="manifest" href="/pwa-deriv/manifest.json">
   <meta name="theme-color" content="#0b1220">
 
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="/pwa-deriv/styles.css">
 </head>
 <body>
 
@@ -31,14 +31,14 @@
   <button id="copyFeedback">📋 Copiar feedback</button>
 </section>
 
-<audio id="alertSound" src="alert.mp3" preload="auto"></audio>
+<audio id="alertSound" src="/pwa-deriv/alert.mp3" preload="auto"></audio>
 
-<script src="app.js"></script>
+<script src="/pwa-deriv/app.js"></script>
 
 <script>
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js");
-  }
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/pwa-deriv/sw.js");
+}
 </script>
 
 </body>
