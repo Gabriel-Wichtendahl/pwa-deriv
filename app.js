@@ -10,8 +10,11 @@ const NORMALIZATION = {
 
 let ws;
 let soundEnabled = false;
-let audioUnlocked = false;   // 🔑 NUEVO (solo para sonido)
 let signalCount = 0;
+
+/* 🔊 AUDIO CONTEXT (FIX DEFINITIVO) */
+let audioCtx = null;
+let audioUnlocked = false;
 
 let minuteData = {};
 let lastEvaluatedMinute = null;
@@ -20,29 +23,27 @@ const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
-const sound = document.getElementById("alertSound");
+const sound = document.getElementById("alertSound"); // queda, pero ya no es crítico
 
 /* =====================
    UI
 ===================== */
 
-/* 🔊 FIX REAL DE AUDIO PARA PWA / ANDROID */
-document.getElementById("soundBtn").onclick = () => {
+/* 🔊 BOTÓN DE SONIDO (desbloquea AudioContext) */
+document.getElementById("soundBtn").onclick = async () => {
   if (audioUnlocked) return;
 
-  sound.volume = 0;
-  sound.play().then(() => {
-    sound.pause();
-    sound.currentTime = 0;
-    sound.volume = 1;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
 
     audioUnlocked = true;
     soundEnabled = true;
 
     alert("🔊 Alertas sonoras activadas");
-  }).catch(() => {
-    alert("Tocá nuevamente para habilitar sonido");
-  });
+  } catch (e) {
+    alert("No se pudo activar el audio");
+  }
 };
 
 document.getElementById("copyFeedback").onclick = () => {
@@ -54,133 +55,4 @@ document.getElementById("copyFeedback").onclick = () => {
 ===================== */
 
 function connect() {
-  statusEl.textContent = "Conectando…";
-
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => {
-      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
-    });
-  };
-
-  ws.onmessage = e => {
-    let data;
-    try {
-      data = JSON.parse(e.data);
-    } catch {
-      return;
-    }
-
-    if (data.tick) {
-      onTick(data.tick);
-    }
-  };
-
-  ws.onerror = () => {
-    statusEl.textContent = "Error de conexión";
-  };
-
-  ws.onclose = () => {
-    statusEl.textContent = "Desconectado – Reintentando…";
-    setTimeout(connect, 2000);
-  };
-}
-
-/* =====================
-   Ticks
-===================== */
-
-function onTick(tick) {
-  if (!tick || !tick.epoch || !tick.symbol) return;
-
-  const epoch = Math.floor(tick.epoch);
-  const minute = Math.floor(epoch / 60);
-  const sec = epoch % 60;
-  const symbol = tick.symbol;
-
-  if (!minuteData[minute]) minuteData[minute] = {};
-  if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-
-  minuteData[minute][symbol].push(tick.quote);
-
-  // Evaluar una sola vez por minuto desde seg 45
-  if (sec >= 45 && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    evaluateMinute(minute);
-  }
-}
-
-/* =====================
-   Evaluación
-===================== */
-
-function evaluateMinute(minute) {
-  const data = minuteData[minute];
-  if (!data) return;
-
-  let best = null;
-
-  for (const symbol in data) {
-    const prices = data[symbol];
-    if (!prices || prices.length < 5) continue;
-
-    const move = prices[prices.length - 1] - prices[0];
-    const rawScore = Math.abs(move);
-    const normScore = rawScore / (NORMALIZATION[symbol] || 1);
-
-    if (!best || normScore > best.score) {
-      best = { symbol, move, score: normScore };
-    }
-  }
-
-  if (!best || best.score < 0.015) return;
-
-  const direction = best.move > 0 ? "CALL" : "PUT";
-  showSignal(minute, best.symbol, direction);
-}
-
-/* =====================
-   Señales
-===================== */
-
-function showSignal(minute, symbol, direction) {
-  signalCount++;
-  counterEl.textContent = `Señales: ${signalCount}`;
-
-  const time =
-    new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
-
-  const row = document.createElement("div");
-  row.className = "row";
-  row.innerHTML = `
-    ${time} | ${symbol} | ${direction}
-    <button data-v="like">👍</button>
-    <button data-v="dislike">👎</button>
-    <input placeholder="comentario">
-  `;
-
-  row.querySelectorAll("button").forEach(btn => {
-    btn.onclick = () => {
-      const comment = row.querySelector("input").value || "";
-      feedbackEl.value +=
-        `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
-      btn.disabled = true;
-    };
-  });
-
-  signalsEl.prepend(row);
-
-  // 🔊 ALERTA SONORA (ahora sí funciona en PWA)
-  if (soundEnabled) {
-    sound.currentTime = 0;
-    sound.play().catch(() => {});
-  }
-}
-
-/* =====================
-   Start
-===================== */
-
-connect();
+  statusEl.textContent = "
