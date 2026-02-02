@@ -17,15 +17,13 @@ const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
 const themeBtn = document.getElementById("themeBtn");
 
-/* ✅ TEMA OSCURO/CLARO (nuevo) */
+/* ✅ TEMA OSCURO/CLARO */
 function applyTheme(theme) {
   const isLight = theme === "light";
   document.body.classList.toggle("light", isLight);
   themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
   localStorage.setItem("theme", theme);
 }
-
-// cargar preferencia
 applyTheme(localStorage.getItem("theme") || "dark");
 
 themeBtn.onclick = () => {
@@ -36,13 +34,17 @@ themeBtn.onclick = () => {
 /* 🔊 Sonido (PWA Android OK) */
 document.getElementById("soundBtn").onclick = async () => {
   try {
+    sound.muted = false;
+    sound.volume = 1;
     sound.currentTime = 0;
-    await sound.play();
+
+    await sound.play();   // desbloquea
     sound.pause();
+
     soundEnabled = true;
     alert("🔊 Sonido activado");
   } catch (e) {
-    alert("Tocá nuevamente para habilitar sonido");
+    alert("⚠️ Tocá nuevamente para habilitar sonido");
   }
 };
 
@@ -56,14 +58,17 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym =>
-      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }))
-    );
+    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
   };
 
   ws.onmessage = e => {
     const data = JSON.parse(e.data);
     if (data.tick) onTick(data.tick);
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "Desconectado – reconectando...";
+    setTimeout(connect, 1500);
   };
 }
 
@@ -75,7 +80,6 @@ function onTick(tick) {
 
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-
   minuteData[minute][symbol].push(tick.quote);
 
   if (sec >= 50 && lastEvaluatedMinute !== minute) {
@@ -83,7 +87,6 @@ function onTick(tick) {
     evaluateMinute(minute);
   }
 
-  // limpieza
   delete minuteData[minute - 2];
 }
 
@@ -100,9 +103,7 @@ function evaluateMinute(minute) {
     const move = prices[prices.length - 1] - prices[0];
     const score = Math.abs(move);
 
-    if (!best || score > best.score) {
-      best = { symbol, move, score };
-    }
+    if (!best || score > best.score) best = { symbol, move, score };
   }
 
   if (!best || best.score < 0.01) return;
@@ -115,8 +116,7 @@ function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
-  const time =
-    new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
@@ -130,8 +130,7 @@ function showSignal(minute, symbol, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
-      feedbackEl.value +=
-        `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
       btn.disabled = true;
     };
   });
@@ -148,15 +147,19 @@ function showSignal(minute, symbol, direction) {
 let wakeLock = null;
 
 wakeBtn.onclick = async () => {
-  if (wakeLock) {
-    await wakeLock.release();
-    wakeLock = null;
-    wakeBtn.textContent = "🔓 Pantalla activa";
-    wakeBtn.classList.remove("active");
-  } else {
-    wakeLock = await navigator.wakeLock.request("screen");
-    wakeBtn.textContent = "🔒 Pantalla activa";
-    wakeBtn.classList.add("active");
+  try {
+    if (wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+      wakeBtn.textContent = "🔓 Pantalla activa";
+      wakeBtn.classList.remove("active");
+    } else {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeBtn.textContent = "🔒 Pantalla activa";
+      wakeBtn.classList.add("active");
+    }
+  } catch (e) {
+    alert("No se pudo mantener la pantalla activa");
   }
 };
 
