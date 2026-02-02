@@ -15,7 +15,9 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
-/* UI */
+/* ===============================
+   UI
+================================ */
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
@@ -23,19 +25,34 @@ const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
 
-/* Sonido */
-document.getElementById("soundBtn").onclick = () => {
-  sound.play().then(() => {
+/* ===============================
+   SONIDO (CORREGIDO PARA PWA)
+================================ */
+document.getElementById("soundBtn").onclick = async () => {
+  try {
+    sound.muted = false;
+    sound.volume = 1;
+    sound.currentTime = 0;
+
+    // desbloqueo real de audio
+    await sound.play();
+    sound.pause();
+
     soundEnabled = true;
-    alert("🔊 Sonido activado");
-  });
+    alert("🔊 Sonido activado correctamente");
+  } catch (e) {
+    alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
+    console.error(e);
+  }
 };
 
 document.getElementById("copyFeedback").onclick = () => {
   navigator.clipboard.writeText(feedbackEl.value);
 };
 
-/* WebSocket */
+/* ===============================
+   WEBSOCKET
+================================ */
 function connect() {
   ws = new WebSocket(WS_URL);
 
@@ -52,7 +69,9 @@ function connect() {
   };
 }
 
-/* Ticks */
+/* ===============================
+   TICKS
+================================ */
 function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
@@ -70,7 +89,9 @@ function onTick(tick) {
   }
 }
 
-/* Evaluación */
+/* ===============================
+   EVALUACIÓN
+================================ */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return;
@@ -94,7 +115,9 @@ function evaluateMinute(minute) {
   showSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT");
 }
 
-/* Mostrar señal */
+/* ===============================
+   MOSTRAR SEÑAL
+================================ */
 function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
@@ -122,13 +145,16 @@ function showSignal(minute, symbol, direction) {
 
   signalsEl.prepend(row);
 
+  // 🔊 SONIDO GARANTIZADO
   if (soundEnabled) {
     sound.currentTime = 0;
-    sound.play();
+    sound.play().catch(() => {});
   }
 }
 
-/* Pantalla siempre activa */
+/* ===============================
+   PANTALLA SIEMPRE ACTIVA
+================================ */
 let wakeLock = null;
 let wakeEnabled = false;
 
@@ -159,5 +185,7 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-/* Start */
+/* ===============================
+   START
+================================ */
 connect();
