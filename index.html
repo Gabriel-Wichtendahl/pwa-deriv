@@ -1,45 +1,41 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Deriv Signals</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- PWA -->
-  <link rel="manifest" href="/pwa-deriv/manifest.json">
-  <meta name="theme-color" content="#0b1220">
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0f172a" />
 
-  <link rel="stylesheet" href="/pwa-deriv/styles.css">
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<header>
-  <h1>📈 Deriv Signals</h1>
-  <div id="status">Conectando…</div>
-</header>
+  <h2 id="status">Conectando...</h2>
 
-<section class="controls">
-  <button id="soundBtn">🔊 Activar sonido</button>
-  <span id="counter">Señales: 0</span>
-</section>
+  <div class="controls">
+    <button id="soundBtn">🔊 Activar sonido</button>
+    <button id="wakeBtn">🔓 Pantalla activa</button>
+  </div>
 
-<section id="signals" class="signals"></section>
+  <div id="counter">Señales: 0</div>
 
-<section class="feedback">
+  <div id="signals"></div>
+
   <h3>Feedback</h3>
-  <textarea id="feedback" readonly></textarea>
+  <textarea id="feedback" rows="6"></textarea><br>
   <button id="copyFeedback">📋 Copiar feedback</button>
-</section>
 
-<audio id="alertSound" src="/pwa-deriv/alert.mp3" preload="auto"></audio>
+  <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-<script src="/pwa-deriv/app.js"></script>
+  <script src="app.js"></script>
 
-<script>
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/pwa-deriv/sw.js");
-}
-</script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js");
+    }
+  </script>
 
 </body>
 </html>
