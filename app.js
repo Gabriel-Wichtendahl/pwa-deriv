@@ -15,12 +15,15 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
+/* UI */
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
+const wakeBtn = document.getElementById("wakeBtn");
 
+/* Sonido */
 document.getElementById("soundBtn").onclick = () => {
   sound.play().then(() => {
     soundEnabled = true;
@@ -32,6 +35,7 @@ document.getElementById("copyFeedback").onclick = () => {
   navigator.clipboard.writeText(feedbackEl.value);
 };
 
+/* WebSocket */
 function connect() {
   ws = new WebSocket(WS_URL);
 
@@ -48,6 +52,7 @@ function connect() {
   };
 }
 
+/* Ticks */
 function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
@@ -59,13 +64,13 @@ function onTick(tick) {
 
   minuteData[minute][symbol].push(tick.quote);
 
-  // Evaluar una sola vez por minuto, desde seg 45
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     evaluateMinute(minute);
   }
 }
 
+/* Evaluación */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return;
@@ -77,32 +82,25 @@ function evaluateMinute(minute) {
     if (prices.length < 5) continue;
 
     const move = prices[prices.length - 1] - prices[0];
-    const rawScore = Math.abs(move);
-    const normScore = rawScore / (NORMALIZATION[symbol] || 1);
+    const score = Math.abs(move) / (NORMALIZATION[symbol] || 1);
 
-    if (!best || normScore > best.score) {
-      best = {
-        symbol,
-        move,
-        score: normScore
-      };
+    if (!best || score > best.score) {
+      best = { symbol, move, score };
     }
   }
 
-  // umbral bajo para no matar señales
   if (!best || best.score < 0.015) return;
 
-  const direction = best.move > 0 ? "CALL" : "PUT";
-  showSignal(minute, best.symbol, direction);
+  showSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT");
 }
 
+/* Mostrar señal */
 function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
-  const time = new Date(minute * 60000)
-    .toISOString()
-    .substr(11, 8) + " UTC";
+  const time =
+    new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
@@ -116,7 +114,8 @@ function showSignal(minute, symbol, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
-      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+      feedbackEl.value +=
+        `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
       btn.disabled = true;
     };
   });
@@ -129,4 +128,36 @@ function showSignal(minute, symbol, direction) {
   }
 }
 
+/* Pantalla siempre activa */
+let wakeLock = null;
+let wakeEnabled = false;
+
+async function enableWakeLock() {
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeEnabled = true;
+    wakeBtn.classList.add("active");
+    wakeBtn.textContent = "🔒 Pantalla activa";
+
+    wakeLock.addEventListener("release", () => {
+      wakeEnabled = false;
+      wakeBtn.classList.remove("active");
+      wakeBtn.textContent = "🔓 Pantalla activa";
+    });
+  } catch (e) {
+    alert("No se pudo mantener la pantalla activa");
+  }
+}
+
+wakeBtn.onclick = () => {
+  wakeEnabled ? wakeLock.release() : enableWakeLock();
+};
+
+document.addEventListener("visibilitychange", () => {
+  if (wakeEnabled && document.visibilityState === "visible") {
+    enableWakeLock();
+  }
+});
+
+/* Start */
 connect();
