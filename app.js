@@ -15,6 +15,23 @@ const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
+const themeBtn = document.getElementById("themeBtn");
+
+/* ✅ TEMA OSCURO/CLARO (nuevo) */
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  document.body.classList.toggle("light", isLight);
+  themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
+  localStorage.setItem("theme", theme);
+}
+
+// cargar preferencia
+applyTheme(localStorage.getItem("theme") || "dark");
+
+themeBtn.onclick = () => {
+  const current = document.body.classList.contains("light") ? "light" : "dark";
+  applyTheme(current === "light" ? "dark" : "light");
+};
 
 /* 🔊 Sonido (PWA Android OK) */
 document.getElementById("soundBtn").onclick = async () => {
