@@ -15,9 +15,7 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
-/* ===============================
-   UI
-================================ */
+/* UI */
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
@@ -25,16 +23,13 @@ const feedbackEl = document.getElementById("feedback");
 const sound = document.getElementById("alertSound");
 const wakeBtn = document.getElementById("wakeBtn");
 
-/* ===============================
-   SONIDO (CORREGIDO PARA PWA)
-================================ */
+/* Sonido (PWA Android friendly) */
 document.getElementById("soundBtn").onclick = async () => {
   try {
     sound.muted = false;
     sound.volume = 1;
     sound.currentTime = 0;
 
-    // desbloqueo real de audio
     await sound.play();
     sound.pause();
 
@@ -50,9 +45,7 @@ document.getElementById("copyFeedback").onclick = () => {
   navigator.clipboard.writeText(feedbackEl.value);
 };
 
-/* ===============================
-   WEBSOCKET
-================================ */
+/* WebSocket */
 function connect() {
   ws = new WebSocket(WS_URL);
 
@@ -69,9 +62,7 @@ function connect() {
   };
 }
 
-/* ===============================
-   TICKS
-================================ */
+/* Ticks */
 function onTick(tick) {
   const epoch = Math.floor(tick.epoch);
   const minute = Math.floor(epoch / 60);
@@ -89,9 +80,7 @@ function onTick(tick) {
   }
 }
 
-/* ===============================
-   EVALUACIÓN
-================================ */
+/* Evaluación */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return;
@@ -103,21 +92,30 @@ function evaluateMinute(minute) {
     if (prices.length < 5) continue;
 
     const move = prices[prices.length - 1] - prices[0];
-    const score = Math.abs(move) / (NORMALIZATION[symbol] || 1);
+    const rawMove = Math.abs(move);
+
+    // ✅ Normalización dinámica por volatilidad (promedio de |delta| por tick)
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) {
+      vol += Math.abs(prices[i] - prices[i - 1]);
+    }
+    vol = vol / (prices.length - 1);
+
+    // Score robusto: movimiento neto relativo a la volatilidad del minuto
+    const score = rawMove / (vol || 1e-9);
 
     if (!best || score > best.score) {
       best = { symbol, move, score };
     }
   }
 
+  // Umbral bajo para no matar señales (mantenido)
   if (!best || best.score < 0.015) return;
 
   showSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT");
 }
 
-/* ===============================
-   MOSTRAR SEÑAL
-================================ */
+/* Mostrar señal */
 function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
@@ -145,16 +143,13 @@ function showSignal(minute, symbol, direction) {
 
   signalsEl.prepend(row);
 
-  // 🔊 SONIDO GARANTIZADO
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
 }
 
-/* ===============================
-   PANTALLA SIEMPRE ACTIVA
-================================ */
+/* Pantalla siempre activa */
 let wakeLock = null;
 let wakeEnabled = false;
 
@@ -185,7 +180,5 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-/* ===============================
-   START
-================================ */
+/* Start */
 connect();
