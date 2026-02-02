@@ -350,4 +350,4 @@ wakeBtn.onclick = async () => {
 /* =========================
    Start
 ========================= */
-connect();
+connect(); 
