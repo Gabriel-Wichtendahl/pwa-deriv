@@ -15,6 +15,10 @@ let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
+// ✅ NUEVO: control de evaluación diferida
+const MIN_TICKS_PER_SYMBOL = 3;          // antes era 5 (esto ayudaba a sesgo)
+const pendingEval = {};                  // minute -> timeoutId
+
 /* UI */
 const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
@@ -74,10 +78,59 @@ function onTick(tick) {
 
   minuteData[minute][symbol].push(tick.quote);
 
+  // ✅ Evaluar una sola vez por minuto desde seg 45, pero con "espera inteligente"
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
-    evaluateMinute(minute);
+    scheduleEvaluate(minute);
   }
+
+  // ✅ limpieza simple: borrar minutos viejos (no afecta nada)
+  const oldMinute = minute - 3;
+  if (minuteData[oldMinute]) delete minuteData[oldMinute];
+  if (pendingEval[oldMinute]) {
+    clearTimeout(pendingEval[oldMinute]);
+    delete pendingEval[oldMinute];
+  }
+}
+
+/* ✅ NUEVO: espera a que haya ticks suficientes en varios símbolos */
+function scheduleEvaluate(minute) {
+  // Evitar múltiples timeouts para el mismo minuto
+  if (pendingEval[minute]) return;
+
+  const tryEval = () => {
+    // si cambió el minuto, abortar
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    const nowMinute = Math.floor(nowEpoch / 60);
+    const nowSec = nowEpoch % 60;
+
+    if (nowMinute !== minute) {
+      pendingEval[minute] = null;
+      delete pendingEval[minute];
+      return;
+    }
+
+    // si ya estamos muy tarde en el minuto, evaluamos con lo que haya
+    // (para no quedarnos sin señal)
+    const late = nowSec >= 58;
+
+    const data = minuteData[minute] || {};
+    const readySymbols = SYMBOLS.filter(sym => (data[sym] || []).length >= MIN_TICKS_PER_SYMBOL);
+
+    // condición ideal: al menos 2 símbolos con data suficiente (reduce monopolio)
+    if (readySymbols.length >= 2 || late) {
+      pendingEval[minute] = null;
+      delete pendingEval[minute];
+      evaluateMinute(minute);
+      return;
+    }
+
+    // reintentar en 1s
+    pendingEval[minute] = setTimeout(tryEval, 1000);
+  };
+
+  // primer intento inmediato
+  pendingEval[minute] = setTimeout(tryEval, 0);
 }
 
 /* Evaluación */
@@ -89,19 +142,20 @@ function evaluateMinute(minute) {
 
   for (const symbol in data) {
     const prices = data[symbol];
-    if (prices.length < 5) continue;
+
+    // ✅ antes: <5 (sesgaba fuerte a R_75). Ahora usamos MIN_TICKS_PER_SYMBOL
+    if (prices.length < MIN_TICKS_PER_SYMBOL) continue;
 
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // Normalización dinámica por volatilidad (promedio de |delta| por tick)
+    // Normalización dinámica por volatilidad (promedio |delta|)
     let vol = 0;
     for (let i = 1; i < prices.length; i++) {
       vol += Math.abs(prices[i] - prices[i - 1]);
     }
     vol = vol / (prices.length - 1);
 
-    // Score robusto
     const score = rawMove / (vol || 1e-9);
 
     if (!best || score > best.score) {
@@ -109,30 +163,23 @@ function evaluateMinute(minute) {
     }
   }
 
-  // Umbral (mantenido)
+  // umbral bajo (mantenido)
   if (!best || best.score < 0.015) return;
 
-  const direction = best.move > 0 ? "CALL" : "PUT";
-
-  // ✅ pasamos score a showSignal
-  showSignal(minute, best.symbol, direction, best.score);
+  showSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT");
 }
 
 /* Mostrar señal */
-function showSignal(minute, symbol, direction, score) {
+function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
-  const time =
-    new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
-
-  // ✅ formato corto para mostrar (por ejemplo 2 decimales)
-  const scoreText = Number.isFinite(score) ? score.toFixed(2) : "—";
+  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
   row.innerHTML = `
-    ${time} | ${symbol} | ${direction} | score: <b>${scoreText}</b>
+    ${time} | ${symbol} | ${direction}
     <button data-v="like">👍</button>
     <button data-v="dislike">👎</button>
     <input placeholder="comentario">
@@ -141,9 +188,7 @@ function showSignal(minute, symbol, direction, score) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
-      // ✅ guardamos también el score en feedback
-      feedbackEl.value +=
-        `${time} | ${symbol} | ${direction} | score:${scoreText} | ${btn.dataset.v} | ${comment}\n`;
+      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
       btn.disabled = true;
     };
   });
