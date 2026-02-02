@@ -5,9 +5,11 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
    Estado
 ========================= */
 let ws;
-let soundEnabled = false;
-let signalCount = 0;
 
+let soundEnabled = false;
+let vibrateEnabled = true;
+
+let signalCount = 0;
 let minuteData = {};
 let lastEvaluatedMinute = null;
 let lastSignalSymbol = null;
@@ -26,14 +28,56 @@ const statusEl = document.getElementById("status");
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
+
 const sound = document.getElementById("alertSound");
+
+const soundBtn = document.getElementById("soundBtn");
 const wakeBtn = document.getElementById("wakeBtn");
+const themeBtn = document.getElementById("themeBtn");
+const vibrateBtn = document.getElementById("vibrateBtn");
+
+/* =========================
+   Helpers UI
+========================= */
+function setBtnActive(btn, active) {
+  if (!btn) return;
+  btn.classList.toggle("active", !!active);
+}
+
+function loadBool(key, fallback) {
+  const v = localStorage.getItem(key);
+  if (v === null) return fallback;
+  return v === "1";
+}
+
+function saveBool(key, value) {
+  localStorage.setItem(key, value ? "1" : "0");
+}
+
+/* =========================
+   🌙 Tema oscuro/claro
+========================= */
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  document.body.classList.toggle("light", isLight);
+  if (themeBtn) themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
+  localStorage.setItem("theme", theme);
+}
+
+(function initTheme() {
+  const saved = localStorage.getItem("theme") || "dark";
+  applyTheme(saved);
+  if (themeBtn) {
+    themeBtn.onclick = () => {
+      const current = document.body.classList.contains("light") ? "light" : "dark";
+      applyTheme(current === "light" ? "dark" : "light");
+    };
+  }
+})();
 
 /* =========================
    🔔 Notificaciones
 ========================= */
-
-// Pedir permiso una sola vez
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
 }
@@ -52,36 +96,84 @@ function showNotification(symbol, direction) {
       body,
       icon: "icon-192.png",
       badge: "icon-192.png",
-      vibrate: [200, 100, 200],
       tag: "deriv-signal",
       renotify: true,
 
-      // 🔥 mejora visibilidad (heads-up cuando el sistema lo permite)
+      // heads-up cuando el sistema lo permite
       requireInteraction: true,
-      silent: false
+      silent: false,
+
+      // vibración opcional (según toggle)
+      vibrate: vibrateEnabled ? [200, 100, 200] : undefined
     });
   });
 }
 
 /* =========================
-   🔊 Sonido
+   📳 Vibración (toggle)
 ========================= */
-document.getElementById("soundBtn").onclick = async () => {
-  try {
-    sound.muted = false;
-    sound.volume = 1;
-    sound.currentTime = 0;
+(function initVibrationToggle() {
+  vibrateEnabled = loadBool("vibrateEnabled", true);
+  if (vibrateBtn) {
+    setBtnActive(vibrateBtn, vibrateEnabled);
+    vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
 
-    // desbloqueo real (PWA Android)
-    await sound.play();
-    sound.pause();
+    vibrateBtn.onclick = () => {
+      vibrateEnabled = !vibrateEnabled;
+      saveBool("vibrateEnabled", vibrateEnabled);
 
-    soundEnabled = true;
-    alert("🔊 Sonido activado correctamente");
-  } catch (e) {
-    alert("⚠️ Tocá nuevamente para habilitar sonido");
+      setBtnActive(vibrateBtn, vibrateEnabled);
+      vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
+
+      // vibración corta de confirmación (si está habilitada)
+      if (vibrateEnabled && "vibrate" in navigator) {
+        navigator.vibrate([80]);
+      }
+    };
   }
-};
+})();
+
+/* =========================
+   🔊 Sonido (toggle + color)
+========================= */
+(function initSoundToggle() {
+  soundEnabled = loadBool("soundEnabled", false);
+  setBtnActive(soundBtn, soundEnabled);
+  if (soundBtn) soundBtn.textContent = soundEnabled ? "🔊 Sonido ON" : "🔇 Sonido OFF";
+
+  if (soundBtn) {
+    soundBtn.onclick = async () => {
+      // si está apagado, intentamos “desbloquear” audio con gesto del usuario
+      if (!soundEnabled) {
+        try {
+          sound.muted = false;
+          sound.volume = 1;
+          sound.currentTime = 0;
+
+          await sound.play();
+          sound.pause();
+
+          soundEnabled = true;
+          saveBool("soundEnabled", true);
+
+          setBtnActive(soundBtn, true);
+          soundBtn.textContent = "🔊 Sonido ON";
+          alert("🔊 Sonido activado correctamente");
+        } catch (e) {
+          alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
+          console.error(e);
+        }
+      } else {
+        // apagar
+        soundEnabled = false;
+        saveBool("soundEnabled", false);
+
+        setBtnActive(soundBtn, false);
+        soundBtn.textContent = "🔇 Sonido OFF";
+      }
+    };
+  }
+})();
 
 document.getElementById("copyFeedback").onclick = () => {
   navigator.clipboard.writeText(feedbackEl.value);
@@ -95,9 +187,7 @@ function connect() {
 
   ws.onopen = () => {
     statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym =>
-      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }))
-    );
+    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
   };
 
   ws.onmessage = e => {
@@ -140,9 +230,7 @@ function scheduleRetry(minute) {
 
   evalRetryTimer = setTimeout(() => {
     const nowMinute = Math.floor(Date.now() / 1000 / 60);
-    if (nowMinute === minute) {
-      evaluateMinute(minute);
-    }
+    if (nowMinute === minute) evaluateMinute(minute);
   }, RETRY_DELAY_MS);
 }
 
@@ -166,9 +254,7 @@ function evaluateMinute(minute) {
 
     // volatilidad promedio
     let vol = 0;
-    for (let i = 1; i < prices.length; i++) {
-      vol += Math.abs(prices[i] - prices[i - 1]);
-    }
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
     vol = vol / Math.max(1, prices.length - 1);
 
     const score = rawMove / (vol || 1e-9);
@@ -183,11 +269,7 @@ function evaluateMinute(minute) {
 
   // anti-monopolio suave
   const second = candidates[1];
-  if (
-    second &&
-    best.symbol === lastSignalSymbol &&
-    second.score >= best.score * 0.90
-  ) {
+  if (second && best.symbol === lastSignalSymbol && second.score >= best.score * 0.90) {
     best = second;
   }
 
@@ -207,9 +289,7 @@ function showSignal(minute, symbol, direction) {
   signalCount++;
   counterEl.textContent = `Señales: ${signalCount}`;
 
-  const time = new Date(minute * 60000)
-    .toISOString()
-    .substr(11, 8) + " UTC";
+  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
   row.className = "row";
@@ -223,8 +303,7 @@ function showSignal(minute, symbol, direction) {
   row.querySelectorAll("button").forEach(btn => {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
-      feedbackEl.value +=
-        `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
+      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
       btn.disabled = true;
     };
   });
@@ -235,6 +314,11 @@ function showSignal(minute, symbol, direction) {
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
+  }
+
+  // 📳 vibración local (además de la notificación)
+  if (vibrateEnabled && "vibrate" in navigator) {
+    navigator.vibrate([120]);
   }
 
   // 🔔 notificación
