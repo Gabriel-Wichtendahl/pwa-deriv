@@ -21,7 +21,30 @@
     <button id="themeBtn">🌙 Oscuro</button>
   </div>
 
-  <div id="counter">Señales: 0</div>
+  <div class="controls secondary">
+    <label class="field">
+      <span>Evaluar en:</span>
+      <select id="evalSelect">
+        <option value="45">45s</option>
+        <option value="50">50s</option>
+        <option value="55">55s</option>
+      </select>
+    </label>
+
+    <label class="field checkbox">
+      <input type="checkbox" id="strongToggle" />
+      <span>Solo señales fuertes</span>
+    </label>
+  </div>
+
+  <div class="stats">
+    <div id="counter">Señales: 0</div>
+    <div class="mini">
+      <span id="likeCount">👍 0</span>
+      <span id="dislikeCount">👎 0</span>
+    </div>
+  </div>
+
   <div id="signals"></div>
 
   <h3>Feedback</h3>
@@ -39,4 +62,4 @@
   </script>
 
 </body>
-</html> 
+</html>
