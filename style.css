@@ -6,6 +6,10 @@
   --btn-text:#e5e7eb;
   --row-bg: rgba(255,255,255,.03);
   --ok:#16a34a;
+
+  --up:#22c55e;
+  --down:#ef4444;
+  --flat:#94a3b8;
 }
 
 body.light{
@@ -24,7 +28,7 @@ body{
   padding: 10px;
 }
 
-/* ✅ pills (tick + countdown) */
+/* pills (tick + countdown) */
 .topStatus{
   display:flex;
   gap:8px;
@@ -115,7 +119,7 @@ button.active{
   padding: 8px;
 }
 
-/* ✅ botón ícono gráfico */
+/* botón ícono gráfico */
 .chartBtn{
   width:40px;
   height:32px;
@@ -132,7 +136,37 @@ button.active{
   opacity:.95;
 }
 
-/* ✅ modal responsive */
+/* ✅ flecha próxima vela */
+.nextArrow{
+  min-width: 28px;
+  text-align:center;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--btn-bg) 70%, transparent);
+}
+
+.nextArrow.pending{
+  opacity: .65;
+}
+
+.nextArrow.up{
+  color: var(--up);
+  border-color: color-mix(in srgb, var(--up) 45%, var(--border));
+}
+
+.nextArrow.down{
+  color: var(--down);
+  border-color: color-mix(in srgb, var(--down) 45%, var(--border));
+}
+
+.nextArrow.flat{
+  color: var(--flat);
+  border-color: color-mix(in srgb, var(--flat) 45%, var(--border));
+}
+
+/* modal responsive */
 .modal.hidden{ display:none; }
 .modal{
   position:fixed;
@@ -150,17 +184,13 @@ button.active{
 
 .modalCard{
   position:relative;
-
-  /* ✅ acorde a pantalla (móvil primero) */
   width: min(980px, calc(100vw - 18px));
   max-height: calc(100vh - 24px);
-
   border:1px solid var(--border);
   border-radius: 16px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px);
   padding: 12px;
-
   display:flex;
   flex-direction:column;
   gap:10px;
@@ -183,7 +213,6 @@ button.active{
 
 #minuteCanvas{
   width:100%;
-  /* ✅ altura dinámica */
   height: min(360px, 55vh);
   border:1px solid var(--border);
   border-radius: 14px;
