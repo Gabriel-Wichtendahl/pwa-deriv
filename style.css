@@ -129,8 +129,6 @@ button.active {
   background: var(--row-bg);
   display: grid;
   gap: 8px;
-
-  cursor: pointer;
 }
 
 .row .topline {
@@ -138,14 +136,18 @@ button.active {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  font-weight: 700;
+  font-weight: 800;
+
+  /* ✅ solo esta parte abre Deriv */
+  cursor: pointer;
+  user-select: none;
 }
 
 .row .badge {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 900;
   border: 1px solid var(--border);
 }
 
@@ -164,11 +166,6 @@ button.active {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-}
-
-.row button,
-.row input {
-  cursor: auto;
 }
 
 .row input {
@@ -190,7 +187,7 @@ textarea {
   padding: 10px;
 }
 
-/* ✅ Flash fuerte cuando aparece señal */
+/* ✅ Flash */
 @keyframes flashPulse {
   0%   { box-shadow: 0 0 0 rgba(0,0,0,0); transform: translateY(0); }
   20%  { box-shadow: 0 0 0 3px rgba(255,255,255,0.08); transform: translateY(-1px); }
@@ -211,7 +208,7 @@ textarea {
   outline: 2px solid color-mix(in srgb, var(--put) 50%, transparent);
 }
 
-/* ✅ Panel fijo Última señal */
+/* ✅ Panel fijo Última señal (sin botón) */
 .lastSignal {
   position: sticky;
   top: 8px;
@@ -252,4 +249,4 @@ textarea {
 .ls-sub {
   font-size: 12px;
   opacity: 0.75;
-}  
+}
