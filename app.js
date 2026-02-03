@@ -2,6 +2,19 @@ const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 /* =========================
+   Config Deriv Deep Link
+   - DEMO + Rise/Fall + parámetros que ya probaste
+========================= */
+const DERIV_DTRADER_TEMPLATE =
+  "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
+
+function makeDerivTraderUrl(symbol) {
+  const u = new URL(DERIV_DTRADER_TEMPLATE);
+  u.searchParams.set("symbol", symbol);
+  return u.toString();
+}
+
+/* =========================
    Estado
 ========================= */
 let ws;
@@ -14,7 +27,6 @@ let minuteData = {};
 let lastEvaluatedMinute = null;
 let lastSignalSymbol = null;
 
-// retry dentro del minuto
 let evalRetryTimer = null;
 
 const MIN_TICKS = 3;
@@ -37,7 +49,7 @@ const themeBtn = document.getElementById("themeBtn");
 const vibrateBtn = document.getElementById("vibrateBtn");
 
 /* =========================
-   Helpers UI
+   Helpers
 ========================= */
 function setBtnActive(btn, active) {
   if (!btn) return;
@@ -67,6 +79,7 @@ function applyTheme(theme) {
 (function initTheme() {
   const saved = localStorage.getItem("theme") || "dark";
   applyTheme(saved);
+
   if (themeBtn) {
     themeBtn.onclick = () => {
       const current = document.body.classList.contains("light") ? "light" : "dark";
@@ -76,16 +89,10 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   🔔 Notificaciones + Deep link Deriv
+   🔔 Notificaciones
 ========================= */
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
-}
-
-// ✅ Link a Deriv Trader con el símbolo exacto
-function makeDerivTraderUrl(symbol) {
-  const params = new URLSearchParams({ symbol });
-  return `https://app.deriv.com/dtrader?${params.toString()}`;
 }
 
 function showNotification(symbol, direction) {
@@ -110,13 +117,12 @@ function showNotification(symbol, direction) {
       requireInteraction: true,
       silent: false,
 
-      // vibración opcional (según toggle)
+      // vibración opcional
       vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
 
-      // ✅ CLAVE: datos para el click (lo usa sw.js)
+      // ✅ para el click (sw.js abre esto)
       data: { url, symbol, direction },
 
-      // (opcional) botón en la notificación
       actions: [{ action: "open", title: "Abrir Deriv" }]
     });
   });
@@ -127,6 +133,7 @@ function showNotification(symbol, direction) {
 ========================= */
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
+
   if (vibrateBtn) {
     setBtnActive(vibrateBtn, vibrateEnabled);
     vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
@@ -138,9 +145,7 @@ function showNotification(symbol, direction) {
       setBtnActive(vibrateBtn, vibrateEnabled);
       vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
 
-      if (vibrateEnabled && "vibrate" in navigator) {
-        navigator.vibrate([80]);
-      }
+      if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([80]);
     };
   }
 })();
@@ -150,6 +155,7 @@ function showNotification(symbol, direction) {
 ========================= */
 (function initSoundToggle() {
   soundEnabled = loadBool("soundEnabled", false);
+
   setBtnActive(soundBtn, soundEnabled);
   if (soundBtn) soundBtn.textContent = soundEnabled ? "🔊 Sonido ON" : "🔇 Sonido OFF";
 
@@ -224,12 +230,14 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
+  // primer intento en segundo 45
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
     if (!ok) scheduleRetry(minute);
   }
 
+  // limpieza simple
   delete minuteData[minute - 2];
 }
 
@@ -274,6 +282,7 @@ function evaluateMinute(minute) {
   candidates.sort((a, b) => b.score - a.score);
   let best = candidates[0];
 
+  // anti-monopolio suave
   const second = candidates[1];
   if (second && best.symbol === lastSignalSymbol && second.score >= best.score * 0.90) {
     best = second;
