@@ -138,7 +138,7 @@ button.danger {
 
 .row .topline {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   gap: 10px;
   font-weight: 800;
@@ -208,6 +208,39 @@ textarea {
   width: 42px;
   height: 20px;
   display: block;
+}
+
+/* ✅ Icono outcome (resultado del minuto siguiente) */
+.outcomeIcon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+}
+
+.outcomeIcon.pending {
+  opacity: 0.7;
+}
+
+.outcomeIcon.up {
+  border-color: color-mix(in srgb, var(--call) 50%, var(--border));
+  background: color-mix(in srgb, var(--call) 18%, transparent);
+}
+
+.outcomeIcon.down {
+  border-color: color-mix(in srgb, var(--put) 50%, var(--border));
+  background: color-mix(in srgb, var(--put) 18%, transparent);
+}
+
+.outcomeIcon.flat {
+  opacity: 0.85;
 }
 
 /* Flash */
