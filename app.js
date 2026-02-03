@@ -60,11 +60,11 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-/* ✅ tick health + countdown */
+/* tick health + countdown */
 let lastTickEpoch = null;
 let currentMinuteEpochBase = null;
 
-/* ✅ para calcular próxima vela */
+/* próxima vela */
 let lastSeenMinute = null;
 let candleOC = {}; // minute -> symbol -> {open, close}
 
@@ -128,6 +128,22 @@ function rebuildFeedbackFromHistory() {
     text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | ${vote} | ${comment}\n`;
   }
   if (feedbackEl) feedbackEl.value = text;
+}
+
+function cssEscape(s) {
+  return String(s).replace(/"/g, '\\"');
+}
+
+function updateRowChartBtn(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const btn = row.querySelector(".chartBtn");
+  if (!btn) return;
+
+  const ready = !!item.minuteComplete;
+  btn.disabled = !ready;
+  btn.title = ready ? "Ver gráfico del minuto" : "Esperando cierre del minuto…";
+  btn.setAttribute("aria-label", btn.title);
 }
 
 /* =========================
@@ -211,9 +227,7 @@ function applyTheme(theme) {
 /* =========================
    Copy feedback
 ========================= */
-if (copyBtn) {
-  copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value);
-}
+if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value);
 
 /* =========================
    🧹 Vaciar historial
@@ -284,9 +298,11 @@ function showNotification(symbol, direction) {
 }
 
 /* =========================
-   ✅ Modal gráfico (fix: dibujar después de mostrar)
+   ✅ Modal gráfico
 ========================= */
 function openChartModal(item) {
+  if (!item.minuteComplete) return; // ✅ no abrir antes del cierre del minuto
+
   modalCurrentItem = item;
   if (!chartModal) return;
 
@@ -295,7 +311,6 @@ function openChartModal(item) {
 
   chartModal.classList.remove("hidden");
 
-  // ✅ ahora que el modal es visible, el canvas ya tiene tamaño real
   requestAnimationFrame(() => {
     drawLineChart(minuteCanvas, item.ticks || []);
   });
@@ -309,6 +324,7 @@ function closeChartModal() {
 
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeChartModal();
 });
@@ -320,7 +336,6 @@ if (modalOpenDerivBtn) {
   };
 }
 
-// ✅ redibujar si gira pantalla o cambia tamaño
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (!modalCurrentItem) return;
@@ -329,7 +344,6 @@ window.addEventListener("resize", () => {
 
 function drawLineChart(canvas, ticks) {
   if (!canvas) return;
-
   const ctx = canvas.getContext("2d");
 
   const cssW = canvas.clientWidth || 1;
@@ -351,7 +365,7 @@ function drawLineChart(canvas, ticks) {
   ctx.fillRect(0, 0, w, h);
   ctx.globalAlpha = 1;
 
-  // ejes X (0..60)
+  // labels 0/60
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -359,7 +373,7 @@ function drawLineChart(canvas, ticks) {
   ctx.fillText("60s", w - 34, h - 10);
   ctx.globalAlpha = 1;
 
-  // línea vertical 30s
+  // línea 30s
   const x30 = (30 / 60) * (w - 20) + 10;
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
@@ -376,11 +390,10 @@ function drawLineChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  // ✅ asegurar minuto completo: agrego puntos en 0s y 60s
+  // minuto completo 0..60 (en teoría ya está completo, igual aseguramos)
   const pts = ticks.map(t => ({ sec: t.sec, quote: t.quote })).sort((a,b)=>a.sec-b.sec);
   const first = pts[0];
   const last = pts[pts.length - 1];
-
   if (first.sec > 0) pts.unshift({ sec: 0, quote: first.quote });
   if (last.sec < 60) pts.push({ sec: 60, quote: last.quote });
 
@@ -413,7 +426,6 @@ function drawLineChart(canvas, ticks) {
     const x = (pts[i].sec / 60) * (w - 20) + 10;
     const yNorm = (pts[i].quote - min) / (max - min);
     const y = (1 - yNorm) * (h - 30) + 10;
-
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
@@ -421,7 +433,7 @@ function drawLineChart(canvas, ticks) {
 }
 
 /* =========================
-   ✅ Flecha próxima vela
+   ✅ Próxima vela: flecha
 ========================= */
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome; // "up" | "down" | "flat"
@@ -457,13 +469,8 @@ function updateRowNextArrow(item) {
   }
 }
 
-// escape para selector
-function cssEscape(s) {
-  return String(s).replace(/"/g, '\\"');
-}
-
 /* =========================
-   ✅ Construir fila
+   ✅ Fila
 ========================= */
 function buildRow(item) {
   const row = document.createElement("div");
@@ -476,7 +483,7 @@ function buildRow(item) {
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)}</span>
 
-      <button class="chartBtn" type="button" title="Ver gráfico del minuto" aria-label="Ver gráfico del minuto">
+      <button class="chartBtn" type="button">
         <svg viewBox="0 0 24 24" fill="none">
           <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
           <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -497,26 +504,27 @@ function buildRow(item) {
     </div>
   `;
 
-  // texto abre Deriv (misma pestaña)
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
-  // botón gráfico abre modal
-  row.querySelector(".chartBtn").onclick = (e) => {
+  const chartBtn = row.querySelector(".chartBtn");
+  chartBtn.onclick = (e) => {
     e.stopPropagation();
+    if (chartBtn.disabled) return;
     openChartModal(item);
   };
 
-  // like/dislike
+  // ✅ set disabled until minute closes
+  updateRowChartBtn(item);
+
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
       if (item.vote) return;
 
       item.vote = btn.dataset.v;
-      const comment = row.querySelector(".row-comment").value || "";
-      item.comment = comment;
+      item.comment = row.querySelector(".row-comment").value || "";
 
       saveHistory(history);
       rebuildFeedbackFromHistory();
@@ -525,7 +533,6 @@ function buildRow(item) {
     };
   });
 
-  // comentario blur
   const input = row.querySelector(".row-comment");
   input.addEventListener("blur", () => {
     item.comment = input.value || "";
@@ -533,9 +540,7 @@ function buildRow(item) {
     rebuildFeedbackFromHistory();
   });
 
-  // ✅ aplicar estado de flecha si ya existe
   updateRowNextArrow(item);
-
   return row;
 }
 
@@ -571,7 +576,7 @@ function connect() {
 }
 
 /* =========================
-   Tick health + countdown UI
+   Tick health + countdown
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
@@ -602,13 +607,13 @@ setInterval(() => {
 }, 1000);
 
 /* =========================
-   ✅ Finalizar vela (para flecha próxima)
+   Finalizar vela + habilitar gráficos
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // para cada símbolo: vela de minute => afecta señales del minute-1
+  // 1) outcome para señales del minuto anterior (minute-1)
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -625,7 +630,17 @@ function finalizeMinute(minute) {
     }
   }
 
-  // limpiar para no crecer infinito
+  // 2) ✅ marcar como completo el minuto finalizado (habilita botón gráfico)
+  let changed = false;
+  for (const it of history) {
+    if (it.minute === minute && !it.minuteComplete) {
+      it.minuteComplete = true;
+      changed = true;
+      updateRowChartBtn(it);
+    }
+  }
+  if (changed) saveHistory(history);
+
   delete candleOC[minute - 3];
 }
 
@@ -638,29 +653,25 @@ function onTick(tick) {
   const sec = epoch % 60;
   const symbol = tick.symbol;
 
-  // tick health / countdown
   lastTickEpoch = epoch;
   currentMinuteEpochBase = minute * 60;
 
-  // ✅ detectar cambio de minuto para finalizar velas
+  // detectar cambio de minuto -> finalizar los minutos que quedaron atrás
   if (lastSeenMinute === null) lastSeenMinute = minute;
   if (minute > lastSeenMinute) {
     for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
     lastSeenMinute = minute;
   }
 
-  // almacenar ticks del minuto
+  // ticks por minuto
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push({ sec, quote: tick.quote });
 
-  // ✅ open/close de la vela del minuto (para outcome)
+  // open/close vela
   if (!candleOC[minute]) candleOC[minute] = {};
-  if (!candleOC[minute][symbol]) {
-    candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
-  } else {
-    candleOC[minute][symbol].close = tick.quote;
-  }
+  if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
+  else candleOC[minute][symbol].close = tick.quote;
 
   // evaluar a los 45s
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
@@ -682,7 +693,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Evaluación (la que venías usando)
+   Evaluación
 ========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
@@ -740,7 +751,8 @@ function addSignal(minute, symbol, direction, ticks) {
     vote: "",
     comment: "",
     ticks: Array.isArray(ticks) ? ticks : [],
-    nextOutcome: "" // se completa cuando cierre el minuto siguiente
+    nextOutcome: "",
+    minuteComplete: false // ✅ hasta que cierre el minuto
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -755,18 +767,15 @@ function addSignal(minute, symbol, direction, ticks) {
   const row = buildRow(item);
   signalsEl.prepend(row);
 
-  // sonido
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
 
-  // vibración local
   if (vibrateEnabled && "vibrate" in navigator) {
     navigator.vibrate([120]);
   }
 
-  // notificación
   showNotification(symbol, direction);
 }
 
@@ -796,6 +805,12 @@ wakeBtn.onclick = async () => {
    Start
 ========================= */
 renderHistory();
+
+// ✅ Asegurar que al cargar se respeten disabled/enabled según minuteComplete guardado
+for (const it of history) {
+  if (it.minuteComplete) updateRowChartBtn(it);
+}
+
 updateTickHealthUI();
 updateCountdownUI();
 connect();
