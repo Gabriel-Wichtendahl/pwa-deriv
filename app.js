@@ -76,10 +76,16 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   🔔 Notificaciones
+   🔔 Notificaciones + Deep link Deriv
 ========================= */
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
+}
+
+// ✅ Link a Deriv Trader con el símbolo exacto
+function makeDerivTraderUrl(symbol) {
+  const params = new URLSearchParams({ symbol });
+  return `https://app.deriv.com/dtrader?${params.toString()}`;
 }
 
 function showNotification(symbol, direction) {
@@ -88,6 +94,7 @@ function showNotification(symbol, direction) {
 
   const title = "📈 Deriv Signal";
   const body = `${symbol} – ${direction}`;
+  const url = makeDerivTraderUrl(symbol);
 
   navigator.serviceWorker.getRegistration().then(reg => {
     if (!reg) return;
@@ -104,7 +111,13 @@ function showNotification(symbol, direction) {
       silent: false,
 
       // vibración opcional (según toggle)
-      vibrate: vibrateEnabled ? [200, 100, 200] : undefined
+      vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
+
+      // ✅ CLAVE: datos para el click (lo usa sw.js)
+      data: { url, symbol, direction },
+
+      // (opcional) botón en la notificación
+      actions: [{ action: "open", title: "Abrir Deriv" }]
     });
   });
 }
@@ -125,7 +138,6 @@ function showNotification(symbol, direction) {
       setBtnActive(vibrateBtn, vibrateEnabled);
       vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
 
-      // vibración corta de confirmación (si está habilitada)
       if (vibrateEnabled && "vibrate" in navigator) {
         navigator.vibrate([80]);
       }
@@ -143,7 +155,6 @@ function showNotification(symbol, direction) {
 
   if (soundBtn) {
     soundBtn.onclick = async () => {
-      // si está apagado, intentamos “desbloquear” audio con gesto del usuario
       if (!soundEnabled) {
         try {
           sound.muted = false;
@@ -164,7 +175,6 @@ function showNotification(symbol, direction) {
           console.error(e);
         }
       } else {
-        // apagar
         soundEnabled = false;
         saveBool("soundEnabled", false);
 
@@ -214,14 +224,12 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  // primer intento en segundo 45
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
     if (!ok) scheduleRetry(minute);
   }
 
-  // limpieza simple
   delete minuteData[minute - 2];
 }
 
@@ -252,7 +260,6 @@ function evaluateMinute(minute) {
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // volatilidad promedio
     let vol = 0;
     for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
     vol = vol / Math.max(1, prices.length - 1);
@@ -267,7 +274,6 @@ function evaluateMinute(minute) {
   candidates.sort((a, b) => b.score - a.score);
   let best = candidates[0];
 
-  // anti-monopolio suave
   const second = candidates[1];
   if (second && best.symbol === lastSignalSymbol && second.score >= best.score * 0.90) {
     best = second;
@@ -310,18 +316,15 @@ function showSignal(minute, symbol, direction) {
 
   signalsEl.prepend(row);
 
-  // 🔊 sonido
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
 
-  // 📳 vibración local (además de la notificación)
   if (vibrateEnabled && "vibrate" in navigator) {
     navigator.vibrate([120]);
   }
 
-  // 🔔 notificación
   showNotification(symbol, direction);
 }
 
