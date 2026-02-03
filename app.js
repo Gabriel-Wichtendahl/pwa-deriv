@@ -51,6 +51,11 @@ let soundEnabled = false;
 let vibrateEnabled = true;
 
 let signalCount = 0;
+
+/**
+ * minuteData:
+ *   minute -> symbol -> [{ms, quote}, ...]   // ms: 0..60000 dentro del minuto
+ */
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
@@ -61,8 +66,8 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 /* tick health + countdown */
-let lastTickEpoch = null;
-let currentMinuteEpochBase = null;
+let lastTickEpochMs = null;
+let currentMinuteStartMs = null;
 
 /* próxima vela */
 let lastSeenMinute = null;
@@ -106,11 +111,13 @@ function setBtnActive(btn, active) {
   if (!btn) return;
   btn.classList.toggle("active", !!active);
 }
+
 function loadBool(key, fallback) {
   const v = localStorage.getItem(key);
   if (v === null) return fallback;
   return v === "1";
 }
+
 function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
@@ -134,39 +141,13 @@ function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
 }
 
-/* =========================
-   ✅ Botón gráfico: lock/unlock visual
-========================= */
-const CHART_ICON_SVG = `
-<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-  <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  <path d="M6 14l4-4 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="10" cy="10" r="1" fill="currentColor"/>
-  <circle cx="13" cy="13" r="1" fill="currentColor"/>
-  <circle cx="18" cy="6" r="1" fill="currentColor"/>
-</svg>
-`;
-
-function updateRowChartBtn(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-
-  const btn = row.querySelector(".chartBtn");
-  if (!btn) return;
-
-  const ready = !!item.minuteComplete;
-  btn.disabled = !ready;
-
-  if (ready) {
-    btn.innerHTML = CHART_ICON_SVG;
-    btn.title = "Ver gráfico del minuto (completo 0–60)";
-    btn.setAttribute("aria-label", btn.title);
-  } else {
-    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto… (se habilita al llegar a 60s)";
-    btn.setAttribute("aria-label", btn.title);
-  }
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 /* =========================
@@ -178,6 +159,7 @@ function applyTheme(theme) {
   if (themeBtn) themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
   localStorage.setItem("theme", theme);
 }
+
 (function initTheme() {
   const saved = localStorage.getItem("theme") || "dark";
   applyTheme(saved);
@@ -204,6 +186,7 @@ function applyTheme(theme) {
           sound.muted = false;
           sound.volume = 1;
           sound.currentTime = 0;
+
           await sound.play();
           sound.pause();
 
@@ -218,6 +201,7 @@ function applyTheme(theme) {
       } else {
         soundEnabled = false;
         saveBool("soundEnabled", false);
+
         setBtnActive(soundBtn, false);
         soundBtn.textContent = "🔇 Sonido OFF";
       }
@@ -334,7 +318,7 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
 
   requestAnimationFrame(() => {
-    drawLineChart(minuteCanvas, item.ticks || []);
+    drawDerivLikeChart(minuteCanvas, item.ticks || []);
   });
 }
 
@@ -361,44 +345,13 @@ if (modalOpenDerivBtn) {
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (!modalCurrentItem) return;
-  drawLineChart(minuteCanvas, modalCurrentItem.ticks || []);
+  drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
 });
 
 /* =========================
-   ✅ Gráfico: 0..60 con TODOS los ticks (agrupados por segundo)
+   ✅ Gráfico tipo Deriv (area + line) con TODOS los ticks (ms)
 ========================= */
-function compressTicksToSeconds(ticks) {
-  // ticks: [{sec, quote}, ...] puede contener MUCHOS con el mismo sec.
-  // Queremos 0..60, y por cada segundo usamos el último tick que llegó en ese segundo.
-  const perSec = new Array(61).fill(null);
-
-  for (const t of ticks) {
-    const s = Math.max(0, Math.min(60, Math.floor(t.sec)));
-    perSec[s] = t.quote; // último que llega para ese segundo
-  }
-
-  // rellenar huecos hacia adelante/atrás para que la línea sea continua
-  // 1) buscar primer valor
-  let firstIdx = perSec.findIndex(v => v !== null);
-  if (firstIdx === -1) return [];
-
-  // rellenar hacia atrás con el primero
-  for (let i = 0; i < firstIdx; i++) perSec[i] = perSec[firstIdx];
-
-  // rellenar hacia adelante con el último conocido
-  let lastVal = perSec[firstIdx];
-  for (let i = firstIdx + 1; i <= 60; i++) {
-    if (perSec[i] === null) perSec[i] = lastVal;
-    else lastVal = perSec[i];
-  }
-
-  // devolver puntos 0..60
-  const pts = [];
-  for (let s = 0; s <= 60; s++) pts.push({ sec: s, quote: perSec[s] });
-  return pts;
-}
-
-function drawLineChart(canvas, ticks) {
+function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
 
@@ -415,48 +368,38 @@ function drawLineChart(canvas, ticks) {
 
   ctx.clearRect(0, 0, w, h);
 
-  // fondo
-  ctx.globalAlpha = 0.22;
+  // Fondo suave
+  ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, 0, w, h);
   ctx.globalAlpha = 1;
 
-  // labels 0/60
-  ctx.globalAlpha = 0.85;
-  ctx.fillStyle = "rgba(255,255,255,0.75)";
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("0s", 10, h - 10);
-  ctx.fillText("60s", w - 34, h - 10);
-  ctx.globalAlpha = 1;
-
-  // línea 30s
-  const x30 = (30 / 60) * (w - 20) + 10;
-  ctx.globalAlpha = 0.55;
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x30, 10);
-  ctx.lineTo(x30, h - 20);
-  ctx.stroke();
-
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "rgba(255,255,255,0.75)";
-  ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
-  ctx.globalAlpha = 1;
-
   if (!ticks || ticks.length < 2) return;
 
-  // ✅ clave: comprimimos a 0..60 (un valor por segundo)
-  const pts = compressTicksToSeconds(ticks);
-  if (pts.length < 2) return;
+  // ticks: [{ms, quote}, ...] donde ms: 0..60000
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
+  // Forzar 0ms y 60000ms para completar el minuto visualmente
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  if (first.ms > 0) pts.unshift({ ms: 0, quote: first.quote });
+  if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
+
+  // Escala Y
   const quotes = pts.map(p => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
   if (max - min < 1e-9) max = min + 1e-9;
 
-  // grilla
-  ctx.globalAlpha = 0.25;
+  // Helpers mapeo
+  const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
+  const yOf = (q) => {
+    const yNorm = (q - min) / (max - min);
+    return (1 - yNorm) * (h - 30) + 10;
+  };
+
+  // Grilla sutil
+  ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i++) {
@@ -468,21 +411,102 @@ function drawLineChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  // línea
-  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+  // Marca 30s
+  const x30 = xOf(30000);
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x30, 10);
+  ctx.lineTo(x30, h - 20);
+  ctx.stroke();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
+  ctx.globalAlpha = 1;
+
+  // AREA (como Deriv)
+  ctx.beginPath();
+  ctx.moveTo(xOf(pts[0].ms), h - 20);
+  for (let i = 0; i < pts.length; i++) {
+    ctx.lineTo(xOf(pts[i].ms), yOf(pts[i].quote));
+  }
+  ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
+  ctx.closePath();
+
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // LINEA
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
   ctx.beginPath();
   for (let i = 0; i < pts.length; i++) {
-    const x = (pts[i].sec / 60) * (w - 20) + 10;
-    const yNorm = (pts[i].quote - min) / (max - min);
-    const y = (1 - yNorm) * (h - 30) + 10;
+    const x = xOf(pts[i].ms);
+    const y = yOf(pts[i].quote);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
+
+  // Punto último precio
+  const lx = xOf(pts[pts.length - 1].ms);
+  const ly = yOf(pts[pts.length - 1].quote);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Labels 0s / 60s
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("0s", 10, h - 10);
+  ctx.fillText("60s", w - 34, h - 10);
+  ctx.globalAlpha = 1;
+}
+
+/* =========================
+   ✅ Botón gráfico: lock/unlock visual
+========================= */
+const CHART_ICON_SVG = `
+<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M6 14l4-4 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="10" cy="10" r="1" fill="currentColor"/>
+  <circle cx="13" cy="13" r="1" fill="currentColor"/>
+  <circle cx="18" cy="6" r="1" fill="currentColor"/>
+</svg>
+`;
+
+function updateRowChartBtn(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+
+  const btn = row.querySelector(".chartBtn");
+  if (!btn) return;
+
+  const ready = !!item.minuteComplete;
+  btn.disabled = !ready;
+
+  if (ready) {
+    btn.innerHTML = CHART_ICON_SVG;
+    btn.title = "Ver gráfico del minuto (ticks reales 0–60)";
+    btn.setAttribute("aria-label", btn.title);
+  } else {
+    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
+    btn.title = "Esperando cierre del minuto… (se habilita al llegar a 60s)";
+    btn.setAttribute("aria-label", btn.title);
+  }
 }
 
 /* =========================
@@ -557,7 +581,6 @@ function buildRow(item) {
     openChartModal(item);
   };
 
-  // ✅ set lock/unlock visual + disabled
   updateRowChartBtn(item);
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
@@ -584,15 +607,6 @@ function buildRow(item) {
 
   updateRowNextArrow(item);
   return row;
-}
-
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }
 
 /* =========================
@@ -622,24 +636,24 @@ function connect() {
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
-  if (!lastTickEpoch) {
+  if (!lastTickEpochMs) {
     tickHealthEl.textContent = "Último tick: —";
     return;
   }
-  const nowSec = Math.floor(Date.now() / 1000);
-  const age = nowSec - lastTickEpoch;
-  tickHealthEl.textContent = `Último tick: hace ${age}s`;
+  const ageMs = Date.now() - lastTickEpochMs;
+  const ageSec = Math.max(0, Math.floor(ageMs / 1000));
+  tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
 
 function updateCountdownUI() {
   if (!countdownEl) return;
-  if (!currentMinuteEpochBase) {
+  if (!currentMinuteStartMs) {
     countdownEl.textContent = "⏱️ 60";
     return;
   }
-  const nowSec = Math.floor(Date.now() / 1000);
-  const secInMinute = (nowSec - currentMinuteEpochBase) % 60;
-  const remaining = 60 - Math.max(0, Math.min(59, secInMinute));
+  const nowMs = Date.now();
+  const msInMinute = (nowMs - currentMinuteStartMs) % 60000;
+  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   countdownEl.textContent = `⏱️ ${remaining}`;
 }
 
@@ -655,7 +669,7 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // 1) outcome para señales del minuto anterior (minute-1)
+  // outcome para señales del minuto anterior (minute-1)
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -672,7 +686,7 @@ function finalizeMinute(minute) {
     }
   }
 
-  // 2) ✅ marcar como completo el minuto finalizado (habilita botón gráfico)
+  // marcar minuto completo (habilita botón gráfico)
   let changed = false;
   for (const it of history) {
     if (it.minute === minute && !it.minuteComplete) {
@@ -687,31 +701,39 @@ function finalizeMinute(minute) {
 }
 
 /* =========================
-   Ticks + evaluación
+   Ticks + evaluación (ms)
 ========================= */
 function onTick(tick) {
-  const epoch = Math.floor(tick.epoch);
-  const minute = Math.floor(epoch / 60);
-  const sec = epoch % 60;
+  // ✅ usar ms para no perder ticks dentro del mismo segundo
+  const epochMs = Math.round(Number(tick.epoch) * 1000);
+  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
+
+  const minute = Math.floor(epochMs / 60000);
+  const msInMinute = epochMs - minuteStartMs; // 0..59999 (aprox)
+  const sec = Math.floor(msInMinute / 1000);  // para evaluar en seg 45
   const symbol = tick.symbol;
 
-  lastTickEpoch = epoch;
-  currentMinuteEpochBase = minute * 60;
+  lastTickEpochMs = epochMs;
+  currentMinuteStartMs = minuteStartMs;
 
+  // detectar cambio de minuto -> finalizar minutos pendientes
   if (lastSeenMinute === null) lastSeenMinute = minute;
   if (minute > lastSeenMinute) {
     for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
     lastSeenMinute = minute;
   }
 
+  // guardar ticks
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-  minuteData[minute][symbol].push({ sec, quote: tick.quote });
+  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
 
+  // open/close vela
   if (!candleOC[minute]) candleOC[minute] = {};
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
+  // evaluar a los 45s
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
@@ -725,7 +747,7 @@ function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
 
   evalRetryTimer = setTimeout(() => {
-    const nowMinute = Math.floor(Date.now() / 1000 / 60);
+    const nowMinute = Math.floor(Date.now() / 60000);
     if (nowMinute === minute) evaluateMinute(minute);
   }, RETRY_DELAY_MS);
 }
@@ -844,7 +866,7 @@ wakeBtn.onclick = async () => {
 ========================= */
 renderHistory();
 
-// ✅ asegurar que al cargar respete lock/unlock guardado
+// asegurar lock/unlock al cargar
 for (const it of history) {
   updateRowChartBtn(it);
 }
