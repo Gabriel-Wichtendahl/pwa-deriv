@@ -4,6 +4,10 @@
   --border: #334155;
   --btn-bg: #0f172a;
   --btn-text: #e5e7eb;
+
+  --call: #16a34a;
+  --put: #dc2626;
+  --row-bg: rgba(255,255,255,0.02);
 }
 
 body.light {
@@ -12,6 +16,8 @@ body.light {
   --border: #cbd5e1;
   --btn-bg: #e2e8f0;
   --btn-text: #0f172a;
+
+  --row-bg: rgba(0,0,0,0.03);
 }
 
 body {
@@ -22,36 +28,132 @@ body {
 }
 
 .controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 8px;
 }
 
-button {
-  margin: 4px;
+.controls.secondary {
+  align-items: center;
+  opacity: 0.95;
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
   padding: 6px 10px;
+  background: var(--row-bg);
+}
+
+.field span {
+  font-size: 13px;
+  opacity: 0.9;
+}
+
+.field select {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
+
+.field.checkbox {
+  cursor: pointer;
+}
+
+.field.checkbox input {
+  transform: scale(1.05);
+}
+
+button {
+  margin: 0;
+  padding: 8px 10px;
   font-size: 14px;
   background: var(--btn-bg);
   color: var(--btn-text);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
-/* ✅ Estado activo (sonido/vibración/wakelock) */
 button.active {
   background: #16a34a;
   color: #ffffff;
   border-color: #16a34a;
 }
 
-/* Mantengo por compatibilidad, pero ya lo cubre button.active */
-#wakeBtn.active {
-  background: #16a34a;
-  color: #ffffff;
-  border-color: #16a34a;
+.stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 10px 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--row-bg);
+}
+
+.stats .mini {
+  display: flex;
+  gap: 10px;
+  opacity: 0.9;
 }
 
 .row {
-  border-bottom: 1px solid var(--border);
-  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  margin: 8px 0;
+  background: var(--row-bg);
+  display: grid;
+  gap: 8px;
+}
+
+.row .topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
+
+.row .badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+}
+
+.row.call .badge {
+  background: color-mix(in srgb, var(--call) 20%, transparent);
+  border-color: color-mix(in srgb, var(--call) 50%, var(--border));
+}
+
+.row.put .badge {
+  background: color-mix(in srgb, var(--put) 18%, transparent);
+  border-color: color-mix(in srgb, var(--put) 50%, var(--border));
+}
+
+.row .actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.row input {
+  flex: 1;
+  min-width: 160px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
 }
 
 textarea {
@@ -59,6 +161,27 @@ textarea {
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+/* ✅ Flash fuerte cuando aparece señal */
+@keyframes flashPulse {
+  0%   { box-shadow: 0 0 0 rgba(0,0,0,0); transform: translateY(0); }
+  20%  { box-shadow: 0 0 0 3px rgba(255,255,255,0.08); transform: translateY(-1px); }
+  40%  { box-shadow: 0 0 0 6px rgba(255,255,255,0.04); transform: translateY(0); }
+  60%  { box-shadow: 0 0 0 3px rgba(255,255,255,0.08); }
+  100% { box-shadow: 0 0 0 rgba(0,0,0,0); }
+}
+
+.row.flash {
+  animation: flashPulse 0.6s ease-in-out 3;
+}
+
+.row.call.flash {
+  outline: 2px solid color-mix(in srgb, var(--call) 50%, transparent);
+}
+
+.row.put.flash {
+  outline: 2px solid color-mix(in srgb, var(--put) 50%, transparent);
 }
