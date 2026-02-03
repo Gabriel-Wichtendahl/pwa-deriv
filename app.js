@@ -51,7 +51,6 @@ let soundEnabled = false;
 let vibrateEnabled = true;
 
 let signalCount = 0;
-
 let minuteData = {};
 let lastEvaluatedMinute = null;
 
@@ -64,6 +63,10 @@ const RETRY_DELAY_MS = 5000;
 /* ✅ tick health + countdown */
 let lastTickEpoch = null;
 let currentMinuteEpochBase = null;
+
+/* ✅ para calcular próxima vela */
+let lastSeenMinute = null;
+let candleOC = {}; // minute -> symbol -> {open, close}
 
 /* =========================
    UI
@@ -241,7 +244,6 @@ function renderHistory() {
   updateCounter();
   rebuildFeedbackFromHistory();
 
-  // mostrar últimas primero
   for (const it of [...history].reverse()) {
     const row = buildRow(it);
     signalsEl.appendChild(row);
@@ -282,7 +284,7 @@ function showNotification(symbol, direction) {
 }
 
 /* =========================
-   ✅ Modal gráfico (línea + línea 30s)
+   ✅ Modal gráfico (fix: dibujar después de mostrar)
 ========================= */
 function openChartModal(item) {
   modalCurrentItem = item;
@@ -291,8 +293,12 @@ function openChartModal(item) {
   modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)}`;
   modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
 
-  drawLineChart(minuteCanvas, item.ticks || []);
   chartModal.classList.remove("hidden");
+
+  // ✅ ahora que el modal es visible, el canvas ya tiene tamaño real
+  requestAnimationFrame(() => {
+    drawLineChart(minuteCanvas, item.ticks || []);
+  });
 }
 
 function closeChartModal() {
@@ -314,12 +320,20 @@ if (modalOpenDerivBtn) {
   };
 }
 
+// ✅ redibujar si gira pantalla o cambia tamaño
+window.addEventListener("resize", () => {
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (!modalCurrentItem) return;
+  drawLineChart(minuteCanvas, modalCurrentItem.ticks || []);
+});
+
 function drawLineChart(canvas, ticks) {
   if (!canvas) return;
+
   const ctx = canvas.getContext("2d");
 
-  const cssW = canvas.clientWidth;
-  const cssH = canvas.clientHeight;
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
   const dpr = window.devicePixelRatio || 1;
 
   canvas.width = Math.floor(cssW * dpr);
@@ -337,31 +351,46 @@ function drawLineChart(canvas, ticks) {
   ctx.fillRect(0, 0, w, h);
   ctx.globalAlpha = 1;
 
-  // ✅ línea vertical en 30s
+  // ejes X (0..60)
+  ctx.globalAlpha = 0.85;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("0s", 10, h - 10);
+  ctx.fillText("60s", w - 34, h - 10);
+  ctx.globalAlpha = 1;
+
+  // línea vertical 30s
   const x30 = (30 / 60) * (w - 20) + 10;
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(x30, 10);
-  ctx.lineTo(x30, h - 10);
+  ctx.lineTo(x30, h - 20);
   ctx.stroke();
 
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
-  ctx.font = "12px system-ui, sans-serif";
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
   if (!ticks || ticks.length < 2) return;
 
-  const quotes = ticks.map(t => t.quote);
+  // ✅ asegurar minuto completo: agrego puntos en 0s y 60s
+  const pts = ticks.map(t => ({ sec: t.sec, quote: t.quote })).sort((a,b)=>a.sec-b.sec);
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+
+  if (first.sec > 0) pts.unshift({ sec: 0, quote: first.quote });
+  if (last.sec < 60) pts.push({ sec: 60, quote: last.quote });
+
+  const quotes = pts.map(p => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
   if (max - min < 1e-9) max = min + 1e-9;
 
   // grilla
-  ctx.globalAlpha = 0.3;
+  ctx.globalAlpha = 0.25;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i++) {
@@ -380,12 +409,10 @@ function drawLineChart(canvas, ticks) {
   ctx.lineCap = "round";
 
   ctx.beginPath();
-  for (let i = 0; i < ticks.length; i++) {
-    const sec = ticks[i].sec ?? (i / (ticks.length - 1)) * 60;
-    const x = (sec / 60) * (w - 20) + 10;
-
-    const yNorm = (ticks[i].quote - min) / (max - min);
-    const y = (1 - yNorm) * (h - 20) + 10;
+  for (let i = 0; i < pts.length; i++) {
+    const x = (pts[i].sec / 60) * (w - 20) + 10;
+    const yNorm = (pts[i].quote - min) / (max - min);
+    const y = (1 - yNorm) * (h - 30) + 10;
 
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
@@ -394,7 +421,49 @@ function drawLineChart(canvas, ticks) {
 }
 
 /* =========================
-   ✅ Construir fila (con botón ícono gráfico)
+   ✅ Flecha próxima vela
+========================= */
+function setNextOutcome(item, outcome) {
+  item.nextOutcome = outcome; // "up" | "down" | "flat"
+  saveHistory(history);
+  updateRowNextArrow(item);
+}
+
+function updateRowNextArrow(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+
+  const el = row.querySelector(".nextArrow");
+  if (!el) return;
+
+  el.classList.remove("pending", "up", "down", "flat");
+
+  if (item.nextOutcome === "up") {
+    el.classList.add("up");
+    el.textContent = "⬆️";
+    el.title = "Próxima vela: alcista";
+  } else if (item.nextOutcome === "down") {
+    el.classList.add("down");
+    el.textContent = "⬇️";
+    el.title = "Próxima vela: bajista";
+  } else if (item.nextOutcome === "flat") {
+    el.classList.add("flat");
+    el.textContent = "➖";
+    el.title = "Próxima vela: plana";
+  } else {
+    el.classList.add("pending");
+    el.textContent = "⏳";
+    el.title = "Próxima vela: esperando…";
+  }
+}
+
+// escape para selector
+function cssEscape(s) {
+  return String(s).replace(/"/g, '\\"');
+}
+
+/* =========================
+   ✅ Construir fila
 ========================= */
 function buildRow(item) {
   const row = document.createElement("div");
@@ -417,6 +486,8 @@ function buildRow(item) {
           <circle cx="18" cy="6" r="1" fill="currentColor"/>
         </svg>
       </button>
+
+      <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
 
     <div class="row-actions">
@@ -426,7 +497,7 @@ function buildRow(item) {
     </div>
   `;
 
-  // tocar texto abre Deriv (misma pestaña)
+  // texto abre Deriv (misma pestaña)
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
@@ -437,32 +508,33 @@ function buildRow(item) {
     openChartModal(item);
   };
 
-  // like/dislike solo para buttons[data-v]
+  // like/dislike
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
-
       if (item.vote) return;
-      item.vote = btn.dataset.v;
 
+      item.vote = btn.dataset.v;
       const comment = row.querySelector(".row-comment").value || "";
       item.comment = comment;
 
       saveHistory(history);
       rebuildFeedbackFromHistory();
 
-      // bloquear ambos
       row.querySelectorAll('button[data-v]').forEach(b => (b.disabled = true));
     };
   });
 
-  // guardar comentario al salir
+  // comentario blur
   const input = row.querySelector(".row-comment");
   input.addEventListener("blur", () => {
     item.comment = input.value || "";
     saveHistory(history);
     rebuildFeedbackFromHistory();
   });
+
+  // ✅ aplicar estado de flecha si ya existe
+  updateRowNextArrow(item);
 
   return row;
 }
@@ -530,6 +602,34 @@ setInterval(() => {
 }, 1000);
 
 /* =========================
+   ✅ Finalizar vela (para flecha próxima)
+========================= */
+function finalizeMinute(minute) {
+  const oc = candleOC[minute];
+  if (!oc) return;
+
+  // para cada símbolo: vela de minute => afecta señales del minute-1
+  for (const symbol of Object.keys(oc)) {
+    const { open, close } = oc[symbol];
+    if (open == null || close == null) continue;
+
+    let outcome = "flat";
+    if (close > open) outcome = "up";
+    else if (close < open) outcome = "down";
+
+    const prevMinute = minute - 1;
+    for (const it of history) {
+      if (it.minute === prevMinute && it.symbol === symbol && !it.nextOutcome) {
+        setNextOutcome(it, outcome);
+      }
+    }
+  }
+
+  // limpiar para no crecer infinito
+  delete candleOC[minute - 3];
+}
+
+/* =========================
    Ticks + evaluación
 ========================= */
 function onTick(tick) {
@@ -538,13 +638,29 @@ function onTick(tick) {
   const sec = epoch % 60;
   const symbol = tick.symbol;
 
-  // ✅ tick health / countdown
+  // tick health / countdown
   lastTickEpoch = epoch;
   currentMinuteEpochBase = minute * 60;
 
+  // ✅ detectar cambio de minuto para finalizar velas
+  if (lastSeenMinute === null) lastSeenMinute = minute;
+  if (minute > lastSeenMinute) {
+    for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
+    lastSeenMinute = minute;
+  }
+
+  // almacenar ticks del minuto
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push({ sec, quote: tick.quote });
+
+  // ✅ open/close de la vela del minuto (para outcome)
+  if (!candleOC[minute]) candleOC[minute] = {};
+  if (!candleOC[minute][symbol]) {
+    candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
+  } else {
+    candleOC[minute][symbol].close = tick.quote;
+  }
 
   // evaluar a los 45s
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
@@ -566,7 +682,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Evaluación (la que tenías)
+   Evaluación (la que venías usando)
 ========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
@@ -598,7 +714,6 @@ function evaluateMinute(minute) {
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
 
-  // umbral bajo (como venías usando)
   if (!best || best.score < 0.015) return true;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
@@ -624,10 +739,10 @@ function addSignal(minute, symbol, direction, ticks) {
     direction,
     vote: "",
     comment: "",
-    ticks: Array.isArray(ticks) ? ticks : []
+    ticks: Array.isArray(ticks) ? ticks : [],
+    nextOutcome: "" // se completa cuando cierre el minuto siguiente
   };
 
-  // evitar duplicados
   if (history.some(x => x.id === item.id)) return;
 
   history.push(item);
