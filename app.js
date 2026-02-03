@@ -173,7 +173,7 @@ function showNotification(symbol, direction) {
   if (Notification.permission !== "granted") return;
 
   const title = "📈 Deriv Signal";
-  const body = `${symbol} – ${labelForDirection(direction)}`; // (4)
+  const body = `${symbol} – ${labelForDirection(direction)}`;
   const url = makeDerivTraderUrl(symbol);
 
   navigator.serviceWorker.getRegistration().then(reg => {
@@ -373,7 +373,7 @@ function evaluateMinute(minute) {
 }
 
 /* =========================
-   Mostrar señal
+   Mostrar señal (tap abre Deriv)
 ========================= */
 function showSignal(minute, symbol, direction) {
   signalCount++;
@@ -381,52 +381,68 @@ function showSignal(minute, symbol, direction) {
 
   const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
   const label = labelForDirection(direction);
+  const derivUrl = makeDerivTraderUrl(symbol);
 
   const row = document.createElement("div");
-  row.className = `row ${cssClassForDirection(direction)} flash`; // (2)
+  row.className = `row ${cssClassForDirection(direction)} flash`;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", `Abrir Deriv: ${symbol} ${label}`);
+  row.title = "Tocar para abrir Deriv";
 
   row.innerHTML = `
     <div class="topline">
       <div>${time} | ${symbol}</div>
-      <div class="badge">${label}</div> <!-- (3) -->
+      <div class="badge">${label}</div>
     </div>
 
     <div class="actions">
-      <button data-v="like">👍</button>
-      <button data-v="dislike">👎</button>
+      <button type="button" data-v="like">👍</button>
+      <button type="button" data-v="dislike">👎</button>
       <input placeholder="comentario">
     </div>
   `;
 
+  // ✅ Tap en el row abre Deriv (pero NO si tocás botones/input)
+  row.addEventListener("click", (e) => {
+    const target = e.target;
+    if (target?.closest("button") || target?.closest("input")) return;
+    window.open(derivUrl, "_blank", "noopener,noreferrer");
+  });
+
   const likeBtn = row.querySelector('button[data-v="like"]');
   const dislikeBtn = row.querySelector('button[data-v="dislike"]');
+  const commentInput = row.querySelector("input");
 
   function lockVotes() {
     likeBtn.disabled = true;
     dislikeBtn.disabled = true;
   }
 
-  likeBtn.onclick = () => {
+  likeBtn.onclick = (e) => {
+    e.stopPropagation();
     likeCount++;
     updateStatsUI();
 
-    const comment = row.querySelector("input").value || "";
-    feedbackEl.value += `${time} | ${symbol} | ${label} | like | ${comment}\n`; // (5)
+    const comment = commentInput.value || "";
+    feedbackEl.value += `${time} | ${symbol} | ${label} | like | ${comment}\n`;
     lockVotes();
   };
 
-  dislikeBtn.onclick = () => {
+  dislikeBtn.onclick = (e) => {
+    e.stopPropagation();
     dislikeCount++;
     updateStatsUI();
 
-    const comment = row.querySelector("input").value || "";
-    feedbackEl.value += `${time} | ${symbol} | ${label} | dislike | ${comment}\n`; // (5)
+    const comment = commentInput.value || "";
+    feedbackEl.value += `${time} | ${symbol} | ${label} | dislike | ${comment}\n`;
     lockVotes();
   };
 
+  commentInput.addEventListener("click", (e) => e.stopPropagation());
+  commentInput.addEventListener("keydown", (e) => e.stopPropagation());
+
   signalsEl.prepend(row);
 
-  // quitar clase flash luego de un rato
   setTimeout(() => row.classList.remove("flash"), 2200);
 
   // 🔊 sonido
@@ -435,12 +451,12 @@ function showSignal(minute, symbol, direction) {
     sound.play().catch(() => {});
   }
 
-  // 📳 vibración local (además de la notificación)
+  // 📳 vibración local
   if (vibrateEnabled && "vibrate" in navigator) {
     navigator.vibrate(vibratePatternForDirection(direction));
   }
 
-  // 🔔 notificación (click abre Deriv demo/rise-fall con símbolo)
+  // 🔔 notificación
   showNotification(symbol, direction);
 }
 
