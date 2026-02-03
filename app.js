@@ -1036,4 +1036,4 @@ updateStatsUI();
 updateTickHealthUI();
 updateCountdownUI();
 renderHistory();
-connect();
+connect(); 
