@@ -14,6 +14,12 @@
 
   <h2 id="status">Conectando…</h2>
 
+  <!-- ✅ Salud + segundero -->
+  <div class="topInfo">
+    <div id="tickHealth">Ticks: —</div>
+    <div id="countdown">⏱️ 60</div>
+  </div>
+
   <div class="controls">
     <button id="soundBtn">🔇 Sonido OFF</button>
     <button id="vibrateBtn">📳 Vibración ON</button>
@@ -35,6 +41,16 @@
       <input type="checkbox" id="strongToggle" />
       <span>Solo señales fuertes</span>
     </label>
+  </div>
+
+  <!-- ✅ Panel fijo “última señal” -->
+  <div id="lastSignal" class="lastSignal hidden" role="button" aria-label="Abrir Deriv">
+    <div class="ls-left">
+      <div class="ls-title">Última señal</div>
+      <div class="ls-main" id="lastSignalText">—</div>
+      <div class="ls-sub" id="lastSignalMeta">—</div>
+    </div>
+    <button id="openDerivBtn" type="button">Abrir Deriv</button>
   </div>
 
   <div class="stats">
