@@ -4,7 +4,7 @@
   --border: #334155;
   --btn-bg: #0f172a;
   --btn-text: #e5e7eb;
-  --row-bg: rgba(255,255,255,0.02);
+  --row-bg: rgba(255,255,255,0.03);
 
   --ok: #16a34a;
 }
@@ -15,7 +15,7 @@ body.light {
   --border: #cbd5e1;
   --btn-bg: #e2e8f0;
   --btn-text: #0f172a;
-  --row-bg: rgba(0,0,0,0.03);
+  --row-bg: rgba(0,0,0,0.04);
 }
 
 body {
@@ -25,6 +25,9 @@ body {
   padding: 10px;
 }
 
+/* ======================
+   Controles
+====================== */
 .controls {
   display: flex;
   gap: 6px;
@@ -33,7 +36,6 @@ body {
 }
 
 button {
-  margin: 0;
   padding: 8px 10px;
   font-size: 14px;
   background: var(--btn-bg);
@@ -48,6 +50,9 @@ button.active {
   color: #fff;
 }
 
+/* ======================
+   Contador
+====================== */
 #counter {
   margin: 10px 0;
   padding: 8px 10px;
@@ -56,9 +61,12 @@ button.active {
   background: var(--row-bg);
 }
 
+/* ======================
+   Señales
+====================== */
 .row {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 10px;
   margin: 8px 0;
   background: var(--row-bg);
@@ -98,7 +106,9 @@ button.active {
   padding: 8px;
 }
 
-/* ✅ Botón con imagen de gráfico */
+/* ======================
+   Botón gráfico (ícono)
+====================== */
 .chartBtn {
   width: 40px;
   height: 32px;
@@ -107,7 +117,6 @@ button.active {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
   background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
 }
 
@@ -117,15 +126,24 @@ button.active {
   opacity: 0.95;
 }
 
-/* Outcome flecha */
+/* ======================
+   Flecha outcome
+====================== */
 .nextArrow {
   font-size: 16px;
-  opacity: 0.95;
+  opacity: 0.9;
 }
-.nextArrow.pending { opacity: 0.6; }
 
-/* ✅ Modal */
-.modal.hidden { display: none; }
+.nextArrow.pending {
+  opacity: 0.6;
+}
+
+/* ======================
+   Modal
+====================== */
+.modal.hidden {
+  display: none;
+}
 
 .modal {
   position: fixed;
@@ -146,7 +164,7 @@ button.active {
   width: min(920px, calc(100vw - 18px));
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px);
   padding: 12px;
 }
@@ -193,6 +211,9 @@ button.active {
   font-weight: 800;
 }
 
+/* ======================
+   Feedback
+====================== */
 textarea {
   width: 100%;
   background: transparent;
