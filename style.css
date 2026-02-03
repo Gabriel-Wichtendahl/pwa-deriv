@@ -137,10 +137,10 @@ button.danger {
 }
 
 .row .topline {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
   font-weight: 800;
   cursor: pointer;
   user-select: none;
@@ -152,6 +152,7 @@ button.danger {
   font-size: 12px;
   font-weight: 900;
   border: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 .row.call .badge {
@@ -188,6 +189,25 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
+}
+
+/* ✅ Botón mini gráfico */
+.sparkBtn {
+  width: 46px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
+}
+
+.sparkBtn canvas {
+  width: 42px;
+  height: 20px;
+  display: block;
 }
 
 /* Flash */
@@ -252,4 +272,73 @@ textarea {
 .ls-sub {
   font-size: 12px;
   opacity: 0.75;
-} 
+}
+
+/* ✅ Modal */
+.modal.hidden { display: none; }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+}
+
+.modalBackdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+}
+
+.modalCard {
+  position: relative;
+  width: min(920px, calc(100vw - 18px));
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(10px);
+  padding: 12px;
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.modalTitle {
+  font-weight: 900;
+  font-size: 16px;
+}
+
+.modalSub {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+
+.modalClose {
+  padding: 6px 10px;
+  border-radius: 10px;
+}
+
+#minuteCanvas {
+  width: 100%;
+  height: 260px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--row-bg);
+}
+
+.modalFooter {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.modalAction {
+  font-weight: 800;
+}
