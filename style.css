@@ -119,16 +119,17 @@ button.active{
   padding: 8px;
 }
 
-/* botón ícono gráfico */
+/* botón gráfico */
 .chartBtn{
-  width:40px;
-  height:32px;
+  width:44px;
+  height:34px;
   padding:0;
   border-radius:10px;
   display:inline-flex;
   align-items:center;
   justify-content:center;
   background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
+  position: relative;
 }
 
 .chartBtn svg{
@@ -137,11 +138,17 @@ button.active{
   opacity:.95;
 }
 
-/* ✅ deshabilitado hasta cierre de minuto */
+/* ✅ Bloqueado: más claro */
 .chartBtn:disabled{
-  opacity: .35;
+  opacity: .45;
   cursor: not-allowed;
-  filter: grayscale(0.5);
+  filter: grayscale(0.35);
+}
+
+/* ✅ badge/candado cuando está bloqueado */
+.chartBtn .lockBadge{
+  font-size: 16px;
+  line-height: 1;
 }
 
 /* flecha próxima vela */
