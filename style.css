@@ -1,224 +1,209 @@
-:root {
-  --bg: #020617;
-  --text: #e5e7eb;
-  --border: #334155;
-  --btn-bg: #0f172a;
-  --btn-text: #e5e7eb;
-  --row-bg: rgba(255,255,255,0.03);
-
-  --ok: #16a34a;
+:root{
+  --bg:#020617;
+  --text:#e5e7eb;
+  --border:#334155;
+  --btn-bg:#0f172a;
+  --btn-text:#e5e7eb;
+  --row-bg: rgba(255,255,255,.03);
+  --ok:#16a34a;
 }
 
-body.light {
-  --bg: #f8fafc;
-  --text: #0f172a;
-  --border: #cbd5e1;
-  --btn-bg: #e2e8f0;
-  --btn-text: #0f172a;
-  --row-bg: rgba(0,0,0,0.04);
+body.light{
+  --bg:#f8fafc;
+  --text:#0f172a;
+  --border:#cbd5e1;
+  --btn-bg:#e2e8f0;
+  --btn-text:#0f172a;
+  --row-bg: rgba(0,0,0,.04);
 }
 
-body {
+body{
   font-family: system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
   padding: 10px;
 }
 
-/* ======================
-   Controles
-====================== */
-.controls {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
+/* ✅ pills (tick + countdown) */
+.topStatus{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin: 6px 0 10px;
 }
 
-button {
-  padding: 8px 10px;
-  font-size: 14px;
+.pill{
+  padding: 6px 10px;
+  border:1px solid var(--border);
+  border-radius:999px;
+  background: var(--row-bg);
+  font-size: 13px;
+  opacity:.95;
+}
+
+/* controles */
+.controls{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-bottom:10px;
+}
+
+button{
+  padding:8px 10px;
+  font-size:14px;
   background: var(--btn-bg);
   color: var(--btn-text);
-  border: 1px solid var(--border);
+  border:1px solid var(--border);
   border-radius: 10px;
 }
 
-button.active {
+button.active{
   background: var(--ok);
   border-color: var(--ok);
-  color: #fff;
+  color:#fff;
 }
 
-/* ======================
-   Contador
-====================== */
-#counter {
+#counter{
   margin: 10px 0;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border:1px solid var(--border);
   border-radius: 12px;
   background: var(--row-bg);
 }
 
-/* ======================
-   Señales
-====================== */
-.row {
-  border: 1px solid var(--border);
+/* señales */
+.row{
+  border:1px solid var(--border);
   border-radius: 14px;
   padding: 10px;
   margin: 8px 0;
   background: var(--row-bg);
-  display: grid;
+  display:grid;
   gap: 8px;
 }
 
-.row-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+.row-main{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
 }
 
-.row-text {
-  flex: 1;
+.row-text{
+  flex:1;
   min-width: 220px;
   font-weight: 800;
-  cursor: pointer;
-  user-select: none;
+  cursor:pointer;
+  user-select:none;
 }
 
-.row-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
+.row-actions{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
 }
 
-.row-comment {
-  flex: 1;
+.row-comment{
+  flex:1;
   min-width: 160px;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
+  border:1px solid var(--border);
   border-radius: 10px;
   padding: 8px;
 }
 
-/* ======================
-   Botón gráfico (ícono)
-====================== */
-.chartBtn {
-  width: 40px;
-  height: 32px;
-  padding: 0;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+/* ✅ botón ícono gráfico */
+.chartBtn{
+  width:40px;
+  height:32px;
+  padding:0;
+  border-radius:10px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
   background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
 }
-
-.chartBtn svg {
-  width: 22px;
-  height: 22px;
-  opacity: 0.95;
+.chartBtn svg{
+  width:22px;
+  height:22px;
+  opacity:.95;
 }
 
-/* ======================
-   Flecha outcome
-====================== */
-.nextArrow {
-  font-size: 16px;
-  opacity: 0.9;
+/* ✅ modal responsive */
+.modal.hidden{ display:none; }
+.modal{
+  position:fixed;
+  inset:0;
+  z-index:50;
+  display:grid;
+  place-items:center;
 }
 
-.nextArrow.pending {
-  opacity: 0.6;
+.modalBackdrop{
+  position:absolute;
+  inset:0;
+  background: rgba(0,0,0,.55);
 }
 
-/* ======================
-   Modal
-====================== */
-.modal.hidden {
-  display: none;
-}
+.modalCard{
+  position:relative;
 
-.modal {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-items: center;
-}
+  /* ✅ acorde a pantalla (móvil primero) */
+  width: min(980px, calc(100vw - 18px));
+  max-height: calc(100vh - 24px);
 
-.modalBackdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,0.55);
-}
-
-.modalCard {
-  position: relative;
-  width: min(920px, calc(100vw - 18px));
-  border: 1px solid var(--border);
+  border:1px solid var(--border);
   border-radius: 16px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px);
   padding: 12px;
+
+  display:flex;
+  flex-direction:column;
+  gap:10px;
 }
 
-.modalHeader {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 10px;
+.modalHeader{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
 }
 
-.modalTitle {
-  font-weight: 900;
-  font-size: 16px;
+.modalTitle{ font-weight:900; font-size:16px; }
+.modalSub{ font-size:12px; opacity:.75; margin-top:2px; }
+
+.modalClose{
+  padding:6px 10px;
+  border-radius:10px;
 }
 
-.modalSub {
-  font-size: 12px;
-  opacity: 0.75;
-  margin-top: 2px;
-}
-
-.modalClose {
-  padding: 6px 10px;
-  border-radius: 10px;
-}
-
-#minuteCanvas {
-  width: 100%;
-  height: 260px;
-  border: 1px solid var(--border);
+#minuteCanvas{
+  width:100%;
+  /* ✅ altura dinámica */
+  height: min(360px, 55vh);
+  border:1px solid var(--border);
   border-radius: 14px;
   background: var(--row-bg);
 }
 
-.modalFooter {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
+.modalFooter{
+  display:flex;
+  justify-content:flex-end;
 }
 
-.modalAction {
-  font-weight: 800;
+.modalAction{
+  font-weight:800;
 }
 
-/* ======================
-   Feedback
-====================== */
-textarea {
-  width: 100%;
+textarea{
+  width:100%;
   background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
+  border:1px solid var(--border);
   border-radius: 10px;
   padding: 10px;
 }
