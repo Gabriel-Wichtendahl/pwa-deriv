@@ -27,6 +27,24 @@ body {
   padding: 10px;
 }
 
+.topInfo {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--row-bg);
+  font-size: 13px;
+  opacity: 0.95;
+}
+
+#countdown {
+  font-weight: 800;
+}
+
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -112,7 +130,6 @@ button.active {
   display: grid;
   gap: 8px;
 
-  /* ✅ se siente clickeable */
   cursor: pointer;
 }
 
@@ -121,14 +138,14 @@ button.active {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .row .badge {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
   border: 1px solid var(--border);
 }
 
@@ -149,7 +166,6 @@ button.active {
   flex-wrap: wrap;
 }
 
-/* ✅ botones/input no “parecen” link */
 .row button,
 .row input {
   cursor: auto;
@@ -193,4 +209,47 @@ textarea {
 
 .row.put.flash {
   outline: 2px solid color-mix(in srgb, var(--put) 50%, transparent);
+}
+
+/* ✅ Panel fijo Última señal */
+.lastSignal {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+  margin: 10px 0;
+
+  background: color-mix(in srgb, var(--row-bg) 70%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.lastSignal.hidden {
+  display: none;
+}
+
+.ls-left {
+  display: grid;
+  gap: 2px;
+}
+
+.ls-title {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.ls-main {
+  font-weight: 900;
+  font-size: 16px;
+}
+
+.ls-sub {
+  font-size: 12px;
+  opacity: 0.75;
 }
