@@ -777,4 +777,4 @@ updateCountdownUI();
 // restaurar historial
 renderHistory();
 
-connect();
+connect(); 
