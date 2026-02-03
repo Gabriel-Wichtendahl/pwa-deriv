@@ -26,7 +26,7 @@ function cssClassForDirection(direction) {
 /* =========================
    Persistencia
 ========================= */
-const STORE_KEY = "derivSignalsHistory_v1";
+const STORE_KEY = "derivSignalsHistory_v3"; // nuevo por outcome
 const MAX_HISTORY = 200;
 
 function loadHistory() {
@@ -92,22 +92,18 @@ let lastTickEpoch = null;
 let currentMinuteEpochBase = null;
 
 /* =========================
-   ✅ Ajuste NORMAL por tramos (SUAVE)
-   - Tramo A: 0-30
-   - Tramo B: 30-evalSecond
-   Penaliza contradicción, no mata señales.
+   Ajuste NORMAL por tramos (SUAVE)
 ========================= */
 const SEG_SPLIT_SEC = 30;
 const PENALTY_LEVE = 0.85;
 const PENALTY_FUERTE = 0.65;
-const CONTRA_FUERTE_RATIO = 0.60; // si |B| >= 0.6*|A| y opuestos => fuerte
+const CONTRA_FUERTE_RATIO = 0.60;
 
 function sign(x) {
   return x > 0 ? 1 : x < 0 ? -1 : 0;
 }
 
 function extractQuotes(ticks) {
-  // ticks: [{sec, quote}, ...]
   return ticks.map(t => t.quote);
 }
 
@@ -128,7 +124,6 @@ function computeVolatilityFromQuotes(quotes) {
 }
 
 function normalPenaltyBySegments(ticksAll, evalSec) {
-  // Si no hay info suficiente por tramos, no penaliza
   const segA = segmentTicks(ticksAll, 0, SEG_SPLIT_SEC);
   const segB = segmentTicks(ticksAll, SEG_SPLIT_SEC, Math.min(evalSec, 59));
 
@@ -141,15 +136,85 @@ function normalPenaltyBySegments(ticksAll, evalSec) {
   const sB = sign(moveB);
 
   if (sA === 0 || sB === 0) return 1.0;
-  if (sA === sB) return 1.0; // coherente
+  if (sA === sB) return 1.0;
 
   const absA = Math.abs(moveA);
   const absB = Math.abs(moveB);
   const ratio = absB / Math.max(1e-9, absA);
 
-  // contradicción
   if (ratio >= CONTRA_FUERTE_RATIO) return PENALTY_FUERTE;
   return PENALTY_LEVE;
+}
+
+/* =========================
+   Snapshot ticks
+========================= */
+const SNAPSHOT_MAX_POINTS = 120;
+
+function compressTicks(ticks, maxPoints = SNAPSHOT_MAX_POINTS) {
+  if (!Array.isArray(ticks)) return [];
+  if (ticks.length <= maxPoints) return ticks;
+
+  const step = ticks.length / maxPoints;
+  const out = [];
+  for (let i = 0; i < maxPoints; i++) out.push(ticks[Math.floor(i * step)]);
+  out[out.length - 1] = ticks[ticks.length - 1];
+  return out;
+}
+
+/* =========================
+   ✅ Outcome del minuto siguiente (⬆️/⬇️/⏺)
+========================= */
+function computeNextMinuteOutcome(ticksNextMinute) {
+  if (!ticksNextMinute || ticksNextMinute.length < 2) return null;
+
+  const open = ticksNextMinute[0].quote;
+  const close = ticksNextMinute[ticksNextMinute.length - 1].quote;
+  const diff = close - open;
+
+  const EPS = 1e-9;
+  if (diff > EPS) return "up";
+  if (diff < -EPS) return "down";
+  return "flat";
+}
+
+function updateOutcomeIconInRow(signalId, outcome) {
+  const row = document.querySelector(`.row[data-id="${signalId}"]`);
+  if (!row) return;
+
+  const icon = row.querySelector(".outcomeIcon");
+  if (!icon) return;
+
+  icon.classList.remove("pending", "up", "down", "flat");
+  icon.classList.add(outcome);
+
+  icon.textContent =
+    outcome === "up" ? "⬆️" :
+    outcome === "down" ? "⬇️" :
+    outcome === "flat" ? "⏺" : "⏳";
+}
+
+function tryResolveOutcomesForMinute(currentMinute, secNow) {
+  // resolvemos hacia el final del minuto actual
+  if (typeof secNow !== "number" || secNow < 58) return;
+
+  const prevMinute = currentMinute - 1;
+  if (prevMinute < 0) return;
+
+  for (const it of history) {
+    if (it.minute !== prevMinute) continue;
+    if (it.outcome && it.outcome !== "pending") continue;
+
+    const ticksNext = minuteData[currentMinute]?.[it.symbol];
+    if (!ticksNext || ticksNext.length < 2) continue;
+
+    const outcome = computeNextMinuteOutcome(ticksNext);
+    if (!outcome) continue;
+
+    it.outcome = outcome;
+    saveHistory(history);
+    updateOutcomeIconInRow(it.id, outcome);
+  }
 }
 
 /* =========================
@@ -179,6 +244,17 @@ const vibrateBtn = document.getElementById("vibrateBtn");
 const evalSelect = document.getElementById("evalSelect");
 const strongToggle = document.getElementById("strongToggle");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+
+/* Modal */
+const chartModal = document.getElementById("chartModal");
+const modalCloseBtn = document.getElementById("modalCloseBtn");
+const modalCloseBackdrop = document.getElementById("modalCloseBackdrop");
+const modalTitle = document.getElementById("modalTitle");
+const modalSub = document.getElementById("modalSub");
+const minuteCanvas = document.getElementById("minuteCanvas");
+const modalOpenDerivBtn = document.getElementById("modalOpenDerivBtn");
+
+let modalCurrentSymbol = null;
 
 /* =========================
    Helpers
@@ -215,7 +291,7 @@ function fmtTimeUTC(minute) {
 }
 
 /* =========================
-   🌙 Tema
+   Tema
 ========================= */
 function applyTheme(theme) {
   const isLight = theme === "light";
@@ -235,7 +311,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   ⚙️ Config
+   Config
 ========================= */
 (function initConfig() {
   evalSecond = loadNumber("evalSecond", 45);
@@ -261,44 +337,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   🔔 Notificaciones
-========================= */
-if ("Notification" in window && Notification.permission === "default") {
-  Notification.requestPermission().catch(() => {});
-}
-
-function vibratePatternForDirection(direction) {
-  return direction === "CALL" ? [120] : [180, 80, 180];
-}
-
-function showNotification(symbol, direction) {
-  if (!("Notification" in window)) return;
-  if (Notification.permission !== "granted") return;
-
-  const title = "📈 Deriv Signal";
-  const body = `${symbol} – ${labelForDirection(direction)}`;
-  const url = makeDerivTraderUrl(symbol);
-
-  navigator.serviceWorker.getRegistration().then(reg => {
-    if (!reg) return;
-
-    reg.showNotification(title, {
-      body,
-      icon: "icon-192.png",
-      badge: "icon-192.png",
-      tag: "deriv-signal",
-      renotify: true,
-      requireInteraction: true,
-      silent: false,
-      vibrate: vibrateEnabled ? vibratePatternForDirection(direction) : undefined,
-      data: { url, symbol, direction },
-      actions: [{ action: "open", title: "Abrir Deriv" }]
-    });
-  });
-}
-
-/* =========================
-   📳 Vibración toggle
+   Vibración toggle
 ========================= */
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
@@ -320,7 +359,7 @@ function showNotification(symbol, direction) {
 })();
 
 /* =========================
-   🔊 Sonido toggle
+   Sonido toggle
 ========================= */
 (function initSoundToggle() {
   soundEnabled = loadBool("soundEnabled", false);
@@ -366,7 +405,7 @@ document.getElementById("copyFeedback").onclick = () => {
 };
 
 /* =========================
-   Panel última señal
+   Última señal
 ========================= */
 function setLastSignalUI({ symbol, direction, time }) {
   const label = labelForDirection(direction);
@@ -411,7 +450,7 @@ setInterval(() => {
 }, 1000);
 
 /* =========================
-   Historial: render + feedback
+   Feedback desde historial
 ========================= */
 function rebuildFeedbackFromHistory() {
   let text = "";
@@ -425,6 +464,167 @@ function rebuildFeedbackFromHistory() {
   feedbackEl.value = text;
 }
 
+/* =========================
+   Sparkline
+========================= */
+function drawSparkline(canvas, ticks) {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+
+  ctx.clearRect(0, 0, w, h);
+
+  if (!ticks || ticks.length < 2) {
+    ctx.globalAlpha = 0.35;
+    ctx.beginPath();
+    ctx.moveTo(2, h / 2);
+    ctx.lineTo(w - 2, h / 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+
+  const quotes = ticks.map(t => t.quote);
+  let min = Math.min(...quotes);
+  let max = Math.max(...quotes);
+  if (max - min < 1e-9) max = min + 1e-9;
+
+  ctx.globalAlpha = 0.9;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+
+  ctx.beginPath();
+  for (let i = 0; i < ticks.length; i++) {
+    const x = (i / (ticks.length - 1)) * (w - 4) + 2;
+    const yNorm = (quotes[i] - min) / (max - min);
+    const y = (1 - yNorm) * (h - 4) + 2;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+
+/* =========================
+   Modal
+========================= */
+function openModalForSignal(item) {
+  if (!chartModal || !minuteCanvas) return;
+
+  modalCurrentSymbol = item.symbol;
+
+  const label = labelForDirection(item.direction);
+  modalTitle.textContent = `${item.symbol} – ${label}`;
+  modalSub.textContent = `${item.time} | minuto capturado (${(item.ticks || []).length} pts)`;
+
+  drawMinuteChart(minuteCanvas, item.ticks || [], item.direction);
+
+  chartModal.classList.remove("hidden");
+}
+
+function closeModal() {
+  if (!chartModal) return;
+  chartModal.classList.add("hidden");
+}
+
+function drawMinuteChart(canvas, ticks, direction) {
+  const ctx = canvas.getContext("2d");
+
+  const cssW = canvas.clientWidth;
+  const cssH = canvas.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+
+  ctx.clearRect(0, 0, w, h);
+
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "rgba(255,255,255,0.05)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
+
+  ctx.globalAlpha = 0.35;
+  ctx.strokeStyle = "rgba(255,255,255,0.20)";
+  ctx.lineWidth = 1;
+
+  for (let i = 1; i <= 5; i++) {
+    const y = (h / 6) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  for (let i = 1; i <= 5; i++) {
+    const x = (w / 6) * i;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  if (!ticks || ticks.length < 2) return;
+
+  const quotes = ticks.map(t => t.quote);
+  const secs = ticks.map(t => t.sec);
+
+  let min = Math.min(...quotes);
+  let max = Math.max(...quotes);
+  if (max - min < 1e-9) max = min + 1e-9;
+
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+
+  ctx.beginPath();
+  for (let i = 0; i < ticks.length; i++) {
+    const x = ((secs[i] - 0) / 60) * (w - 20) + 10;
+    const yNorm = (quotes[i] - min) / (max - min);
+    const y = (1 - yNorm) * (h - 20) + 10;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  const start = quotes[0];
+  const end = quotes[quotes.length - 1];
+
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText(`inicio: ${start.toFixed(3)}`, 10, 16);
+  ctx.fillText(`fin: ${end.toFixed(3)}`, 10, 32);
+  ctx.fillText(`rango: ${(max - min).toFixed(3)}`, 10, 48);
+  ctx.fillText(`dir: ${labelForDirection(direction)}`, 10, 64);
+  ctx.globalAlpha = 1;
+}
+
+if (modalCloseBtn) modalCloseBtn.onclick = closeModal;
+if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeModal;
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeModal();
+});
+
+if (modalOpenDerivBtn) {
+  modalOpenDerivBtn.onclick = () => {
+    if (!modalCurrentSymbol) return;
+    window.location.href = makeDerivTraderUrl(modalCurrentSymbol);
+  };
+}
+
+/* =========================
+   Render historial
+========================= */
 function renderHistory() {
   signalsEl.innerHTML = "";
   signalCount = history.length;
@@ -449,13 +649,29 @@ function renderHistory() {
 function buildRowFromItem(it) {
   const row = document.createElement("div");
   row.className = `row ${cssClassForDirection(it.direction)}`;
+  row.dataset.id = it.id;
 
   const label = labelForDirection(it.direction);
   const derivUrl = makeDerivTraderUrl(it.symbol);
 
+  const outcome = it.outcome || "pending";
+  const outcomeEmoji =
+    outcome === "up" ? "⬆️" :
+    outcome === "down" ? "⬇️" :
+    outcome === "flat" ? "⏺" : "⏳";
+
   row.innerHTML = `
     <div class="topline" title="Tocar para abrir Deriv">
       <div>${it.time} | ${it.symbol}</div>
+
+      <button type="button" class="sparkBtn" aria-label="Ver gráfico del minuto" title="Ver gráfico del minuto">
+        <canvas width="84" height="40"></canvas>
+      </button>
+
+      <span class="outcomeIcon ${outcome}" title="Resultado del minuto siguiente">
+        ${outcomeEmoji}
+      </span>
+
       <div class="badge">${label}</div>
     </div>
 
@@ -467,6 +683,9 @@ function buildRowFromItem(it) {
   `;
 
   const topLine = row.querySelector(".topline");
+  const sparkBtn = row.querySelector(".sparkBtn");
+  const sparkCanvas = sparkBtn.querySelector("canvas");
+
   const likeBtn = row.querySelector('button[data-v="like"]');
   const dislikeBtn = row.querySelector('button[data-v="dislike"]');
   const commentInput = row.querySelector("input");
@@ -475,13 +694,24 @@ function buildRowFromItem(it) {
     window.location.href = derivUrl;
   });
 
-  [likeBtn, dislikeBtn].forEach(btn => {
-    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
-    btn.addEventListener("click", (e) => e.stopPropagation());
+  function stop(e) { e.stopPropagation(); }
+
+  sparkBtn.addEventListener("pointerdown", stop);
+  sparkBtn.addEventListener("click", (e) => {
+    stop(e);
+    openModalForSignal(it);
   });
-  commentInput.addEventListener("pointerdown", (e) => e.stopPropagation());
-  commentInput.addEventListener("click", (e) => e.stopPropagation());
-  commentInput.addEventListener("keydown", (e) => e.stopPropagation());
+
+  [likeBtn, dislikeBtn].forEach(btn => {
+    btn.addEventListener("pointerdown", stop);
+    btn.addEventListener("click", stop);
+  });
+
+  commentInput.addEventListener("pointerdown", stop);
+  commentInput.addEventListener("click", stop);
+  commentInput.addEventListener("keydown", stop);
+
+  drawSparkline(sparkCanvas, it.ticks || []);
 
   if (it.comment) commentInput.value = it.comment;
 
@@ -490,8 +720,7 @@ function buildRowFromItem(it) {
     dislikeBtn.disabled = true;
   }
 
-  if (it.vote === "like") lockVotes();
-  if (it.vote === "dislike") lockVotes();
+  if (it.vote === "like" || it.vote === "dislike") lockVotes();
 
   commentInput.addEventListener("blur", () => {
     it.comment = commentInput.value || "";
@@ -549,6 +778,39 @@ if (clearHistoryBtn) {
 }
 
 /* =========================
+   Notificaciones
+========================= */
+function vibratePatternForDirection(direction) {
+  return direction === "CALL" ? [120] : [180, 80, 180];
+}
+
+function showNotification(symbol, direction) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  const title = "📈 Deriv Signal";
+  const body = `${symbol} – ${labelForDirection(direction)}`;
+  const url = makeDerivTraderUrl(symbol);
+
+  navigator.serviceWorker.getRegistration().then(reg => {
+    if (!reg) return;
+
+    reg.showNotification(title, {
+      body,
+      icon: "icon-192.png",
+      badge: "icon-192.png",
+      tag: "deriv-signal",
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: vibrateEnabled ? vibratePatternForDirection(direction) : undefined,
+      data: { url, symbol, direction },
+      actions: [{ action: "open", title: "Abrir Deriv" }]
+    });
+  });
+}
+
+/* =========================
    WebSocket
 ========================= */
 function connect() {
@@ -585,8 +847,10 @@ function onTick(tick) {
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
 
-  // ✅ guardamos sec + quote
   minuteData[minute][symbol].push({ sec, quote: tick.quote });
+
+  // ✅ resolver outcomes de señales del minuto anterior
+  tryResolveOutcomesForMinute(minute, sec);
 
   if (sec >= evalSecond && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
@@ -639,12 +903,10 @@ function evaluateMinute(minute, secNow) {
     const vol = computeVolatilityFromQuotes(quotesAll);
     const baseScore = rawMove / (vol || 1e-9);
 
-    // ✅ SOLO para normales: penalización por contradicción A vs B
-    let penalty = 1.0;
     let rankScore = baseScore;
 
     if (!strongOnly) {
-      penalty = normalPenaltyBySegments(ticksAll, evalSecond);
+      const penalty = normalPenaltyBySegments(ticksAll, evalSecond);
       rankScore = baseScore * penalty;
     }
 
@@ -660,25 +922,19 @@ function evaluateMinute(minute, secNow) {
   if (readySymbols < MIN_SYMBOLS_READY) return false;
   if (candidates.length === 0) return false;
 
-  // ✅ Ordena por rankScore (en normal incluye penalty, en fuerte es igual al baseScore)
   candidates.sort((a, b) => b.rankScore - a.rankScore);
   let best = candidates[0];
 
-  // anti-monopolio suave (se aplica igual)
   const second = candidates[1];
   if (second && best.symbol === lastSignalSymbol && second.rankScore >= best.rankScore * 0.90) {
     best = second;
   }
 
-  // umbral: respetamos el threshold elegido (normal/fuerte)
-  // Nota: comparamos contra baseScore para no “matar” por penalización.
-  // El penalty solo decide qué símbolo gana, no si hay señal.
   if (!best || best.baseScore < threshold) return true;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   const dirSign = best.move > 0 ? 1 : -1;
 
-  // Confirmación y consistencia (igual que antes)
   const prices = best.prices;
   const deltas = [];
   for (let i = 1; i < prices.length; i++) {
@@ -698,15 +954,18 @@ function evaluateMinute(minute, secNow) {
     if (ratio < consistencyMin) return true;
   }
 
+  const ticksSnapshotRaw = minuteData[minute]?.[best.symbol] || [];
+  const ticksSnapshot = compressTicks(ticksSnapshotRaw, SNAPSHOT_MAX_POINTS);
+
   lastSignalSymbol = best.symbol;
-  addSignalToHistory(minute, best.symbol, direction);
+  addSignalToHistory(minute, best.symbol, direction, ticksSnapshot);
   return true;
 }
 
 /* =========================
-   Añadir señal (persistente)
+   Añadir señal
 ========================= */
-function addSignalToHistory(minute, symbol, direction) {
+function addSignalToHistory(minute, symbol, direction, ticksSnapshot) {
   const time = fmtTimeUTC(minute);
 
   const item = {
@@ -716,7 +975,9 @@ function addSignalToHistory(minute, symbol, direction) {
     symbol,
     direction,
     vote: "",
-    comment: ""
+    comment: "",
+    ticks: Array.isArray(ticksSnapshot) ? ticksSnapshot : [],
+    outcome: "pending"
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -731,6 +992,7 @@ function addSignalToHistory(minute, symbol, direction) {
   setLastSignalUI({ symbol, direction, time });
 
   const row = buildRowFromItem(item);
+  row.classList.add("flash");
   signalsEl.prepend(row);
 
   if (soundEnabled) {
@@ -746,7 +1008,7 @@ function addSignalToHistory(minute, symbol, direction) {
 }
 
 /* =========================
-   🔒 Wake Lock
+   Wake Lock
 ========================= */
 let wakeLock = null;
 
@@ -773,8 +1035,5 @@ wakeBtn.onclick = async () => {
 updateStatsUI();
 updateTickHealthUI();
 updateCountdownUI();
-
-// restaurar historial
 renderHistory();
-
-connect(); 
+connect();
