@@ -2,7 +2,7 @@ const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 /* =========================
-   Config Deriv Deep Link (DEMO + Rise/Fall)
+   Deriv Deep Link (DEMO + Rise/Fall)
 ========================= */
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
@@ -19,7 +19,6 @@ function makeDerivTraderUrl(symbol) {
 function labelForDirection(direction) {
   return direction === "CALL" ? "COMPRA" : "VENTA";
 }
-
 function cssClassForDirection(direction) {
   return direction === "CALL" ? "call" : "put";
 }
@@ -50,13 +49,27 @@ const RETRY_DELAY_MS = 5000;
 const THRESHOLD_NORMAL = 0.015;
 const THRESHOLD_STRONG = 0.03;
 
-let evalSecond = 45;        // 45 / 50 / 55
-let strongOnly = false;     // filtro señales fuertes
+// ✅ Mejoras calidad
+const CONFIRM_LAST_DELTAS = 3;   // (1) confirmación 2–3 ticks
+const CONSISTENCY_MIN = 0.65;    // (2) % de deltas a favor
+
+// ✅ Evitar señales tardías (3)
+const LATE_SECOND_CUTOFF = 58;   // si ya es >=58s, no alertar
+
+let evalSecond = 45;     // 45/50/55
+let strongOnly = false;  // filtro
+
+// ✅ Salud + segundero
+let lastTickEpoch = null;
+let currentMinuteEpochBase = null; // epoch (seg) al inicio del minuto detectado
 
 /* =========================
    UI
 ========================= */
 const statusEl = document.getElementById("status");
+const tickHealthEl = document.getElementById("tickHealth");
+const countdownEl = document.getElementById("countdown");
+
 const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
@@ -64,8 +77,12 @@ const feedbackEl = document.getElementById("feedback");
 const likeCountEl = document.getElementById("likeCount");
 const dislikeCountEl = document.getElementById("dislikeCount");
 
-const sound = document.getElementById("alertSound");
+const lastSignalEl = document.getElementById("lastSignal");
+const lastSignalTextEl = document.getElementById("lastSignalText");
+const lastSignalMetaEl = document.getElementById("lastSignalMeta");
+const openDerivBtn = document.getElementById("openDerivBtn");
 
+const sound = document.getElementById("alertSound");
 const soundBtn = document.getElementById("soundBtn");
 const wakeBtn = document.getElementById("wakeBtn");
 const themeBtn = document.getElementById("themeBtn");
@@ -81,27 +98,22 @@ function setBtnActive(btn, active) {
   if (!btn) return;
   btn.classList.toggle("active", !!active);
 }
-
 function loadBool(key, fallback) {
   const v = localStorage.getItem(key);
   if (v === null) return fallback;
   return v === "1";
 }
-
 function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
-
 function loadNumber(key, fallback) {
   const v = localStorage.getItem(key);
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
-
 function saveNumber(key, value) {
   localStorage.setItem(key, String(value));
 }
-
 function updateStatsUI() {
   counterEl.textContent = `Señales: ${signalCount}`;
   if (likeCountEl) likeCountEl.textContent = `👍 ${likeCount}`;
@@ -109,7 +121,7 @@ function updateStatsUI() {
 }
 
 /* =========================
-   🌙 Tema oscuro/claro
+   🌙 Tema
 ========================= */
 function applyTheme(theme) {
   const isLight = theme === "light";
@@ -117,11 +129,9 @@ function applyTheme(theme) {
   if (themeBtn) themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
   localStorage.setItem("theme", theme);
 }
-
 (function initTheme() {
   const saved = localStorage.getItem("theme") || "dark";
   applyTheme(saved);
-
   if (themeBtn) {
     themeBtn.onclick = () => {
       const current = document.body.classList.contains("light") ? "light" : "dark";
@@ -131,7 +141,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   ⚙️ Config (45/50/55 + fuertes)
+   ⚙️ Config
 ========================= */
 (function initConfig() {
   evalSecond = loadNumber("evalSecond", 45);
@@ -164,7 +174,6 @@ if ("Notification" in window && Notification.permission === "default") {
 }
 
 function vibratePatternForDirection(direction) {
-  // CALL (COMPRA) = corto, PUT (VENTA) = más largo
   return direction === "CALL" ? [120] : [180, 80, 180];
 }
 
@@ -187,19 +196,15 @@ function showNotification(symbol, direction) {
       renotify: true,
       requireInteraction: true,
       silent: false,
-
       vibrate: vibrateEnabled ? vibratePatternForDirection(direction) : undefined,
-
-      // click abre Deriv demo/rise-fall con símbolo
       data: { url, symbol, direction },
-
       actions: [{ action: "open", title: "Abrir Deriv" }]
     });
   });
 }
 
 /* =========================
-   📳 Vibración (toggle)
+   📳 Vibración toggle
 ========================= */
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
@@ -221,11 +226,10 @@ function showNotification(symbol, direction) {
 })();
 
 /* =========================
-   🔊 Sonido (toggle + color)
+   🔊 Sonido toggle
 ========================= */
 (function initSoundToggle() {
   soundEnabled = loadBool("soundEnabled", false);
-
   setBtnActive(soundBtn, soundEnabled);
   if (soundBtn) soundBtn.textContent = soundEnabled ? "🔊 Sonido ON" : "🔇 Sonido OFF";
 
@@ -236,7 +240,6 @@ function showNotification(symbol, direction) {
           sound.muted = false;
           sound.volume = 1;
           sound.currentTime = 0;
-
           await sound.play();
           sound.pause();
 
@@ -269,6 +272,71 @@ document.getElementById("copyFeedback").onclick = () => {
 };
 
 /* =========================
+   Última señal fija (4)
+========================= */
+let lastDerivUrl = null;
+
+function setLastSignalUI({ symbol, direction, time }) {
+  const label = labelForDirection(direction);
+  lastDerivUrl = makeDerivTraderUrl(symbol);
+
+  if (lastSignalEl) lastSignalEl.classList.remove("hidden");
+  if (lastSignalTextEl) lastSignalTextEl.textContent = `${symbol} – ${label}`;
+  if (lastSignalMetaEl) lastSignalMetaEl.textContent = `Hora: ${time}`;
+
+  // tap en el panel
+  if (lastSignalEl) {
+    lastSignalEl.onclick = (e) => {
+      // si tocó el botón, lo maneja el botón
+      if (e.target?.closest("button")) return;
+      if (lastDerivUrl) window.location.href = lastDerivUrl;
+    };
+  }
+
+  // botón dedicado
+  if (openDerivBtn) {
+    openDerivBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (lastDerivUrl) window.location.href = lastDerivUrl;
+    };
+  }
+}
+
+/* =========================
+   Salud ticks + segundero
+========================= */
+function updateTickHealthUI() {
+  if (!tickHealthEl) return;
+
+  if (!lastTickEpoch) {
+    tickHealthEl.textContent = "Ticks: —";
+    return;
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const age = nowSec - lastTickEpoch;
+  tickHealthEl.textContent = `Último tick: hace ${age}s`;
+}
+
+function updateCountdownUI() {
+  if (!countdownEl) return;
+  if (!currentMinuteEpochBase) {
+    countdownEl.textContent = "⏱️ 60";
+    return;
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const secInMinute = (nowSec - currentMinuteEpochBase) % 60;
+  const remaining = 60 - Math.max(0, Math.min(59, secInMinute));
+  countdownEl.textContent = `⏱️ ${remaining}`;
+}
+
+setInterval(() => {
+  updateTickHealthUI();
+  updateCountdownUI();
+}, 1000);
+
+/* =========================
    WebSocket
 ========================= */
 function connect() {
@@ -299,18 +367,20 @@ function onTick(tick) {
   const sec = epoch % 60;
   const symbol = tick.symbol;
 
+  lastTickEpoch = epoch;
+  currentMinuteEpochBase = minute * 60;
+
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  // primer intento en segundo configurable (45/50/55)
+  // primer intento en segundo configurable
   if (sec >= evalSecond && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
+    const ok = evaluateMinute(minute, sec);
     if (!ok) scheduleRetry(minute);
   }
 
-  // limpieza simple
   delete minuteData[minute - 2];
 }
 
@@ -318,17 +388,27 @@ function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
 
   evalRetryTimer = setTimeout(() => {
-    const nowMinute = Math.floor(Date.now() / 1000 / 60);
-    if (nowMinute === minute) evaluateMinute(minute);
+    const now = Math.floor(Date.now() / 1000);
+    const nowMinute = Math.floor(now / 60);
+    const nowSec = now % 60;
+
+    if (nowMinute === minute) {
+      evaluateMinute(minute, nowSec);
+    }
   }, RETRY_DELAY_MS);
 }
 
 /* =========================
-   Evaluación
+   Evaluación (1)(2)(3)
 ========================= */
-function evaluateMinute(minute) {
+function evaluateMinute(minute, secNow) {
   const data = minuteData[minute];
   if (!data) return false;
+
+  // (3) no alertar si ya es tardísimo en el minuto
+  if (typeof secNow === "number" && secNow >= LATE_SECOND_CUTOFF) {
+    return true; // ya “evaluado”, pero sin señal
+  }
 
   const candidates = [];
   let readySymbols = 0;
@@ -347,7 +427,7 @@ function evaluateMinute(minute) {
     vol = vol / Math.max(1, prices.length - 1);
 
     const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol, move, score });
+    candidates.push({ symbol, move, score, prices });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY) return false;
@@ -365,10 +445,33 @@ function evaluateMinute(minute) {
   const threshold = strongOnly ? THRESHOLD_STRONG : THRESHOLD_NORMAL;
   if (!best || best.score < threshold) return true;
 
-  lastSignalSymbol = best.symbol;
   const direction = best.move > 0 ? "CALL" : "PUT";
-  showSignal(minute, best.symbol, direction);
+  const dirSign = best.move > 0 ? 1 : -1;
 
+  // deltas
+  const prices = best.prices;
+  const deltas = [];
+  for (let i = 1; i < prices.length; i++) {
+    const d = prices[i] - prices[i - 1];
+    if (d !== 0) deltas.push(d);
+  }
+
+  // (1) Confirmación últimos N deltas
+  if (deltas.length >= CONFIRM_LAST_DELTAS) {
+    const last = deltas.slice(-CONFIRM_LAST_DELTAS);
+    const okConfirm = last.every(d => Math.sign(d) === dirSign);
+    if (!okConfirm) return true;
+  }
+
+  // (2) Consistencia: % deltas a favor
+  if (deltas.length >= 3) {
+    const favor = deltas.filter(d => Math.sign(d) === dirSign).length;
+    const ratio = favor / deltas.length;
+    if (ratio < CONSISTENCY_MIN) return true;
+  }
+
+  lastSignalSymbol = best.symbol;
+  showSignal(minute, best.symbol, direction);
   return true;
 }
 
@@ -383,10 +486,11 @@ function showSignal(minute, symbol, direction) {
   const label = labelForDirection(direction);
   const derivUrl = makeDerivTraderUrl(symbol);
 
+  // ✅ panel fijo (4)
+  setLastSignalUI({ symbol, direction, time });
+
   const row = document.createElement("div");
   row.className = `row ${cssClassForDirection(direction)} flash`;
-  row.setAttribute("role", "button");
-  row.setAttribute("aria-label", `Abrir Deriv: ${symbol} ${label}`);
   row.title = "Tocar para abrir Deriv";
 
   row.innerHTML = `
@@ -402,11 +506,11 @@ function showSignal(minute, symbol, direction) {
     </div>
   `;
 
-  // ✅ Tap en el row abre Deriv (pero NO si tocás botones/input)
+  // ✅ tocar en el card abre Deriv
   row.addEventListener("click", (e) => {
     const target = e.target;
     if (target?.closest("button") || target?.closest("input")) return;
-    window.open(derivUrl, "_blank", "noopener,noreferrer");
+    window.location.href = derivUrl;
   });
 
   const likeBtn = row.querySelector('button[data-v="like"]');
@@ -442,7 +546,6 @@ function showSignal(minute, symbol, direction) {
   commentInput.addEventListener("keydown", (e) => e.stopPropagation());
 
   signalsEl.prepend(row);
-
   setTimeout(() => row.classList.remove("flash"), 2200);
 
   // 🔊 sonido
@@ -486,4 +589,6 @@ wakeBtn.onclick = async () => {
    Start
 ========================= */
 updateStatsUI();
+updateTickHealthUI();
+updateCountdownUI();
 connect();
