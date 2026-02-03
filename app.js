@@ -14,7 +14,7 @@ function makeDerivTraderUrl(symbol) {
 }
 
 /* =========================
-   Labels (CALL/PUT -> COMPRA/VENTA)
+   Labels
 ========================= */
 function labelForDirection(direction) {
   return direction === "CALL" ? "COMPRA" : "VENTA";
@@ -22,6 +22,31 @@ function labelForDirection(direction) {
 function cssClassForDirection(direction) {
   return direction === "CALL" ? "call" : "put";
 }
+
+/* =========================
+   Persistencia
+========================= */
+const STORE_KEY = "derivSignalsHistory_v1";
+const MAX_HISTORY = 200;
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history) {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
+  } catch {}
+}
+
+let history = loadHistory();
 
 /* =========================
    Estado
@@ -93,6 +118,9 @@ const vibrateBtn = document.getElementById("vibrateBtn");
 const evalSelect = document.getElementById("evalSelect");
 const strongToggle = document.getElementById("strongToggle");
 
+// ✅ NUEVO
+const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+
 /* =========================
    Helpers
 ========================= */
@@ -116,10 +144,15 @@ function loadNumber(key, fallback) {
 function saveNumber(key, value) {
   localStorage.setItem(key, String(value));
 }
+
 function updateStatsUI() {
   counterEl.textContent = `Señales: ${signalCount}`;
   if (likeCountEl) likeCountEl.textContent = `👍 ${likeCount}`;
   if (dislikeCountEl) dislikeCountEl.textContent = `👎 ${dislikeCount}`;
+}
+
+function fmtTimeUTC(minute) {
+  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 
 /* =========================
@@ -274,7 +307,7 @@ document.getElementById("copyFeedback").onclick = () => {
 };
 
 /* =========================
-   Panel fijo última señal (sin botón)
+   Panel última señal
 ========================= */
 function setLastSignalUI({ symbol, direction, time }) {
   const label = labelForDirection(direction);
@@ -317,6 +350,144 @@ setInterval(() => {
   updateTickHealthUI();
   updateCountdownUI();
 }, 1000);
+
+/* =========================
+   Historial: render + feedback
+========================= */
+function rebuildFeedbackFromHistory() {
+  let text = "";
+  for (const it of history) {
+    if (!it.vote && !it.comment) continue;
+    const label = labelForDirection(it.direction);
+    const vote = it.vote || "";
+    const comment = it.comment || "";
+    text += `${it.time} | ${it.symbol} | ${label} | ${vote} | ${comment}\n`;
+  }
+  feedbackEl.value = text;
+}
+
+function renderHistory() {
+  signalsEl.innerHTML = "";
+  signalCount = history.length;
+
+  likeCount = history.filter(x => x.vote === "like").length;
+  dislikeCount = history.filter(x => x.vote === "dislike").length;
+  updateStatsUI();
+
+  for (const it of [...history].reverse()) {
+    const row = buildRowFromItem(it);
+    signalsEl.appendChild(row);
+  }
+
+  rebuildFeedbackFromHistory();
+
+  if (history.length) {
+    const last = history[history.length - 1];
+    setLastSignalUI({ symbol: last.symbol, direction: last.direction, time: last.time });
+  }
+}
+
+function buildRowFromItem(it) {
+  const row = document.createElement("div");
+  row.className = `row ${cssClassForDirection(it.direction)}`;
+
+  const label = labelForDirection(it.direction);
+  const derivUrl = makeDerivTraderUrl(it.symbol);
+
+  row.innerHTML = `
+    <div class="topline" title="Tocar para abrir Deriv">
+      <div>${it.time} | ${it.symbol}</div>
+      <div class="badge">${label}</div>
+    </div>
+
+    <div class="actions">
+      <button type="button" data-v="like">👍</button>
+      <button type="button" data-v="dislike">👎</button>
+      <input placeholder="comentario">
+    </div>
+  `;
+
+  const topLine = row.querySelector(".topline");
+  const likeBtn = row.querySelector('button[data-v="like"]');
+  const dislikeBtn = row.querySelector('button[data-v="dislike"]');
+  const commentInput = row.querySelector("input");
+
+  topLine.addEventListener("click", () => {
+    window.location.href = derivUrl;
+  });
+
+  [likeBtn, dislikeBtn].forEach(btn => {
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => e.stopPropagation());
+  });
+  commentInput.addEventListener("pointerdown", (e) => e.stopPropagation());
+  commentInput.addEventListener("click", (e) => e.stopPropagation());
+  commentInput.addEventListener("keydown", (e) => e.stopPropagation());
+
+  if (it.comment) commentInput.value = it.comment;
+
+  function lockVotes() {
+    likeBtn.disabled = true;
+    dislikeBtn.disabled = true;
+  }
+
+  if (it.vote === "like") lockVotes();
+  if (it.vote === "dislike") lockVotes();
+
+  commentInput.addEventListener("blur", () => {
+    it.comment = commentInput.value || "";
+    saveHistory(history);
+    rebuildFeedbackFromHistory();
+  });
+
+  likeBtn.onclick = () => {
+    if (it.vote) return;
+    it.vote = "like";
+    likeCount++;
+    updateStatsUI();
+    lockVotes();
+    saveHistory(history);
+    rebuildFeedbackFromHistory();
+  };
+
+  dislikeBtn.onclick = () => {
+    if (it.vote) return;
+    it.vote = "dislike";
+    dislikeCount++;
+    updateStatsUI();
+    lockVotes();
+    saveHistory(history);
+    rebuildFeedbackFromHistory();
+  };
+
+  return row;
+}
+
+/* =========================
+   ✅ Limpiar historial (NUEVO)
+========================= */
+function clearHistory() {
+  history = [];
+  saveHistory(history);
+
+  signalsEl.innerHTML = "";
+  feedbackEl.value = "";
+
+  signalCount = 0;
+  likeCount = 0;
+  dislikeCount = 0;
+  updateStatsUI();
+
+  if (lastSignalEl) lastSignalEl.classList.add("hidden");
+}
+
+if (clearHistoryBtn) {
+  clearHistoryBtn.onclick = () => {
+    const ok = confirm("¿Seguro que querés borrar todas las señales guardadas?");
+    if (!ok) return;
+    clearHistory();
+  };
+}
 
 /* =========================
    WebSocket
@@ -446,83 +617,39 @@ function evaluateMinute(minute, secNow) {
   }
 
   lastSignalSymbol = best.symbol;
-  showSignal(minute, best.symbol, direction);
+  addSignalToHistory(minute, best.symbol, direction);
   return true;
 }
 
 /* =========================
-   Mostrar señal
-   ✅ Ahora Deriv se abre tocando SOLO el encabezado (topline)
+   Añadir señal (persistente)
 ========================= */
-function showSignal(minute, symbol, direction) {
-  signalCount++;
-  updateStatsUI();
+function addSignalToHistory(minute, symbol, direction) {
+  const time = fmtTimeUTC(minute);
 
-  const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
-  const label = labelForDirection(direction);
-  const derivUrl = makeDerivTraderUrl(symbol);
+  const item = {
+    id: `${minute}-${symbol}-${direction}`,
+    minute,
+    time,
+    symbol,
+    direction,
+    vote: "",
+    comment: ""
+  };
+
+  if (history.some(x => x.id === item.id)) return;
+
+  history.push(item);
+  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+  saveHistory(history);
+
+  signalCount = history.length;
+  updateStatsUI();
 
   setLastSignalUI({ symbol, direction, time });
 
-  const row = document.createElement("div");
-  row.className = `row ${cssClassForDirection(direction)} flash`;
-
-  row.innerHTML = `
-    <div class="topline" title="Tocar para abrir Deriv">
-      <div>${time} | ${symbol}</div>
-      <div class="badge">${label}</div>
-    </div>
-
-    <div class="actions">
-      <button type="button" data-v="like">👍</button>
-      <button type="button" data-v="dislike">👎</button>
-      <input placeholder="comentario">
-    </div>
-  `;
-
-  const topLine = row.querySelector(".topline");
-  const likeBtn = row.querySelector('button[data-v="like"]');
-  const dislikeBtn = row.querySelector('button[data-v="dislike"]');
-  const commentInput = row.querySelector("input");
-
-  // ✅ Abrir deriv solo si tocás el encabezado
-  topLine.addEventListener("click", () => {
-    window.location.href = derivUrl;
-  });
-
-  // ✅ en mobile a veces se dispara el click por “tap”
-  // cortamos propagación en botones e input con pointerdown + click
-  [likeBtn, dislikeBtn].forEach(btn => {
-    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
-    btn.addEventListener("click", (e) => e.stopPropagation());
-  });
-  commentInput.addEventListener("pointerdown", (e) => e.stopPropagation());
-  commentInput.addEventListener("click", (e) => e.stopPropagation());
-  commentInput.addEventListener("keydown", (e) => e.stopPropagation());
-
-  function lockVotes() {
-    likeBtn.disabled = true;
-    dislikeBtn.disabled = true;
-  }
-
-  likeBtn.onclick = () => {
-    likeCount++;
-    updateStatsUI();
-    const comment = commentInput.value || "";
-    feedbackEl.value += `${time} | ${symbol} | ${label} | like | ${comment}\n`;
-    lockVotes();
-  };
-
-  dislikeBtn.onclick = () => {
-    dislikeCount++;
-    updateStatsUI();
-    const comment = commentInput.value || "";
-    feedbackEl.value += `${time} | ${symbol} | ${label} | dislike | ${comment}\n`;
-    lockVotes();
-  };
-
+  const row = buildRowFromItem(item);
   signalsEl.prepend(row);
-  setTimeout(() => row.classList.remove("flash"), 2200);
 
   if (soundEnabled) {
     sound.currentTime = 0;
@@ -564,4 +691,8 @@ wakeBtn.onclick = async () => {
 updateStatsUI();
 updateTickHealthUI();
 updateCountdownUI();
+
+// restaurar historial
+renderHistory();
+
 connect();
