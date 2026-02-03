@@ -14,11 +14,6 @@
 
   <h2 id="status">Conectando…</h2>
 
-  <div class="topInfo">
-    <div id="tickHealth">Ticks: —</div>
-    <div id="countdown">⏱️ 60</div>
-  </div>
-
   <div class="controls">
     <button id="soundBtn">🔇 Sonido OFF</button>
     <button id="vibrateBtn">📳 Vibración ON</button>
@@ -26,41 +21,7 @@
     <button id="themeBtn">🌙 Oscuro</button>
   </div>
 
-  <div class="controls secondary">
-    <label class="field">
-      <span>Evaluar en:</span>
-      <select id="evalSelect">
-        <option value="45">45s</option>
-        <option value="50">50s</option>
-        <option value="55">55s</option>
-      </select>
-    </label>
-
-    <label class="field checkbox">
-      <input type="checkbox" id="strongToggle" />
-      <span>Solo señales fuertes</span>
-    </label>
-
-    <!-- ✅ NUEVO -->
-    <button id="clearHistoryBtn" class="danger">🗑️ Limpiar historial</button>
-  </div>
-
-  <div id="lastSignal" class="lastSignal hidden">
-    <div class="ls-left">
-      <div class="ls-title">Última señal</div>
-      <div class="ls-main" id="lastSignalText">—</div>
-      <div class="ls-sub" id="lastSignalMeta">—</div>
-    </div>
-  </div>
-
-  <div class="stats">
-    <div id="counter">Señales: 0</div>
-    <div class="mini">
-      <span id="likeCount">👍 0</span>
-      <span id="dislikeCount">👎 0</span>
-    </div>
-  </div>
-
+  <div id="counter">Señales: 0</div>
   <div id="signals"></div>
 
   <h3>Feedback</h3>
@@ -68,6 +29,27 @@
   <button id="copyFeedback">📋 Copiar feedback</button>
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
+
+  <!-- ✅ Modal gráfico -->
+  <div id="chartModal" class="modal hidden" aria-hidden="true">
+    <div id="modalCloseBackdrop" class="modalBackdrop"></div>
+
+    <div class="modalCard" role="dialog" aria-modal="true">
+      <div class="modalHeader">
+        <div>
+          <div id="modalTitle" class="modalTitle">Gráfico</div>
+          <div id="modalSub" class="modalSub">—</div>
+        </div>
+        <button id="modalCloseBtn" class="modalClose" type="button">✖</button>
+      </div>
+
+      <canvas id="minuteCanvas"></canvas>
+
+      <div class="modalFooter">
+        <button id="modalOpenDerivBtn" class="modalAction" type="button">Abrir Deriv</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 
@@ -78,4 +60,4 @@
   </script>
 
 </body>
-</html>   
+</html>
