@@ -49,19 +49,25 @@ const RETRY_DELAY_MS = 5000;
 const THRESHOLD_NORMAL = 0.015;
 const THRESHOLD_STRONG = 0.03;
 
-// ✅ Mejoras calidad
-const CONFIRM_LAST_DELTAS = 3;   // (1) confirmación 2–3 ticks
-const CONSISTENCY_MIN = 0.65;    // (2) % de deltas a favor
+/* =========================
+   ✅ Filtros de calidad (SUAVES en normal / ESTRICTOS en fuerte)
+========================= */
+// Normal (más flexible)
+const CONFIRM_LAST_DELTAS_NORMAL = 2; // antes 3
+const CONSISTENCY_MIN_NORMAL = 0.55;  // antes 0.65
+const LATE_SECOND_CUTOFF_NORMAL = 59; // permite casi todo el minuto
 
-// ✅ Evitar señales tardías (3)
-const LATE_SECOND_CUTOFF = 58;   // si ya es >=58s, no alertar
+// Fuerte (más estricto)
+const CONFIRM_LAST_DELTAS_STRONG = 3;
+const CONSISTENCY_MIN_STRONG = 0.65;
+const LATE_SECOND_CUTOFF_STRONG = 58;
 
 let evalSecond = 45;     // 45/50/55
 let strongOnly = false;  // filtro
 
-// ✅ Salud + segundero
+// Salud + segundero
 let lastTickEpoch = null;
-let currentMinuteEpochBase = null; // epoch (seg) al inicio del minuto detectado
+let currentMinuteEpochBase = null;
 
 /* =========================
    UI
@@ -272,7 +278,7 @@ document.getElementById("copyFeedback").onclick = () => {
 };
 
 /* =========================
-   Última señal fija (4)
+   Última señal fija
 ========================= */
 let lastDerivUrl = null;
 
@@ -284,16 +290,13 @@ function setLastSignalUI({ symbol, direction, time }) {
   if (lastSignalTextEl) lastSignalTextEl.textContent = `${symbol} – ${label}`;
   if (lastSignalMetaEl) lastSignalMetaEl.textContent = `Hora: ${time}`;
 
-  // tap en el panel
   if (lastSignalEl) {
     lastSignalEl.onclick = (e) => {
-      // si tocó el botón, lo maneja el botón
       if (e.target?.closest("button")) return;
       if (lastDerivUrl) window.location.href = lastDerivUrl;
     };
   }
 
-  // botón dedicado
   if (openDerivBtn) {
     openDerivBtn.onclick = (e) => {
       e.stopPropagation();
@@ -374,7 +377,6 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  // primer intento en segundo configurable
   if (sec >= evalSecond && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute, sec);
@@ -399,15 +401,21 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Evaluación (1)(2)(3)
+   Evaluación
 ========================= */
 function evaluateMinute(minute, secNow) {
   const data = minuteData[minute];
   if (!data) return false;
 
-  // (3) no alertar si ya es tardísimo en el minuto
-  if (typeof secNow === "number" && secNow >= LATE_SECOND_CUTOFF) {
-    return true; // ya “evaluado”, pero sin señal
+  // Config dinámica según modo
+  const threshold = strongOnly ? THRESHOLD_STRONG : THRESHOLD_NORMAL;
+  const confirmN = strongOnly ? CONFIRM_LAST_DELTAS_STRONG : CONFIRM_LAST_DELTAS_NORMAL;
+  const consistencyMin = strongOnly ? CONSISTENCY_MIN_STRONG : CONSISTENCY_MIN_NORMAL;
+  const lateCutoff = strongOnly ? LATE_SECOND_CUTOFF_STRONG : LATE_SECOND_CUTOFF_NORMAL;
+
+  // Evitar señales tardías (según modo)
+  if (typeof secNow === "number" && secNow >= lateCutoff) {
+    return true;
   }
 
   const candidates = [];
@@ -421,7 +429,6 @@ function evaluateMinute(minute, secNow) {
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // volatilidad promedio
     let vol = 0;
     for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
     vol = vol / Math.max(1, prices.length - 1);
@@ -442,13 +449,11 @@ function evaluateMinute(minute, secNow) {
     best = second;
   }
 
-  const threshold = strongOnly ? THRESHOLD_STRONG : THRESHOLD_NORMAL;
   if (!best || best.score < threshold) return true;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   const dirSign = best.move > 0 ? 1 : -1;
 
-  // deltas
   const prices = best.prices;
   const deltas = [];
   for (let i = 1; i < prices.length; i++) {
@@ -456,18 +461,18 @@ function evaluateMinute(minute, secNow) {
     if (d !== 0) deltas.push(d);
   }
 
-  // (1) Confirmación últimos N deltas
-  if (deltas.length >= CONFIRM_LAST_DELTAS) {
-    const last = deltas.slice(-CONFIRM_LAST_DELTAS);
+  // Confirmación últimos N deltas (suave/estricto según modo)
+  if (deltas.length >= confirmN) {
+    const last = deltas.slice(-confirmN);
     const okConfirm = last.every(d => Math.sign(d) === dirSign);
     if (!okConfirm) return true;
   }
 
-  // (2) Consistencia: % deltas a favor
+  // Consistencia mínima (suave/estricto según modo)
   if (deltas.length >= 3) {
     const favor = deltas.filter(d => Math.sign(d) === dirSign).length;
     const ratio = favor / deltas.length;
-    if (ratio < CONSISTENCY_MIN) return true;
+    if (ratio < consistencyMin) return true;
   }
 
   lastSignalSymbol = best.symbol;
@@ -486,7 +491,6 @@ function showSignal(minute, symbol, direction) {
   const label = labelForDirection(direction);
   const derivUrl = makeDerivTraderUrl(symbol);
 
-  // ✅ panel fijo (4)
   setLastSignalUI({ symbol, direction, time });
 
   const row = document.createElement("div");
@@ -506,7 +510,6 @@ function showSignal(minute, symbol, direction) {
     </div>
   `;
 
-  // ✅ tocar en el card abre Deriv
   row.addEventListener("click", (e) => {
     const target = e.target;
     if (target?.closest("button") || target?.closest("input")) return;
@@ -526,7 +529,6 @@ function showSignal(minute, symbol, direction) {
     e.stopPropagation();
     likeCount++;
     updateStatsUI();
-
     const comment = commentInput.value || "";
     feedbackEl.value += `${time} | ${symbol} | ${label} | like | ${comment}\n`;
     lockVotes();
@@ -536,7 +538,6 @@ function showSignal(minute, symbol, direction) {
     e.stopPropagation();
     dislikeCount++;
     updateStatsUI();
-
     const comment = commentInput.value || "";
     feedbackEl.value += `${time} | ${symbol} | ${label} | dislike | ${comment}\n`;
     lockVotes();
@@ -548,18 +549,15 @@ function showSignal(minute, symbol, direction) {
   signalsEl.prepend(row);
   setTimeout(() => row.classList.remove("flash"), 2200);
 
-  // 🔊 sonido
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
 
-  // 📳 vibración local
   if (vibrateEnabled && "vibrate" in navigator) {
     navigator.vibrate(vibratePatternForDirection(direction));
   }
 
-  // 🔔 notificación
   showNotification(symbol, direction);
 }
 
