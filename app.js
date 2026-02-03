@@ -92,6 +92,67 @@ let lastTickEpoch = null;
 let currentMinuteEpochBase = null;
 
 /* =========================
+   ✅ Ajuste NORMAL por tramos (SUAVE)
+   - Tramo A: 0-30
+   - Tramo B: 30-evalSecond
+   Penaliza contradicción, no mata señales.
+========================= */
+const SEG_SPLIT_SEC = 30;
+const PENALTY_LEVE = 0.85;
+const PENALTY_FUERTE = 0.65;
+const CONTRA_FUERTE_RATIO = 0.60; // si |B| >= 0.6*|A| y opuestos => fuerte
+
+function sign(x) {
+  return x > 0 ? 1 : x < 0 ? -1 : 0;
+}
+
+function extractQuotes(ticks) {
+  // ticks: [{sec, quote}, ...]
+  return ticks.map(t => t.quote);
+}
+
+function segmentTicks(ticks, fromSec, toSec) {
+  return ticks.filter(t => t.sec >= fromSec && t.sec <= toSec);
+}
+
+function segmentMove(ticksSeg) {
+  if (!ticksSeg || ticksSeg.length < 2) return null;
+  return ticksSeg[ticksSeg.length - 1].quote - ticksSeg[0].quote;
+}
+
+function computeVolatilityFromQuotes(quotes) {
+  if (!quotes || quotes.length < 2) return 0;
+  let vol = 0;
+  for (let i = 1; i < quotes.length; i++) vol += Math.abs(quotes[i] - quotes[i - 1]);
+  return vol / Math.max(1, quotes.length - 1);
+}
+
+function normalPenaltyBySegments(ticksAll, evalSec) {
+  // Si no hay info suficiente por tramos, no penaliza
+  const segA = segmentTicks(ticksAll, 0, SEG_SPLIT_SEC);
+  const segB = segmentTicks(ticksAll, SEG_SPLIT_SEC, Math.min(evalSec, 59));
+
+  const moveA = segmentMove(segA);
+  const moveB = segmentMove(segB);
+
+  if (moveA === null || moveB === null) return 1.0;
+
+  const sA = sign(moveA);
+  const sB = sign(moveB);
+
+  if (sA === 0 || sB === 0) return 1.0;
+  if (sA === sB) return 1.0; // coherente
+
+  const absA = Math.abs(moveA);
+  const absB = Math.abs(moveB);
+  const ratio = absB / Math.max(1e-9, absA);
+
+  // contradicción
+  if (ratio >= CONTRA_FUERTE_RATIO) return PENALTY_FUERTE;
+  return PENALTY_LEVE;
+}
+
+/* =========================
    UI
 ========================= */
 const statusEl = document.getElementById("status");
@@ -117,8 +178,6 @@ const vibrateBtn = document.getElementById("vibrateBtn");
 
 const evalSelect = document.getElementById("evalSelect");
 const strongToggle = document.getElementById("strongToggle");
-
-// ✅ NUEVO
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 
 /* =========================
@@ -464,7 +523,7 @@ function buildRowFromItem(it) {
 }
 
 /* =========================
-   ✅ Limpiar historial (NUEVO)
+   Limpiar historial
 ========================= */
 function clearHistory() {
   history = [];
@@ -525,7 +584,9 @@ function onTick(tick) {
 
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-  minuteData[minute][symbol].push(tick.quote);
+
+  // ✅ guardamos sec + quote
+  minuteData[minute][symbol].push({ sec, quote: tick.quote });
 
   if (sec >= evalSecond && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
@@ -566,37 +627,58 @@ function evaluateMinute(minute, secNow) {
   let readySymbols = 0;
 
   for (const symbol of SYMBOLS) {
-    const prices = data[symbol] || [];
-    if (prices.length >= MIN_TICKS) readySymbols++;
-    if (prices.length < MIN_TICKS) continue;
+    const ticksAll = data[symbol] || [];
+    if (ticksAll.length >= MIN_TICKS) readySymbols++;
+    if (ticksAll.length < MIN_TICKS) continue;
 
-    const move = prices[prices.length - 1] - prices[0];
+    const quotesAll = extractQuotes(ticksAll);
+
+    const move = quotesAll[quotesAll.length - 1] - quotesAll[0];
     const rawMove = Math.abs(move);
 
-    let vol = 0;
-    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
-    vol = vol / Math.max(1, prices.length - 1);
+    const vol = computeVolatilityFromQuotes(quotesAll);
+    const baseScore = rawMove / (vol || 1e-9);
 
-    const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol, move, score, prices });
+    // ✅ SOLO para normales: penalización por contradicción A vs B
+    let penalty = 1.0;
+    let rankScore = baseScore;
+
+    if (!strongOnly) {
+      penalty = normalPenaltyBySegments(ticksAll, evalSecond);
+      rankScore = baseScore * penalty;
+    }
+
+    candidates.push({
+      symbol,
+      move,
+      baseScore,
+      rankScore,
+      prices: quotesAll
+    });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY) return false;
   if (candidates.length === 0) return false;
 
-  candidates.sort((a, b) => b.score - a.score);
+  // ✅ Ordena por rankScore (en normal incluye penalty, en fuerte es igual al baseScore)
+  candidates.sort((a, b) => b.rankScore - a.rankScore);
   let best = candidates[0];
 
+  // anti-monopolio suave (se aplica igual)
   const second = candidates[1];
-  if (second && best.symbol === lastSignalSymbol && second.score >= best.score * 0.90) {
+  if (second && best.symbol === lastSignalSymbol && second.rankScore >= best.rankScore * 0.90) {
     best = second;
   }
 
-  if (!best || best.score < threshold) return true;
+  // umbral: respetamos el threshold elegido (normal/fuerte)
+  // Nota: comparamos contra baseScore para no “matar” por penalización.
+  // El penalty solo decide qué símbolo gana, no si hay señal.
+  if (!best || best.baseScore < threshold) return true;
 
   const direction = best.move > 0 ? "CALL" : "PUT";
   const dirSign = best.move > 0 ? 1 : -1;
 
+  // Confirmación y consistencia (igual que antes)
   const prices = best.prices;
   const deltas = [];
   for (let i = 1; i < prices.length; i++) {
