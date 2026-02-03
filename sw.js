@@ -39,8 +39,8 @@ self.addEventListener("fetch", (e) => {
 });
 
 /* =========================
-   ✅ Click en notificación
-   Abre Deriv Trader DEMO + Rise/Fall + símbolo
+   Click en notificación:
+   abre Deriv Trader demo/rise-fall con el símbolo de la señal
 ========================= */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
