@@ -14,11 +14,18 @@
 
   <h2 id="status">Conectando…</h2>
 
+  <!-- ✅ Salud + segundero -->
+  <div class="topStatus">
+    <div id="tickHealth" class="pill">Último tick: —</div>
+    <div id="countdown" class="pill">⏱️ 60</div>
+  </div>
+
   <div class="controls">
     <button id="soundBtn">🔇 Sonido OFF</button>
     <button id="vibrateBtn">📳 Vibración ON</button>
     <button id="wakeBtn">🔓 Pantalla activa</button>
     <button id="themeBtn">🌙 Oscuro</button>
+    <button id="clearHistoryBtn">🧹 Vaciar historial</button>
   </div>
 
   <div id="counter">Señales: 0</div>
@@ -31,9 +38,7 @@
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- ======================
-       Modal gráfico
-  ======================= -->
+  <!-- ✅ Modal gráfico -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
