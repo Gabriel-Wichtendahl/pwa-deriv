@@ -134,16 +134,39 @@ function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
 }
 
+/* =========================
+   ✅ Botón gráfico: lock/unlock visual
+========================= */
+const CHART_ICON_SVG = `
+<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M6 14l4-4 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="10" cy="10" r="1" fill="currentColor"/>
+  <circle cx="13" cy="13" r="1" fill="currentColor"/>
+  <circle cx="18" cy="6" r="1" fill="currentColor"/>
+</svg>
+`;
+
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
+
   const btn = row.querySelector(".chartBtn");
   if (!btn) return;
 
   const ready = !!item.minuteComplete;
   btn.disabled = !ready;
-  btn.title = ready ? "Ver gráfico del minuto" : "Esperando cierre del minuto…";
-  btn.setAttribute("aria-label", btn.title);
+
+  if (ready) {
+    btn.innerHTML = CHART_ICON_SVG;
+    btn.title = "Ver gráfico del minuto (completo 0–60)";
+    btn.setAttribute("aria-label", btn.title);
+  } else {
+    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
+    btn.title = "Esperando cierre del minuto… (se habilita al llegar a 60s)";
+    btn.setAttribute("aria-label", btn.title);
+  }
 }
 
 /* =========================
@@ -181,7 +204,6 @@ function applyTheme(theme) {
           sound.muted = false;
           sound.volume = 1;
           sound.currentTime = 0;
-
           await sound.play();
           sound.pause();
 
@@ -301,7 +323,7 @@ function showNotification(symbol, direction) {
    ✅ Modal gráfico
 ========================= */
 function openChartModal(item) {
-  if (!item.minuteComplete) return; // ✅ no abrir antes del cierre del minuto
+  if (!item.minuteComplete) return;
 
   modalCurrentItem = item;
   if (!chartModal) return;
@@ -341,6 +363,40 @@ window.addEventListener("resize", () => {
   if (!modalCurrentItem) return;
   drawLineChart(minuteCanvas, modalCurrentItem.ticks || []);
 });
+
+/* =========================
+   ✅ Gráfico: 0..60 con TODOS los ticks (agrupados por segundo)
+========================= */
+function compressTicksToSeconds(ticks) {
+  // ticks: [{sec, quote}, ...] puede contener MUCHOS con el mismo sec.
+  // Queremos 0..60, y por cada segundo usamos el último tick que llegó en ese segundo.
+  const perSec = new Array(61).fill(null);
+
+  for (const t of ticks) {
+    const s = Math.max(0, Math.min(60, Math.floor(t.sec)));
+    perSec[s] = t.quote; // último que llega para ese segundo
+  }
+
+  // rellenar huecos hacia adelante/atrás para que la línea sea continua
+  // 1) buscar primer valor
+  let firstIdx = perSec.findIndex(v => v !== null);
+  if (firstIdx === -1) return [];
+
+  // rellenar hacia atrás con el primero
+  for (let i = 0; i < firstIdx; i++) perSec[i] = perSec[firstIdx];
+
+  // rellenar hacia adelante con el último conocido
+  let lastVal = perSec[firstIdx];
+  for (let i = firstIdx + 1; i <= 60; i++) {
+    if (perSec[i] === null) perSec[i] = lastVal;
+    else lastVal = perSec[i];
+  }
+
+  // devolver puntos 0..60
+  const pts = [];
+  for (let s = 0; s <= 60; s++) pts.push({ sec: s, quote: perSec[s] });
+  return pts;
+}
 
 function drawLineChart(canvas, ticks) {
   if (!canvas) return;
@@ -390,12 +446,9 @@ function drawLineChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  // minuto completo 0..60 (en teoría ya está completo, igual aseguramos)
-  const pts = ticks.map(t => ({ sec: t.sec, quote: t.quote })).sort((a,b)=>a.sec-b.sec);
-  const first = pts[0];
-  const last = pts[pts.length - 1];
-  if (first.sec > 0) pts.unshift({ sec: 0, quote: first.quote });
-  if (last.sec < 60) pts.push({ sec: 60, quote: last.quote });
+  // ✅ clave: comprimimos a 0..60 (un valor por segundo)
+  const pts = compressTicksToSeconds(ticks);
+  if (pts.length < 2) return;
 
   const quotes = pts.map(p => p.quote);
   let min = Math.min(...quotes);
@@ -482,18 +535,7 @@ function buildRow(item) {
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)}</span>
-
-      <button class="chartBtn" type="button">
-        <svg viewBox="0 0 24 24" fill="none">
-          <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          <path d="M6 14l4-4 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="10" cy="10" r="1" fill="currentColor"/>
-          <circle cx="13" cy="13" r="1" fill="currentColor"/>
-          <circle cx="18" cy="6" r="1" fill="currentColor"/>
-        </svg>
-      </button>
-
+      <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
 
@@ -515,7 +557,7 @@ function buildRow(item) {
     openChartModal(item);
   };
 
-  // ✅ set disabled until minute closes
+  // ✅ set lock/unlock visual + disabled
   updateRowChartBtn(item);
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
@@ -656,24 +698,20 @@ function onTick(tick) {
   lastTickEpoch = epoch;
   currentMinuteEpochBase = minute * 60;
 
-  // detectar cambio de minuto -> finalizar los minutos que quedaron atrás
   if (lastSeenMinute === null) lastSeenMinute = minute;
   if (minute > lastSeenMinute) {
     for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
     lastSeenMinute = minute;
   }
 
-  // ticks por minuto
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push({ sec, quote: tick.quote });
 
-  // open/close vela
   if (!candleOC[minute]) candleOC[minute] = {};
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
-  // evaluar a los 45s
   if (sec >= 45 && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
@@ -752,7 +790,7 @@ function addSignal(minute, symbol, direction, ticks) {
     comment: "",
     ticks: Array.isArray(ticks) ? ticks : [],
     nextOutcome: "",
-    minuteComplete: false // ✅ hasta que cierre el minuto
+    minuteComplete: false
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -806,9 +844,9 @@ wakeBtn.onclick = async () => {
 ========================= */
 renderHistory();
 
-// ✅ Asegurar que al cargar se respeten disabled/enabled según minuteComplete guardado
+// ✅ asegurar que al cargar respete lock/unlock guardado
 for (const it of history) {
-  if (it.minuteComplete) updateRowChartBtn(it);
+  updateRowChartBtn(it);
 }
 
 updateTickHealthUI();
