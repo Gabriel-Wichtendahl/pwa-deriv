@@ -111,6 +111,9 @@ button.active {
   background: var(--row-bg);
   display: grid;
   gap: 8px;
+
+  /* ✅ se siente clickeable */
+  cursor: pointer;
 }
 
 .row .topline {
@@ -144,6 +147,12 @@ button.active {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+/* ✅ botones/input no “parecen” link */
+.row button,
+.row input {
+  cursor: auto;
 }
 
 .row input {
