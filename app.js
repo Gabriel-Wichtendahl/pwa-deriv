@@ -49,21 +49,18 @@ const RETRY_DELAY_MS = 5000;
 const THRESHOLD_NORMAL = 0.015;
 const THRESHOLD_STRONG = 0.03;
 
-/* =========================
-   ✅ Filtros de calidad (SUAVES en normal / ESTRICTOS en fuerte)
-========================= */
-// Normal (más flexible)
-const CONFIRM_LAST_DELTAS_NORMAL = 2; // antes 3
-const CONSISTENCY_MIN_NORMAL = 0.55;  // antes 0.65
-const LATE_SECOND_CUTOFF_NORMAL = 59; // permite casi todo el minuto
+// Normal (flexible)
+const CONFIRM_LAST_DELTAS_NORMAL = 2;
+const CONSISTENCY_MIN_NORMAL = 0.55;
+const LATE_SECOND_CUTOFF_NORMAL = 59;
 
-// Fuerte (más estricto)
+// Fuerte (estricto)
 const CONFIRM_LAST_DELTAS_STRONG = 3;
 const CONSISTENCY_MIN_STRONG = 0.65;
 const LATE_SECOND_CUTOFF_STRONG = 58;
 
-let evalSecond = 45;     // 45/50/55
-let strongOnly = false;  // filtro
+let evalSecond = 45;
+let strongOnly = false;
 
 // Salud + segundero
 let lastTickEpoch = null;
@@ -86,7 +83,6 @@ const dislikeCountEl = document.getElementById("dislikeCount");
 const lastSignalEl = document.getElementById("lastSignal");
 const lastSignalTextEl = document.getElementById("lastSignalText");
 const lastSignalMetaEl = document.getElementById("lastSignalMeta");
-const openDerivBtn = document.getElementById("openDerivBtn");
 
 const sound = document.getElementById("alertSound");
 const soundBtn = document.getElementById("soundBtn");
@@ -278,31 +274,14 @@ document.getElementById("copyFeedback").onclick = () => {
 };
 
 /* =========================
-   Última señal fija
+   Panel fijo última señal (sin botón)
 ========================= */
-let lastDerivUrl = null;
-
 function setLastSignalUI({ symbol, direction, time }) {
   const label = labelForDirection(direction);
-  lastDerivUrl = makeDerivTraderUrl(symbol);
 
   if (lastSignalEl) lastSignalEl.classList.remove("hidden");
   if (lastSignalTextEl) lastSignalTextEl.textContent = `${symbol} – ${label}`;
   if (lastSignalMetaEl) lastSignalMetaEl.textContent = `Hora: ${time}`;
-
-  if (lastSignalEl) {
-    lastSignalEl.onclick = (e) => {
-      if (e.target?.closest("button")) return;
-      if (lastDerivUrl) window.location.href = lastDerivUrl;
-    };
-  }
-
-  if (openDerivBtn) {
-    openDerivBtn.onclick = (e) => {
-      e.stopPropagation();
-      if (lastDerivUrl) window.location.href = lastDerivUrl;
-    };
-  }
 }
 
 /* =========================
@@ -394,9 +373,7 @@ function scheduleRetry(minute) {
     const nowMinute = Math.floor(now / 60);
     const nowSec = now % 60;
 
-    if (nowMinute === minute) {
-      evaluateMinute(minute, nowSec);
-    }
+    if (nowMinute === minute) evaluateMinute(minute, nowSec);
   }, RETRY_DELAY_MS);
 }
 
@@ -407,16 +384,12 @@ function evaluateMinute(minute, secNow) {
   const data = minuteData[minute];
   if (!data) return false;
 
-  // Config dinámica según modo
   const threshold = strongOnly ? THRESHOLD_STRONG : THRESHOLD_NORMAL;
   const confirmN = strongOnly ? CONFIRM_LAST_DELTAS_STRONG : CONFIRM_LAST_DELTAS_NORMAL;
   const consistencyMin = strongOnly ? CONSISTENCY_MIN_STRONG : CONSISTENCY_MIN_NORMAL;
   const lateCutoff = strongOnly ? LATE_SECOND_CUTOFF_STRONG : LATE_SECOND_CUTOFF_NORMAL;
 
-  // Evitar señales tardías (según modo)
-  if (typeof secNow === "number" && secNow >= lateCutoff) {
-    return true;
-  }
+  if (typeof secNow === "number" && secNow >= lateCutoff) return true;
 
   const candidates = [];
   let readySymbols = 0;
@@ -443,7 +416,6 @@ function evaluateMinute(minute, secNow) {
   candidates.sort((a, b) => b.score - a.score);
   let best = candidates[0];
 
-  // anti-monopolio suave
   const second = candidates[1];
   if (second && best.symbol === lastSignalSymbol && second.score >= best.score * 0.90) {
     best = second;
@@ -461,14 +433,12 @@ function evaluateMinute(minute, secNow) {
     if (d !== 0) deltas.push(d);
   }
 
-  // Confirmación últimos N deltas (suave/estricto según modo)
   if (deltas.length >= confirmN) {
     const last = deltas.slice(-confirmN);
     const okConfirm = last.every(d => Math.sign(d) === dirSign);
     if (!okConfirm) return true;
   }
 
-  // Consistencia mínima (suave/estricto según modo)
   if (deltas.length >= 3) {
     const favor = deltas.filter(d => Math.sign(d) === dirSign).length;
     const ratio = favor / deltas.length;
@@ -481,7 +451,8 @@ function evaluateMinute(minute, secNow) {
 }
 
 /* =========================
-   Mostrar señal (tap abre Deriv)
+   Mostrar señal
+   ✅ Ahora Deriv se abre tocando SOLO el encabezado (topline)
 ========================= */
 function showSignal(minute, symbol, direction) {
   signalCount++;
@@ -495,10 +466,9 @@ function showSignal(minute, symbol, direction) {
 
   const row = document.createElement("div");
   row.className = `row ${cssClassForDirection(direction)} flash`;
-  row.title = "Tocar para abrir Deriv";
 
   row.innerHTML = `
-    <div class="topline">
+    <div class="topline" title="Tocar para abrir Deriv">
       <div>${time} | ${symbol}</div>
       <div class="badge">${label}</div>
     </div>
@@ -510,23 +480,32 @@ function showSignal(minute, symbol, direction) {
     </div>
   `;
 
-  row.addEventListener("click", (e) => {
-    const target = e.target;
-    if (target?.closest("button") || target?.closest("input")) return;
-    window.location.href = derivUrl;
-  });
-
+  const topLine = row.querySelector(".topline");
   const likeBtn = row.querySelector('button[data-v="like"]');
   const dislikeBtn = row.querySelector('button[data-v="dislike"]');
   const commentInput = row.querySelector("input");
+
+  // ✅ Abrir deriv solo si tocás el encabezado
+  topLine.addEventListener("click", () => {
+    window.location.href = derivUrl;
+  });
+
+  // ✅ en mobile a veces se dispara el click por “tap”
+  // cortamos propagación en botones e input con pointerdown + click
+  [likeBtn, dislikeBtn].forEach(btn => {
+    btn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    btn.addEventListener("click", (e) => e.stopPropagation());
+  });
+  commentInput.addEventListener("pointerdown", (e) => e.stopPropagation());
+  commentInput.addEventListener("click", (e) => e.stopPropagation());
+  commentInput.addEventListener("keydown", (e) => e.stopPropagation());
 
   function lockVotes() {
     likeBtn.disabled = true;
     dislikeBtn.disabled = true;
   }
 
-  likeBtn.onclick = (e) => {
-    e.stopPropagation();
+  likeBtn.onclick = () => {
     likeCount++;
     updateStatsUI();
     const comment = commentInput.value || "";
@@ -534,17 +513,13 @@ function showSignal(minute, symbol, direction) {
     lockVotes();
   };
 
-  dislikeBtn.onclick = (e) => {
-    e.stopPropagation();
+  dislikeBtn.onclick = () => {
     dislikeCount++;
     updateStatsUI();
     const comment = commentInput.value || "";
     feedbackEl.value += `${time} | ${symbol} | ${label} | dislike | ${comment}\n`;
     lockVotes();
   };
-
-  commentInput.addEventListener("click", (e) => e.stopPropagation());
-  commentInput.addEventListener("keydown", (e) => e.stopPropagation());
 
   signalsEl.prepend(row);
   setTimeout(() => row.classList.remove("flash"), 2200);
