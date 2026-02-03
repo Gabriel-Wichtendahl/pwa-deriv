@@ -130,13 +130,21 @@ button.active{
   justify-content:center;
   background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
 }
+
 .chartBtn svg{
   width:22px;
   height:22px;
   opacity:.95;
 }
 
-/* ✅ flecha próxima vela */
+/* ✅ deshabilitado hasta cierre de minuto */
+.chartBtn:disabled{
+  opacity: .35;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
+/* flecha próxima vela */
 .nextArrow{
   min-width: 28px;
   text-align:center;
