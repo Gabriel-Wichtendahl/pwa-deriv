@@ -4,10 +4,9 @@
   --border: #334155;
   --btn-bg: #0f172a;
   --btn-text: #e5e7eb;
-
-  --call: #16a34a;
-  --put: #dc2626;
   --row-bg: rgba(255,255,255,0.02);
+
+  --ok: #16a34a;
 }
 
 body.light {
@@ -16,7 +15,6 @@ body.light {
   --border: #cbd5e1;
   --btn-bg: #e2e8f0;
   --btn-text: #0f172a;
-
   --row-bg: rgba(0,0,0,0.03);
 }
 
@@ -27,65 +25,11 @@ body {
   padding: 10px;
 }
 
-.topInfo {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin: 6px 0 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--row-bg);
-  font-size: 13px;
-  opacity: 0.95;
-}
-
-#countdown {
-  font-weight: 800;
-}
-
 .controls {
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 8px;
-}
-
-.controls.secondary {
-  align-items: center;
-  opacity: 0.95;
-}
-
-.field {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px 10px;
-  background: var(--row-bg);
-}
-
-.field span {
-  font-size: 13px;
-  opacity: 0.9;
-}
-
-.field select {
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px 8px;
-}
-
-.field.checkbox {
-  cursor: pointer;
-}
-
-.field.checkbox input {
-  transform: scale(1.05);
+  flex-wrap: wrap;
+  margin-bottom: 10px;
 }
 
 button {
@@ -99,31 +43,17 @@ button {
 }
 
 button.active {
-  background: #16a34a;
-  color: #ffffff;
-  border-color: #16a34a;
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
 }
 
-button.danger {
-  border-color: color-mix(in srgb, #dc2626 55%, var(--border));
-  background: color-mix(in srgb, #dc2626 16%, var(--btn-bg));
-}
-
-.stats {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 10px 0 6px;
+#counter {
+  margin: 10px 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--row-bg);
-}
-
-.stats .mini {
-  display: flex;
-  gap: 10px;
-  opacity: 0.9;
 }
 
 .row {
@@ -136,43 +66,29 @@ button.danger {
   gap: 8px;
 }
 
-.row .topline {
-  display: grid;
-  grid-template-columns: 1fr auto auto auto;
+.row-main {
+  display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.row-text {
+  flex: 1;
+  min-width: 220px;
   font-weight: 800;
   cursor: pointer;
   user-select: none;
 }
 
-.row .badge {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 900;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-}
-
-.row.call .badge {
-  background: color-mix(in srgb, var(--call) 20%, transparent);
-  border-color: color-mix(in srgb, var(--call) 50%, var(--border));
-}
-
-.row.put .badge {
-  background: color-mix(in srgb, var(--put) 18%, transparent);
-  border-color: color-mix(in srgb, var(--put) 50%, var(--border));
-}
-
-.row .actions {
+.row-actions {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
 }
 
-.row input {
+.row-comment {
   flex: 1;
   min-width: 160px;
   background: transparent;
@@ -182,130 +98,31 @@ button.danger {
   padding: 8px;
 }
 
-textarea {
-  width: 100%;
-  background: transparent;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px;
-}
-
-/* ✅ Botón mini gráfico */
-.sparkBtn {
-  width: 46px;
-  height: 28px;
+/* ✅ Botón con imagen de gráfico */
+.chartBtn {
+  width: 40px;
+  height: 32px;
   padding: 0;
+  border-radius: 10px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
   overflow: hidden;
   background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
 }
 
-.sparkBtn canvas {
-  width: 42px;
-  height: 20px;
-  display: block;
+.chartBtn svg {
+  width: 22px;
+  height: 22px;
+  opacity: 0.95;
 }
 
-/* ✅ Icono outcome (resultado del minuto siguiente) */
-.outcomeIcon {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--btn-bg) 85%, transparent);
-  font-size: 14px;
-  line-height: 1;
-  user-select: none;
-}
-
-.outcomeIcon.pending {
-  opacity: 0.7;
-}
-
-.outcomeIcon.up {
-  border-color: color-mix(in srgb, var(--call) 50%, var(--border));
-  background: color-mix(in srgb, var(--call) 18%, transparent);
-}
-
-.outcomeIcon.down {
-  border-color: color-mix(in srgb, var(--put) 50%, var(--border));
-  background: color-mix(in srgb, var(--put) 18%, transparent);
-}
-
-.outcomeIcon.flat {
-  opacity: 0.85;
-}
-
-/* Flash */
-@keyframes flashPulse {
-  0%   { box-shadow: 0 0 0 rgba(0,0,0,0); transform: translateY(0); }
-  20%  { box-shadow: 0 0 0 3px rgba(255,255,255,0.08); transform: translateY(-1px); }
-  40%  { box-shadow: 0 0 0 6px rgba(255,255,255,0.04); transform: translateY(0); }
-  60%  { box-shadow: 0 0 0 3px rgba(255,255,255,0.08); }
-  100% { box-shadow: 0 0 0 rgba(0,0,0,0); }
-}
-
-.row.flash {
-  animation: flashPulse 0.6s ease-in-out 3;
-}
-
-.row.call.flash {
-  outline: 2px solid color-mix(in srgb, var(--call) 50%, transparent);
-}
-
-.row.put.flash {
-  outline: 2px solid color-mix(in srgb, var(--put) 50%, transparent);
-}
-
-/* Panel Última señal */
-.lastSignal {
-  position: sticky;
-  top: 8px;
-  z-index: 5;
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: center;
-
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 10px;
-  margin: 10px 0;
-
-  background: color-mix(in srgb, var(--row-bg) 70%, transparent);
-  backdrop-filter: blur(6px);
-}
-
-.lastSignal.hidden {
-  display: none;
-}
-
-.ls-left {
-  display: grid;
-  gap: 2px;
-}
-
-.ls-title {
-  font-size: 12px;
-  opacity: 0.75;
-}
-
-.ls-main {
-  font-weight: 900;
+/* Outcome flecha */
+.nextArrow {
   font-size: 16px;
+  opacity: 0.95;
 }
-
-.ls-sub {
-  font-size: 12px;
-  opacity: 0.75;
-}
+.nextArrow.pending { opacity: 0.6; }
 
 /* ✅ Modal */
 .modal.hidden { display: none; }
@@ -374,4 +191,13 @@ textarea {
 
 .modalAction {
   font-weight: 800;
+}
+
+textarea {
+  width: 100%;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
 }
