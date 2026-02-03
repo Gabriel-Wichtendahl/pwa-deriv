@@ -2,8 +2,7 @@ const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 /* =========================
-   Config Deriv Deep Link
-   - DEMO + Rise/Fall + parámetros que ya probaste
+   Config Deriv Deep Link (DEMO + Rise/Fall + gráfico ticks)
 ========================= */
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
@@ -23,6 +22,9 @@ let soundEnabled = false;
 let vibrateEnabled = true;
 
 let signalCount = 0;
+let likeCount = 0;
+let dislikeCount = 0;
+
 let minuteData = {};
 let lastEvaluatedMinute = null;
 let lastSignalSymbol = null;
@@ -33,6 +35,13 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
+// umbrales
+const THRESHOLD_NORMAL = 0.015;
+const THRESHOLD_STRONG = 0.03;
+
+let evalSecond = 45;        // 45 / 50 / 55
+let strongOnly = false;     // filtro señales fuertes
+
 /* =========================
    UI
 ========================= */
@@ -41,12 +50,18 @@ const signalsEl = document.getElementById("signals");
 const counterEl = document.getElementById("counter");
 const feedbackEl = document.getElementById("feedback");
 
+const likeCountEl = document.getElementById("likeCount");
+const dislikeCountEl = document.getElementById("dislikeCount");
+
 const sound = document.getElementById("alertSound");
 
 const soundBtn = document.getElementById("soundBtn");
 const wakeBtn = document.getElementById("wakeBtn");
 const themeBtn = document.getElementById("themeBtn");
 const vibrateBtn = document.getElementById("vibrateBtn");
+
+const evalSelect = document.getElementById("evalSelect");
+const strongToggle = document.getElementById("strongToggle");
 
 /* =========================
    Helpers
@@ -64,6 +79,22 @@ function loadBool(key, fallback) {
 
 function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
+}
+
+function loadNumber(key, fallback) {
+  const v = localStorage.getItem(key);
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function saveNumber(key, value) {
+  localStorage.setItem(key, String(value));
+}
+
+function updateStatsUI() {
+  counterEl.textContent = `Señales: ${signalCount}`;
+  if (likeCountEl) likeCountEl.textContent = `👍 ${likeCount}`;
+  if (dislikeCountEl) dislikeCountEl.textContent = `👎 ${dislikeCount}`;
 }
 
 /* =========================
@@ -89,10 +120,41 @@ function applyTheme(theme) {
 })();
 
 /* =========================
+   ⚙️ Config (45/50/55 + fuertes)
+========================= */
+(function initConfig() {
+  evalSecond = loadNumber("evalSecond", 45);
+  if (![45, 50, 55].includes(evalSecond)) evalSecond = 45;
+
+  strongOnly = loadBool("strongOnly", false);
+
+  if (evalSelect) {
+    evalSelect.value = String(evalSecond);
+    evalSelect.onchange = () => {
+      evalSecond = Number(evalSelect.value) || 45;
+      saveNumber("evalSecond", evalSecond);
+    };
+  }
+
+  if (strongToggle) {
+    strongToggle.checked = strongOnly;
+    strongToggle.onchange = () => {
+      strongOnly = !!strongToggle.checked;
+      saveBool("strongOnly", strongOnly);
+    };
+  }
+})();
+
+/* =========================
    🔔 Notificaciones
 ========================= */
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
+}
+
+function vibratePatternForDirection(direction) {
+  // CALL = corto, PUT = más largo
+  return direction === "CALL" ? [120] : [180, 80, 180];
 }
 
 function showNotification(symbol, direction) {
@@ -112,13 +174,10 @@ function showNotification(symbol, direction) {
       badge: "icon-192.png",
       tag: "deriv-signal",
       renotify: true,
-
-      // heads-up cuando el sistema lo permite
       requireInteraction: true,
       silent: false,
 
-      // vibración opcional
-      vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
+      vibrate: vibrateEnabled ? vibratePatternForDirection(direction) : undefined,
 
       // ✅ para el click (sw.js abre esto)
       data: { url, symbol, direction },
@@ -230,8 +289,8 @@ function onTick(tick) {
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push(tick.quote);
 
-  // primer intento en segundo 45
-  if (sec >= 45 && lastEvaluatedMinute !== minute) {
+  // primer intento en segundo configurable (45/50/55)
+  if (sec >= evalSecond && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
     if (!ok) scheduleRetry(minute);
@@ -268,6 +327,7 @@ function evaluateMinute(minute) {
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
+    // volatilidad promedio
     let vol = 0;
     for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
     vol = vol / Math.max(1, prices.length - 1);
@@ -288,7 +348,8 @@ function evaluateMinute(minute) {
     best = second;
   }
 
-  if (!best || best.score < 0.015) return true;
+  const threshold = strongOnly ? THRESHOLD_STRONG : THRESHOLD_NORMAL;
+  if (!best || best.score < threshold) return true;
 
   lastSignalSymbol = best.symbol;
   const direction = best.move > 0 ? "CALL" : "PUT";
@@ -302,38 +363,69 @@ function evaluateMinute(minute) {
 ========================= */
 function showSignal(minute, symbol, direction) {
   signalCount++;
-  counterEl.textContent = `Señales: ${signalCount}`;
+  updateStatsUI();
 
   const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 
   const row = document.createElement("div");
-  row.className = "row";
+  row.className = `row ${direction === "CALL" ? "call" : "put"} flash`;
+
   row.innerHTML = `
-    ${time} | ${symbol} | ${direction}
-    <button data-v="like">👍</button>
-    <button data-v="dislike">👎</button>
-    <input placeholder="comentario">
+    <div class="topline">
+      <div>${time} | ${symbol}</div>
+      <div class="badge">${direction}</div>
+    </div>
+
+    <div class="actions">
+      <button data-v="like">👍</button>
+      <button data-v="dislike">👎</button>
+      <input placeholder="comentario">
+    </div>
   `;
 
-  row.querySelectorAll("button").forEach(btn => {
-    btn.onclick = () => {
-      const comment = row.querySelector("input").value || "";
-      feedbackEl.value += `${time} | ${symbol} | ${direction} | ${btn.dataset.v} | ${comment}\n`;
-      btn.disabled = true;
-    };
-  });
+  const likeBtn = row.querySelector('button[data-v="like"]');
+  const dislikeBtn = row.querySelector('button[data-v="dislike"]');
+
+  function lockVotes() {
+    likeBtn.disabled = true;
+    dislikeBtn.disabled = true;
+  }
+
+  likeBtn.onclick = () => {
+    likeCount++;
+    updateStatsUI();
+
+    const comment = row.querySelector("input").value || "";
+    feedbackEl.value += `${time} | ${symbol} | ${direction} | like | ${comment}\n`;
+    lockVotes();
+  };
+
+  dislikeBtn.onclick = () => {
+    dislikeCount++;
+    updateStatsUI();
+
+    const comment = row.querySelector("input").value || "";
+    feedbackEl.value += `${time} | ${symbol} | ${direction} | dislike | ${comment}\n`;
+    lockVotes();
+  };
 
   signalsEl.prepend(row);
 
+  // quitar clase flash luego de un rato (limpio)
+  setTimeout(() => row.classList.remove("flash"), 2200);
+
+  // 🔊 sonido
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
 
+  // 📳 vibración local (además de la notificación)
   if (vibrateEnabled && "vibrate" in navigator) {
-    navigator.vibrate([120]);
+    navigator.vibrate(vibratePatternForDirection(direction));
   }
 
+  // 🔔 notificación + click abre Deriv demo rise/fall con símbolo
   showNotification(symbol, direction);
 }
 
@@ -362,4 +454,5 @@ wakeBtn.onclick = async () => {
 /* =========================
    Start
 ========================= */
-connect(); 
+updateStatsUI();
+connect();
