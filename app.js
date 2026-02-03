@@ -2,7 +2,7 @@ const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
 /* =========================
-   Config Deriv Deep Link (DEMO + Rise/Fall + gráfico ticks)
+   Config Deriv Deep Link (DEMO + Rise/Fall)
 ========================= */
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
@@ -11,6 +11,17 @@ function makeDerivTraderUrl(symbol) {
   const u = new URL(DERIV_DTRADER_TEMPLATE);
   u.searchParams.set("symbol", symbol);
   return u.toString();
+}
+
+/* =========================
+   Labels (CALL/PUT -> COMPRA/VENTA)
+========================= */
+function labelForDirection(direction) {
+  return direction === "CALL" ? "COMPRA" : "VENTA";
+}
+
+function cssClassForDirection(direction) {
+  return direction === "CALL" ? "call" : "put";
 }
 
 /* =========================
@@ -153,7 +164,7 @@ if ("Notification" in window && Notification.permission === "default") {
 }
 
 function vibratePatternForDirection(direction) {
-  // CALL = corto, PUT = más largo
+  // CALL (COMPRA) = corto, PUT (VENTA) = más largo
   return direction === "CALL" ? [120] : [180, 80, 180];
 }
 
@@ -162,7 +173,7 @@ function showNotification(symbol, direction) {
   if (Notification.permission !== "granted") return;
 
   const title = "📈 Deriv Signal";
-  const body = `${symbol} – ${direction}`;
+  const body = `${symbol} – ${labelForDirection(direction)}`; // (4)
   const url = makeDerivTraderUrl(symbol);
 
   navigator.serviceWorker.getRegistration().then(reg => {
@@ -179,7 +190,7 @@ function showNotification(symbol, direction) {
 
       vibrate: vibrateEnabled ? vibratePatternForDirection(direction) : undefined,
 
-      // ✅ para el click (sw.js abre esto)
+      // click abre Deriv demo/rise-fall con símbolo
       data: { url, symbol, direction },
 
       actions: [{ action: "open", title: "Abrir Deriv" }]
@@ -250,6 +261,9 @@ function showNotification(symbol, direction) {
   }
 })();
 
+/* =========================
+   Feedback
+========================= */
 document.getElementById("copyFeedback").onclick = () => {
   navigator.clipboard.writeText(feedbackEl.value);
 };
@@ -366,14 +380,15 @@ function showSignal(minute, symbol, direction) {
   updateStatsUI();
 
   const time = new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+  const label = labelForDirection(direction);
 
   const row = document.createElement("div");
-  row.className = `row ${direction === "CALL" ? "call" : "put"} flash`;
+  row.className = `row ${cssClassForDirection(direction)} flash`; // (2)
 
   row.innerHTML = `
     <div class="topline">
       <div>${time} | ${symbol}</div>
-      <div class="badge">${direction}</div>
+      <div class="badge">${label}</div> <!-- (3) -->
     </div>
 
     <div class="actions">
@@ -396,7 +411,7 @@ function showSignal(minute, symbol, direction) {
     updateStatsUI();
 
     const comment = row.querySelector("input").value || "";
-    feedbackEl.value += `${time} | ${symbol} | ${direction} | like | ${comment}\n`;
+    feedbackEl.value += `${time} | ${symbol} | ${label} | like | ${comment}\n`; // (5)
     lockVotes();
   };
 
@@ -405,13 +420,13 @@ function showSignal(minute, symbol, direction) {
     updateStatsUI();
 
     const comment = row.querySelector("input").value || "";
-    feedbackEl.value += `${time} | ${symbol} | ${direction} | dislike | ${comment}\n`;
+    feedbackEl.value += `${time} | ${symbol} | ${label} | dislike | ${comment}\n`; // (5)
     lockVotes();
   };
 
   signalsEl.prepend(row);
 
-  // quitar clase flash luego de un rato (limpio)
+  // quitar clase flash luego de un rato
   setTimeout(() => row.classList.remove("flash"), 2200);
 
   // 🔊 sonido
@@ -425,7 +440,7 @@ function showSignal(minute, symbol, direction) {
     navigator.vibrate(vibratePatternForDirection(direction));
   }
 
-  // 🔔 notificación + click abre Deriv demo rise/fall con símbolo
+  // 🔔 notificación (click abre Deriv demo/rise-fall con símbolo)
   showNotification(symbol, direction);
 }
 
