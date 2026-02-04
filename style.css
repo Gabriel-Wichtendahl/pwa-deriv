@@ -1,9 +1,15 @@
 /* =========================
+   Reset básico
+========================= */
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+
+/* =========================
    Variables de tema
 ========================= */
 :root {
   --bg-main: #020617;
-  --bg-card: rgba(2, 6, 23, 0.85);
+  --bg-card: rgba(2, 6, 23, 0.82);
   --text: #e5e7eb;
   --muted: #94a3b8;
 
@@ -15,12 +21,12 @@
   --neon-purple: #a855f7;
   --neon-orange: #fb923c;
 
-  --btn-bg: rgba(15, 23, 42, 0.85);
+  --btn-bg: rgba(15, 23, 42, 0.82);
   --btn-text: #e5e7eb;
 }
 
 /* =========================
-   Tema claro (sin fondo)
+   Tema claro (sin imagen)
 ========================= */
 body.light {
   --bg-main: #f8fafc;
@@ -30,22 +36,24 @@ body.light {
   --border: #cbd5e1;
   --btn-bg: #e2e8f0;
   --btn-text: #0f172a;
+
+  background: #f8fafc;
 }
 
 /* =========================
-   Body base
+   Body
 ========================= */
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: var(--bg-main);
   color: var(--text);
-  padding: 10px;
-  position: relative;
+  padding: 12px;
+  background: var(--bg-main);
   overflow-x: hidden;
 }
 
 /* =========================
-   Fondo Neon (capa independiente)
+   ✅ Fondo Neon (capa fija)
+   (Esto evita “fondo negro” cuando el body tiene cards opacas)
 ========================= */
 .bgNeon {
   position: fixed;
@@ -53,43 +61,58 @@ body {
   z-index: -1;
   pointer-events: none;
 
+  /* Fondo: imagen + overlays (sin blur) */
   background-image:
-    linear-gradient(180deg, rgba(2,6,23,0.55), rgba(2,6,23,0.75)),
+    radial-gradient(circle at 20% 10%, rgba(34,211,238,0.18), transparent 45%),
+    radial-gradient(circle at 80% 20%, rgba(168,85,247,0.16), transparent 45%),
+    radial-gradient(circle at 50% 90%, rgba(34,197,94,0.10), transparent 55%),
+    linear-gradient(180deg, rgba(2,6,23,0.35), rgba(2,6,23,0.85)),
     url("./bg-neon.png");
 
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  background-attachment: fixed;
 
-  image-rendering: -webkit-optimize-contrast;
+  /* En móviles, fixed puede “apagarse” o parpadear. Esto lo estabiliza */
+  transform: translateZ(0);
+  will-change: transform;
 }
 
-/* Apagar fondo en modo claro */
-body.light .bgNeon {
-  background-image: none;
-}
+/* Si estás en modo claro, ocultamos el fondo neon */
+body.light .bgNeon { display: none; }
 
 /* =========================
-   Títulos
+   Layout
 ========================= */
-h2 {
-  font-weight: 600;
-  letter-spacing: 0.4px;
+.header {
+  position: relative;
+  z-index: 1;
 }
 
-h3 {
-  margin-top: 14px;
+.main {
+  position: relative;
+  z-index: 1;
+}
+
+.status {
+  margin: 6px 0 10px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+}
+
+.h3, h3 {
+  margin: 14px 0 8px;
   color: var(--muted);
 }
 
 /* =========================
-   Pills (estado / countdown)
+   Pills (estado / segundero)
 ========================= */
 .topStatus {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 
 .pill {
@@ -102,83 +125,108 @@ h3 {
 }
 
 /* =========================
-   Controles
+   Botones
 ========================= */
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-bottom: 10px;
 }
 
-button,
-.btn {
+.btn, button {
   background: var(--btn-bg);
   color: var(--btn-text);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px 12px;
+  border-radius: 12px;
+  padding: 8px 12px;
   font-size: 14px;
   cursor: pointer;
   backdrop-filter: blur(10px);
-  transition: all 0.2s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
-button:hover,
-.btn:hover {
+.btn:hover, button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 0 12px rgba(34,211,238,0.25);
+  box-shadow: 0 0 14px rgba(34,211,238,0.18);
+}
+
+.btn:active, button:active {
+  transform: translateY(0px);
 }
 
 button.active,
 .btn.active {
   border-color: var(--neon-cyan);
-  box-shadow: 0 0 12px rgba(34,211,238,0.6);
+  box-shadow: 0 0 16px rgba(34,211,238,0.35);
 }
 
 /* Wake activo */
 #wakeBtn.active {
   border-color: var(--neon-green);
-  box-shadow: 0 0 12px rgba(34,197,94,0.6);
+  box-shadow: 0 0 16px rgba(34,197,94,0.35);
 }
 
-/* =========================
-   Grupo botones (45 / 50 / 55)
-========================= */
+/* Danger / Ghost / Primary (si los usás) */
+.btnDanger {
+  border-color: rgba(239,68,68,0.45);
+}
+.btnDanger:hover {
+  box-shadow: 0 0 16px rgba(239,68,68,0.18);
+}
+
+.btnGhost {
+  background: rgba(15,23,42,0.45);
+}
+
+.btnPrimary {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 16px rgba(34,211,238,0.22);
+}
+
+.btnIcon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+/* Grupo de botones (45/50/55) */
 .btnGroup {
   display: flex;
   gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .evalBtn {
   font-size: 13px;
-  opacity: 0.7;
+  opacity: 0.78;
 }
 
 .evalBtn.active {
   opacity: 1;
   border-color: var(--neon-cyan);
-  box-shadow: 0 0 12px rgba(34,211,238,0.6);
+  box-shadow: 0 0 16px rgba(34,211,238,0.35);
 }
 
-/* =========================
-   Botón modo NORMAL / FUERTE
-========================= */
+/* Botón modo NORMAL/FUERTE */
 .modeBtn {
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .modeBtn.active-strong {
   border-color: var(--neon-orange);
-  box-shadow: 0 0 14px rgba(251,146,60,0.6);
+  box-shadow: 0 0 16px rgba(251,146,60,0.35);
   color: #fdba74;
 }
 
 /* =========================
    Contador
 ========================= */
-#counter {
-  margin: 8px 0;
+.counter, #counter {
+  margin: 8px 0 10px;
   font-size: 14px;
   color: var(--muted);
 }
@@ -186,88 +234,65 @@ button.active,
 /* =========================
    Señales
 ========================= */
+.signals { display: grid; gap: 10px; }
+
 .row {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 10px;
-  margin-bottom: 8px;
+  border-radius: 16px;
+  padding: 12px;
   backdrop-filter: blur(14px);
 }
 
 .row-main {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 .row-text {
   flex: 1;
   cursor: pointer;
+  user-select: none;
 }
 
-.row-text:hover {
-  text-decoration: underline;
-}
+.row-text:hover { text-decoration: underline; }
 
-/* =========================
-   Botón gráfico
-========================= */
 .chartBtn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
 }
 
-.chartBtn svg {
-  width: 20px;
-  height: 20px;
-}
+.chartBtn svg { width: 22px; height: 22px; }
 
 .chartBtn:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: not-allowed;
   box-shadow: none;
 }
 
-.lockBadge {
-  font-size: 18px;
-}
+.lockBadge { font-size: 18px; }
 
-/* =========================
-   Flecha próxima vela
-========================= */
-.nextArrow {
-  font-size: 18px;
-}
+/* Flecha próxima vela */
+.nextArrow { font-size: 18px; }
+.nextArrow.up { color: var(--neon-green); }
+.nextArrow.down { color: var(--neon-red); }
+.nextArrow.flat { color: var(--muted); }
+.nextArrow.pending { color: var(--muted); }
 
-.nextArrow.up {
-  color: var(--neon-green);
-}
-
-.nextArrow.down {
-  color: var(--neon-red);
-}
-
-.nextArrow.flat,
-.nextArrow.pending {
-  color: var(--muted);
-}
-
-/* =========================
-   Acciones
-========================= */
+/* Acciones */
 .row-actions {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 10px;
 }
 
 .row-actions button {
-  padding: 4px 8px;
+  padding: 6px 10px;
+  border-radius: 12px;
 }
 
 .row-comment {
@@ -275,39 +300,52 @@ button.active,
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 4px 6px;
+  border-radius: 12px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.row-comment:focus {
+  border-color: rgba(34,211,238,0.55);
+  box-shadow: 0 0 0 3px rgba(34,211,238,0.12);
 }
 
 /* =========================
    Feedback
 ========================= */
-textarea {
+.feedback textarea,
+textarea#feedback {
   width: 100%;
   background: var(--bg-card);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px;
+  border-radius: 14px;
+  padding: 12px;
   backdrop-filter: blur(14px);
+  outline: none;
+}
+
+textarea#feedback:focus {
+  border-color: rgba(34,211,238,0.55);
+  box-shadow: 0 0 0 3px rgba(34,211,238,0.12);
 }
 
 /* =========================
    Modal gráfico
 ========================= */
-.modal.hidden {
-  display: none;
-}
+.modal.hidden { display: none; }
 
 .modalBackdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.65);
+  z-index: 50;
 }
 
 .modalCard {
   position: fixed;
   inset: 8%;
+  z-index: 60;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -317,40 +355,29 @@ textarea {
   backdrop-filter: blur(18px);
 }
 
+@media (max-width: 420px) {
+  .modalCard { inset: 6%; }
+}
+
 .modalHeader {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
 }
 
-.modalTitle {
-  font-weight: 600;
-}
-
-.modalSub {
-  font-size: 13px;
-  color: var(--muted);
-}
+.modalTitle { font-weight: 650; }
+.modalSub { font-size: 13px; color: var(--muted); }
 
 #minuteCanvas {
+  width: 100%;
+  height: 100%;
   flex: 1;
   margin: 10px 0;
+  border-radius: 14px;
 }
 
 .modalFooter {
   display: flex;
   justify-content: flex-end;
-}
-
-.btnPrimary {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 14px rgba(34,211,238,0.5);
-}
-
-.btnDanger {
-  border-color: var(--neon-red);
-}
-
-.btnGhost {
-  opacity: 0.8;
 }
