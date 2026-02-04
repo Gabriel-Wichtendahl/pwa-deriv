@@ -74,8 +74,8 @@ let lastSeenMinute = null;
 let candleOC = {}; // minute -> symbol -> {open, close}
 
 /* ✅ seed estilo Deriv: último precio previo para arrancar minuto en 0s */
-let lastQuoteBySymbol = {};        // symbol -> último quote recibido (global)
-let lastMinuteSeenBySymbol = {};   // symbol -> último minuto visto (para detectar cambio)
+let lastQuoteBySymbol = {};        // symbol -> último quote recibido
+let lastMinuteSeenBySymbol = {};   // symbol -> último minuto visto por símbolo
 
 /* =========================
    UI
@@ -311,6 +311,7 @@ function showNotification(symbol, direction) {
    ✅ Modal gráfico
 ========================= */
 function openChartModal(item) {
+  // ✅ candado real: no se abre hasta que termine el minuto
   if (!item.minuteComplete) return;
 
   modalCurrentItem = item;
@@ -354,9 +355,8 @@ window.addEventListener("resize", () => {
 
 /* =========================
    ✅ Gráfico tipo Deriv (area + line) con TODOS los ticks (ms)
-   - NO fuerza 0ms con el primer tick (evita meseta falsa)
-   - Usa seed (último precio previo) desde onTick
-   - Agrega padding Y para look tipo Deriv
+   - seed 0ms se hace desde onTick (precio del minuto anterior)
+   - padding Y para look tipo Deriv
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
@@ -383,10 +383,9 @@ function drawDerivLikeChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  // ticks: [{ms, quote}, ...] donde ms: 0..60000
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
-  // Completar visualmente hasta 60s con el último precio
+  // Completar hasta 60s con último precio
   const last = pts[pts.length - 1];
   if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
@@ -397,7 +396,6 @@ function drawDerivLikeChart(canvas, ticks) {
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
 
-  // ✅ padding para no exagerar vertical (tipo Deriv)
   const pad = range * 0.08;
   min -= pad;
   max += pad;
@@ -466,7 +464,7 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.stroke();
 
-  // Punto último precio
+  // Punto final
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
 
@@ -508,15 +506,17 @@ function updateRowChartBtn(item) {
   if (!btn) return;
 
   const ready = !!item.minuteComplete;
+
+  // ✅ candado visual + real
   btn.disabled = !ready;
 
   if (ready) {
     btn.innerHTML = CHART_ICON_SVG;
-    btn.title = "Ver gráfico del minuto (ticks reales 0–60)";
+    btn.title = "Ver gráfico del minuto (ticks 0–60)";
     btn.setAttribute("aria-label", btn.title);
   } else {
     btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto… (se habilita al llegar a 60s)";
+    btn.title = "Esperando cierre del minuto…";
     btn.setAttribute("aria-label", btn.title);
   }
 }
@@ -582,19 +582,24 @@ function buildRow(item) {
     </div>
   `;
 
+  // tocar texto -> abrir Deriv
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
+  // botón gráfico
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
-    if (chartBtn.disabled) return;
+    // ✅ doble seguridad: no abre hasta que termine el minuto
+    if (!item.minuteComplete) return;
     openChartModal(item);
   };
 
+  // estado inicial del botón
   updateRowChartBtn(item);
 
+  // votos
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -610,6 +615,7 @@ function buildRow(item) {
     };
   });
 
+  // comentario (guardar al salir)
   const input = row.querySelector(".row-comment");
   input.addEventListener("blur", () => {
     item.comment = input.value || "";
@@ -617,30 +623,10 @@ function buildRow(item) {
     rebuildFeedbackFromHistory();
   });
 
+  // flecha próxima vela
   updateRowNextArrow(item);
+
   return row;
-}
-
-/* =========================
-   WebSocket
-========================= */
-function connect() {
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
-  };
-
-  ws.onmessage = e => {
-    const data = JSON.parse(e.data);
-    if (data.tick) onTick(data.tick);
-  };
-
-  ws.onclose = () => {
-    statusEl.textContent = "Desconectado – reconectando...";
-    setTimeout(connect, 1500);
-  };
 }
 
 /* =========================
@@ -698,7 +684,7 @@ function finalizeMinute(minute) {
     }
   }
 
-  // marcar minuto completo (habilita botón gráfico)
+  // ✅ marcar minuto completo (habilita botón gráfico)
   let changed = false;
   for (const it of history) {
     if (it.minute === minute && !it.minuteComplete) {
@@ -721,24 +707,25 @@ function onTick(tick) {
 
   const minute = Math.floor(epochMs / 60000);
   const msInMinute = epochMs - minuteStartMs; // 0..59999
-  const sec = Math.floor(msInMinute / 1000);  // para evaluar en seg 45
+  const sec = Math.floor(msInMinute / 1000);
   const symbol = tick.symbol;
 
   lastTickEpochMs = epochMs;
   currentMinuteStartMs = minuteStartMs;
 
-  // ✅ guardar último precio global
+  // ✅ seed correcto: guardamos el último precio anterior ANTES de pisarlo
+  const prevLast = lastQuoteBySymbol[symbol];
   lastQuoteBySymbol[symbol] = tick.quote;
 
-  // ✅ detectar nuevo minuto por símbolo y sembrar 0ms con último precio
+  // ✅ detectar nuevo minuto por símbolo y sembrar 0ms con el precio del minuto anterior
   if (lastMinuteSeenBySymbol[symbol] !== minute) {
     lastMinuteSeenBySymbol[symbol] = minute;
 
     if (!minuteData[minute]) minuteData[minute] = {};
     if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
 
-    if (minuteData[minute][symbol].length === 0 && lastQuoteBySymbol[symbol] != null) {
-      minuteData[minute][symbol].push({ ms: 0, quote: lastQuoteBySymbol[symbol] });
+    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
+      minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
   }
 
@@ -853,6 +840,9 @@ function addSignal(minute, symbol, direction, ticks) {
   const row = buildRow(item);
   signalsEl.prepend(row);
 
+  // ✅ asegurar candado visible inmediatamente
+  updateRowChartBtn(item);
+
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
@@ -891,10 +881,7 @@ wakeBtn.onclick = async () => {
    Start
 ========================= */
 renderHistory();
-
-for (const it of history) {
-  updateRowChartBtn(it);
-}
+for (const it of history) updateRowChartBtn(it);
 
 updateTickHealthUI();
 updateCountdownUI();
