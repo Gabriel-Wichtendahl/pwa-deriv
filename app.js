@@ -50,14 +50,15 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-// ✅ Modo: por ahora default NORMAL (si después querés botón, lo activamos)
-let strongMode = false;
+/* ✅ Config persistente */
+let EVAL_SEC = 45;      // 45 / 50 / 55
+let strongMode = false; // NORMAL / FUERTE
 
 let signalCount = 0;
 
 /**
  * minuteData:
- *   minute -> symbol -> [{ms, quote}, ...]   // ms: 0..60000 dentro del minuto
+ *   minute -> symbol -> [{ms, quote}, ...]
  */
 let minuteData = {};
 let lastEvaluatedMinute = null;
@@ -67,8 +68,6 @@ let evalRetryTimer = null;
 const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
-
-const EVAL_SEC = 45; // ✅ evaluación en segundo 45
 
 /* tick health + countdown */
 let lastTickEpochMs = null;
@@ -100,8 +99,11 @@ const wakeBtn = document.getElementById("wakeBtn");
 const themeBtn = document.getElementById("themeBtn");
 const vibrateBtn = document.getElementById("vibrateBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
-
 const copyBtn = document.getElementById("copyFeedback");
+
+/* ✅ nuevos controles */
+const evalSecSelect = document.getElementById("evalSecSelect");
+const modeBtn = document.getElementById("modeBtn");
 
 /* Modal */
 const chartModal = document.getElementById("chartModal");
@@ -178,6 +180,41 @@ function applyTheme(theme) {
     themeBtn.onclick = () => {
       const current = document.body.classList.contains("light") ? "light" : "dark";
       applyTheme(current === "light" ? "dark" : "light");
+    };
+  }
+})();
+
+/* =========================
+   ✅ Init EvalSec + Mode (persistente)
+========================= */
+(function initEvalMode() {
+  const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
+  EVAL_SEC = [45, 50, 55].includes(savedSec) ? savedSec : 45;
+
+  if (evalSecSelect) {
+    evalSecSelect.value = String(EVAL_SEC);
+    evalSecSelect.onchange = () => {
+      const v = parseInt(evalSecSelect.value, 10);
+      EVAL_SEC = [45, 50, 55].includes(v) ? v : 45;
+      localStorage.setItem("evalSec", String(EVAL_SEC));
+    };
+  }
+
+  strongMode = loadBool("strongMode", false);
+
+  function paintMode() {
+    if (!modeBtn) return;
+    modeBtn.textContent = strongMode ? "🟧 Modo FUERTE" : "🟦 Modo NORMAL";
+    modeBtn.classList.toggle("active-strong", strongMode);
+  }
+
+  paintMode();
+
+  if (modeBtn) {
+    modeBtn.onclick = () => {
+      strongMode = !strongMode;
+      saveBool("strongMode", strongMode);
+      paintMode();
     };
   }
 })();
@@ -271,7 +308,6 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  // compatibilidad historial viejo
   for (const it of history) {
     if (!it.mode) it.mode = "NORMAL";
   }
@@ -323,7 +359,6 @@ function showNotification(symbol, direction, modeLabel) {
    ✅ Modal gráfico
 ========================= */
 function openChartModal(item) {
-  // candado real
   if (!item.minuteComplete) return;
 
   modalCurrentItem = item;
@@ -370,7 +405,7 @@ window.addEventListener("resize", () => {
 });
 
 /* =========================
-   ✅ Gráfico tipo Deriv (area + line) con TODOS los ticks (ms)
+   ✅ Gráfico tipo Deriv (area + line)
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
@@ -398,7 +433,6 @@ function drawDerivLikeChart(canvas, ticks) {
 
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
-  // completar hasta 60s con último precio
   const last = pts[pts.length - 1];
   if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
@@ -419,7 +453,6 @@ function drawDerivLikeChart(canvas, ticks) {
     return (1 - yNorm) * (h - 30) + 10;
   };
 
-  // grilla sutil
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
@@ -432,7 +465,6 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  // marca 30s
   const x30 = xOf(30000);
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
@@ -448,7 +480,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
-  // area
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (let i = 0; i < pts.length; i++) {
@@ -462,7 +493,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // línea
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -477,7 +507,6 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.stroke();
 
-  // punto final
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
 
@@ -488,7 +517,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // labels 0/60
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -498,7 +526,7 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   ✅ Botón gráfico: lock/unlock visual
+   Botón gráfico lock
 ========================= */
 const CHART_ICON_SVG = `
 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -524,19 +552,17 @@ function updateRowChartBtn(item) {
   if (ready) {
     btn.innerHTML = CHART_ICON_SVG;
     btn.title = "Ver gráfico del minuto (ticks 0–60)";
-    btn.setAttribute("aria-label", btn.title);
   } else {
     btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
     btn.title = "Esperando cierre del minuto…";
-    btn.setAttribute("aria-label", btn.title);
   }
 }
 
 /* =========================
-   ✅ Próxima vela: flecha
+   Próxima vela: flecha
 ========================= */
 function setNextOutcome(item, outcome) {
-  item.nextOutcome = outcome; // "up" | "down" | "flat"
+  item.nextOutcome = outcome;
   saveHistory(history);
   updateRowNextArrow(item);
 }
@@ -547,8 +573,6 @@ function updateRowNextArrow(item) {
 
   const el = row.querySelector(".nextArrow");
   if (!el) return;
-
-  el.classList.remove("pending", "up", "down", "flat");
 
   if (item.nextOutcome === "up") {
     el.textContent = "⬆️";
@@ -566,7 +590,7 @@ function updateRowNextArrow(item) {
 }
 
 /* =========================
-   ✅ Fila
+   Fila
 ========================= */
 function buildRow(item) {
   const row = document.createElement("div");
@@ -590,12 +614,10 @@ function buildRow(item) {
     </div>
   `;
 
-  // tocar texto -> abrir Deriv
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
-  // botón gráfico
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
@@ -605,7 +627,6 @@ function buildRow(item) {
 
   updateRowChartBtn(item);
 
-  // votos
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -621,7 +642,6 @@ function buildRow(item) {
     };
   });
 
-  // comentario (guardar al salir)
   const input = row.querySelector(".row-comment");
   input.addEventListener("blur", () => {
     item.comment = input.value || "";
@@ -634,44 +654,12 @@ function buildRow(item) {
 }
 
 /* =========================
-   Tick health + countdown
-========================= */
-function updateTickHealthUI() {
-  if (!tickHealthEl) return;
-  if (!lastTickEpochMs) {
-    tickHealthEl.textContent = "Último tick: —";
-    return;
-  }
-  const ageMs = Date.now() - lastTickEpochMs;
-  const ageSec = Math.max(0, Math.floor(ageMs / 1000));
-  tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
-}
-
-function updateCountdownUI() {
-  if (!countdownEl) return;
-  if (!currentMinuteStartMs) {
-    countdownEl.textContent = "⏱️ 60";
-    return;
-  }
-  const nowMs = Date.now();
-  const msInMinute = (nowMs - currentMinuteStartMs) % 60000;
-  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-  countdownEl.textContent = `⏱️ ${remaining}`;
-}
-
-setInterval(() => {
-  updateTickHealthUI();
-  updateCountdownUI();
-}, 1000);
-
-/* =========================
-   Finalizar vela + habilitar gráficos + flecha
+   Finalizar minuto + habilitar gráficos
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // outcome para señales del minuto anterior (minute-1)
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -688,7 +676,6 @@ function finalizeMinute(minute) {
     }
   }
 
-  // marcar minuto completo (habilita botón gráfico)
   let changed = false;
   for (const it of history) {
     if (it.minute === minute && !it.minuteComplete) {
@@ -703,25 +690,23 @@ function finalizeMinute(minute) {
 }
 
 /* =========================
-   Ticks + evaluación (ms)
+   Ticks + evaluación
 ========================= */
 function onTick(tick) {
   const epochMs = Math.round(Number(tick.epoch) * 1000);
   const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
 
   const minute = Math.floor(epochMs / 60000);
-  const msInMinute = epochMs - minuteStartMs; // 0..59999
+  const msInMinute = epochMs - minuteStartMs;
   const sec = Math.floor(msInMinute / 1000);
   const symbol = tick.symbol;
 
   lastTickEpochMs = epochMs;
   currentMinuteStartMs = minuteStartMs;
 
-  // seed: precio anterior
   const prevLast = lastQuoteBySymbol[symbol];
   lastQuoteBySymbol[symbol] = tick.quote;
 
-  // nuevo minuto por símbolo -> sembrar 0ms
   if (lastMinuteSeenBySymbol[symbol] !== minute) {
     lastMinuteSeenBySymbol[symbol] = minute;
 
@@ -733,24 +718,20 @@ function onTick(tick) {
     }
   }
 
-  // cambio de minuto global -> finalizar
   if (lastSeenMinute === null) lastSeenMinute = minute;
   if (minute > lastSeenMinute) {
     for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
     lastSeenMinute = minute;
   }
 
-  // tick real
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
 
-  // open/close vela
   if (!candleOC[minute]) candleOC[minute] = {};
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
-  // evaluar a los 45s
   if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
@@ -788,7 +769,6 @@ function evaluateMinute(minute) {
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
-    // volatilidad promedio
     let vol = 0;
     for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
     vol = vol / Math.max(1, prices.length - 1);
@@ -849,20 +829,48 @@ function addSignal(minute, symbol, direction, ticks) {
 
   updateRowChartBtn(item);
 
-  // sonido
   if (soundEnabled) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
   }
 
-  // vibración local
   if (vibrateEnabled && "vibrate" in navigator) {
     navigator.vibrate([120]);
   }
 
-  // notificación
   showNotification(symbol, direction, modeLabel);
 }
+
+/* =========================
+   Tick health + countdown
+========================= */
+function updateTickHealthUI() {
+  if (!tickHealthEl) return;
+  if (!lastTickEpochMs) {
+    tickHealthEl.textContent = "Último tick: —";
+    return;
+  }
+  const ageMs = Date.now() - lastTickEpochMs;
+  const ageSec = Math.max(0, Math.floor(ageMs / 1000));
+  tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
+}
+
+function updateCountdownUI() {
+  if (!countdownEl) return;
+  if (!currentMinuteStartMs) {
+    countdownEl.textContent = "⏱️ 60";
+    return;
+  }
+  const nowMs = Date.now();
+  const msInMinute = (nowMs - currentMinuteStartMs) % 60000;
+  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+  countdownEl.textContent = `⏱️ ${remaining}`;
+}
+
+setInterval(() => {
+  updateTickHealthUI();
+  updateCountdownUI();
+}, 1000);
 
 /* =========================
    Wake Lock
@@ -924,7 +932,6 @@ for (const it of history) {
   updateRowChartBtn(it);
   updateRowNextArrow(it);
 }
-
 updateTickHealthUI();
 updateCountdownUI();
-connect(); 
+connect();
