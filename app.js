@@ -718,4 +718,223 @@ function finalizeMinute(minute) {
 ========================= */
 function connect() {
   try {
-    if (ws && (ws.readyState === WebSo
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      ws.close();
+    }
+  } catch {}
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    if (statusEl) statusEl.textContent = "Conectado – Analizando";
+    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.tick) onTick(data.tick);
+    } catch {}
+  };
+
+  ws.onerror = () => {
+    if (statusEl) statusEl.textContent = "Error WS – reconectando...";
+  };
+
+  ws.onclose = () => {
+    if (statusEl) statusEl.textContent = "Desconectado – reconectando...";
+    setTimeout(connect, 1500);
+  };
+}
+
+/* =========================
+   Ticks + evaluación (ms)
+========================= */
+function onTick(tick) {
+  // ✅ ms reales (sin round) para que no “entrecorte” el gráfico
+  const epochMs = Number(tick.epoch) * 1000;
+
+  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
+  const minute = Math.floor(epochMs / 60000);
+  const msInMinute = epochMs - minuteStartMs; // 0..59999
+  const sec = Math.floor(msInMinute / 1000);
+  const symbol = tick.symbol;
+
+  lastTickEpochMs = epochMs;
+  currentMinuteStartMs = minuteStartMs;
+
+  // seed correcto: guardamos el último precio anterior ANTES de pisarlo
+  const prevLast = lastQuoteBySymbol[symbol];
+  lastQuoteBySymbol[symbol] = tick.quote;
+
+  // detectar nuevo minuto por símbolo y sembrar 0ms con el precio del minuto anterior
+  if (lastMinuteSeenBySymbol[symbol] !== minute) {
+    lastMinuteSeenBySymbol[symbol] = minute;
+
+    if (!minuteData[minute]) minuteData[minute] = {};
+    if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
+
+    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
+      minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
+    }
+  }
+
+  // detectar cambio de minuto global -> finalizar pendientes
+  if (lastSeenMinute === null) lastSeenMinute = minute;
+  if (minute > lastSeenMinute) {
+    for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
+    lastSeenMinute = minute;
+  }
+
+  // guardar tick real
+  if (!minuteData[minute]) minuteData[minute] = {};
+  if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
+  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
+
+  // open/close vela
+  if (!candleOC[minute]) candleOC[minute] = {};
+  if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
+  else candleOC[minute][symbol].close = tick.quote;
+
+  // evaluar a los 45s
+  if (sec >= 45 && lastEvaluatedMinute !== minute) {
+    lastEvaluatedMinute = minute;
+    const ok = evaluateMinute(minute);
+    if (!ok) scheduleRetry(minute);
+  }
+
+  delete minuteData[minute - 2];
+}
+
+function scheduleRetry(minute) {
+  if (evalRetryTimer) clearTimeout(evalRetryTimer);
+
+  evalRetryTimer = setTimeout(() => {
+    const nowMinute = Math.floor(Date.now() / 60000);
+    if (nowMinute === minute) evaluateMinute(minute);
+  }, RETRY_DELAY_MS);
+}
+
+/* =========================
+   Evaluación
+========================= */
+function evaluateMinute(minute) {
+  const data = minuteData[minute];
+  if (!data) return false;
+
+  const candidates = [];
+  let readySymbols = 0;
+
+  for (const symbol of SYMBOLS) {
+    const ticks = data[symbol] || [];
+    if (ticks.length >= MIN_TICKS) readySymbols++;
+    if (ticks.length < MIN_TICKS) continue;
+
+    const prices = ticks.map(t => t.quote);
+    const move = prices[prices.length - 1] - prices[0];
+    const rawMove = Math.abs(move);
+
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
+    vol = vol / Math.max(1, prices.length - 1);
+
+    const score = rawMove / (vol || 1e-9);
+    candidates.push({ symbol, move, score, ticks });
+  }
+
+  if (readySymbols < MIN_SYMBOLS_READY) return false;
+  if (candidates.length === 0) return false;
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+
+  if (!best || best.score < 0.015) return true;
+
+  const direction = best.move > 0 ? "CALL" : "PUT";
+  addSignal(minute, best.symbol, direction, best.ticks);
+  return true;
+}
+
+/* =========================
+   Guardar + mostrar señal
+========================= */
+function fmtTimeUTC(minute) {
+  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+}
+
+function addSignal(minute, symbol, direction, ticks) {
+  const time = fmtTimeUTC(minute);
+
+  const item = {
+    id: `${minute}-${symbol}-${direction}`,
+    minute,
+    time,
+    symbol,
+    direction,
+    vote: "",
+    comment: "",
+    ticks: Array.isArray(ticks) ? ticks : [],
+    nextOutcome: "",
+    minuteComplete: false
+  };
+
+  if (history.some(x => x.id === item.id)) return;
+
+  history.push(item);
+  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+  saveHistory(history);
+
+  signalCount = history.length;
+  updateCounter();
+
+  const row = buildRow(item);
+  if (signalsEl) signalsEl.prepend(row);
+
+  updateRowChartBtn(item);
+
+  if (soundEnabled) {
+    sound.currentTime = 0;
+    sound.play().catch(() => {});
+  }
+
+  if (vibrateEnabled && "vibrate" in navigator) {
+    navigator.vibrate([120]);
+  }
+
+  showNotification(symbol, direction);
+}
+
+/* =========================
+   Wake Lock
+========================= */
+let wakeLock = null;
+
+wakeBtn.onclick = async () => {
+  try {
+    if (wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+      wakeBtn.textContent = "🔓 Pantalla activa";
+      wakeBtn.classList.remove("active");
+    } else {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeBtn.textContent = "🔒 Pantalla activa";
+      wakeBtn.classList.add("active");
+    }
+  } catch {
+    alert("No se pudo mantener la pantalla activa");
+  }
+};
+
+/* =========================
+   Start
+========================= */
+renderHistory();
+for (const it of history) {
+  updateRowChartBtn(it);
+  updateRowNextArrow(it);
+}
+
+updateTickHealthUI();
+updateCountdownUI();
+connect();
