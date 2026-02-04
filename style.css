@@ -1,19 +1,12 @@
 /* =========================
-   Reset básico
-========================= */
-* { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
-
-/* =========================
    Variables de tema
 ========================= */
 :root {
   --bg-main: #020617;
-  --bg-card: rgba(2, 6, 23, 0.82);
+  --bg-card: rgba(2, 6, 23, 0.78);
   --text: #e5e7eb;
   --muted: #94a3b8;
-
-  --border: rgba(148, 163, 184, 0.25);
+  --border: rgba(148, 163, 184, 0.22);
 
   --neon-cyan: #22d3ee;
   --neon-green: #22c55e;
@@ -21,98 +14,93 @@ html, body { height: 100%; margin: 0; }
   --neon-purple: #a855f7;
   --neon-orange: #fb923c;
 
-  --btn-bg: rgba(15, 23, 42, 0.82);
+  --btn-bg: rgba(15, 23, 42, 0.78);
   --btn-text: #e5e7eb;
 }
 
 /* =========================
-   Tema claro (sin imagen)
+   Tema claro
 ========================= */
 body.light {
   --bg-main: #f8fafc;
-  --bg-card: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.92);
   --text: #0f172a;
   --muted: #475569;
-  --border: #cbd5e1;
-  --btn-bg: #e2e8f0;
-  --btn-text: #0f172a;
+  --border: rgba(15, 23, 42, 0.18);
 
-  background: #f8fafc;
+  --btn-bg: rgba(226, 232, 240, 0.95);
+  --btn-text: #0f172a;
 }
 
 /* =========================
-   Body
+   Base
 ========================= */
+* { box-sizing: border-box; }
+
 body {
+  margin: 0;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text);
-  padding: 12px;
   background: var(--bg-main);
+  padding: 10px;
+  min-height: 100vh;
   overflow-x: hidden;
 }
 
-/* =========================
-   ✅ Fondo Neon (capa fija)
-   (Esto evita “fondo negro” cuando el body tiene cards opacas)
-========================= */
+/* ✅ Fondo neon como capa fija (no se rompe en mobile) */
 .bgNeon {
   position: fixed;
   inset: 0;
-  z-index: -1;
+  z-index: 0;
   pointer-events: none;
 
-  /* Fondo: imagen + overlays (sin blur) */
   background-image:
     radial-gradient(circle at 20% 10%, rgba(34,211,238,0.18), transparent 45%),
-    radial-gradient(circle at 80% 20%, rgba(168,85,247,0.16), transparent 45%),
-    radial-gradient(circle at 50% 90%, rgba(34,197,94,0.10), transparent 55%),
-    linear-gradient(180deg, rgba(2,6,23,0.35), rgba(2,6,23,0.85)),
+    radial-gradient(circle at 80% 20%, rgba(168,85,247,0.16), transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(34,197,94,0.10), transparent 55%),
+    linear-gradient(180deg, rgba(2,6,23,0.65), rgba(2,6,23,0.88)),
     url("./bg-neon.png");
 
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
 
-  /* En móviles, fixed puede “apagarse” o parpadear. Esto lo estabiliza */
+  /* En algunos Android, mejora nitidez */
+  image-rendering: -webkit-optimize-contrast;
   transform: translateZ(0);
-  will-change: transform;
 }
 
-/* Si estás en modo claro, ocultamos el fondo neon */
-body.light .bgNeon { display: none; }
+/* En claro, escondemos la imagen de fondo */
+body.light .bgNeon {
+  display: none;
+}
 
 /* =========================
-   Layout
+   Layout z-index arriba del fondo
 ========================= */
-.header {
-  position: relative;
-  z-index: 1;
-}
-
-.main {
+.header, .main {
   position: relative;
   z-index: 1;
 }
 
 .status {
-  margin: 6px 0 10px;
+  margin: 0 0 8px 0;
   font-weight: 650;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.4px;
 }
 
-.h3, h3 {
-  margin: 14px 0 8px;
+.h3 {
+  margin: 14px 0 8px 0;
   color: var(--muted);
 }
 
 /* =========================
-   Pills (estado / segundero)
+   Pills
 ========================= */
 .topStatus {
   display: flex;
   gap: 8px;
   margin-bottom: 10px;
-  flex-wrap: wrap;
 }
 
 .pill {
@@ -121,17 +109,18 @@ body.light .bgNeon { display: none; }
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 13px;
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px);
 }
 
 /* =========================
-   Botones
+   Controles
 ========================= */
 .controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 10px;
+  align-items: center;
 }
 
 .btn, button {
@@ -139,94 +128,92 @@ body.light .bgNeon { display: none; }
   color: var(--btn-text);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 8px 12px;
+  padding: 7px 12px;
   font-size: 14px;
   cursor: pointer;
-  backdrop-filter: blur(10px);
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  backdrop-filter: blur(12px);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
 }
 
 .btn:hover, button:hover {
   transform: translateY(-1px);
-  box-shadow: 0 0 14px rgba(34,211,238,0.18);
+  box-shadow: 0 0 14px rgba(34,211,238,0.22);
 }
 
 .btn:active, button:active {
-  transform: translateY(0px);
+  transform: translateY(0);
 }
 
-button.active,
-.btn.active {
+.btn.active, button.active {
   border-color: var(--neon-cyan);
-  box-shadow: 0 0 16px rgba(34,211,238,0.35);
+  box-shadow: 0 0 14px rgba(34,211,238,0.55);
 }
 
-/* Wake activo */
-#wakeBtn.active {
-  border-color: var(--neon-green);
-  box-shadow: 0 0 16px rgba(34,197,94,0.35);
-}
-
-/* Danger / Ghost / Primary (si los usás) */
 .btnDanger {
-  border-color: rgba(239,68,68,0.45);
+  border-color: rgba(239,68,68,0.5);
 }
+
 .btnDanger:hover {
-  box-shadow: 0 0 16px rgba(239,68,68,0.18);
+  box-shadow: 0 0 14px rgba(239,68,68,0.25);
 }
 
 .btnGhost {
-  background: rgba(15,23,42,0.45);
+  opacity: 0.95;
 }
 
 .btnPrimary {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 16px rgba(34,211,238,0.22);
+  border-color: rgba(34,211,238,0.55);
+  box-shadow: 0 0 14px rgba(34,211,238,0.35);
 }
 
 .btnIcon {
   width: 40px;
   height: 40px;
+  border-radius: 12px;
   padding: 0;
   display: grid;
   place-items: center;
 }
 
-/* Grupo de botones (45/50/55) */
+/* Wake activo */
+#wakeBtn.active {
+  border-color: var(--neon-green);
+  box-shadow: 0 0 14px rgba(34,197,94,0.55);
+}
+
+/* Grupo 45/50/55 */
 .btnGroup {
   display: flex;
   gap: 6px;
-  align-items: center;
-  flex-wrap: wrap;
 }
 
 .evalBtn {
   font-size: 13px;
-  opacity: 0.78;
+  opacity: 0.75;
 }
 
 .evalBtn.active {
   opacity: 1;
   border-color: var(--neon-cyan);
-  box-shadow: 0 0 16px rgba(34,211,238,0.35);
+  box-shadow: 0 0 14px rgba(34,211,238,0.55);
 }
 
-/* Botón modo NORMAL/FUERTE */
+/* Modo */
 .modeBtn {
   font-weight: 650;
 }
 
 .modeBtn.active-strong {
   border-color: var(--neon-orange);
-  box-shadow: 0 0 16px rgba(251,146,60,0.35);
+  box-shadow: 0 0 14px rgba(251,146,60,0.55);
   color: #fdba74;
 }
 
 /* =========================
    Contador
 ========================= */
-.counter, #counter {
-  margin: 8px 0 10px;
+.counter {
+  margin: 8px 0;
   font-size: 14px;
   color: var(--muted);
 }
@@ -234,20 +221,20 @@ button.active,
 /* =========================
    Señales
 ========================= */
-.signals { display: grid; gap: 10px; }
+.signals { display: flex; flex-direction: column; gap: 8px; }
 
 .row {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 12px;
-  backdrop-filter: blur(14px);
+  padding: 10px;
+  backdrop-filter: blur(16px);
 }
 
 .row-main {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .row-text {
@@ -256,17 +243,23 @@ button.active,
   user-select: none;
 }
 
-.row-text:hover { text-decoration: underline; }
+.row-text:hover {
+  text-decoration: underline;
+}
 
 .chartBtn {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border-radius: 12px;
   display: grid;
   place-items: center;
+  padding: 0;
 }
 
-.chartBtn svg { width: 22px; height: 22px; }
+.chartBtn svg {
+  width: 20px;
+  height: 20px;
+}
 
 .chartBtn:disabled {
   opacity: 0.45;
@@ -276,18 +269,23 @@ button.active,
 
 .lockBadge { font-size: 18px; }
 
-/* Flecha próxima vela */
-.nextArrow { font-size: 18px; }
+.nextArrow {
+  font-size: 18px;
+  width: 28px;
+  text-align: center;
+}
+
 .nextArrow.up { color: var(--neon-green); }
 .nextArrow.down { color: var(--neon-red); }
 .nextArrow.flat { color: var(--muted); }
 .nextArrow.pending { color: var(--muted); }
 
-/* Acciones */
+/* acciones */
 .row-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 6px;
+  margin-top: 8px;
+  align-items: center;
 }
 
 .row-actions button {
@@ -301,51 +299,38 @@ button.active,
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 12px;
-  padding: 8px 10px;
-  outline: none;
-}
-
-.row-comment:focus {
-  border-color: rgba(34,211,238,0.55);
-  box-shadow: 0 0 0 3px rgba(34,211,238,0.12);
+  padding: 7px 10px;
 }
 
 /* =========================
    Feedback
 ========================= */
-.feedback textarea,
-textarea#feedback {
+textarea {
   width: 100%;
   background: var(--bg-card);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 12px;
-  backdrop-filter: blur(14px);
-  outline: none;
-}
-
-textarea#feedback:focus {
-  border-color: rgba(34,211,238,0.55);
-  box-shadow: 0 0 0 3px rgba(34,211,238,0.12);
+  padding: 10px;
+  backdrop-filter: blur(16px);
 }
 
 /* =========================
-   Modal gráfico
+   Modal
 ========================= */
 .modal.hidden { display: none; }
 
 .modalBackdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,0.65);
-  z-index: 50;
+  z-index: 20;
+  background: rgba(0,0,0,0.62);
 }
 
 .modalCard {
   position: fixed;
   inset: 8%;
-  z-index: 60;
+  z-index: 21;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -355,10 +340,6 @@ textarea#feedback:focus {
   backdrop-filter: blur(18px);
 }
 
-@media (max-width: 420px) {
-  .modalCard { inset: 6%; }
-}
-
 .modalHeader {
   display: flex;
   justify-content: space-between;
@@ -366,18 +347,26 @@ textarea#feedback:focus {
   gap: 10px;
 }
 
-.modalTitle { font-weight: 650; }
-.modalSub { font-size: 13px; color: var(--muted); }
+.modalTitle { font-weight: 700; }
+.modalSub { font-size: 13px; color: var(--muted); margin-top: 2px; }
 
 #minuteCanvas {
+  flex: 1;
   width: 100%;
   height: 100%;
-  flex: 1;
+  min-height: 220px;
   margin: 10px 0;
   border-radius: 14px;
+  border: 1px solid var(--border);
 }
 
 .modalFooter {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Mobile */
+@media (max-width: 480px) {
+  .modalCard { inset: 6%; }
 }
