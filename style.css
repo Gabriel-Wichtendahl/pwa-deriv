@@ -13,13 +13,14 @@
   --neon-green: #22c55e;
   --neon-red: #ef4444;
   --neon-purple: #a855f7;
+  --neon-orange: #fb923c;
 
   --btn-bg: rgba(15, 23, 42, 0.85);
   --btn-text: #e5e7eb;
 }
 
 /* =========================
-   Tema claro (sin imagen)
+   Tema claro (sin fondo)
 ========================= */
 body.light {
   --bg-main: #f8fafc;
@@ -29,17 +30,29 @@ body.light {
   --border: #cbd5e1;
   --btn-bg: #e2e8f0;
   --btn-text: #0f172a;
-
-  background: #f8fafc;
 }
 
 /* =========================
-   Body – Fondo Neon
+   Body base
 ========================= */
 body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg-main);
+  color: var(--text);
+  padding: 10px;
+  position: relative;
+  overflow-x: hidden;
+}
 
-  /* 1) Imagen nítida primero */
+/* =========================
+   Fondo Neon (capa independiente)
+========================= */
+.bgNeon {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+
   background-image:
     linear-gradient(180deg, rgba(2,6,23,0.55), rgba(2,6,23,0.75)),
     url("./bg-neon.png");
@@ -49,11 +62,12 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 
-  /* 2) Evita “blur” por render en algunos móviles */
   image-rendering: -webkit-optimize-contrast;
+}
 
-  color: var(--text);
-  padding: 10px;
+/* Apagar fondo en modo claro */
+body.light .bgNeon {
+  background-image: none;
 }
 
 /* =========================
@@ -70,7 +84,7 @@ h3 {
 }
 
 /* =========================
-   Pills (estado / contador)
+   Pills (estado / countdown)
 ========================= */
 .topStatus {
   display: flex;
@@ -97,7 +111,8 @@ h3 {
   margin-bottom: 10px;
 }
 
-button {
+button,
+.btn {
   background: var(--btn-bg);
   color: var(--btn-text);
   border: 1px solid var(--border);
@@ -109,12 +124,14 @@ button {
   transition: all 0.2s ease;
 }
 
-button:hover {
+button:hover,
+.btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 0 12px rgba(34,211,238,0.25);
 }
 
-button.active {
+button.active,
+.btn.active {
   border-color: var(--neon-cyan);
   box-shadow: 0 0 12px rgba(34,211,238,0.6);
 }
@@ -123,6 +140,38 @@ button.active {
 #wakeBtn.active {
   border-color: var(--neon-green);
   box-shadow: 0 0 12px rgba(34,197,94,0.6);
+}
+
+/* =========================
+   Grupo botones (45 / 50 / 55)
+========================= */
+.btnGroup {
+  display: flex;
+  gap: 6px;
+}
+
+.evalBtn {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.evalBtn.active {
+  opacity: 1;
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 12px rgba(34,211,238,0.6);
+}
+
+/* =========================
+   Botón modo NORMAL / FUERTE
+========================= */
+.modeBtn {
+  font-weight: 600;
+}
+
+.modeBtn.active-strong {
+  border-color: var(--neon-orange);
+  box-shadow: 0 0 14px rgba(251,146,60,0.6);
+  color: #fdba74;
 }
 
 /* =========================
@@ -161,6 +210,9 @@ button.active {
   text-decoration: underline;
 }
 
+/* =========================
+   Botón gráfico
+========================= */
 .chartBtn {
   width: 36px;
   height: 36px;
@@ -185,7 +237,9 @@ button.active {
   font-size: 18px;
 }
 
-/* Flecha próxima vela */
+/* =========================
+   Flecha próxima vela
+========================= */
 .nextArrow {
   font-size: 18px;
 }
@@ -198,10 +252,7 @@ button.active {
   color: var(--neon-red);
 }
 
-.nextArrow.flat {
-  color: var(--muted);
-}
-
+.nextArrow.flat,
 .nextArrow.pending {
   color: var(--muted);
 }
@@ -256,7 +307,7 @@ textarea {
 
 .modalCard {
   position: fixed;
-  inset: 10%;
+  inset: 8%;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -281,10 +332,6 @@ textarea {
   color: var(--muted);
 }
 
-.modalClose {
-  font-size: 18px;
-}
-
 #minuteCanvas {
   flex: 1;
   margin: 10px 0;
@@ -295,42 +342,15 @@ textarea {
   justify-content: flex-end;
 }
 
-.modalAction {
+.btnPrimary {
   border-color: var(--neon-cyan);
   box-shadow: 0 0 14px rgba(34,211,238,0.5);
 }
 
-/* =========================
-   Grupo de botones
-========================= */
-.btnGroup {
-  display: flex;
-  gap: 6px;
+.btnDanger {
+  border-color: var(--neon-red);
 }
 
-/* =========================
-   Botones de evaluación
-========================= */
-.evalBtn {
-  font-size: 13px;
-  opacity: 0.7;
-}
-
-.evalBtn.active {
-  opacity: 1;
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 12px rgba(34,211,238,0.6);
-}
-
-/* =========================
-   Botón modo NORMAL / FUERTE
-========================= */
-.modeBtn {
-  font-weight: 600;
-}
-
-.modeBtn.active-strong {
-  border-color: var(--neon-orange, #fb923c);
-  box-shadow: 0 0 14px rgba(251,146,60,0.6);
-  color: #fdba74;
+.btnGhost {
+  opacity: 0.8;
 }
