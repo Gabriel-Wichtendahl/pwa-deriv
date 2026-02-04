@@ -323,8 +323,10 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
 
   requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
     drawDerivLikeChart(minuteCanvas, item.ticks || []);
   });
+});
 }
 
 function closeChartModal() {
