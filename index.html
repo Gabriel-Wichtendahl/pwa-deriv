@@ -6,49 +6,44 @@
   <title>Deriv Signals</title>
 
   <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#0f172a" />
+  <meta name="theme-color" content="#020617" />
 
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
+<body class="neon">
 
-  <h2 id="status">Conectando…</h2>
+  <!-- Fondo neon decorativo -->
+  <div class="bgNeon" aria-hidden="true"></div>
 
-  <!-- ✅ Salud + segundero -->
-  <div class="topStatus">
-    <div id="tickHealth" class="pill">Último tick: —</div>
-    <div id="countdown" class="pill">⏱️ 60</div>
-  </div>
+  <header class="header">
+    <h2 id="status" class="status">Conectando…</h2>
 
-  <div class="controls">
-    <button id="soundBtn">🔇 Sonido OFF</button>
-    <button id="vibrateBtn">📳 Vibración ON</button>
-    <button id="wakeBtn">🔓 Pantalla activa</button>
-    <button id="themeBtn">🌙 Oscuro</button>
+    <!-- ✅ Salud + segundero -->
+    <div class="topStatus">
+      <div id="tickHealth" class="pill">Último tick: —</div>
+      <div id="countdown" class="pill">⏱️ 60</div>
+    </div>
 
-    <!-- ✅ Nuevo: Selector de segundo de evaluación -->
-    <label class="miniControl" for="evalSecSelect">
-      Evaluar:
-      <select id="evalSecSelect" aria-label="Segundo de evaluación">
-        <option value="45">45s</option>
-        <option value="50">50s</option>
-        <option value="55">55s</option>
-      </select>
-    </label>
+    <div class="controls">
+      <button id="soundBtn" class="btn">🔇 Sonido OFF</button>
+      <button id="vibrateBtn" class="btn">📳 Vibración ON</button>
+      <button id="wakeBtn" class="btn">🔓 Pantalla activa</button>
+      <button id="themeBtn" class="btn">🌙 Oscuro</button>
+      <button id="clearHistoryBtn" class="btn btnDanger">🧹 Vaciar historial</button>
+    </div>
 
-    <!-- ✅ Nuevo: Modo Normal/Fuerte -->
-    <button id="modeBtn" type="button">🟦 Modo NORMAL</button>
+    <div id="counter" class="counter">Señales: 0</div>
+  </header>
 
-    <button id="clearHistoryBtn">🧹 Vaciar historial</button>
-  </div>
+  <main class="main">
+    <div id="signals" class="signals"></div>
 
-  <div id="counter">Señales: 0</div>
-
-  <div id="signals"></div>
-
-  <h3>Feedback</h3>
-  <textarea id="feedback" rows="6"></textarea><br>
-  <button id="copyFeedback">📋 Copiar feedback</button>
+    <section class="feedback">
+      <h3 class="h3">Feedback</h3>
+      <textarea id="feedback" rows="6"></textarea><br>
+      <button id="copyFeedback" class="btn btnGhost">📋 Copiar feedback</button>
+    </section>
+  </main>
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
@@ -62,13 +57,13 @@
           <div id="modalTitle" class="modalTitle">Gráfico</div>
           <div id="modalSub" class="modalSub">—</div>
         </div>
-        <button id="modalCloseBtn" class="modalClose" type="button">✖</button>
+        <button id="modalCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
       </div>
 
       <canvas id="minuteCanvas"></canvas>
 
       <div class="modalFooter">
-        <button id="modalOpenDerivBtn" class="modalAction" type="button">
+        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">
           Abrir Deriv
         </button>
       </div>
