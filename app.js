@@ -934,4 +934,4 @@ for (const it of history) {
 }
 updateTickHealthUI();
 updateCountdownUI();
-connect(); 
+connect();
