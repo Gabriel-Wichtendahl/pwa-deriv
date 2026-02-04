@@ -10,87 +10,54 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 
-<body class="neon">
+<body>
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
-    <div class="headerTop">
-      <h2 id="status" class="status">Conectando…</h2>
+    <h2 id="status">Conectando…</h2>
 
-      <div class="topStatus">
-        <div id="tickHealth" class="pill">Último tick: —</div>
-        <div id="countdown" class="pill">⏱️ 60</div>
-      </div>
+    <div class="topStatus">
+      <div id="tickHealth" class="pill">Último tick: —</div>
+      <div id="countdown" class="pill">⏱️ 60</div>
     </div>
 
     <div class="controls">
-      <div class="controlsRow">
-        <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
-        <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
-        <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
-        <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
+      <button id="soundBtn">🔇 Sonido OFF</button>
+      <button id="vibrateBtn">📳 Vibración ON</button>
+      <button id="wakeBtn">🔓 Pantalla activa</button>
+      <button id="themeBtn">🌙 Oscuro</button>
+
+      <div class="btnGroup">
+        <button class="evalBtn" data-sec="45">45s</button>
+        <button class="evalBtn" data-sec="50">50s</button>
+        <button class="evalBtn" data-sec="55">55s</button>
       </div>
 
-      <div class="controlsRow controlsRow2">
-        <!-- ✅ Tabs 45/50/55 -->
-        <div class="tabs" role="tablist" aria-label="Segundo de evaluación">
-          <button class="tab evalBtn" type="button" role="tab" aria-selected="false" data-sec="45">45s</button>
-          <button class="tab evalBtn" type="button" role="tab" aria-selected="false" data-sec="50">50s</button>
-          <button class="tab evalBtn" type="button" role="tab" aria-selected="false" data-sec="55">55s</button>
-        </div>
-
-        <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-
-        <!-- ✅ Vaciar como icono -->
-        <button id="clearHistoryBtn" class="btn btnDanger btnIconSm" type="button" aria-label="Vaciar historial" title="Vaciar historial">
-          🧹
-        </button>
-      </div>
+      <button id="modeBtn">🟦 Modo NORMAL</button>
+      <button id="clearHistoryBtn" class="danger">🧹 Vaciar</button>
     </div>
 
-    <div class="headerBottom">
-      <div id="counter" class="counter">Señales: 0</div>
-      <div class="hint">Tip: tocá la señal para abrir Deriv. El gráfico se habilita al cerrar el minuto.</div>
+    <!-- 🔥 Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="ALL">Todas</button>
+      <button class="tab" data-tab="NORMAL">NORMAL</button>
+      <button class="tab" data-tab="FUERTE">FUERTE</button>
     </div>
+
+    <div id="counter">Señales: 0</div>
   </header>
 
-  <main class="main">
-    <div id="signals" class="signals"></div>
+  <main>
+    <div id="signals"></div>
 
     <section class="feedback">
-      <h3 class="h3">Feedback</h3>
-      <textarea id="feedback" rows="6"></textarea><br />
-      <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
+      <h3>Feedback</h3>
+      <textarea id="feedback" rows="6"></textarea>
+      <button id="copyFeedback">📋 Copiar</button>
     </section>
   </main>
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
-
-  <div id="chartModal" class="modal hidden" aria-hidden="true">
-    <div id="modalCloseBackdrop" class="modalBackdrop"></div>
-
-    <div class="modalCard" role="dialog" aria-modal="true">
-      <div class="modalHeader">
-        <div>
-          <div id="modalTitle" class="modalTitle">Gráfico</div>
-          <div id="modalSub" class="modalSub">—</div>
-        </div>
-        <button id="modalCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
-      </div>
-
-      <canvas id="minuteCanvas"></canvas>
-
-      <div class="modalFooter">
-        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
-      </div>
-    </div>
-  </div>
-
   <script src="app.js"></script>
-  <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js");
-    }
-  </script>
 </body>
 </html>
