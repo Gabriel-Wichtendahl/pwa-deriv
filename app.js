@@ -702,7 +702,7 @@ function finalizeMinute(minute) {
    Ticks + evaluación (ms)
 ========================= */
 function onTick(tick) {
-  const epochMs = Math.round(Number(tick.epoch) * 1000);
+  const epochMs = Number(tick.epoch) * 1000; // ✅ sin round
   const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
 
   const minute = Math.floor(epochMs / 60000);
