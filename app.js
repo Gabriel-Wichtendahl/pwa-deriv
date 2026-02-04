@@ -73,6 +73,10 @@ let currentMinuteStartMs = null;
 let lastSeenMinute = null;
 let candleOC = {}; // minute -> symbol -> {open, close}
 
+/* ✅ seed estilo Deriv: último precio previo para arrancar minuto en 0s */
+let lastQuoteBySymbol = {};        // symbol -> último quote recibido (global)
+let lastMinuteSeenBySymbol = {};   // symbol -> último minuto visto (para detectar cambio)
+
 /* =========================
    UI
 ========================= */
@@ -350,6 +354,9 @@ window.addEventListener("resize", () => {
 
 /* =========================
    ✅ Gráfico tipo Deriv (area + line) con TODOS los ticks (ms)
+   - NO fuerza 0ms con el primer tick (evita meseta falsa)
+   - Usa seed (último precio previo) desde onTick
+   - Agrega padding Y para look tipo Deriv
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
@@ -379,19 +386,22 @@ function drawDerivLikeChart(canvas, ticks) {
   // ticks: [{ms, quote}, ...] donde ms: 0..60000
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
-  // Forzar 0ms y 60000ms para completar el minuto visualmente
-  const first = pts[0];
+  // Completar visualmente hasta 60s con el último precio
   const last = pts[pts.length - 1];
-  if (first.ms > 0) pts.unshift({ ms: 0, quote: first.quote });
   if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
-  // Escala Y
   const quotes = pts.map(p => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  if (max - min < 1e-9) max = min + 1e-9;
 
-  // Helpers mapeo
+  let range = max - min;
+  if (range < 1e-9) range = 1e-9;
+
+  // ✅ padding para no exagerar vertical (tipo Deriv)
+  const pad = range * 0.08;
+  min -= pad;
+  max += pad;
+
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => {
     const yNorm = (q - min) / (max - min);
@@ -420,13 +430,14 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.moveTo(x30, 10);
   ctx.lineTo(x30, h - 20);
   ctx.stroke();
+
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
-  // AREA (como Deriv)
+  // AREA
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (let i = 0; i < pts.length; i++) {
@@ -458,6 +469,7 @@ function drawDerivLikeChart(canvas, ticks) {
   // Punto último precio
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
+
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.95)";
   ctx.beginPath();
@@ -704,26 +716,40 @@ function finalizeMinute(minute) {
    Ticks + evaluación (ms)
 ========================= */
 function onTick(tick) {
-  // ✅ usar ms para no perder ticks dentro del mismo segundo
   const epochMs = Math.round(Number(tick.epoch) * 1000);
   const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
 
   const minute = Math.floor(epochMs / 60000);
-  const msInMinute = epochMs - minuteStartMs; // 0..59999 (aprox)
+  const msInMinute = epochMs - minuteStartMs; // 0..59999
   const sec = Math.floor(msInMinute / 1000);  // para evaluar en seg 45
   const symbol = tick.symbol;
 
   lastTickEpochMs = epochMs;
   currentMinuteStartMs = minuteStartMs;
 
-  // detectar cambio de minuto -> finalizar minutos pendientes
+  // ✅ guardar último precio global
+  lastQuoteBySymbol[symbol] = tick.quote;
+
+  // ✅ detectar nuevo minuto por símbolo y sembrar 0ms con último precio
+  if (lastMinuteSeenBySymbol[symbol] !== minute) {
+    lastMinuteSeenBySymbol[symbol] = minute;
+
+    if (!minuteData[minute]) minuteData[minute] = {};
+    if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
+
+    if (minuteData[minute][symbol].length === 0 && lastQuoteBySymbol[symbol] != null) {
+      minuteData[minute][symbol].push({ ms: 0, quote: lastQuoteBySymbol[symbol] });
+    }
+  }
+
+  // detectar cambio de minuto global -> finalizar pendientes
   if (lastSeenMinute === null) lastSeenMinute = minute;
   if (minute > lastSeenMinute) {
     for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
     lastSeenMinute = minute;
   }
 
-  // guardar ticks
+  // guardar tick real
   if (!minuteData[minute]) minuteData[minute] = {};
   if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
   minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
@@ -866,7 +892,6 @@ wakeBtn.onclick = async () => {
 ========================= */
 renderHistory();
 
-// asegurar lock/unlock al cargar
 for (const it of history) {
   updateRowChartBtn(it);
 }
