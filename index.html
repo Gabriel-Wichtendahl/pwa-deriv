@@ -12,8 +12,7 @@
 </head>
 
 <body class="neon">
-
-  <!-- ✅ Capa de fondo neon (debe existir sí o sí) -->
+  <!-- ✅ Fondo neon (capa fija) -->
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
@@ -25,23 +24,21 @@
     </div>
 
     <div class="controls">
-      <!-- existentes -->
       <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
       <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
       <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
       <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
 
-      <!-- evaluación 45/50/55 -->
+      <!-- 🕒 Evaluación 45/50/55 -->
       <div class="btnGroup" aria-label="Segundo de evaluación">
         <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
         <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
         <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
       </div>
 
-      <!-- modo normal/fuerte -->
+      <!-- ⚡ Modo -->
       <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
 
-      <!-- vaciar historial -->
       <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
     </div>
 
@@ -76,9 +73,7 @@
       <canvas id="minuteCanvas"></canvas>
 
       <div class="modalFooter">
-        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">
-          Abrir Deriv
-        </button>
+        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
       </div>
     </div>
   </div>
@@ -90,6 +85,5 @@
       navigator.serviceWorker.register("./sw.js");
     }
   </script>
-
 </body>
 </html>
