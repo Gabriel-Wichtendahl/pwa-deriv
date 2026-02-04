@@ -878,6 +878,42 @@ wakeBtn.onclick = async () => {
 };
 
 /* =========================
+   WebSocket
+========================= */
+function connect() {
+  try {
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+      ws.close();
+    }
+  } catch {}
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    if (statusEl) statusEl.textContent = "Conectado – Analizando";
+    SYMBOLS.forEach(sym => {
+      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
+    });
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.tick) onTick(data.tick);
+    } catch {}
+  };
+
+  ws.onerror = () => {
+    if (statusEl) statusEl.textContent = "Error WS – reconectando...";
+  };
+
+  ws.onclose = () => {
+    if (statusEl) statusEl.textContent = "Desconectado – reconectando...";
+    setTimeout(connect, 1500);
+  };
+}
+
+/* =========================
    Start
 ========================= */
 renderHistory();
