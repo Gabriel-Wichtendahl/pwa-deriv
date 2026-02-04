@@ -51,8 +51,8 @@ let soundEnabled = false;
 let vibrateEnabled = true;
 
 /* ✅ Config persistente */
-let EVAL_SEC = 45;      // 45 / 50 / 55
-let strongMode = false; // NORMAL / FUERTE
+let EVAL_SEC = 45;       // 45 / 50 / 55
+let strongMode = false;  // NORMAL / FUERTE
 
 let signalCount = 0;
 
@@ -64,7 +64,6 @@ let minuteData = {};
 let lastEvaluatedMinute = null;
 
 let evalRetryTimer = null;
-
 const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
@@ -101,8 +100,8 @@ const vibrateBtn = document.getElementById("vibrateBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const copyBtn = document.getElementById("copyFeedback");
 
-/* ✅ nuevos controles */
-const evalSecSelect = document.getElementById("evalSecSelect");
+/* ✅ Controles nuevos */
+const evalBtns = Array.from(document.querySelectorAll(".evalBtn"));
 const modeBtn = document.getElementById("modeBtn");
 
 /* Modal */
@@ -185,20 +184,29 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   ✅ Init EvalSec + Mode (persistente)
+   ✅ Init EvalSec (45/50/55) + Mode (persistente)
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
   EVAL_SEC = [45, 50, 55].includes(savedSec) ? savedSec : 45;
 
-  if (evalSecSelect) {
-    evalSecSelect.value = String(EVAL_SEC);
-    evalSecSelect.onchange = () => {
-      const v = parseInt(evalSecSelect.value, 10);
+  function paintEval() {
+    evalBtns.forEach(b => {
+      const sec = parseInt(b.dataset.sec || "0", 10);
+      b.classList.toggle("active", sec === EVAL_SEC);
+    });
+  }
+
+  paintEval();
+
+  evalBtns.forEach(b => {
+    b.onclick = () => {
+      const v = parseInt(b.dataset.sec || "45", 10);
       EVAL_SEC = [45, 50, 55].includes(v) ? v : 45;
       localStorage.setItem("evalSec", String(EVAL_SEC));
+      paintEval();
     };
-  }
+  });
 
   strongMode = loadBool("strongMode", false);
 
@@ -279,7 +287,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Copy feedback
+   Copiar feedback
 ========================= */
 if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
 
@@ -317,6 +325,7 @@ function renderHistory() {
   updateCounter();
   rebuildFeedbackFromHistory();
 
+  // render newest first
   for (const it of [...history].reverse()) {
     const row = buildRow(it);
     signalsEl.appendChild(row);
@@ -370,6 +379,7 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
+  // doble RAF para esperar layout (evita “entrecortado”)
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       drawDerivLikeChart(minuteCanvas, item.ticks || []);
@@ -453,6 +463,7 @@ function drawDerivLikeChart(canvas, ticks) {
     return (1 - yNorm) * (h - 30) + 10;
   };
 
+  // grilla
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
@@ -465,6 +476,7 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
+  // marca 30s
   const x30 = xOf(30000);
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
@@ -480,6 +492,7 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
+  // area
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (let i = 0; i < pts.length; i++) {
@@ -493,6 +506,7 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
+  // línea
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -507,6 +521,7 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.stroke();
 
+  // punto final
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
 
@@ -517,6 +532,7 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
+  // labels
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -576,15 +592,19 @@ function updateRowNextArrow(item) {
 
   if (item.nextOutcome === "up") {
     el.textContent = "⬆️";
+    el.className = "nextArrow up";
     el.title = "Próxima vela: alcista";
   } else if (item.nextOutcome === "down") {
     el.textContent = "⬇️";
+    el.className = "nextArrow down";
     el.title = "Próxima vela: bajista";
   } else if (item.nextOutcome === "flat") {
     el.textContent = "➖";
+    el.className = "nextArrow flat";
     el.title = "Próxima vela: plana";
   } else {
     el.textContent = "⏳";
+    el.className = "nextArrow pending";
     el.title = "Próxima vela: esperando…";
   }
 }
@@ -604,7 +624,7 @@ function buildRow(item) {
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
-      <span class="nextArrow" title="Próxima vela: esperando…">⏳</span>
+      <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
 
     <div class="row-actions">
@@ -614,10 +634,12 @@ function buildRow(item) {
     </div>
   `;
 
+  // tocar texto -> abrir Deriv (misma pestaña)
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
+  // botón gráfico
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
@@ -627,6 +649,7 @@ function buildRow(item) {
 
   updateRowChartBtn(item);
 
+  // votos
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -642,6 +665,7 @@ function buildRow(item) {
     };
   });
 
+  // comentario
   const input = row.querySelector(".row-comment");
   input.addEventListener("blur", () => {
     item.comment = input.value || "";
@@ -651,194 +675,6 @@ function buildRow(item) {
 
   updateRowNextArrow(item);
   return row;
-}
-
-/* =========================
-   Finalizar minuto + habilitar gráficos
-========================= */
-function finalizeMinute(minute) {
-  const oc = candleOC[minute];
-  if (!oc) return;
-
-  for (const symbol of Object.keys(oc)) {
-    const { open, close } = oc[symbol];
-    if (open == null || close == null) continue;
-
-    let outcome = "flat";
-    if (close > open) outcome = "up";
-    else if (close < open) outcome = "down";
-
-    const prevMinute = minute - 1;
-    for (const it of history) {
-      if (it.minute === prevMinute && it.symbol === symbol && !it.nextOutcome) {
-        setNextOutcome(it, outcome);
-      }
-    }
-  }
-
-  let changed = false;
-  for (const it of history) {
-    if (it.minute === minute && !it.minuteComplete) {
-      it.minuteComplete = true;
-      changed = true;
-      updateRowChartBtn(it);
-    }
-  }
-  if (changed) saveHistory(history);
-
-  delete candleOC[minute - 3];
-}
-
-/* =========================
-   Ticks + evaluación
-========================= */
-function onTick(tick) {
-  const epochMs = Math.round(Number(tick.epoch) * 1000);
-  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
-
-  const minute = Math.floor(epochMs / 60000);
-  const msInMinute = epochMs - minuteStartMs;
-  const sec = Math.floor(msInMinute / 1000);
-  const symbol = tick.symbol;
-
-  lastTickEpochMs = epochMs;
-  currentMinuteStartMs = minuteStartMs;
-
-  const prevLast = lastQuoteBySymbol[symbol];
-  lastQuoteBySymbol[symbol] = tick.quote;
-
-  if (lastMinuteSeenBySymbol[symbol] !== minute) {
-    lastMinuteSeenBySymbol[symbol] = minute;
-
-    if (!minuteData[minute]) minuteData[minute] = {};
-    if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-
-    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
-      minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
-    }
-  }
-
-  if (lastSeenMinute === null) lastSeenMinute = minute;
-  if (minute > lastSeenMinute) {
-    for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
-    lastSeenMinute = minute;
-  }
-
-  if (!minuteData[minute]) minuteData[minute] = {};
-  if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
-
-  if (!candleOC[minute]) candleOC[minute] = {};
-  if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
-  else candleOC[minute][symbol].close = tick.quote;
-
-  if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
-    if (!ok) scheduleRetry(minute);
-  }
-
-  delete minuteData[minute - 2];
-}
-
-function scheduleRetry(minute) {
-  if (evalRetryTimer) clearTimeout(evalRetryTimer);
-
-  evalRetryTimer = setTimeout(() => {
-    const nowMinute = Math.floor(Date.now() / 60000);
-    if (nowMinute === minute) evaluateMinute(minute);
-  }, RETRY_DELAY_MS);
-}
-
-/* =========================
-   Evaluación
-========================= */
-function evaluateMinute(minute) {
-  const data = minuteData[minute];
-  if (!data) return false;
-
-  const candidates = [];
-  let readySymbols = 0;
-
-  for (const symbol of SYMBOLS) {
-    const ticks = data[symbol] || [];
-    if (ticks.length >= MIN_TICKS) readySymbols++;
-    if (ticks.length < MIN_TICKS) continue;
-
-    const prices = ticks.map(t => t.quote);
-    const move = prices[prices.length - 1] - prices[0];
-    const rawMove = Math.abs(move);
-
-    let vol = 0;
-    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
-    vol = vol / Math.max(1, prices.length - 1);
-
-    const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol, move, score, ticks });
-  }
-
-  if (readySymbols < MIN_SYMBOLS_READY) return false;
-  if (candidates.length === 0) return false;
-
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-
-  if (!best || best.score < 0.015) return true;
-
-  const direction = best.move > 0 ? "CALL" : "PUT";
-  addSignal(minute, best.symbol, direction, best.ticks);
-  return true;
-}
-
-/* =========================
-   Guardar + mostrar señal
-========================= */
-function fmtTimeUTC(minute) {
-  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
-}
-
-function addSignal(minute, symbol, direction, ticks) {
-  const time = fmtTimeUTC(minute);
-  const modeLabel = strongMode ? "FUERTE" : "NORMAL";
-
-  const item = {
-    id: `${minute}-${symbol}-${direction}`,
-    minute,
-    time,
-    symbol,
-    direction,
-    mode: modeLabel,
-    vote: "",
-    comment: "",
-    ticks: Array.isArray(ticks) ? ticks : [],
-    nextOutcome: "",
-    minuteComplete: false
-  };
-
-  if (history.some(x => x.id === item.id)) return;
-
-  history.push(item);
-  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
-  saveHistory(history);
-
-  signalCount = history.length;
-  updateCounter();
-
-  const row = buildRow(item);
-  if (signalsEl) signalsEl.prepend(row);
-
-  updateRowChartBtn(item);
-
-  if (soundEnabled) {
-    sound.currentTime = 0;
-    sound.play().catch(() => {});
-  }
-
-  if (vibrateEnabled && "vibrate" in navigator) {
-    navigator.vibrate([120]);
-  }
-
-  showNotification(symbol, direction, modeLabel);
 }
 
 /* =========================
@@ -871,6 +707,211 @@ setInterval(() => {
   updateTickHealthUI();
   updateCountdownUI();
 }, 1000);
+
+/* =========================
+   Finalizar minuto + habilitar gráficos + próxima vela
+========================= */
+function finalizeMinute(minute) {
+  const oc = candleOC[minute];
+  if (!oc) return;
+
+  // outcome para señales del minuto anterior (minute-1)
+  for (const symbol of Object.keys(oc)) {
+    const { open, close } = oc[symbol];
+    if (open == null || close == null) continue;
+
+    let outcome = "flat";
+    if (close > open) outcome = "up";
+    else if (close < open) outcome = "down";
+
+    const prevMinute = minute - 1;
+    for (const it of history) {
+      if (it.minute === prevMinute && it.symbol === symbol && !it.nextOutcome) {
+        setNextOutcome(it, outcome);
+      }
+    }
+  }
+
+  // marcar minuto completo (habilita botón gráfico)
+  let changed = false;
+  for (const it of history) {
+    if (it.minute === minute && !it.minuteComplete) {
+      it.minuteComplete = true;
+      changed = true;
+      updateRowChartBtn(it);
+    }
+  }
+  if (changed) saveHistory(history);
+
+  delete candleOC[minute - 3];
+}
+
+/* =========================
+   Ticks + evaluación
+========================= */
+function onTick(tick) {
+  const epochMs = Math.round(Number(tick.epoch) * 1000);
+  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
+
+  const minute = Math.floor(epochMs / 60000);
+  const msInMinute = epochMs - minuteStartMs;
+  const sec = Math.floor(msInMinute / 1000);
+  const symbol = tick.symbol;
+
+  lastTickEpochMs = epochMs;
+  currentMinuteStartMs = minuteStartMs;
+
+  // seed 0ms (precio minuto anterior)
+  const prevLast = lastQuoteBySymbol[symbol];
+  lastQuoteBySymbol[symbol] = tick.quote;
+
+  if (lastMinuteSeenBySymbol[symbol] !== minute) {
+    lastMinuteSeenBySymbol[symbol] = minute;
+
+    if (!minuteData[minute]) minuteData[minute] = {};
+    if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
+
+    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
+      minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
+    }
+  }
+
+  // detectar cambio de minuto global
+  if (lastSeenMinute === null) lastSeenMinute = minute;
+  if (minute > lastSeenMinute) {
+    for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
+    lastSeenMinute = minute;
+  }
+
+  // guardar tick
+  if (!minuteData[minute]) minuteData[minute] = {};
+  if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
+  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
+
+  // open/close vela (para outcome)
+  if (!candleOC[minute]) candleOC[minute] = {};
+  if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
+  else candleOC[minute][symbol].close = tick.quote;
+
+  // evaluar en EVAL_SEC
+  if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+    lastEvaluatedMinute = minute;
+    const ok = evaluateMinute(minute);
+    if (!ok) scheduleRetry(minute);
+  }
+
+  delete minuteData[minute - 2];
+}
+
+function scheduleRetry(minute) {
+  if (evalRetryTimer) clearTimeout(evalRetryTimer);
+
+  evalRetryTimer = setTimeout(() => {
+    const nowMinute = Math.floor(Date.now() / 60000);
+    if (nowMinute === minute) evaluateMinute(minute);
+  }, RETRY_DELAY_MS);
+}
+
+/* =========================
+   Evaluación NORMAL / FUERTE
+========================= */
+function evaluateMinute(minute) {
+  const data = minuteData[minute];
+  if (!data) return false;
+
+  const candidates = [];
+  let readySymbols = 0;
+
+  for (const symbol of SYMBOLS) {
+    const ticks = data[symbol] || [];
+    if (ticks.length >= MIN_TICKS) readySymbols++;
+    if (ticks.length < MIN_TICKS) continue;
+
+    const prices = ticks.map(t => t.quote);
+    const move = prices[prices.length - 1] - prices[0];
+    const rawMove = Math.abs(move);
+
+    // volatilidad promedio
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
+    vol = vol / Math.max(1, prices.length - 1);
+
+    const score = rawMove / (vol || 1e-9);
+    candidates.push({ symbol, move, score, ticks });
+  }
+
+  if (readySymbols < MIN_SYMBOLS_READY) return false;
+  if (candidates.length === 0) return false;
+
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+
+  // umbral base (mantener señales)
+  let threshold = 0.015;
+
+  // ✅ FUERTE: un poco más estricto (sin matar)
+  if (strongMode) threshold = 0.02;
+
+  if (!best || best.score < threshold) return true;
+
+  const direction = best.move > 0 ? "CALL" : "PUT";
+  addSignal(minute, best.symbol, direction, best.ticks);
+  return true;
+}
+
+/* =========================
+   Guardar + mostrar señal
+========================= */
+function fmtTimeUTC(minute) {
+  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+}
+
+function addSignal(minute, symbol, direction, ticks) {
+  const time = fmtTimeUTC(minute);
+  const modeLabel = strongMode ? "FUERTE" : "NORMAL";
+
+  const item = {
+    id: `${minute}-${symbol}-${direction}-${modeLabel}`,
+    minute,
+    time,
+    symbol,
+    direction,
+    mode: modeLabel,
+    vote: "",
+    comment: "",
+    ticks: Array.isArray(ticks) ? ticks : [],
+    nextOutcome: "",
+    minuteComplete: false
+  };
+
+  if (history.some(x => x.id === item.id)) return;
+
+  history.push(item);
+  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+  saveHistory(history);
+
+  signalCount = history.length;
+  updateCounter();
+
+  const row = buildRow(item);
+  if (signalsEl) signalsEl.prepend(row);
+
+  updateRowChartBtn(item);
+
+  // sonido
+  if (soundEnabled) {
+    sound.currentTime = 0;
+    sound.play().catch(() => {});
+  }
+
+  // vibración local
+  if (vibrateEnabled && "vibrate" in navigator) {
+    navigator.vibrate([120]);
+  }
+
+  // notificación
+  showNotification(symbol, direction, modeLabel);
+}
 
 /* =========================
    Wake Lock
