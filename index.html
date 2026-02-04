@@ -12,23 +12,37 @@
 </head>
 <body class="neon">
 
-  <!-- Fondo neon decorativo -->
+  <!-- Fondo neon -->
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
     <h2 id="status" class="status">Conectando…</h2>
 
-    <!-- ✅ Salud + segundero -->
     <div class="topStatus">
       <div id="tickHealth" class="pill">Último tick: —</div>
       <div id="countdown" class="pill">⏱️ 60</div>
     </div>
 
+    <!-- 🔥 CONTROLES -->
     <div class="controls">
+
+      <!-- 🔔 existentes -->
       <button id="soundBtn" class="btn">🔇 Sonido OFF</button>
       <button id="vibrateBtn" class="btn">📳 Vibración ON</button>
       <button id="wakeBtn" class="btn">🔓 Pantalla activa</button>
       <button id="themeBtn" class="btn">🌙 Oscuro</button>
+
+      <!-- 🕒 NUEVO: segundos de evaluación -->
+      <div class="btnGroup">
+        <button class="btn evalBtn" data-sec="45">⏱️ 45s</button>
+        <button class="btn evalBtn" data-sec="50">⏱️ 50s</button>
+        <button class="btn evalBtn" data-sec="55">⏱️ 55s</button>
+      </div>
+
+      <!-- ⚡ NUEVO: modo -->
+      <button id="modeBtn" class="btn modeBtn">🟦 Modo NORMAL</button>
+
+      <!-- 🧹 -->
       <button id="clearHistoryBtn" class="btn btnDanger">🧹 Vaciar historial</button>
     </div>
 
@@ -39,7 +53,7 @@
     <div id="signals" class="signals"></div>
 
     <section class="feedback">
-      <h3 class="h3">Feedback</h3>
+      <h3>Feedback</h3>
       <textarea id="feedback" rows="6"></textarea><br>
       <button id="copyFeedback" class="btn btnGhost">📋 Copiar feedback</button>
     </section>
@@ -47,7 +61,7 @@
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- ✅ Modal gráfico -->
+  <!-- Modal gráfico (igual que antes) -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
@@ -57,15 +71,13 @@
           <div id="modalTitle" class="modalTitle">Gráfico</div>
           <div id="modalSub" class="modalSub">—</div>
         </div>
-        <button id="modalCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
+        <button id="modalCloseBtn" class="btnIcon">✖</button>
       </div>
 
       <canvas id="minuteCanvas"></canvas>
 
       <div class="modalFooter">
-        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">
-          Abrir Deriv
-        </button>
+        <button id="modalOpenDerivBtn" class="btn btnPrimary">Abrir Deriv</button>
       </div>
     </div>
   </div>
@@ -77,6 +89,5 @@
       navigator.serviceWorker.register("./sw.js");
     }
   </script>
-
 </body>
 </html>
