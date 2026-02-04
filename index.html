@@ -1,9 +1,10 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Deriv Signals</title>
+
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#020617" />
   <link rel="stylesheet" href="style.css" />
@@ -13,30 +14,44 @@
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
-    <h2 id="status" class="status">Conectando…</h2>
+    <div class="headerTop">
+      <h2 id="status" class="status">Conectando…</h2>
 
-    <div class="topStatus">
-      <div id="tickHealth" class="pill">Último tick: —</div>
-      <div id="countdown" class="pill">⏱️ 60</div>
+      <div class="topStatus">
+        <div id="tickHealth" class="pill">Último tick: —</div>
+        <div id="countdown" class="pill">⏱️ 60</div>
+      </div>
     </div>
 
     <div class="controls">
-      <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
-      <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
-      <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
-      <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
-
-      <div class="btnGroup" aria-label="Segundo de evaluación">
-        <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
-        <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
-        <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
+      <div class="controlsRow">
+        <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
+        <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
+        <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
+        <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
       </div>
 
-      <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-      <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+      <div class="controlsRow controlsRow2">
+        <!-- ✅ Tabs 45/50/55 -->
+        <div class="tabs" role="tablist" aria-label="Segundo de evaluación">
+          <button class="tab evalBtn" type="button" role="tab" aria-selected="false" data-sec="45">45s</button>
+          <button class="tab evalBtn" type="button" role="tab" aria-selected="false" data-sec="50">50s</button>
+          <button class="tab evalBtn" type="button" role="tab" aria-selected="false" data-sec="55">55s</button>
+        </div>
+
+        <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
+
+        <!-- ✅ Vaciar como icono -->
+        <button id="clearHistoryBtn" class="btn btnDanger btnIconSm" type="button" aria-label="Vaciar historial" title="Vaciar historial">
+          🧹
+        </button>
+      </div>
     </div>
 
-    <div id="counter" class="counter">Señales: 0</div>
+    <div class="headerBottom">
+      <div id="counter" class="counter">Señales: 0</div>
+      <div class="hint">Tip: tocá la señal para abrir Deriv. El gráfico se habilita al cerrar el minuto.</div>
+    </div>
   </header>
 
   <main class="main">
@@ -73,7 +88,9 @@
 
   <script src="app.js"></script>
   <script>
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js");
+    }
   </script>
 </body>
 </html>
