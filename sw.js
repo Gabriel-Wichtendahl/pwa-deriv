@@ -1,4 +1,4 @@
-const CACHE = "deriv-assets-v2";
+const CACHE = "deriv-assets-v3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,7 +7,8 @@ const ASSETS = [
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png",
-  "./alert.mp3"
+  "./alert.mp3",
+  "./bg-neon.png"
 ];
 
 self.addEventListener("install", (e) => {
@@ -37,7 +38,7 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Assets: cache-first
+  // Cache-first para assets
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request))
   );
@@ -45,12 +46,12 @@ self.addEventListener("fetch", (e) => {
 
 /* =========================
    ✅ Click en notificación
-   Abre Deriv Trader con el símbolo exacto
+   Abre Deriv en DEMO / Rise-Fall / símbolo
 ========================= */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const url = event.notification?.data?.url || "https://app.deriv.com/dtrader";
+  const url = event.notification?.data?.url || "https://app.deriv.com/dtrader?account=demo";
 
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({
@@ -58,6 +59,7 @@ self.addEventListener("notificationclick", (event) => {
       includeUncontrolled: true
     });
 
+    // Si ya hay Deriv abierto, enfocar y navegar
     for (const client of allClients) {
       if (client.url && client.url.includes("app.deriv.com")) {
         await client.focus();
@@ -66,6 +68,7 @@ self.addEventListener("notificationclick", (event) => {
       }
     }
 
+    // Si no hay, abrir nueva
     await clients.openWindow(url);
   })());
-}); 
+});
