@@ -1,18 +1,15 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Deriv Signals</title>
-
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#020617" />
-
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body class="neon">
-  <!-- ✅ Fondo neon (capa fija) -->
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
@@ -29,16 +26,13 @@
       <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
       <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
 
-      <!-- 🕒 Evaluación 45/50/55 -->
       <div class="btnGroup" aria-label="Segundo de evaluación">
         <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
         <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
         <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
       </div>
 
-      <!-- ⚡ Modo -->
       <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-
       <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
     </div>
 
@@ -57,7 +51,6 @@
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- ✅ Modal gráfico -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
@@ -79,11 +72,8 @@
   </div>
 
   <script src="app.js"></script>
-
   <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js");
-    }
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js");
   </script>
 </body>
 </html>
