@@ -321,17 +321,20 @@ function openChartModal(item) {
   modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
 
   chartModal.classList.remove("hidden");
+  chartModal.setAttribute("aria-hidden", "false");
 
+  // ✅ doble frame: evita canvas “entrecortado” por tamaño no listo
   requestAnimationFrame(() => {
-  requestAnimationFrame(() => {
-    drawDerivLikeChart(minuteCanvas, item.ticks || []);
+    requestAnimationFrame(() => {
+      drawDerivLikeChart(minuteCanvas, item.ticks || []);
+    });
   });
-});
 }
 
 function closeChartModal() {
   if (!chartModal) return;
   chartModal.classList.add("hidden");
+  chartModal.setAttribute("aria-hidden", "true");
   modalCurrentItem = null;
 }
 
@@ -356,9 +359,7 @@ window.addEventListener("resize", () => {
 });
 
 /* =========================
-   ✅ Gráfico tipo Deriv (area + line) con TODOS los ticks (ms)
-   - seed 0ms se hace desde onTick (precio del minuto anterior)
-   - padding Y para look tipo Deriv
+   ✅ Gráfico tipo Deriv (area + line) con ticks (ms)
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
@@ -377,7 +378,6 @@ function drawDerivLikeChart(canvas, ticks) {
 
   ctx.clearRect(0, 0, w, h);
 
-  // Fondo suave
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, 0, w, h);
@@ -387,7 +387,6 @@ function drawDerivLikeChart(canvas, ticks) {
 
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
-  // Completar hasta 60s con último precio
   const last = pts[pts.length - 1];
   if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
@@ -408,7 +407,6 @@ function drawDerivLikeChart(canvas, ticks) {
     return (1 - yNorm) * (h - 30) + 10;
   };
 
-  // Grilla sutil
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
@@ -421,7 +419,6 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  // Marca 30s
   const x30 = xOf(30000);
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
@@ -437,7 +434,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
-  // AREA
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (let i = 0; i < pts.length; i++) {
@@ -451,7 +447,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // LINEA
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -466,7 +461,6 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.stroke();
 
-  // Punto final
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
 
@@ -477,7 +471,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // Labels 0s / 60s
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -508,8 +501,6 @@ function updateRowChartBtn(item) {
   if (!btn) return;
 
   const ready = !!item.minuteComplete;
-
-  // ✅ candado visual + real
   btn.disabled = !ready;
 
   if (ready) {
@@ -561,6 +552,25 @@ function updateRowNextArrow(item) {
 }
 
 /* =========================
+   ✅ Catch-up flechas (cuando Android pausa / volvés a la app)
+========================= */
+function catchUpNextOutcomes() {
+  for (const it of history) {
+    if (it.nextOutcome) continue;
+
+    const nextMin = it.minute + 1;
+    const oc = candleOC[nextMin]?.[it.symbol];
+    if (!oc || oc.open == null || oc.close == null) continue;
+
+    let outcome = "flat";
+    if (oc.close > oc.open) outcome = "up";
+    else if (oc.close < oc.open) outcome = "down";
+
+    setNextOutcome(it, outcome);
+  }
+}
+
+/* =========================
    ✅ Fila
 ========================= */
 function buildRow(item) {
@@ -584,24 +594,19 @@ function buildRow(item) {
     </div>
   `;
 
-  // tocar texto -> abrir Deriv
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
-  // botón gráfico
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
-    // ✅ doble seguridad: no abre hasta que termine el minuto
     if (!item.minuteComplete) return;
     openChartModal(item);
   };
 
-  // estado inicial del botón
   updateRowChartBtn(item);
 
-  // votos
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
@@ -617,7 +622,6 @@ function buildRow(item) {
     };
   });
 
-  // comentario (guardar al salir)
   const input = row.querySelector(".row-comment");
   input.addEventListener("blur", () => {
     item.comment = input.value || "";
@@ -625,9 +629,7 @@ function buildRow(item) {
     rebuildFeedbackFromHistory();
   });
 
-  // flecha próxima vela
   updateRowNextArrow(item);
-
   return row;
 }
 
@@ -662,29 +664,20 @@ setInterval(() => {
   updateCountdownUI();
 }, 1000);
 
+// ✅ al volver a la app: completar flechas pendientes y refrescar UI
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    catchUpNextOutcomes();
+    for (const it of history) updateRowNextArrow(it);
+  }
+});
+
 /* =========================
    Finalizar vela + habilitar gráficos
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
-
-function catchUpNextOutcomes() {
-  // para cada señal pendiente, si ya tenemos open/close del minuto siguiente => calculamos flecha
-  for (const it of history) {
-    if (it.nextOutcome) continue;
-
-    const nextMin = it.minute + 1;
-    const oc = candleOC[nextMin]?.[it.symbol];
-    if (!oc || oc.open == null || oc.close == null) continue;
-
-    let outcome = "flat";
-    if (oc.close > oc.open) outcome = "up";
-    else if (oc.close < oc.open) outcome = "down";
-
-    setNextOutcome(it, outcome);
-  }
-}
 
   // outcome para señales del minuto anterior (minute-1)
   for (const symbol of Object.keys(oc)) {
@@ -703,7 +696,7 @@ function catchUpNextOutcomes() {
     }
   }
 
-  // ✅ marcar minuto completo (habilita botón gráfico)
+  // marcar minuto completo (habilita botón gráfico)
   let changed = false;
   for (const it of history) {
     if (it.minute === minute && !it.minuteComplete) {
@@ -714,230 +707,15 @@ function catchUpNextOutcomes() {
   }
   if (changed) saveHistory(history);
 
+  // ✅ catch-up por si quedó algo pendiente
+  catchUpNextOutcomes();
+
   delete candleOC[minute - 3];
 }
-
-/* =========================
-   Ticks + evaluación (ms)
-========================= */
-function onTick(tick) {
-  const epochMs = Number(tick.epoch) * 1000; // ✅ sin round
-  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
-
-  const minute = Math.floor(epochMs / 60000);
-  const msInMinute = epochMs - minuteStartMs; // 0..59999
-  const sec = Math.floor(msInMinute / 1000);
-  const symbol = tick.symbol;
-
-  lastTickEpochMs = epochMs;
-  currentMinuteStartMs = minuteStartMs;
-
-  // ✅ seed correcto: guardamos el último precio anterior ANTES de pisarlo
-  const prevLast = lastQuoteBySymbol[symbol];
-  lastQuoteBySymbol[symbol] = tick.quote;
-
-  // ✅ detectar nuevo minuto por símbolo y sembrar 0ms con el precio del minuto anterior
-  if (lastMinuteSeenBySymbol[symbol] !== minute) {
-    lastMinuteSeenBySymbol[symbol] = minute;
-
-    if (!minuteData[minute]) minuteData[minute] = {};
-    if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-
-    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
-      minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
-    }
-  }
-
-  // detectar cambio de minuto global -> finalizar pendientes
-  if (lastSeenMinute === null) lastSeenMinute = minute;
-  if (minute > lastSeenMinute) {
-    for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
-    lastSeenMinute = minute;
-  }
-
-  // guardar tick real
-  if (!minuteData[minute]) minuteData[minute] = {};
-  if (!minuteData[minute][symbol]) minuteData[minute][symbol] = [];
-  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
-
-  // open/close vela
-  if (!candleOC[minute]) candleOC[minute] = {};
-  if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
-  else candleOC[minute][symbol].close = tick.quote;
-
-  // evaluar a los 45s
-  if (sec >= 45 && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
-    if (!ok) scheduleRetry(minute);
-  }
-
-  delete minuteData[minute - 2];
-}
-
-function scheduleRetry(minute) {
-  if (evalRetryTimer) clearTimeout(evalRetryTimer);
-
-  evalRetryTimer = setTimeout(() => {
-    const nowMinute = Math.floor(Date.now() / 60000);
-    if (nowMinute === minute) evaluateMinute(minute);
-  }, RETRY_DELAY_MS);
-}
-
-/* =========================
-   Evaluación
-========================= */
-function evaluateMinute(minute) {
-  const data = minuteData[minute];
-  if (!data) return false;
-
-  const candidates = [];
-  let readySymbols = 0;
-
-  for (const symbol of SYMBOLS) {
-    const ticks = data[symbol] || [];
-    if (ticks.length >= MIN_TICKS) readySymbols++;
-    if (ticks.length < MIN_TICKS) continue;
-
-    const prices = ticks.map(t => t.quote);
-    const move = prices[prices.length - 1] - prices[0];
-    const rawMove = Math.abs(move);
-
-    let vol = 0;
-    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
-    vol = vol / Math.max(1, prices.length - 1);
-
-    const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol, move, score, ticks });
-  }
-
-  if (readySymbols < MIN_SYMBOLS_READY) return false;
-  if (candidates.length === 0) return false;
-
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-
-  if (!best || best.score < 0.015) return true;
-
-  const direction = best.move > 0 ? "CALL" : "PUT";
-  addSignal(minute, best.symbol, direction, best.ticks);
-  return true;
-}
-
-/* =========================
-   Guardar + mostrar señal
-========================= */
-function fmtTimeUTC(minute) {
-  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
-}
-
-function addSignal(minute, symbol, direction, ticks) {
-  const time = fmtTimeUTC(minute);
-
-  const item = {
-    id: `${minute}-${symbol}-${direction}`,
-    minute,
-    time,
-    symbol,
-    direction,
-    vote: "",
-    comment: "",
-    ticks: Array.isArray(ticks) ? ticks : [],
-    nextOutcome: "",
-    minuteComplete: false
-  };
-
-  if (history.some(x => x.id === item.id)) return;
-
-  history.push(item);
-  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
-  saveHistory(history);
-
-  signalCount = history.length;
-  updateCounter();
-
-  const row = buildRow(item);
-  signalsEl.prepend(row);
-
-  // ✅ asegurar candado visible inmediatamente
-  updateRowChartBtn(item);
-
-  if (soundEnabled) {
-    sound.currentTime = 0;
-    sound.play().catch(() => {});
-  }
-
-  if (vibrateEnabled && "vibrate" in navigator) {
-    navigator.vibrate([120]);
-  }
-
-  showNotification(symbol, direction);
-}
-
-/* =========================
-   Wake Lock
-========================= */
-let wakeLock = null;
-
-wakeBtn.onclick = async () => {
-  try {
-    if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-      wakeBtn.textContent = "🔓 Pantalla activa";
-      wakeBtn.classList.remove("active");
-    } else {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeBtn.textContent = "🔒 Pantalla activa";
-      wakeBtn.classList.add("active");
-    }
-  } catch {
-    alert("No se pudo mantener la pantalla activa");
-  }
-};
 
 /* =========================
    WebSocket
 ========================= */
 function connect() {
   try {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-      ws.close();
-    }
-  } catch {}
-
-  ws = new WebSocket(WS_URL);
-
-  ws.onopen = () => {
-    if (statusEl) statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => {
-      ws.send(JSON.stringify({ ticks: sym, subscribe: 1 }));
-    });
-  };
-
-  ws.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      if (data.tick) onTick(data.tick);
-    } catch {}
-  };
-
-  ws.onerror = () => {
-    if (statusEl) statusEl.textContent = "Error WS – reconectando...";
-  };
-
-  ws.onclose = () => {
-    if (statusEl) statusEl.textContent = "Desconectado – reconectando...";
-    setTimeout(connect, 1500);
-  };
-}
-
-/* =========================
-   Start
-========================= */
-renderHistory();
-for (const it of history) updateRowChartBtn(it);
-
-updateTickHealthUI();
-updateCountdownUI();
-connect();
+    if (ws && (ws.readyState === WebSo
