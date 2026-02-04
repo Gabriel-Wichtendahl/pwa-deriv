@@ -299,3 +299,38 @@ textarea {
   border-color: var(--neon-cyan);
   box-shadow: 0 0 14px rgba(34,211,238,0.5);
 }
+
+/* =========================
+   Grupo de botones
+========================= */
+.btnGroup {
+  display: flex;
+  gap: 6px;
+}
+
+/* =========================
+   Botones de evaluación
+========================= */
+.evalBtn {
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.evalBtn.active {
+  opacity: 1;
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 12px rgba(34,211,238,0.6);
+}
+
+/* =========================
+   Botón modo NORMAL / FUERTE
+========================= */
+.modeBtn {
+  font-weight: 600;
+}
+
+.modeBtn.active-strong {
+  border-color: var(--neon-orange, #fb923c);
+  box-shadow: 0 0 14px rgba(251,146,60,0.6);
+  color: #fdba74;
+}
