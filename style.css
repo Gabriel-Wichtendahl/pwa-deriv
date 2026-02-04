@@ -109,4 +109,4 @@ textarea{
   border-radius:14px;border:1px solid var(--border)
 }
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
-@media (max-width:480px){.modalCard{inset:6%}}
+@media (max-width:480px){.modalCard{inset:6%}} 
