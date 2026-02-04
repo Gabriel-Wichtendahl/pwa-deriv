@@ -669,6 +669,23 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+function catchUpNextOutcomes() {
+  // para cada señal pendiente, si ya tenemos open/close del minuto siguiente => calculamos flecha
+  for (const it of history) {
+    if (it.nextOutcome) continue;
+
+    const nextMin = it.minute + 1;
+    const oc = candleOC[nextMin]?.[it.symbol];
+    if (!oc || oc.open == null || oc.close == null) continue;
+
+    let outcome = "flat";
+    if (oc.close > oc.open) outcome = "up";
+    else if (oc.close < oc.open) outcome = "down";
+
+    setNextOutcome(it, outcome);
+  }
+}
+
   // outcome para señales del minuto anterior (minute-1)
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
