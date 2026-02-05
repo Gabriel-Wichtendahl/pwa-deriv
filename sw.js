@@ -51,7 +51,7 @@ self.addEventListener("notificationclick", (event) => {
   const url = event.notification?.data?.url || "https://app.deriv.com/dtrader?account=demo";
 
   event.waitUntil((async () => {
-    const allClients = await clients.matchAll({
+    const allClients = await clients.matchAll({ 
       type: "window",
       includeUncontrolled: true
     });
