@@ -110,6 +110,7 @@ function escapeHtml(str) {
 function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
 function rebuildFeedbackFromHistory() {
+  if (!feedbackEl) return;
   let text = "";
   for (const it of history) {
     const vote = it.vote || "";
@@ -118,156 +119,7 @@ function rebuildFeedbackFromHistory() {
     const modeLabel = it.mode || "NORMAL";
     text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | ${comment}\n`;
   }
-  if (feedbackEl) feedbackEl.value = text;
-}
-
-/* =========================
-   ✅ WS request/response (ticks_history backfill)
-========================= */
-let _reqId = 1;
-const _pending = new Map();
-
-function wsRequest(payload, timeoutMs = 4500) {
-  return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== 1) return reject(new Error("WS no listo"));
-    const req_id = _reqId++;
-    _pending.set(req_id, { resolve, reject });
-
-    try {
-      ws.send(JSON.stringify({ ...payload, req_id }));
-    } catch (e) {
-      _pending.delete(req_id);
-      return reject(e);
-    }
-
-    setTimeout(() => {
-      const p = _pending.get(req_id);
-      if (!p) return;
-      _pending.delete(req_id);
-      reject(new Error("Timeout wsRequest"));
-    }, timeoutMs);
-  });
-}
-
-function isHistoryResponse(data) {
-  return !!(data && data.req_id && data.history && Array.isArray(data.history.prices) && Array.isArray(data.history.times));
-}
-function isErrorResponse(data) {
-  return !!(data && data.req_id && data.error);
-}
-
-async function fetchMinuteTicks(symbol, minute) {
-  const start = minute * 60;      // epoch seconds
-  const end = start + 60;
-
-  // 1) Ticks del minuto (0..60)
-  const resIn = await wsRequest({
-    ticks_history: symbol,
-    start,
-    end,
-    style: "ticks",
-    adjust_start_time: 1
-  });
-
-  // 2) Último tick ANTES del minuto (para clavar 0ms igual Deriv)
-  const resPrev = await wsRequest({
-    ticks_history: symbol,
-    end: start,
-    count: 1,
-    style: "ticks"
-  });
-
-  const prices = resIn.history?.prices || [];
-  const times = resIn.history?.times || [];
-
-  const ticks = [];
-  for (let i = 0; i < times.length; i++) {
-    const t = Number(times[i]);
-    const ms = (t - start) * 1000;
-    if (ms < 0 || ms > 60000) continue;
-    ticks.push({ ms, quote: Number(prices[i]) });
-  }
-  ticks.sort((a, b) => a.ms - b.ms);
-
-  // --- NORMALIZACIÓN BORDES (Deriv-like) ---
-
-  // A) Forzar 0ms usando último tick previo (si existe)
-  const prevPriceArr = resPrev.history?.prices || [];
-  const prevPrice = prevPriceArr.length ? Number(prevPriceArr[0]) : null;
-
-  if (prevPrice != null) {
-    if (!ticks.length || ticks[0].ms > 0) {
-      ticks.unshift({ ms: 0, quote: prevPrice });
-    } else {
-      // si hay tick exactamente en 0, lo igualamos al prev (Deriv se ve así)
-      ticks[0].ms = 0;
-      ticks[0].quote = prevPrice;
-    }
-  } else if (ticks.length && ticks[0].ms !== 0) {
-    // fallback: clonar el primero a 0ms
-    ticks.unshift({ ms: 0, quote: ticks[0].quote });
-  }
-
-  // B) Forzar 60000ms con el último tick dentro del minuto
-  if (ticks.length) {
-    const last = ticks[ticks.length - 1];
-    if (last.ms < 60000) ticks.push({ ms: 60000, quote: last.quote });
-    else if (last.ms > 60000) last.ms = 60000; // clamp
-  }
-
-  // C) Limpiar duplicados de ms (opcional pero prolijo)
-  const out = [];
-  let lastMs = null;
-  for (const t of ticks) {
-    const m = Math.max(0, Math.min(60000, Math.round(t.ms)));
-    if (m === lastMs) {
-      // si repite ms, reemplazamos por el más nuevo
-      out[out.length - 1] = { ms: m, quote: t.quote };
-    } else {
-      out.push({ ms: m, quote: t.quote });
-      lastMs = m;
-    }
-  }
-
-  return out;
-}
-
-  const prices = res.history.prices || [];
-  const times = res.history.times || [];
-
-  const ticks = [];
-  for (let i = 0; i < times.length; i++) {
-    const t = Number(times[i]);
-    const ms = (t - start) * 1000;
-    if (ms < 0 || ms > 60000) continue;
-    ticks.push({ ms, quote: Number(prices[i]) });
-  }
-  ticks.sort((a, b) => a.ms - b.ms);
-  return ticks;
-}
-
-function needsBackfill(item) {
-  if (!item || !Array.isArray(item.ticks)) return true;
-  if (item.ticks.length < 5) return true;
-  const first = item.ticks[0];
-  if (!first || typeof first.ms !== "number") return true;
-  return first.ms > 1500; // si arranca tarde, falta info
-}
-
-async function backfillSignalTicks(item) {
-  try {
-    if (!item) return false;
-    if (!needsBackfill(item)) return true;
-
-    const full = await fetchMinuteTicks(item.symbol, item.minute);
-    if (!full || full.length < 2) return false;
-
-    item.ticks = full;
-    saveHistory(history);
-    return true;
-  } catch {
-    return false;
-  }
+  feedbackEl.value = text;
 }
 
 /* Theme */
@@ -323,8 +175,8 @@ function applyTheme(theme) {
   soundEnabled = loadBool("soundEnabled", false);
   setBtnActive(soundBtn, soundEnabled);
   if (soundBtn) soundBtn.textContent = soundEnabled ? "🔊 Sonido ON" : "🔇 Sonido OFF";
+  if (!soundBtn || !sound) return;
 
-  if (!soundBtn) return;
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
       try {
@@ -359,7 +211,7 @@ function applyTheme(theme) {
 })();
 
 /* Copy feedback */
-if (copyBtn) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
+if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
 
 /* Clear history */
 function clearHistory() {
@@ -402,19 +254,16 @@ function showNotification(symbol, direction, modeLabel) {
 function openChartModal(item) {
   if (!item.minuteComplete) return;
   modalCurrentItem = item;
-  if (!chartModal) return;
+  if (!chartModal || !modalTitle || !modalSub) return;
 
   modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
   modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  backfillSignalTicks(item).then(() => {
-    if (modalSub) modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      drawDerivLikeChart(minuteCanvas, item.ticks || []);
-    }));
-  });
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    drawDerivLikeChart(minuteCanvas, item.ticks || []);
+  }));
 }
 function closeChartModal() {
   if (!chartModal) return;
@@ -452,8 +301,9 @@ function drawDerivLikeChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
   const last = pts[pts.length - 1];
-if (last.ms !== 60000) pts.push({ ms: 60000, quote: last.quote });
+  if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
   const quotes = pts.map(p => p.quote);
   let min = Math.min(...quotes), max = Math.max(...quotes);
@@ -637,11 +487,31 @@ function updateCountdownUI() {
 }
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
-/* Finalize minute: unlock chart + compute next candle + backfill full minute */
+/* ✅ IMPORTANTE: completar ticks 0–60 del minuto de la señal al finalizar el minuto */
+function hydrateSignalTicksForMinute(minute) {
+  const data = minuteData[minute];
+  if (!data) return false;
+
+  let changed = false;
+  for (const it of history) {
+    if (it.minute !== minute) continue;
+
+    const full = data[it.symbol];
+    if (Array.isArray(full) && full.length >= 2) {
+      // Guardamos el minuto COMPLETO (0–60) para que el gráfico sea “como Deriv”
+      it.ticks = full.slice();
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/* Finalize minute: unlock chart + compute next candle */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -658,7 +528,11 @@ function finalizeMinute(minute) {
     }
   }
 
-  let changed = false;
+  // ✅ completar ticks del minuto (0–60) para las señales de ESTE minuto
+  const ticksChanged = hydrateSignalTicksForMinute(minute);
+
+  // marcar minuto completo (habilita candado/gráfico)
+  let changed = ticksChanged;
   for (const it of history) {
     if (it.minute === minute && !it.minuteComplete) {
       it.minuteComplete = true;
@@ -668,28 +542,8 @@ function finalizeMinute(minute) {
   }
   if (changed) saveHistory(history);
 
-  // ✅ Backfill automático al cerrar el minuto: guarda ticks completos 0–60 del minuto real
-  (async () => {
-    for (const it of history) {
-      if (it.minute === minute) {
-        const ok = await backfillSignalTicks(it);
-
-        // si justo está abierto el modal de esa señal, redibuja
-        if (
-          ok &&
-          modalCurrentItem &&
-          modalCurrentItem.id === it.id &&
-          chartModal &&
-          !chartModal.classList.contains("hidden")
-        ) {
-          if (modalSub) modalSub.textContent = `${it.time} | ticks: ${(it.ticks || []).length}`;
-          drawDerivLikeChart(minuteCanvas, it.ticks || []);
-        }
-      }
-    }
-  })();
-
   delete candleOC[minute - 3];
+  delete minuteData[minute - 2];
 }
 
 /* Tick flow */
@@ -735,8 +589,6 @@ function onTick(tick) {
     const ok = evaluateMinute(minute);
     if (!ok) scheduleRetry(minute);
   }
-
-  delete minuteData[minute - 2];
 }
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
@@ -753,8 +605,8 @@ function evaluateMinute(minute) {
   const candidates = [];
   let readySymbols = 0;
 
-  for (const symbol of SYMBOLS) {
-    const ticks = data[symbol] || [];
+  for (const sym of SYMBOLS) {
+    const ticks = data[sym] || [];
     if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
 
@@ -767,7 +619,7 @@ function evaluateMinute(minute) {
     vol = vol / Math.max(1, prices.length - 1);
 
     const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol, move, score, ticks });
+    candidates.push({ symbol: sym, move, score, ticks });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
@@ -797,7 +649,8 @@ function addSignal(minute, symbol, direction, ticks) {
     mode: modeLabel,
     vote: "",
     comment: "",
-    ticks: Array.isArray(ticks) ? ticks : [],
+    // Guardamos lo que haya al momento de la señal; luego se “hidrata” al cierre del minuto.
+    ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
     minuteComplete: false
   };
@@ -814,7 +667,7 @@ function addSignal(minute, symbol, direction, ticks) {
   if (signalsEl) signalsEl.prepend(buildRow(item));
   updateRowChartBtn(item);
 
-  if (soundEnabled) { sound.currentTime = 0; sound.play().catch(() => {}); }
+  if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel);
@@ -839,7 +692,12 @@ if (wakeBtn) wakeBtn.onclick = async () => {
 
 /* WebSocket */
 function connect() {
-  ws = new WebSocket(WS_URL);
+  try {
+    ws = new WebSocket(WS_URL);
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
+    return;
+  }
 
   ws.onopen = () => {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
@@ -849,21 +707,6 @@ function connect() {
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-
-      // ✅ Resolver requests (ticks_history)
-      if (isHistoryResponse(data)) {
-        const p = _pending.get(data.req_id);
-        if (p) { _pending.delete(data.req_id); p.resolve(data); }
-        return;
-      }
-
-      // ✅ Rechazar requests con error
-      if (isErrorResponse(data)) {
-        const p = _pending.get(data.req_id);
-        if (p) { _pending.delete(data.req_id); p.reject(data.error); }
-        return;
-      }
-
       if (data.tick) onTick(data.tick);
     } catch {}
   };
@@ -880,4 +723,4 @@ renderHistory();
 for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
 updateTickHealthUI();
 updateCountdownUI();
-connect(); 
+connect();
