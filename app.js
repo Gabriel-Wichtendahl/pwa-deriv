@@ -160,13 +160,77 @@ async function fetchMinuteTicks(symbol, minute) {
   const start = minute * 60;      // epoch seconds
   const end = start + 60;
 
-  const res = await wsRequest({
+  // 1) Ticks del minuto (0..60)
+  const resIn = await wsRequest({
     ticks_history: symbol,
     start,
     end,
     style: "ticks",
     adjust_start_time: 1
   });
+
+  // 2) Último tick ANTES del minuto (para clavar 0ms igual Deriv)
+  const resPrev = await wsRequest({
+    ticks_history: symbol,
+    end: start,
+    count: 1,
+    style: "ticks"
+  });
+
+  const prices = resIn.history?.prices || [];
+  const times = resIn.history?.times || [];
+
+  const ticks = [];
+  for (let i = 0; i < times.length; i++) {
+    const t = Number(times[i]);
+    const ms = (t - start) * 1000;
+    if (ms < 0 || ms > 60000) continue;
+    ticks.push({ ms, quote: Number(prices[i]) });
+  }
+  ticks.sort((a, b) => a.ms - b.ms);
+
+  // --- NORMALIZACIÓN BORDES (Deriv-like) ---
+
+  // A) Forzar 0ms usando último tick previo (si existe)
+  const prevPriceArr = resPrev.history?.prices || [];
+  const prevPrice = prevPriceArr.length ? Number(prevPriceArr[0]) : null;
+
+  if (prevPrice != null) {
+    if (!ticks.length || ticks[0].ms > 0) {
+      ticks.unshift({ ms: 0, quote: prevPrice });
+    } else {
+      // si hay tick exactamente en 0, lo igualamos al prev (Deriv se ve así)
+      ticks[0].ms = 0;
+      ticks[0].quote = prevPrice;
+    }
+  } else if (ticks.length && ticks[0].ms !== 0) {
+    // fallback: clonar el primero a 0ms
+    ticks.unshift({ ms: 0, quote: ticks[0].quote });
+  }
+
+  // B) Forzar 60000ms con el último tick dentro del minuto
+  if (ticks.length) {
+    const last = ticks[ticks.length - 1];
+    if (last.ms < 60000) ticks.push({ ms: 60000, quote: last.quote });
+    else if (last.ms > 60000) last.ms = 60000; // clamp
+  }
+
+  // C) Limpiar duplicados de ms (opcional pero prolijo)
+  const out = [];
+  let lastMs = null;
+  for (const t of ticks) {
+    const m = Math.max(0, Math.min(60000, Math.round(t.ms)));
+    if (m === lastMs) {
+      // si repite ms, reemplazamos por el más nuevo
+      out[out.length - 1] = { ms: m, quote: t.quote };
+    } else {
+      out.push({ ms: m, quote: t.quote });
+      lastMs = m;
+    }
+  }
+
+  return out;
+}
 
   const prices = res.history.prices || [];
   const times = res.history.times || [];
