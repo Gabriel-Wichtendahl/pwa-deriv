@@ -817,4 +817,4 @@ renderHistory();
 for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
 updateTickHealthUI();
 updateCountdownUI();
-connect();
+connect(); 
