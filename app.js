@@ -152,7 +152,6 @@ function wsRequest(payload, timeoutMs = 4500) {
 function isHistoryResponse(data) {
   return !!(data && data.req_id && data.history && Array.isArray(data.history.prices) && Array.isArray(data.history.times));
 }
-
 function isErrorResponse(data) {
   return !!(data && data.req_id && data.error);
 }
@@ -179,7 +178,6 @@ async function fetchMinuteTicks(symbol, minute) {
     if (ms < 0 || ms > 60000) continue;
     ticks.push({ ms, quote: Number(prices[i]) });
   }
-
   ticks.sort((a, b) => a.ms - b.ms);
   return ticks;
 }
@@ -189,7 +187,7 @@ function needsBackfill(item) {
   if (item.ticks.length < 5) return true;
   const first = item.ticks[0];
   if (!first || typeof first.ms !== "number") return true;
-  return first.ms > 1500; // si el primer tick arranca "tarde", faltan ticks
+  return first.ms > 1500; // si arranca tarde, falta info
 }
 
 async function backfillSignalTicks(item) {
@@ -347,7 +345,6 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  // ✅ Backfill antes de dibujar, así se ve el minuto completo como Deriv
   backfillSignalTicks(item).then(() => {
     if (modalSub) modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -577,7 +574,7 @@ function updateCountdownUI() {
 }
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
-/* Finalize minute: unlock chart + compute next candle */
+/* Finalize minute: unlock chart + compute next candle + backfill full minute */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
@@ -608,13 +605,13 @@ function finalizeMinute(minute) {
   }
   if (changed) saveHistory(history);
 
-  // ✅ Backfill automático al cerrar el minuto: queda “como Deriv”
+  // ✅ Backfill automático al cerrar el minuto: guarda ticks completos 0–60 del minuto real
   (async () => {
     for (const it of history) {
       if (it.minute === minute) {
         const ok = await backfillSignalTicks(it);
 
-        // si justo está abierto el modal de esa señal, redibujar con ticks completos
+        // si justo está abierto el modal de esa señal, redibuja
         if (
           ok &&
           modalCurrentItem &&
@@ -793,24 +790,17 @@ function connect() {
       // ✅ Resolver requests (ticks_history)
       if (isHistoryResponse(data)) {
         const p = _pending.get(data.req_id);
-        if (p) {
-          _pending.delete(data.req_id);
-          p.resolve(data);
-        }
+        if (p) { _pending.delete(data.req_id); p.resolve(data); }
         return;
       }
 
       // ✅ Rechazar requests con error
       if (isErrorResponse(data)) {
         const p = _pending.get(data.req_id);
-        if (p) {
-          _pending.delete(data.req_id);
-          p.reject(data.error);
-        }
+        if (p) { _pending.delete(data.req_id); p.reject(data.error); }
         return;
       }
 
-      // ticks live
       if (data.tick) onTick(data.tick);
     } catch {}
   };
