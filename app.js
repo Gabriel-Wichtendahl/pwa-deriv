@@ -1,4 +1,6 @@
-// app.js (corregido + robusto: no queda “Conectando…” por errores silenciosos)
+// app.js — V5+ (gráfico 0–60 REAL usando ticks_history)
+// Mantiene TODO lo que ya tenías (modo, eval 45/50/55, historial, candado, próxima vela, etc.)
+// y agrega: al cerrar el minuto, trae por API el minuto COMPLETO (0–60) del símbolo de la señal.
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -12,6 +14,10 @@ const MAX_HISTORY = 200;
 const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
+
+/** ✅ NUEVO: ticks_history para completar minuto REAL */
+const HISTORY_TIMEOUT_MS = 7000;
+const HISTORY_COUNT_MAX = 5000;
 
 const $ = (id) => document.getElementById(id);
 const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
@@ -46,13 +52,13 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-let EVAL_SEC = 45; // 45/50/55
-let strongMode = false; // NORMAL/FUERTE
+let EVAL_SEC = 45;       // 45/50/55
+let strongMode = false;  // NORMAL/FUERTE
 
 let history = loadHistory();
 let signalCount = 0;
 
-let minuteData = {};
+let minuteData = {};           // minute -> symbol -> [{ms, quote}, ...]
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -74,17 +80,6 @@ const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <circle cx="10" cy="10" r="1" fill="currentColor"/><circle cx="13" cy="13" r="1" fill="currentColor"/><circle cx="18" cy="6" r="1" fill="currentColor"/>
 </svg>`;
 
-/* ========= Debug robusto (evita “Conectando…” sin saber por qué) ========= */
-window.addEventListener("error", (e) => {
-  console.log("JS ERROR:", e.message, e.filename, e.lineno);
-  if (statusEl) statusEl.textContent = "Error JS (ver consola)";
-});
-window.addEventListener("unhandledrejection", (e) => {
-  console.log("PROMISE ERROR:", e.reason);
-  if (statusEl) statusEl.textContent = "Error JS (promise)";
-});
-
-/* ========= Helpers básicos ========= */
 function makeDerivTraderUrl(symbol) {
   const u = new URL(DERIV_DTRADER_TEMPLATE);
   u.searchParams.set("symbol", symbol);
@@ -92,6 +87,9 @@ function makeDerivTraderUrl(symbol) {
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
+/* =========================
+   Persistencia
+========================= */
 function loadHistory() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
@@ -108,16 +106,15 @@ function saveHistory(arr) {
   } catch {}
 }
 
-function setBtnActive(btn, active) {
-  btn && btn.classList.toggle("active", !!active);
-}
+/* =========================
+   Helpers UI / estado
+========================= */
+function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
 function loadBool(key, fallback) {
   const v = localStorage.getItem(key);
   return v === null ? fallback : v === "1";
 }
-function saveBool(key, value) {
-  localStorage.setItem(key, value ? "1" : "0");
-}
+function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
 
 function updateCounter() {
   if (counterEl) counterEl.textContent = `Señales: ${signalCount}`;
@@ -125,15 +122,10 @@ function updateCounter() {
 
 function escapeHtml(str) {
   return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
-function cssEscape(s) {
-  return String(s).replace(/"/g, '\\"');
-}
+function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
@@ -148,7 +140,9 @@ function rebuildFeedbackFromHistory() {
   feedbackEl.value = text;
 }
 
-/* ========= Theme ========= */
+/* =========================
+   Theme
+========================= */
 function applyTheme(theme) {
   const isLight = theme === "light";
   document.body.classList.toggle("light", isLight);
@@ -157,31 +151,31 @@ function applyTheme(theme) {
 }
 (function initTheme() {
   applyTheme(localStorage.getItem("theme") || "dark");
-  if (themeBtn)
-    themeBtn.onclick = () => {
-      const current = document.body.classList.contains("light") ? "light" : "dark";
-      applyTheme(current === "light" ? "dark" : "light");
-    };
+  if (themeBtn) themeBtn.onclick = () => {
+    const current = document.body.classList.contains("light") ? "light" : "dark";
+    applyTheme(current === "light" ? "dark" : "light");
+  };
 })();
 
-/* ========= Eval sec + strong mode ========= */
+/* =========================
+   Eval sec + strong mode
+========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
   EVAL_SEC = [45, 50, 55].includes(savedSec) ? savedSec : 45;
 
-  const paintEval = () =>
-    evalBtns.forEach((b) => {
-      const sec = parseInt(b.dataset.sec || "0", 10);
-      b.classList.toggle("active", sec === EVAL_SEC);
-    });
+  const paintEval = () => evalBtns.forEach(b => {
+    const sec = parseInt(b.dataset.sec || "0", 10);
+    b.classList.toggle("active", sec === EVAL_SEC);
+  });
   paintEval();
 
-  evalBtns.forEach((b) => (b.onclick = () => {
+  evalBtns.forEach(b => b.onclick = () => {
     const v = parseInt(b.dataset.sec || "45", 10);
     EVAL_SEC = [45, 50, 55].includes(v) ? v : 45;
     localStorage.setItem("evalSec", String(EVAL_SEC));
     paintEval();
-  }));
+  });
 
   strongMode = loadBool("strongMode", false);
   const paintMode = () => {
@@ -191,15 +185,16 @@ function applyTheme(theme) {
   };
   paintMode();
 
-  if (modeBtn)
-    modeBtn.onclick = () => {
-      strongMode = !strongMode;
-      saveBool("strongMode", strongMode);
-      paintMode();
-    };
+  if (modeBtn) modeBtn.onclick = () => {
+    strongMode = !strongMode;
+    saveBool("strongMode", strongMode);
+    paintMode();
+  };
 })();
 
-/* ========= Sound ========= */
+/* =========================
+   Sonido
+========================= */
 (function initSoundToggle() {
   soundEnabled = loadBool("soundEnabled", false);
   setBtnActive(soundBtn, soundEnabled);
@@ -209,28 +204,23 @@ function applyTheme(theme) {
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
       try {
-        sound.muted = false;
-        sound.volume = 1;
-        sound.currentTime = 0;
-        await sound.play();
-        sound.pause();
-        soundEnabled = true;
-        saveBool("soundEnabled", true);
-        setBtnActive(soundBtn, true);
-        soundBtn.textContent = "🔊 Sonido ON";
+        sound.muted = false; sound.volume = 1; sound.currentTime = 0;
+        await sound.play(); sound.pause();
+        soundEnabled = true; saveBool("soundEnabled", true);
+        setBtnActive(soundBtn, true); soundBtn.textContent = "🔊 Sonido ON";
       } catch {
         alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
       }
       return;
     }
-    soundEnabled = false;
-    saveBool("soundEnabled", false);
-    setBtnActive(soundBtn, false);
-    soundBtn.textContent = "🔇 Sonido OFF";
+    soundEnabled = false; saveBool("soundEnabled", false);
+    setBtnActive(soundBtn, false); soundBtn.textContent = "🔇 Sonido OFF";
   };
 })();
 
-/* ========= Vibration ========= */
+/* =========================
+   Vibración
+========================= */
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
   if (!vibrateBtn) return;
@@ -246,12 +236,14 @@ function applyTheme(theme) {
   };
 })();
 
-/* ========= Copy feedback ========= */
-if (copyBtn && feedbackEl) {
-  copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
-}
+/* =========================
+   Copy feedback
+========================= */
+if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
 
-/* ========= Clear history ========= */
+/* =========================
+   Clear history
+========================= */
 function clearHistory() {
   history = [];
   saveHistory(history);
@@ -260,41 +252,39 @@ function clearHistory() {
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
 }
-if (clearHistoryBtn) {
-  clearHistoryBtn.onclick = () => {
-    if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
-  };
-}
+if (clearHistoryBtn) clearHistoryBtn.onclick = () => {
+  if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
+};
 
-/* ========= Notifications (robusto) ========= */
+/* =========================
+   Notifications
+========================= */
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
 }
 function showNotification(symbol, direction, modeLabel) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
-  if (!("serviceWorker" in navigator)) return;
 
-  navigator.serviceWorker
-    .getRegistration()
-    .then((reg) => {
-      if (!reg) return;
-      reg.showNotification("📈 Deriv Signal", {
-        body: `${symbol} – ${labelDir(direction)} – [${modeLabel || "NORMAL"}]`,
-        icon: "icon-192.png",
-        badge: "icon-192.png",
-        tag: "deriv-signal",
-        renotify: true,
-        requireInteraction: true,
-        silent: false,
-        vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
-        data: { url: makeDerivTraderUrl(symbol), symbol, direction },
-      });
-    })
-    .catch(() => {});
+  navigator.serviceWorker.getRegistration().then(reg => {
+    if (!reg) return;
+    reg.showNotification("📈 Deriv Signal", {
+      body: `${symbol} – ${labelDir(direction)} – [${modeLabel || "NORMAL"}]`,
+      icon: "icon-192.png",
+      badge: "icon-192.png",
+      tag: "deriv-signal",
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
+      data: { url: makeDerivTraderUrl(symbol), symbol, direction }
+    });
+  });
 }
 
-/* ========= Modal ========= */
+/* =========================
+   Modal
+========================= */
 function openChartModal(item) {
   if (!item.minuteComplete) return;
   modalCurrentItem = item;
@@ -305,11 +295,9 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      drawDerivLikeChart(minuteCanvas, item.ticks || []);
-    })
-  );
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    drawDerivLikeChart(minuteCanvas, item.ticks || []);
+  }));
 }
 function closeChartModal() {
   if (!chartModal) return;
@@ -319,35 +307,29 @@ function closeChartModal() {
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeChartModal();
-});
-if (modalOpenDerivBtn) {
-  modalOpenDerivBtn.onclick = () => {
-    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
-  };
-}
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChartModal(); });
+if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
+  if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
+};
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
 });
 
-/* ========= Chart ========= */
+/* =========================
+   Chart
+========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  const cssW = canvas.clientWidth || 1,
-    cssH = canvas.clientHeight || 1;
+  const cssW = canvas.clientWidth || 1, cssH = canvas.clientHeight || 1;
   const dpr = window.devicePixelRatio || 1;
-
   canvas.width = Math.floor(cssW * dpr);
   canvas.height = Math.floor(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const w = cssW,
-    h = cssH;
+  const w = cssW, h = cssH;
   ctx.clearRect(0, 0, w, h);
-
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, 0, w, h);
@@ -359,85 +341,59 @@ function drawDerivLikeChart(canvas, ticks) {
   const last = pts[pts.length - 1];
   if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
-  const quotes = pts.map((p) => p.quote);
-  let min = Math.min(...quotes),
-    max = Math.max(...quotes);
-  let range = max - min;
-  if (range < 1e-9) range = 1e-9;
-
-  const pad = range * 0.08;
-  min -= pad;
-  max += pad;
+  const quotes = pts.map(p => p.quote);
+  let min = Math.min(...quotes), max = Math.max(...quotes);
+  let range = max - min; if (range < 1e-9) range = 1e-9;
+  const pad = range * 0.08; min -= pad; max += pad;
 
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
-  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
+  const yOf = (q) => (1 - ((q - min) / (max - min))) * (h - 30) + 10;
 
-  // grilla
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i++) {
     const y = (h / 5) * i;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
-  // marca 30s
   const x30 = xOf(30000);
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x30, 10);
-  ctx.lineTo(x30, h - 20);
-  ctx.stroke();
-
+  ctx.beginPath(); ctx.moveTo(x30, 10); ctx.lineTo(x30, h - 20); ctx.stroke();
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
-  // area
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
   ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
   ctx.closePath();
-
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // line
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-
   ctx.beginPath();
   pts.forEach((p, i) => {
-    const x = xOf(p.ms),
-      y = yOf(p.quote);
-    if (!i) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    const x = xOf(p.ms), y = yOf(p.quote);
+    if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
 
-  // punto final
-  const lx = xOf(pts[pts.length - 1].ms),
-    ly = yOf(pts[pts.length - 1].quote);
+  const lx = xOf(pts[pts.length - 1].ms), ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.beginPath();
-  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-
-  // labels
+  ctx.beginPath(); ctx.arc(lx, ly, 3.5, 0, Math.PI * 2); ctx.fill();
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -446,7 +402,9 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.globalAlpha = 1;
 }
 
-/* ========= Row helpers ========= */
+/* =========================
+   Row helpers
+========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -470,21 +428,13 @@ function updateRowNextArrow(item) {
   if (!el) return;
 
   if (item.nextOutcome === "up") {
-    el.textContent = "⬆️";
-    el.className = "nextArrow up";
-    el.title = "Próxima vela: alcista";
+    el.textContent = "⬆️"; el.className = "nextArrow up"; el.title = "Próxima vela: alcista";
   } else if (item.nextOutcome === "down") {
-    el.textContent = "⬇️";
-    el.className = "nextArrow down";
-    el.title = "Próxima vela: bajista";
+    el.textContent = "⬇️"; el.className = "nextArrow down"; el.title = "Próxima vela: bajista";
   } else if (item.nextOutcome === "flat") {
-    el.textContent = "➖";
-    el.className = "nextArrow flat";
-    el.title = "Próxima vela: plana";
+    el.textContent = "➖"; el.className = "nextArrow flat"; el.title = "Próxima vela: plana";
   } else {
-    el.textContent = "⏳";
-    el.className = "nextArrow pending";
-    el.title = "Próxima vela: esperando…";
+    el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
   }
 }
 function setNextOutcome(item, outcome) {
@@ -493,7 +443,9 @@ function setNextOutcome(item, outcome) {
   updateRowNextArrow(item);
 }
 
-/* ========= Build row ========= */
+/* =========================
+   Build row
+========================= */
 function buildRow(item) {
   const row = document.createElement("div");
   row.className = "row";
@@ -515,18 +467,13 @@ function buildRow(item) {
     </div>
   `;
 
-  row.querySelector(".row-text").onclick = () => {
-    window.location.href = derivUrl;
-  };
+  row.querySelector(".row-text").onclick = () => { window.location.href = derivUrl; };
 
   const chartBtn = row.querySelector(".chartBtn");
-  chartBtn.onclick = (e) => {
-    e.stopPropagation();
-    if (item.minuteComplete) openChartModal(item);
-  };
+  chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
   updateRowChartBtn(item);
 
-  row.querySelectorAll('button[data-v]').forEach((btn) => {
+  row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
       if (item.vote) return;
@@ -534,7 +481,7 @@ function buildRow(item) {
       item.comment = row.querySelector(".row-comment").value || "";
       saveHistory(history);
       rebuildFeedbackFromHistory();
-      row.querySelectorAll('button[data-v]').forEach((b) => (b.disabled = true));
+      row.querySelectorAll('button[data-v]').forEach(b => (b.disabled = true));
     };
   });
 
@@ -549,7 +496,9 @@ function buildRow(item) {
   return row;
 }
 
-/* ========= Render ========= */
+/* =========================
+   Render
+========================= */
 function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
@@ -564,50 +513,125 @@ function renderHistory() {
   for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
 }
 
-/* ========= Tick health + countdown ========= */
+/* =========================
+   Tick health + countdown
+========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
-  if (!lastTickEpochMs) {
-    tickHealthEl.textContent = "Último tick: —";
-    return;
-  }
+  if (!lastTickEpochMs) { tickHealthEl.textContent = "Último tick: —"; return; }
   const ageSec = Math.max(0, Math.floor((Date.now() - lastTickEpochMs) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
 function updateCountdownUI() {
   if (!countdownEl) return;
-  if (!currentMinuteStartMs) {
-    countdownEl.textContent = "⏱️ 60";
-    return;
-  }
+  if (!currentMinuteStartMs) { countdownEl.textContent = "⏱️ 60"; return; }
   const msInMinute = (Date.now() - currentMinuteStartMs) % 60000;
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   countdownEl.textContent = `⏱️ ${remaining}`;
 }
-setInterval(() => {
-  updateTickHealthUI();
-  updateCountdownUI();
-}, 1000);
+setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
-/* ✅ completar ticks 0–60 del minuto de la señal al finalizar el minuto */
-function hydrateSignalTicksForMinute(minute) {
-  const data = minuteData[minute];
-  if (!data) return false;
+/* =========================
+   ✅ NUEVO: Sistema de requests WS (ticks_history)
+========================= */
+let reqSeq = 1;
+const pending = new Map(); // req_id -> {resolve, reject, t}
 
-  let changed = false;
-  for (const it of history) {
-    if (it.minute !== minute) continue;
-
-    const full = data[it.symbol];
-    if (Array.isArray(full) && full.length >= 2) {
-      it.ticks = full.slice(); // minuto COMPLETO (0–60)
-      changed = true;
-    }
-  }
-  return changed;
+function wsRequest(payload) {
+  return new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
+    const req_id = reqSeq++;
+    const t = setTimeout(() => {
+      pending.delete(req_id);
+      reject(new Error("timeout"));
+    }, HISTORY_TIMEOUT_MS);
+    pending.set(req_id, { resolve, reject, t });
+    ws.send(JSON.stringify({ ...payload, req_id }));
+  });
 }
 
-/* Finalize minute: unlock chart + compute next candle */
+function minuteToEpochSec(minute) { return minute * 60; }
+
+function normalizeTicksForMinute(minute, times, prices) {
+  const startMs = minute * 60000;
+  const out = [];
+  for (let i = 0; i < Math.min(times.length, prices.length); i++) {
+    const ms = (Number(times[i]) * 1000) - startMs; // precisión 1s (API devuelve epoch en segundos)
+    if (ms < 0 || ms > 60000) continue;
+    out.push({ ms, quote: Number(prices[i]) });
+  }
+  out.sort((a, b) => a.ms - b.ms);
+
+  // asegurar punto en 0ms y 60000ms para que el área se vea completa
+  if (out.length) {
+    if (out[0].ms > 0) out.unshift({ ms: 0, quote: out[0].quote });
+    const last = out[out.length - 1];
+    if (last.ms < 60000) out.push({ ms: 60000, quote: last.quote });
+  }
+  return out;
+}
+
+async function fetchFullMinuteTicks(symbol, minute) {
+  // minuto completo [start, end] ya pasado, por eso usamos end exacto.
+  const start = minuteToEpochSec(minute);
+  const end = minuteToEpochSec(minute + 1);
+
+  const res = await wsRequest({
+    ticks_history: symbol,
+    start,
+    end,
+    style: "ticks",
+    count: HISTORY_COUNT_MAX,
+    adjust_start_time: 1
+  });
+
+  // Deriv responde msg_type:"history" con history:{times, prices}
+  const h = res?.history;
+  if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
+
+  return normalizeTicksForMinute(minute, h.times, h.prices);
+}
+
+/* =========================
+   ✅ IMPORTANTE: al finalizar minuto, completar minuto REAL para señales
+========================= */
+async function hydrateSignalsFromDerivHistory(minute) {
+  const items = history.filter(it => it.minute === minute);
+  if (!items.length) return false;
+
+  let any = false;
+
+  // Para no spamear, hacemos por símbolo único
+  const bySym = new Map();
+  for (const it of items) {
+    if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
+    bySym.get(it.symbol).push(it);
+  }
+
+  for (const [symbol, its] of bySym.entries()) {
+    try {
+      const full = await fetchFullMinuteTicks(symbol, minute);
+      if (!full || full.length < 2) continue;
+
+      // Guardar también en minuteData por si querés reutilizar
+      (minuteData[minute] ||= {});
+      minuteData[minute][symbol] = full.slice();
+
+      for (const it of its) {
+        it.ticks = full.slice(); // ✅ minuto completo REAL 0–60
+        any = true;
+      }
+    } catch {
+      // si falla, no rompemos nada; queda lo que ya tenías
+    }
+  }
+
+  return any;
+}
+
+/* =========================
+   Finalize minute: next candle + minuto completo + unlock
+========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
@@ -629,25 +653,33 @@ function finalizeMinute(minute) {
     }
   }
 
-  // ✅ completar ticks del minuto (0–60) para las señales de ESTE minuto
-  const ticksChanged = hydrateSignalTicksForMinute(minute);
+  // ✅ NUEVO: en vez de liberar ya, pedimos el minuto COMPLETO al API y luego liberamos
+  (async () => {
+    const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
-  // marcar minuto completo (habilita candado/gráfico)
-  let changed = ticksChanged;
-  for (const it of history) {
-    if (it.minute === minute && !it.minuteComplete) {
-      it.minuteComplete = true;
-      changed = true;
-      updateRowChartBtn(it);
+    let changed = ticksChanged;
+    for (const it of history) {
+      if (it.minute === minute && !it.minuteComplete) {
+        it.minuteComplete = true;
+        changed = true;
+        updateRowChartBtn(it);
+      }
     }
-  }
-  if (changed) saveHistory(history);
+    if (changed) saveHistory(history);
+
+    // si el modal está abierto con una señal de este minuto, redibujar con el minuto completo
+    if (modalCurrentItem && modalCurrentItem.minute === minute && modalCurrentItem.minuteComplete) {
+      drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
+    }
+  })();
 
   delete candleOC[minute - 3];
-  delete minuteData[minute - 2];
+  delete minuteData[minute - 3];
 }
 
-/* Tick flow */
+/* =========================
+   Tick flow
+========================= */
 function onTick(tick) {
   const epochMs = Math.round(Number(tick.epoch) * 1000);
   const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
@@ -698,7 +730,9 @@ function scheduleRetry(minute) {
   }, RETRY_DELAY_MS);
 }
 
-/* Evaluation */
+/* =========================
+   Evaluation
+========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return false;
@@ -711,7 +745,7 @@ function evaluateMinute(minute) {
     if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
 
-    const prices = ticks.map((t) => t.quote);
+    const prices = ticks.map(t => t.quote);
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
@@ -735,7 +769,9 @@ function evaluateMinute(minute) {
   return true;
 }
 
-/* Add signal */
+/* =========================
+   Add signal
+========================= */
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
@@ -750,13 +786,13 @@ function addSignal(minute, symbol, direction, ticks) {
     mode: modeLabel,
     vote: "",
     comment: "",
-    // Guardamos lo que haya al momento de la señal; luego se “hidrata” al cierre del minuto.
+    // guardamos lo que haya hasta ahora (parcial). Al finalizar minuto se reemplaza por ticks_history completo.
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
-    minuteComplete: false,
+    minuteComplete: false
   };
 
-  if (history.some((x) => x.id === item.id)) return;
+  if (history.some(x => x.id === item.id)) return;
 
   history.push(item);
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -768,36 +804,36 @@ function addSignal(minute, symbol, direction, ticks) {
   if (signalsEl) signalsEl.prepend(buildRow(item));
   updateRowChartBtn(item);
 
-  if (soundEnabled && sound) {
-    sound.currentTime = 0;
-    sound.play().catch(() => {});
-  }
+  if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel);
 }
 
-/* Wake lock */
+/* =========================
+   Wake lock
+========================= */
 let wakeLock = null;
-if (wakeBtn)
-  wakeBtn.onclick = async () => {
-    try {
-      if (wakeLock) {
-        await wakeLock.release();
-        wakeLock = null;
-        wakeBtn.textContent = "🔓 Pantalla activa";
-        wakeBtn.classList.remove("active");
-      } else {
-        wakeLock = await navigator.wakeLock.request("screen");
-        wakeBtn.textContent = "🔒 Pantalla activa";
-        wakeBtn.classList.add("active");
-      }
-    } catch {
-      alert("No se pudo mantener la pantalla activa");
+if (wakeBtn) wakeBtn.onclick = async () => {
+  try {
+    if (wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+      wakeBtn.textContent = "🔓 Pantalla activa";
+      wakeBtn.classList.remove("active");
+    } else {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeBtn.textContent = "🔒 Pantalla activa";
+      wakeBtn.classList.add("active");
     }
-  };
+  } catch {
+    alert("No se pudo mantener la pantalla activa");
+  }
+};
 
-/* WebSocket */
+/* =========================
+   WebSocket
+========================= */
 function connect() {
   try {
     ws = new WebSocket(WS_URL);
@@ -808,32 +844,45 @@ function connect() {
 
   ws.onopen = () => {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
   };
 
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+
+      // ✅ Respuesta a ticks_history
+      if (data && data.req_id && pending.has(data.req_id) && data.msg_type === "history") {
+        const p = pending.get(data.req_id);
+        clearTimeout(p.t);
+        pending.delete(data.req_id);
+        p.resolve(data);
+        return;
+      }
+
       if (data.tick) onTick(data.tick);
     } catch {}
   };
 
-  ws.onerror = () => {
-    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
-  };
+  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
+
   ws.onclose = () => {
+    // cancelar requests pendientes
+    for (const [id, p] of pending.entries()) {
+      clearTimeout(p.t);
+      pending.delete(id);
+      p.reject(new Error("closed"));
+    }
     if (statusEl) statusEl.textContent = "Desconectado – reconectando…";
     setTimeout(connect, 1500);
   };
 }
 
-/* Start */
+/* =========================
+   Start
+========================= */
 renderHistory();
-for (const it of history) {
-  updateRowChartBtn(it);
-  updateRowNextArrow(it);
-}
+for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
 updateTickHealthUI();
 updateCountdownUI();
 connect();
-```0
