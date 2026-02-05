@@ -452,9 +452,8 @@ function drawDerivLikeChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
   const last = pts[pts.length - 1];
-  if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
+if (last.ms !== 60000) pts.push({ ms: 60000, quote: last.quote });
 
   const quotes = pts.map(p => p.quote);
   let min = Math.min(...quotes), max = Math.max(...quotes);
