@@ -18,6 +18,7 @@ body.light{
   --text:#0f172a;
   --muted:#475569;
   --border:rgba(15,23,42,.18);
+
   --btn-bg:rgba(226,232,240,.95);
   --btn-text:#0f172a;
 }
@@ -96,9 +97,7 @@ body.light .bgNeon{display:none}
 .evalBtn.active{opacity:1;border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.55)}
 .modeBtn{font-weight:650}
 .modeBtn.active-strong{border-color:var(--neon-orange);box-shadow:0 0 14px rgba(251,146,60,.55);color:#fdba74}
-
 .counter{margin:8px 0;font-size:14px;color:var(--muted)}
-
 .signals{display:flex;flex-direction:column;gap:8px}
 .row{
   background:var(--bg-card);
@@ -117,30 +116,20 @@ body.light .bgNeon{display:none}
 }
 .chartBtn svg{width:20px;height:20px}
 
-/* 🔒 YA NO USAMOS :disabled PARA EL CANDADO (para que no desaparezca en Android) */
-.chartBtn.locked{
+/* ✅ IMPORTANTE: no “mates” el icono cuando está disabled */
+.chartBtn:disabled{
+  opacity:1;               /* antes 0.45 */
   cursor:not-allowed;
-  opacity:.95;
-  border-color:rgba(168,85,247,.22);
-  box-shadow:0 0 16px rgba(168,85,247,.12);
-}
-.chartBtn.locked:hover{transform:none; box-shadow:0 0 16px rgba(168,85,247,.18)}
-.chartBtn.locked .lockPulse{
-  animation: lockPulse 1.35s ease-in-out infinite;
+  box-shadow:none;
 }
 
 .lockBadge{font-size:18px}
 
 .nextArrow{font-size:18px;width:28px;text-align:center}
-.nextArrow.up{color:var(--neon-green); animation: arrowIn .18s ease-out}
-.nextArrow.down{color:var(--neon-red); animation: arrowIn .18s ease-out}
-.nextArrow.flat{color:var(--muted); animation: arrowIn .18s ease-out}
+.nextArrow.up{color:var(--neon-green)}
+.nextArrow.down{color:var(--neon-red)}
+.nextArrow.flat{color:var(--muted)}
 .nextArrow.pending{color:var(--muted)}
-
-@keyframes arrowIn{
-  from{ transform:translateY(2px); opacity:.35 }
-  to{ transform:translateY(0); opacity:1 }
-}
 
 .row-actions{display:flex;gap:6px;margin-top:8px;align-items:center}
 .row-actions button{padding:6px 10px;border-radius:12px}
@@ -160,7 +149,6 @@ textarea{
   padding:10px;
   backdrop-filter:blur(16px);
 }
-
 .modal.hidden{display:none}
 .modalBackdrop{
   position:fixed;inset:0;z-index:20;
@@ -186,7 +174,8 @@ textarea{
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
 @media (max-width:480px){.modalCard{inset:6%}}
 
-/* ✅ Ícono cuando la flecha coincide con la señal */
+
+/* ✅ Ícono cuando la flecha (próxima vela) coincide con la señal */
 .hitIcon{
   width:26px;
   height:26px;
@@ -203,21 +192,31 @@ textarea{
   font-size:14px;
   font-weight:800;
   line-height:1;
-
-  transform:scale(1);
 }
 .hitIcon.hidden{ display:none; }
 
-.hitIcon.pop{
-  animation: hitPop .22s ease-out;
+/* =========================
+   ✅ Animaciones
+========================= */
+@keyframes popIn {
+  0% { transform: scale(.6); opacity: .2; }
+  60% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); }
 }
-@keyframes hitPop{
-  from{ transform:scale(.75); opacity:.45 }
-  to{ transform:scale(1); opacity:1 }
+@keyframes pulseSoft {
+  0% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(34,211,238,0)); }
+  50% { transform: scale(1.08); filter: drop-shadow(0 0 10px rgba(34,211,238,.45)); }
+  100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(34,211,238,0)); }
 }
 
-@keyframes lockPulse{
-  0%{ transform:scale(1); opacity:1 }
-  50%{ transform:scale(1.07); opacity:.78 }
-  100%{ transform:scale(1); opacity:1 }
+.lockPulse{
+  animation: pulseSoft 1.2s ease-in-out infinite;
+}
+
+.unlockPop{
+  animation: popIn .25s ease-out 1;
+}
+
+.hitPop{
+  animation: popIn .22s ease-out 1;
 }
