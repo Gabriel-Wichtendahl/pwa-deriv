@@ -1,6 +1,6 @@
-// app.js — V5+ (gráfico 0–60 REAL usando ticks_history)
+// app.js — V6.1 (fix evaluación por reloj + gráfico 0–60 REAL usando ticks_history)
 // Mantiene TODO lo que ya tenías (modo, eval 45/50/55, historial, candado, próxima vela, etc.)
-// y agrega: al cerrar el minuto, trae por API el minuto COMPLETO (0–60) del símbolo de la señal.
+// y agrega: evaluación por TIMER (no depende del tick) para que 45/50/55 sea exacto.
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -15,7 +15,7 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-/** ✅ NUEVO: ticks_history para completar minuto REAL */
+/** ✅ ticks_history para completar minuto REAL */
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -532,7 +532,28 @@ function updateCountdownUI() {
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
-   ✅ NUEVO: Sistema de requests WS (ticks_history)
+   ✅ FIX: Evaluación por reloj (NO depende del tick)
+   - Dispara en 45/50/55 aunque no llegue tick en ese segundo
+========================= */
+setInterval(() => {
+  // Si ya sabemos el inicio del minuto por ticks, perfecto.
+  // Si se "quedó" atrasado y el reloj avanzó, lo empujamos adelante para no clavarnos.
+  const nowMinuteStart = Math.floor(Date.now() / 60000) * 60000;
+  if (!currentMinuteStartMs) currentMinuteStartMs = nowMinuteStart;
+  if (nowMinuteStart > currentMinuteStartMs) currentMinuteStartMs = nowMinuteStart;
+
+  const minute = Math.floor(currentMinuteStartMs / 60000);
+  const sec = Math.floor((Date.now() - currentMinuteStartMs) / 1000);
+
+  if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+    lastEvaluatedMinute = minute;
+    const ok = evaluateMinute(minute);
+    if (!ok) scheduleRetry(minute);
+  }
+}, 250);
+
+/* =========================
+   ✅ ticks_history requests
 ========================= */
 let reqSeq = 1;
 const pending = new Map(); // req_id -> {resolve, reject, t}
@@ -556,13 +577,12 @@ function normalizeTicksForMinute(minute, times, prices) {
   const startMs = minute * 60000;
   const out = [];
   for (let i = 0; i < Math.min(times.length, prices.length); i++) {
-    const ms = (Number(times[i]) * 1000) - startMs; // precisión 1s (API devuelve epoch en segundos)
+    const ms = (Number(times[i]) * 1000) - startMs;
     if (ms < 0 || ms > 60000) continue;
     out.push({ ms, quote: Number(prices[i]) });
   }
   out.sort((a, b) => a.ms - b.ms);
 
-  // asegurar punto en 0ms y 60000ms para que el área se vea completa
   if (out.length) {
     if (out[0].ms > 0) out.unshift({ ms: 0, quote: out[0].quote });
     const last = out[out.length - 1];
@@ -572,317 +592,5 @@ function normalizeTicksForMinute(minute, times, prices) {
 }
 
 async function fetchFullMinuteTicks(symbol, minute) {
-  // minuto completo [start, end] ya pasado, por eso usamos end exacto.
   const start = minuteToEpochSec(minute);
-  const end = minuteToEpochSec(minute + 1);
-
-  const res = await wsRequest({
-    ticks_history: symbol,
-    start,
-    end,
-    style: "ticks",
-    count: HISTORY_COUNT_MAX,
-    adjust_start_time: 1
-  });
-
-  // Deriv responde msg_type:"history" con history:{times, prices}
-  const h = res?.history;
-  if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
-
-  return normalizeTicksForMinute(minute, h.times, h.prices);
-}
-
-/* =========================
-   ✅ IMPORTANTE: al finalizar minuto, completar minuto REAL para señales
-========================= */
-async function hydrateSignalsFromDerivHistory(minute) {
-  const items = history.filter(it => it.minute === minute);
-  if (!items.length) return false;
-
-  let any = false;
-
-  // Para no spamear, hacemos por símbolo único
-  const bySym = new Map();
-  for (const it of items) {
-    if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
-    bySym.get(it.symbol).push(it);
-  }
-
-  for (const [symbol, its] of bySym.entries()) {
-    try {
-      const full = await fetchFullMinuteTicks(symbol, minute);
-      if (!full || full.length < 2) continue;
-
-      // Guardar también en minuteData por si querés reutilizar
-      (minuteData[minute] ||= {});
-      minuteData[minute][symbol] = full.slice();
-
-      for (const it of its) {
-        it.ticks = full.slice(); // ✅ minuto completo REAL 0–60
-        any = true;
-      }
-    } catch {
-      // si falla, no rompemos nada; queda lo que ya tenías
-    }
-  }
-
-  return any;
-}
-
-/* =========================
-   Finalize minute: next candle + minuto completo + unlock
-========================= */
-function finalizeMinute(minute) {
-  const oc = candleOC[minute];
-  if (!oc) return;
-
-  // outcome para señales del minuto anterior
-  for (const symbol of Object.keys(oc)) {
-    const { open, close } = oc[symbol];
-    if (open == null || close == null) continue;
-
-    let outcome = "flat";
-    if (close > open) outcome = "up";
-    else if (close < open) outcome = "down";
-
-    const prevMinute = minute - 1;
-    for (const it of history) {
-      if (it.minute === prevMinute && it.symbol === symbol && !it.nextOutcome) {
-        setNextOutcome(it, outcome);
-      }
-    }
-  }
-
-  // ✅ NUEVO: en vez de liberar ya, pedimos el minuto COMPLETO al API y luego liberamos
-  (async () => {
-    const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
-
-    let changed = ticksChanged;
-    for (const it of history) {
-      if (it.minute === minute && !it.minuteComplete) {
-        it.minuteComplete = true;
-        changed = true;
-        updateRowChartBtn(it);
-      }
-    }
-    if (changed) saveHistory(history);
-
-    // si el modal está abierto con una señal de este minuto, redibujar con el minuto completo
-    if (modalCurrentItem && modalCurrentItem.minute === minute && modalCurrentItem.minuteComplete) {
-      drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
-    }
-  })();
-
-  delete candleOC[minute - 3];
-  delete minuteData[minute - 3];
-}
-
-/* =========================
-   Tick flow
-========================= */
-function onTick(tick) {
-  const epochMs = Math.round(Number(tick.epoch) * 1000);
-  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
-
-  const minute = Math.floor(epochMs / 60000);
-  const msInMinute = epochMs - minuteStartMs;
-  const sec = Math.floor(msInMinute / 1000);
-  const symbol = tick.symbol;
-
-  lastTickEpochMs = epochMs;
-  currentMinuteStartMs = minuteStartMs;
-
-  const prevLast = lastQuoteBySymbol[symbol];
-  lastQuoteBySymbol[symbol] = tick.quote;
-
-  if (lastMinuteSeenBySymbol[symbol] !== minute) {
-    lastMinuteSeenBySymbol[symbol] = minute;
-    (minuteData[minute] ||= {});
-    (minuteData[minute][symbol] ||= []);
-    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
-      minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
-    }
-  }
-
-  if (lastSeenMinute === null) lastSeenMinute = minute;
-  if (minute > lastSeenMinute) {
-    for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
-    lastSeenMinute = minute;
-  }
-
-  (minuteData[minute] ||= {});
-  (minuteData[minute][symbol] ||= []).push({ ms: msInMinute, quote: tick.quote });
-
-  (candleOC[minute] ||= {});
-  if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
-  else candleOC[minute][symbol].close = tick.quote;
-
-  if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
-    if (!ok) scheduleRetry(minute);
-  }
-}
-function scheduleRetry(minute) {
-  if (evalRetryTimer) clearTimeout(evalRetryTimer);
-  evalRetryTimer = setTimeout(() => {
-    if (Math.floor(Date.now() / 60000) === minute) evaluateMinute(minute);
-  }, RETRY_DELAY_MS);
-}
-
-/* =========================
-   Evaluation
-========================= */
-function evaluateMinute(minute) {
-  const data = minuteData[minute];
-  if (!data) return false;
-
-  const candidates = [];
-  let readySymbols = 0;
-
-  for (const sym of SYMBOLS) {
-    const ticks = data[sym] || [];
-    if (ticks.length >= MIN_TICKS) readySymbols++;
-    if (ticks.length < MIN_TICKS) continue;
-
-    const prices = ticks.map(t => t.quote);
-    const move = prices[prices.length - 1] - prices[0];
-    const rawMove = Math.abs(move);
-
-    let vol = 0;
-    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
-    vol = vol / Math.max(1, prices.length - 1);
-
-    const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol: sym, move, score, ticks });
-  }
-
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
-
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-
-  const threshold = strongMode ? 0.02 : 0.015;
-  if (!best || best.score < threshold) return true;
-
-  addSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT", best.ticks);
-  return true;
-}
-
-/* =========================
-   Add signal
-========================= */
-function fmtTimeUTC(minute) {
-  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
-}
-function addSignal(minute, symbol, direction, ticks) {
-  const modeLabel = strongMode ? "FUERTE" : "NORMAL";
-  const item = {
-    id: `${minute}-${symbol}-${direction}-${modeLabel}`,
-    minute,
-    time: fmtTimeUTC(minute),
-    symbol,
-    direction,
-    mode: modeLabel,
-    vote: "",
-    comment: "",
-    // guardamos lo que haya hasta ahora (parcial). Al finalizar minuto se reemplaza por ticks_history completo.
-    ticks: Array.isArray(ticks) ? ticks.slice() : [],
-    nextOutcome: "",
-    minuteComplete: false
-  };
-
-  if (history.some(x => x.id === item.id)) return;
-
-  history.push(item);
-  if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
-  saveHistory(history);
-
-  signalCount = history.length;
-  updateCounter();
-
-  if (signalsEl) signalsEl.prepend(buildRow(item));
-  updateRowChartBtn(item);
-
-  if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
-  if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
-
-  showNotification(symbol, direction, modeLabel);
-}
-
-/* =========================
-   Wake lock
-========================= */
-let wakeLock = null;
-if (wakeBtn) wakeBtn.onclick = async () => {
-  try {
-    if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-      wakeBtn.textContent = "🔓 Pantalla activa";
-      wakeBtn.classList.remove("active");
-    } else {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeBtn.textContent = "🔒 Pantalla activa";
-      wakeBtn.classList.add("active");
-    }
-  } catch {
-    alert("No se pudo mantener la pantalla activa");
-  }
-};
-
-/* =========================
-   WebSocket
-========================= */
-function connect() {
-  try {
-    ws = new WebSocket(WS_URL);
-  } catch {
-    if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
-    return;
-  }
-
-  ws.onopen = () => {
-    if (statusEl) statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
-  };
-
-  ws.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-
-      // ✅ Respuesta a ticks_history
-      if (data && data.req_id && pending.has(data.req_id) && data.msg_type === "history") {
-        const p = pending.get(data.req_id);
-        clearTimeout(p.t);
-        pending.delete(data.req_id);
-        p.resolve(data);
-        return;
-      }
-
-      if (data.tick) onTick(data.tick);
-    } catch {}
-  };
-
-  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
-
-  ws.onclose = () => {
-    // cancelar requests pendientes
-    for (const [id, p] of pending.entries()) {
-      clearTimeout(p.t);
-      pending.delete(id);
-      p.reject(new Error("closed"));
-    }
-    if (statusEl) statusEl.textContent = "Desconectado – reconectando…";
-    setTimeout(connect, 1500);
-  };
-}
-
-/* =========================
-   Start
-========================= */
-renderHistory();
-for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
-updateTickHealthUI();
-updateCountdownUI();
-connect();
+  const end = minuteToEpochS
