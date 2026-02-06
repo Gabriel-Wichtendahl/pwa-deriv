@@ -1,5 +1,6 @@
 // app.js — V6.1 (fix evaluación por reloj + gráfico 0–60 REAL usando ticks_history)
 // + ✅ Ícono visual cuando la próxima vela coincide con la señal (solo icono)
+// ✅ FIX: el ✅ SOLO aparece cuando ya existe nextOutcome (o sea cerró la próxima vela) y hit === true (boolean)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -97,13 +98,14 @@ function isMatch(direction, outcome) {
 
 function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
+/** ✅ SOLO muestra cuando ya hay nextOutcome + hit === true */
 function updateRowHitIcon(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
   const icon = row.querySelector(".hitIcon");
   if (!icon) return;
 
-  const show = !!item.hit;
+  const show = !!item.nextOutcome && item.hit === true;
   icon.classList.toggle("hidden", !show);
   icon.title = show ? "Coincidió con la próxima vela ✅" : "";
 }
@@ -461,8 +463,7 @@ function updateRowNextArrow(item) {
 
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
-  item.hit = isMatch(item.direction, outcome);
-
+  item.hit = isMatch(item.direction, outcome); // boolean real
   saveHistory(history);
   updateRowNextArrow(item);
   updateRowHitIcon(item);
@@ -479,7 +480,9 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
-  const iconHidden = item.hit ? "" : "hidden";
+  // ✅ SOLO mostrar si hay nextOutcome + hit true
+  const showHit = !!item.nextOutcome && item.hit === true;
+  const iconHidden = showHit ? "" : "hidden";
 
   row.innerHTML = `
     <div class="row-main">
@@ -532,12 +535,24 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
+  // ✅ Normalización fuerte para evitar "false" truthy u otros residuos
   let touched = false;
   for (const it of history) {
     if (!it.mode) { it.mode = "NORMAL"; touched = true; }
-    if (it.nextOutcome && typeof it.hit !== "boolean") {
-      it.hit = isMatch(it.direction, it.nextOutcome);
+
+    // hit debe ser boolean real
+    if (typeof it.hit !== "boolean") {
+      it.hit = (it.hit === true); // cualquier cosa que no sea true boolean => false
       touched = true;
+    }
+
+    // Si NO hay nextOutcome aún -> jamás mostrar
+    if (!it.nextOutcome) {
+      if (it.hit !== false) { it.hit = false; touched = true; }
+    } else {
+      // Si ya hay nextOutcome, recalcular hit real
+      const newHit = isMatch(it.direction, it.nextOutcome);
+      if (it.hit !== newHit) { it.hit = newHit; touched = true; }
     }
   }
   if (touched) saveHistory(history);
@@ -826,9 +841,9 @@ function addSignal(minute, symbol, direction, ticks) {
     vote: "",
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
-    nextOutcome: "",
+    nextOutcome: "",        // se setea cuando cierre la próxima vela
     minuteComplete: false,
-    hit: false
+    hit: false              // ✅ SIEMPRE false al crear (nunca mostrar antes de tiempo)
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -842,6 +857,7 @@ function addSignal(minute, symbol, direction, ticks) {
 
   if (signalsEl) signalsEl.prepend(buildRow(item));
   updateRowChartBtn(item);
+  updateRowHitIcon(item);
 
   if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
