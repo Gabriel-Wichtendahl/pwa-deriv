@@ -55,13 +55,8 @@ body.light .bgNeon{display:none}
 .topStatus{display:flex;gap:8px;margin-bottom:10px}
 
 /* ✅ estabilidad numérica */
-#countdown,#tickHealth{
-  font-variant-numeric: tabular-nums;
-}
-#countdown{
-  min-width:84px;
-  text-align:center;
-}
+#countdownText,#tickHealth{font-variant-numeric: tabular-nums;}
+#countdown{min-width:112px;text-align:center;}
 
 .pill{
   background:var(--bg-card);
@@ -73,12 +68,7 @@ body.light .bgNeon{display:none}
 }
 
 /* ✅ Tabs */
-.tabsBar{
-  display:flex;
-  gap:8px;
-  align-items:center;
-  margin-bottom:10px;
-}
+.tabsBar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
 .tabs{flex:1;display:flex;gap:6px}
 .tab{
   flex:1;
@@ -151,7 +141,6 @@ body.light .bgNeon{display:none}
 
 .counter{margin:8px 0;font-size:14px;color:var(--muted)}
 .signals{display:flex;flex-direction:column;gap:8px}
-
 .row{
   background:var(--bg-card);
   border:1px solid var(--border);
@@ -212,18 +201,14 @@ body.light .bgNeon{display:none}
   75%{ transform:translateX(-1px); }
   100%{ transform:translateX(0); }
 }
-.nextArrow.failShake{
-  animation: arrowShake .22s ease-in-out;
-}
+.nextArrow.failShake{animation: arrowShake .22s ease-in-out}
 
 @keyframes hitPop{
   0%{ transform:scale(.6); opacity:0; }
   70%{ transform:scale(1.12); opacity:1; }
   100%{ transform:scale(1); opacity:1; }
 }
-.hitIcon.pop{
-  animation: hitPop .24s ease-out;
-}
+.hitIcon.pop{animation: hitPop .24s ease-out}
 
 /* ✅ Tilde “acierto” */
 .hitIcon{
@@ -246,15 +231,9 @@ body.light .bgNeon{display:none}
 .row-actions{display:flex;gap:6px;margin-top:8px;align-items:center}
 .row-actions button{padding:6px 10px;border-radius:12px}
 
-/* ✅ Like/Dislike: seleccionado SIEMPRE azul (cyan) */
-.voteBtn{
-  min-width:44px;
-  opacity:.95;
-}
-.row.voted .voteBtn{
-  opacity:.45;
-  filter:saturate(.75);
-}
+/* ✅ Like/Dislike: seleccionado azul (cyan) */
+.voteBtn{min-width:44px;opacity:.95}
+.row.voted .voteBtn{opacity:.45;filter:saturate(.75)}
 .row.voted .voteBtn.selected{
   opacity:1;
   filter:saturate(1.15);
@@ -278,7 +257,6 @@ textarea{
   padding:10px;
   backdrop-filter:blur(16px);
 }
-
 .hidden{display:none}
 
 /* ✅ Modal */
@@ -332,9 +310,7 @@ textarea{
   gap:6px;
   flex-wrap:nowrap;
 }
-.settingsBody .controls .btnGroup .btn{
-  flex:1;
-}
+.settingsBody .controls .btnGroup .btn{flex:1}
 #modeBtn,#clearHistoryBtn{grid-column: 1 / -1}
 @media (max-width:420px){
   .settingsBody .controls{grid-template-columns:1fr}
@@ -347,9 +323,72 @@ textarea{
   50%{ transform:scale(1.08); filter:drop-shadow(0 0 10px rgba(34,211,238,.35)); opacity:1; }
   100%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(34,211,238,0)); opacity:.85; }
 }
-.chartBtn.locked .lockBadge{ animation: lockPulse 1.1s ease-in-out infinite; }
+.chartBtn.locked .lockBadge{animation: lockPulse 1.1s ease-in-out infinite}
 @media (prefers-reduced-motion: reduce){
-  .chartBtn.locked .lockBadge{ animation:none; }
+  .chartBtn.locked .lockBadge{animation:none}
 }
 
+/* =========================
+   ⏱️ Reloj PRO (aro HUD)
+========================= */
+.countdownPill{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  justify-content:center;
+  min-width:112px;
+  position:relative;
+}
+.countText{
+  font-variant-numeric: tabular-nums;
+  letter-spacing:.4px;
+}
+.countRing{
+  --p: 0; /* 0..1 */
+  width:22px;
+  height:22px;
+  border-radius:999px;
+  position:relative;
 
+  background:
+    conic-gradient(rgba(34,211,238,.95) calc(var(--p) * 360deg),
+                   rgba(148,163,184,.18) 0);
+
+  -webkit-mask: radial-gradient(circle at center, transparent 58%, #000 60%);
+          mask: radial-gradient(circle at center, transparent 58%, #000 60%);
+
+  box-shadow:
+    0 0 14px rgba(34,211,238,.25),
+    0 0 36px rgba(34,211,238,.10);
+  transform: translateZ(0);
+}
+
+.countdownPill.urgent .countRing{
+  box-shadow:
+    0 0 18px rgba(239,68,68,.35),
+    0 0 50px rgba(239,68,68,.14);
+  background:
+    conic-gradient(rgba(239,68,68,.92) calc(var(--p) * 360deg),
+                   rgba(148,163,184,.18) 0);
+}
+
+@keyframes ringPulse{
+  0%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(239,68,68,0)); }
+  55%{ transform:scale(1.08); filter:drop-shadow(0 0 10px rgba(239,68,68,.35)); }
+  100%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(239,68,68,0)); }
+}
+.countdownPill.urgent .countRing{
+  animation: ringPulse .65s ease-in-out infinite;
+}
+
+@keyframes secTick{
+  0%{ transform:translateY(0); }
+  40%{ transform:translateY(-1px); }
+  100%{ transform:translateY(0); }
+}
+.countdownPill.tick .countText{animation: secTick .16s ease-out}
+
+@media (prefers-reduced-motion: reduce){
+  .countdownPill.urgent .countRing{animation:none}
+  .countdownPill.tick .countText{animation:none}
+}
