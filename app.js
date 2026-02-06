@@ -1,9 +1,10 @@
-// app.js — V6.3
+// app.js — V6.2
 // - Eval 45/50/55 + modo NORMAL/FUERTE
 // - Historial + feedback + notificaciones
-// - Flecha de próxima vela + ✅ acierto SOLO cuando corresponde
+// - Flecha de próxima vela (nextOutcome)
+// - ✅ Acierto SOLO cuando coincide con nextOutcome
+// - Contadores: Señales + ✅ Aciertos (global)
 // - Modal con gráfico 0–60 real usando ticks_history
-// - Contadores: Señales + ✅ Aciertos (en pills)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -18,6 +19,7 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
+// ticks_history para completar minuto real 0–60
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -26,8 +28,11 @@ const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
 
 const statusEl = $("status");
 const signalsEl = $("signals");
-const counterEl = $("counter");
+
+// ✅ Fallback: si alguna vez volvés a usar .counter en CSS, igual lo encuentra
+const counterEl = $("counter") || document.querySelector(".counter");
 const hitCounterEl = $("hitCounter");
+
 const feedbackEl = $("feedback");
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
@@ -55,12 +60,13 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-let EVAL_SEC = 45;       // 45/50/55
-let strongMode = false;  // NORMAL/FUERTE
+let EVAL_SEC = 45;
+let strongMode = false;
 
 let history = loadHistory();
-let minuteData = {};     // minute -> symbol -> [{ms, quote}, ...]
-let candleOC = {};       // minute -> symbol -> {open, close}
+
+let minuteData = {}; // minute -> symbol -> [{ms, quote}]
+let candleOC = {};   // minute -> symbol -> {open, close}
 
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
@@ -74,9 +80,6 @@ let lastMinuteSeenBySymbol = {};
 
 let modalCurrentItem = null;
 
-/* =========================
-   Utils
-========================= */
 const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -89,31 +92,7 @@ function makeDerivTraderUrl(symbol) {
   u.searchParams.set("symbol", symbol);
   return u.toString();
 }
-
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
-
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-}
-function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
-
-function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
-
-function loadBool(key, fallback) {
-  const v = localStorage.getItem(key);
-  return v === null ? fallback : v === "1";
-}
-function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
-
-/* ✅ Match: señal vs próxima vela */
-function isMatch(direction, outcome) {
-  if (!direction || !outcome) return false;
-  if (outcome === "up" && direction === "CALL") return true;
-  if (outcome === "down" && direction === "PUT") return true;
-  return false;
-}
 
 /* =========================
    Persistencia
@@ -135,19 +114,34 @@ function saveHistory(arr) {
 }
 
 /* =========================
-   Contadores
+   Helpers
 ========================= */
-function countHits(arr) {
-  let hits = 0;
-  for (const it of arr) {
-    if (it.nextOutcome && it.hit === true) hits++;
-  }
-  return hits;
+function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
+function loadBool(key, fallback) {
+  const v = localStorage.getItem(key);
+  return v === null ? fallback : v === "1";
+}
+function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+}
+function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
+
+function isHit(item) {
+  // ✅ cuenta solo si ya hay nextOutcome (resultado de la próxima vela)
+  if (!item || !item.nextOutcome) return false;
+  if (item.direction === "CALL" && item.nextOutcome === "up") return true;
+  if (item.direction === "PUT" && item.nextOutcome === "down") return true;
+  return false;
 }
 
 function updateCounters() {
   const total = history.length;
-  const hits = countHits(history);
+  let hits = 0;
+  for (const it of history) if (isHit(it)) hits++;
 
   if (counterEl) counterEl.textContent = `Señales: ${total}`;
   if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${hits}`;
@@ -234,26 +228,17 @@ function applyTheme(theme) {
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
       try {
-        sound.muted = false;
-        sound.volume = 1;
-        sound.currentTime = 0;
-        await sound.play();
-        sound.pause();
-
-        soundEnabled = true;
-        saveBool("soundEnabled", true);
-        setBtnActive(soundBtn, true);
-        soundBtn.textContent = "🔊 Sonido ON";
+        sound.muted = false; sound.volume = 1; sound.currentTime = 0;
+        await sound.play(); sound.pause();
+        soundEnabled = true; saveBool("soundEnabled", true);
+        setBtnActive(soundBtn, true); soundBtn.textContent = "🔊 Sonido ON";
       } catch {
         alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
       }
       return;
     }
-
-    soundEnabled = false;
-    saveBool("soundEnabled", false);
-    setBtnActive(soundBtn, false);
-    soundBtn.textContent = "🔇 Sonido OFF";
+    soundEnabled = false; saveBool("soundEnabled", false);
+    setBtnActive(soundBtn, false); soundBtn.textContent = "🔇 Sonido OFF";
   };
 })();
 
@@ -263,7 +248,6 @@ function applyTheme(theme) {
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
   if (!vibrateBtn) return;
-
   setBtnActive(vibrateBtn, vibrateEnabled);
   vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
 
@@ -292,11 +276,9 @@ function clearHistory() {
 
   updateCounters();
 }
-if (clearHistoryBtn) {
-  clearHistoryBtn.onclick = () => {
-    if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
-  };
-}
+if (clearHistoryBtn) clearHistoryBtn.onclick = () => {
+  if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
+};
 
 /* =========================
    Notifications
@@ -334,7 +316,6 @@ function openChartModal(item) {
 
   modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
   modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
-
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
@@ -351,12 +332,9 @@ function closeChartModal() {
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChartModal(); });
-
-if (modalOpenDerivBtn) {
-  modalOpenDerivBtn.onclick = () => {
-    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
-  };
-}
+if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
+  if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
+};
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
@@ -451,7 +429,7 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   Row helpers (arrow + ✅ + chart)
+   Row helpers
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -461,14 +439,7 @@ function updateRowChartBtn(item) {
 
   const ready = !!item.minuteComplete;
   btn.disabled = !ready;
-
-  if (ready) {
-    btn.innerHTML = CHART_ICON_SVG;
-    btn.title = "Ver gráfico del minuto (ticks 0–60)";
-  } else {
-    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto…";
-  }
+  btn.innerHTML = ready ? CHART_ICON_SVG : `<span class="lockBadge" aria-hidden="true">🔒</span>`;
 }
 
 function updateRowNextArrow(item) {
@@ -478,35 +449,33 @@ function updateRowNextArrow(item) {
   if (!el) return;
 
   if (item.nextOutcome === "up") {
-    el.textContent = "⬆️"; el.className = "nextArrow up"; el.title = "Próxima vela: alcista";
+    el.textContent = "⬆️"; el.className = "nextArrow up";
   } else if (item.nextOutcome === "down") {
-    el.textContent = "⬇️"; el.className = "nextArrow down"; el.title = "Próxima vela: bajista";
+    el.textContent = "⬇️"; el.className = "nextArrow down";
   } else if (item.nextOutcome === "flat") {
-    el.textContent = "➖"; el.className = "nextArrow flat"; el.title = "Próxima vela: plana";
+    el.textContent = "➖"; el.className = "nextArrow flat";
   } else {
-    el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
+    el.textContent = "⏳"; el.className = "nextArrow pending";
   }
 }
 
 function updateRowHitIcon(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
-  const icon = row.querySelector(".hitIcon");
-  if (!icon) return;
+  const el = row.querySelector(".hitIcon");
+  if (!el) return;
 
-  const show = !!item.nextOutcome && item.hit === true;
-  icon.classList.toggle("hidden", !show);
-  icon.title = show ? "Coincidió con la próxima vela ✅" : "";
+  const show = isHit(item);
+  el.classList.toggle("hidden", !show);
 }
 
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
-  item.hit = isMatch(item.direction, outcome);
-
   saveHistory(history);
+
   updateRowNextArrow(item);
   updateRowHitIcon(item);
-  updateCounters(); // ✅ actualiza aciertos al resolverse
+  updateCounters(); // ✅ contador global se actualiza cuando se conoce outcome
 }
 
 /* =========================
@@ -520,16 +489,17 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
-  const showHit = !!item.nextOutcome && item.hit === true;
-  const iconHidden = showHit ? "" : "hidden";
-
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <span class="hitIcon ${iconHidden}" aria-label="Coincidió" title="Coincidió con la próxima vela ✅">✅</span>
+
+      <!-- ✅ solo se muestra si hay acierto -->
+      <span class="hitIcon hidden" aria-label="Acierto" title="Acierto">✓</span>
+
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
+
     <div class="row-actions">
       <button data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
       <button data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
@@ -547,12 +517,10 @@ function buildRow(item) {
     btn.onclick = (e) => {
       e.stopPropagation();
       if (item.vote) return;
-
       item.vote = btn.dataset.v;
       item.comment = row.querySelector(".row-comment").value || "";
       saveHistory(history);
       rebuildFeedbackFromHistory();
-
       row.querySelectorAll('button[data-v]').forEach(b => (b.disabled = true));
     };
   });
@@ -570,40 +538,23 @@ function buildRow(item) {
 }
 
 /* =========================
-   Render + normalización defensiva
+   Render
 ========================= */
-function normalizeHistory() {
-  let touched = false;
-
-  for (const it of history) {
-    if (!it.mode) { it.mode = "NORMAL"; touched = true; }
-
-    // hit boolean real
-    if (typeof it.hit !== "boolean") { it.hit = (it.hit === true); touched = true; }
-
-    // sin nextOutcome => hit siempre false
-    if (!it.nextOutcome) {
-      if (it.hit !== false) { it.hit = false; touched = true; }
-    } else {
-      const newHit = isMatch(it.direction, it.nextOutcome);
-      if (it.hit !== newHit) { it.hit = newHit; touched = true; }
-    }
-  }
-
-  if (touched) saveHistory(history);
-}
-
 function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  normalizeHistory();
+  // normalización suave
+  for (const it of history) {
+    if (!it.mode) it.mode = "NORMAL";
+    if (!it.nextOutcome) it.nextOutcome = "";
+  }
+  saveHistory(history);
+
   updateCounters();
   rebuildFeedbackFromHistory();
 
-  for (const it of [...history].reverse()) {
-    signalsEl.appendChild(buildRow(it));
-  }
+  for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
 }
 
 /* =========================
@@ -615,7 +566,6 @@ function updateTickHealthUI() {
   const ageSec = Math.max(0, Math.floor((Date.now() - lastTickEpochMs) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
-
 function updateCountdownUI() {
   if (!countdownEl) return;
   if (!currentMinuteStartMs) { countdownEl.textContent = "⏱️ 60"; return; }
@@ -623,43 +573,22 @@ function updateCountdownUI() {
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   countdownEl.textContent = `⏱️ ${remaining}`;
 }
-
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
-   ✅ Evaluación por reloj (no depende del tick)
-========================= */
-setInterval(() => {
-  const nowMinuteStart = Math.floor(Date.now() / 60000) * 60000;
-  if (!currentMinuteStartMs) currentMinuteStartMs = nowMinuteStart;
-  if (nowMinuteStart > currentMinuteStartMs) currentMinuteStartMs = nowMinuteStart;
-
-  const minute = Math.floor(currentMinuteStartMs / 60000);
-  const sec = Math.floor((Date.now() - currentMinuteStartMs) / 1000);
-
-  if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
-    if (!ok) scheduleRetry(minute);
-  }
-}, 250);
-
-/* =========================
-   ✅ WS request system (ticks_history)
+   WS request system (ticks_history)
 ========================= */
 let reqSeq = 1;
-const pending = new Map(); // req_id -> {resolve, reject, t}
+const pending = new Map();
 
 function wsRequest(payload) {
   return new Promise((resolve, reject) => {
     if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
-
     const req_id = reqSeq++;
     const t = setTimeout(() => {
       pending.delete(req_id);
       reject(new Error("timeout"));
     }, HISTORY_TIMEOUT_MS);
-
     pending.set(req_id, { resolve, reject, t });
     ws.send(JSON.stringify({ ...payload, req_id }));
   });
@@ -702,6 +631,7 @@ async function fetchFullMinuteTicks(symbol, minute) {
 
   const h = res?.history;
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
+
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
 
@@ -710,8 +640,8 @@ async function hydrateSignalsFromDerivHistory(minute) {
   if (!items.length) return false;
 
   let any = false;
-
   const bySym = new Map();
+
   for (const it of items) {
     if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
     bySym.get(it.symbol).push(it);
@@ -736,13 +666,13 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   Finalize minute (flecha + completar minuto)
+   Finalize minute: nextOutcome + completar minuto
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // outcome del minuto "minute" para señales del minuto anterior
+  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -759,7 +689,7 @@ function finalizeMinute(minute) {
     }
   }
 
-  // completar minuto real para señales de este minuto
+  // completar minuto real para señales del minuto actual
   (async () => {
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
@@ -804,7 +734,6 @@ function onTick(tick) {
     lastMinuteSeenBySymbol[symbol] = minute;
     (minuteData[minute] ||= {});
     (minuteData[minute][symbol] ||= []);
-
     if (minuteData[minute][symbol].length === 0 && prevLast != null) {
       minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
@@ -897,8 +826,7 @@ function addSignal(minute, symbol, direction, ticks) {
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
-    minuteComplete: false,
-    hit: false
+    minuteComplete: false
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -909,14 +837,9 @@ function addSignal(minute, symbol, direction, ticks) {
 
   if (signalsEl) signalsEl.prepend(buildRow(item));
 
-  updateCounters();
-  updateRowChartBtn(item);
-  updateRowHitIcon(item);
+  updateCounters(); // ✅ total sube inmediatamente (aciertos quedarán cuando haya nextOutcome)
 
-  if (soundEnabled && sound) {
-    sound.currentTime = 0;
-    sound.play().catch(() => {});
-  }
+  if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel);
@@ -926,25 +849,22 @@ function addSignal(minute, symbol, direction, ticks) {
    Wake lock
 ========================= */
 let wakeLock = null;
-
-if (wakeBtn) {
-  wakeBtn.onclick = async () => {
-    try {
-      if (wakeLock) {
-        await wakeLock.release();
-        wakeLock = null;
-        wakeBtn.textContent = "🔓 Pantalla activa";
-        wakeBtn.classList.remove("active");
-      } else {
-        wakeLock = await navigator.wakeLock.request("screen");
-        wakeBtn.textContent = "🔒 Pantalla activa";
-        wakeBtn.classList.add("active");
-      }
-    } catch {
-      alert("No se pudo mantener la pantalla activa");
+if (wakeBtn) wakeBtn.onclick = async () => {
+  try {
+    if (wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+      wakeBtn.textContent = "🔓 Pantalla activa";
+      wakeBtn.classList.remove("active");
+    } else {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeBtn.textContent = "🔒 Pantalla activa";
+      wakeBtn.classList.add("active");
     }
-  };
-}
+  } catch {
+    alert("No se pudo mantener la pantalla activa");
+  }
+};
 
 /* =========================
    WebSocket
@@ -966,7 +886,7 @@ function connect() {
     try {
       const data = JSON.parse(e.data);
 
-      // Respuesta a ticks_history
+      // respuesta ticks_history
       if (data && data.req_id && pending.has(data.req_id) && data.msg_type === "history") {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
