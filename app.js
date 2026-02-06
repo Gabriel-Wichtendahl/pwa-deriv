@@ -1,5 +1,4 @@
-// app.js — V6.4 (Estética: reloj fijo + hourglass anim + glow filas + settings prolijo)
-// Mantiene TODO lo anterior (WS, eval 45/50/55, modo, historial, candado, próxima vela, gráfico, etc.)
+// app.js — V6.5 (fix hit/tilde + sin reloj analógico + glow fuerte + votos visibles + config prolijo)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -112,9 +111,7 @@ function loadHistory() {
   }
 }
 function saveHistory(arr) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(arr.slice(-MAX_HISTORY)));
-  } catch {}
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(arr.slice(-MAX_HISTORY))); } catch {}
 }
 
 /* =========================
@@ -127,15 +124,15 @@ function loadBool(key, fallback) {
 }
 function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
 
+function isHit(item){
+  if (!item || !item.nextOutcome) return false;
+  return (item.direction === "CALL" && item.nextOutcome === "up")
+      || (item.direction === "PUT" && item.nextOutcome === "down");
+}
+
 function computeHitsCount() {
   let hits = 0;
-  for (const it of history) {
-    if (!it.nextOutcome) continue;
-    const ok =
-      (it.direction === "CALL" && it.nextOutcome === "up") ||
-      (it.direction === "PUT" && it.nextOutcome === "down");
-    if (ok) hits++;
-  }
+  for (const it of history) if (isHit(it)) hits++;
   return hits;
 }
 function updateCounter() {
@@ -370,9 +367,7 @@ function closeChartModal() {
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeChartModal(); closeSettings(); }
-});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeChartModal(); closeSettings(); } });
 if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
   if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
 };
@@ -488,6 +483,17 @@ function updateRowChartBtn(item) {
     btn.title = "Esperando cierre del minuto…";
   }
 }
+
+function updateRowHitIcon(item){
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return;
+  const show = isHit(item);
+  hit.classList.toggle("hidden", !show);
+  hit.title = show ? "Acertó" : "";
+}
+
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -504,10 +510,12 @@ function updateRowNextArrow(item) {
     el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
   }
 }
+
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   saveHistory(history);
   updateRowNextArrow(item);
+  updateRowHitIcon(item);
   updateCounter();
 }
 
@@ -517,6 +525,7 @@ function setNextOutcome(item, outcome) {
 function buildRow(item) {
   const row = document.createElement("div");
   row.className = "row " + (item.direction === "CALL" ? "dir-call" : "dir-put");
+  if (item.vote) row.classList.add("voted");
   row.dataset.id = item.id;
 
   const derivUrl = makeDerivTraderUrl(item.symbol);
@@ -526,11 +535,12 @@ function buildRow(item) {
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
+      <span class="hitIcon hidden" aria-label="Acertó">✓</span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
     <div class="row-actions">
-      <button data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
-      <button data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
+      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
+      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
       <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
     </div>
   `;
@@ -541,14 +551,36 @@ function buildRow(item) {
   chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
   updateRowChartBtn(item);
 
+  // estado inicial tilde (solo si ya hay nextOutcome y coincide)
+  updateRowHitIcon(item);
+
+  // pintar selección de voto si ya existe
+  if (item.vote) {
+    const likeBtn = row.querySelector('button[data-v="like"]');
+    const disBtn  = row.querySelector('button[data-v="dislike"]');
+    if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected","like");
+    if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected","dislike");
+  }
+
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
       if (item.vote) return;
+
       item.vote = btn.dataset.v;
       item.comment = row.querySelector(".row-comment").value || "";
+
+      // UI: marcar seleccionado
+      row.classList.add("voted");
+      const likeBtn = row.querySelector('button[data-v="like"]');
+      const disBtn  = row.querySelector('button[data-v="dislike"]');
+
+      if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected","like");
+      if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected","dislike");
+
       saveHistory(history);
       rebuildFeedbackFromHistory();
+
       row.querySelectorAll('button[data-v]').forEach(b => (b.disabled = true));
     };
   });
@@ -581,7 +613,7 @@ function renderHistory() {
 }
 
 /* =========================
-   Tick health + countdown (con animaciones)
+   Tick health + countdown
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
@@ -594,24 +626,22 @@ function updateCountdownUI() {
   if (!countdownEl) return;
 
   if (!currentMinuteStartMs) {
-    countdownEl.innerHTML = `<span class="hourglass">⏳</span><span class="cdNum">60</span>`;
+    countdownEl.textContent = "⏱️ 60";
     return;
   }
 
   const msInMinute = (Date.now() - currentMinuteStartMs) % 60000;
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
 
-  countdownEl.innerHTML = `<span class="hourglass">⏳</span><span class="cdNum">${remaining}</span>`;
-
-  // ✅ reloj analógico: rotación continua durante el minuto
-  const rot = (msInMinute / 60000) * 360;
-  document.documentElement.style.setProperty("--sec-rot", `${rot}deg`);
+  // ✅ pad para que se vea prolijo y no “salte”
+  const v = String(remaining).padStart(2, "0");
+  countdownEl.textContent = `⏱️ ${v}`;
 }
 
-setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 250);
+setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 500);
 
 /* =========================
-   Requests WS (ticks_history)
+   ✅ ticks_history (requests)
 ========================= */
 let reqSeq = 1;
 const pending = new Map(); // req_id -> {resolve, reject, t}
@@ -703,6 +733,7 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -863,17 +894,7 @@ function addSignal(minute, symbol, direction, ticks) {
 
   updateCounter();
 
-  if (signalsEl) {
-    signalsEl.prepend(buildRow(item));
-
-    // ✅ micro animación al aparecer
-    const newRow = signalsEl.firstElementChild;
-    if (newRow) {
-      newRow.classList.add("justAdded");
-      setTimeout(() => newRow.classList.remove("justAdded"), 250);
-    }
-  }
-
+  if (signalsEl) signalsEl.prepend(buildRow(item));
   updateRowChartBtn(item);
 
   if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
@@ -907,9 +928,8 @@ if (wakeBtn) wakeBtn.onclick = async () => {
    WebSocket
 ========================= */
 function connect() {
-  try {
-    ws = new WebSocket(WS_URL);
-  } catch {
+  try { ws = new WebSocket(WS_URL); }
+  catch {
     if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
     return;
   }
@@ -952,7 +972,7 @@ function connect() {
    Start
 ========================= */
 renderHistory();
-for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
+for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updateRowHitIcon(it); }
 updateTickHealthUI();
 updateCountdownUI();
 connect();
