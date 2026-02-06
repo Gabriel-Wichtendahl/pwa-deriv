@@ -1,4 +1,4 @@
-const CACHE = "deriv-assets-v6-3";
+const CACHE = "deriv-assets-v6-4";
 const ASSETS = [
   "./",
   "./index.html",
