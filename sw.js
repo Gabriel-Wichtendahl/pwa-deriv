@@ -1,4 +1,5 @@
-const CACHE = "deriv-assets-v6-1";
+const CACHE = "deriv-assets-v6-2";
+
 const ASSETS = [
   "./",
   "./index.html",
@@ -25,42 +26,21 @@ self.addEventListener("activate", (e) => {
   self.clients.claim();
 });
 
-async function networkFirst(request, fallbackUrl = "./index.html") {
-  try {
-    const res = await fetch(request);
-    const cache = await caches.open(CACHE);
-    cache.put(request, res.clone());
-    return res;
-  } catch {
-    const cached = await caches.match(request);
-    if (cached) return cached;
-    const fallback = await caches.match(fallbackUrl);
-    return fallback || new Response("Offline", { status: 503, statusText: "Offline" });
-  }
-}
-
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  const isHTML =
-    e.request.mode === "navigate" ||
+  // ✅ Network-first para HTML/JS/CSS (evita desfasajes de cache)
+  if (
     url.pathname.endsWith("/index.html") ||
-    url.pathname === "/" ||
-    url.pathname.endsWith("/");
-
-  const isAppJs = url.pathname.endsWith("/app.js");
-
-  // ✅ Network-first + fallback a cache para navegación/HTML/JS (evita blanco sin internet)
-  if (isHTML) {
-    e.respondWith(networkFirst(e.request, "./index.html"));
-    return;
-  }
-  if (isAppJs) {
-    e.respondWith(networkFirst(e.request, "./app.js"));
+    url.pathname.endsWith("/app.js") ||
+    url.pathname.endsWith("/style.css") ||
+    e.request.mode === "navigate"
+  ) {
+    e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
     return;
   }
 
-  // ✅ Cache-first para assets
+  // Cache-first para assets estáticos
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request))
   );
@@ -89,4 +69,3 @@ self.addEventListener("notificationclick", (event) => {
     await clients.openWindow(url);
   })());
 });
-
