@@ -12,14 +12,22 @@
 </head>
 
 <body class="neon">
+  <!-- ✅ Fondo neon -->
   <div class="bgNeon" aria-hidden="true"></div>
+
+  <!-- ✅ Reloj analógico fijo (HUD) -->
+  <div id="analogClock" class="analogClock" aria-hidden="true">
+    <div class="acRing"></div>
+    <div class="acHand"></div>
+    <div class="acDot"></div>
+  </div>
 
   <header class="header">
     <h2 id="status" class="status">Conectando…</h2>
 
     <div class="topStatus">
       <div id="tickHealth" class="pill">Último tick: —</div>
-      <div id="countdown" class="pill">⏱️ 60</div>
+      <div id="countdown" class="pill">⏳ 60</div>
     </div>
 
     <!-- ✅ Tabs + Config -->
