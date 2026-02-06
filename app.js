@@ -1,6 +1,6 @@
-// app.js — V6.1 (fix evaluación por reloj + gráfico 0–60 REAL usando ticks_history)
-// + ✅ Ícono visual cuando la próxima vela coincide con la señal (solo icono)
-// ✅ FIX: el ✅ SOLO aparece cuando ya existe nextOutcome (o sea cerró la próxima vela) y hit === true (boolean)
+// app.js — V6.1 (gráfico 0–60 REAL usando ticks_history)
+// + ✅ Ícono ✅ solo cuando coincide señal vs resultado de la PRÓXIMA vela
+// + ✅ FIX: nunca se muestra ✅ si todavía no existe nextOutcome
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -51,13 +51,13 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-let EVAL_SEC = 45;
-let strongMode = false;
+let EVAL_SEC = 45;       // 45/50/55
+let strongMode = false;  // NORMAL/FUERTE
 
 let history = loadHistory();
 let signalCount = 0;
 
-let minuteData = {};
+let minuteData = {};           // minute -> symbol -> [{ms, quote}, ...]
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -65,7 +65,7 @@ let lastTickEpochMs = null;
 let currentMinuteStartMs = null;
 
 let lastSeenMinute = null;
-let candleOC = {};
+let candleOC = {}; // minute -> symbol -> {open, close}
 
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
@@ -94,20 +94,6 @@ function isMatch(direction, outcome) {
   if (outcome === "up" && direction === "CALL") return true;
   if (outcome === "down" && direction === "PUT") return true;
   return false;
-}
-
-function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
-
-/** ✅ SOLO muestra cuando ya hay nextOutcome + hit === true */
-function updateRowHitIcon(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const icon = row.querySelector(".hitIcon");
-  if (!icon) return;
-
-  const show = !!item.nextOutcome && item.hit === true;
-  icon.classList.toggle("hidden", !show);
-  icon.title = show ? "Coincidió con la próxima vela ✅" : "";
 }
 
 /* =========================
@@ -148,6 +134,7 @@ function escapeHtml(str) {
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
+function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
@@ -327,6 +314,8 @@ function closeChartModal() {
   chartModal.setAttribute("aria-hidden", "true");
   modalCurrentItem = null;
 }
+if (modalCloseBtn) modalCloseChartModal;
+function modalCloseChartModal() { closeChartModal(); }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChartModal(); });
@@ -461,9 +450,20 @@ function updateRowNextArrow(item) {
   }
 }
 
+function updateRowHitIcon(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const icon = row.querySelector(".hitIcon");
+  if (!icon) return;
+
+  const show = !!item.nextOutcome && item.hit === true; // ✅ CLAVE
+  icon.classList.toggle("hidden", !show);
+  icon.title = show ? "Coincidió con la próxima vela ✅" : "";
+}
+
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
-  item.hit = isMatch(item.direction, outcome); // boolean real
+  item.hit = isMatch(item.direction, outcome);
   saveHistory(history);
   updateRowNextArrow(item);
   updateRowHitIcon(item);
@@ -480,14 +480,13 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
-  // ✅ SOLO mostrar si hay nextOutcome + hit true
   const showHit = !!item.nextOutcome && item.hit === true;
   const iconHidden = showHit ? "" : "hidden";
 
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <span class="hitIcon ${iconHidden}" aria-label="Coincidió" title="Coincidió con la próxima vela ✅">✅</span>
+      <span class="hitIcon ${iconHidden} hidden" aria-label="Coincidió" title="Coincidió con la próxima vela ✅">✅</span>
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -497,6 +496,11 @@ function buildRow(item) {
       <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
     </div>
   `;
+
+  // ✅ Forzamos hidden por default SIEMPRE (defensivo)
+  // (si corresponde mostrarlo, updateRowHitIcon lo habilita)
+  const icon = row.querySelector(".hitIcon");
+  if (icon) icon.classList.add("hidden");
 
   row.querySelector(".row-text").onclick = () => { window.location.href = derivUrl; };
 
@@ -535,22 +539,17 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  // ✅ Normalización fuerte para evitar "false" truthy u otros residuos
   let touched = false;
   for (const it of history) {
     if (!it.mode) { it.mode = "NORMAL"; touched = true; }
 
     // hit debe ser boolean real
-    if (typeof it.hit !== "boolean") {
-      it.hit = (it.hit === true); // cualquier cosa que no sea true boolean => false
-      touched = true;
-    }
+    if (typeof it.hit !== "boolean") { it.hit = (it.hit === true); touched = true; }
 
-    // Si NO hay nextOutcome aún -> jamás mostrar
+    // si no hay nextOutcome, hit debe ser false siempre
     if (!it.nextOutcome) {
       if (it.hit !== false) { it.hit = false; touched = true; }
     } else {
-      // Si ya hay nextOutcome, recalcular hit real
       const newHit = isMatch(it.direction, it.nextOutcome);
       if (it.hit !== newHit) { it.hit = newHit; touched = true; }
     }
@@ -583,7 +582,7 @@ function updateCountdownUI() {
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
-   ✅ FIX: Evaluación por reloj (NO depende del tick)
+   ✅ Evaluación por reloj (no depende del tick)
 ========================= */
 setInterval(() => {
   const nowMinuteStart = Math.floor(Date.now() / 60000) * 60000;
@@ -687,7 +686,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   Finalize minute
+   Finalize minute (flecha + completar minuto)
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
@@ -841,9 +840,9 @@ function addSignal(minute, symbol, direction, ticks) {
     vote: "",
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
-    nextOutcome: "",        // se setea cuando cierre la próxima vela
+    nextOutcome: "",        // ✅ aún no hay próxima vela
     minuteComplete: false,
-    hit: false              // ✅ SIEMPRE false al crear (nunca mostrar antes de tiempo)
+    hit: false              // ✅ nunca se muestra al crear
   };
 
   if (history.some(x => x.id === item.id)) return;
