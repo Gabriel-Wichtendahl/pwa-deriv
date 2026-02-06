@@ -1,6 +1,5 @@
 // app.js — V6.1 (fix evaluación por reloj + gráfico 0–60 REAL usando ticks_history)
-// Mantiene TODO lo que ya tenías (modo, eval 45/50/55, historial, candado, próxima vela, etc.)
-// y agrega: evaluación por TIMER (no depende del tick) para que 45/50/55 sea exacto.
+// + ✅ Badge visual cuando la flecha (próxima vela) coincide con la señal
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -86,6 +85,31 @@ function makeDerivTraderUrl(symbol) {
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+
+/* =========================
+   ✅ Badge match helpers
+========================= */
+function isMatch(direction, outcome) {
+  if (!direction || !outcome) return false;
+  if (outcome === "up" && direction === "CALL") return true;
+  if (outcome === "down" && direction === "PUT") return true;
+  return false;
+}
+function updateRowHitBadge(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const badge = row.querySelector(".hitBadge");
+  if (!badge) return;
+
+  const show = !!item.hit; // boolean
+  badge.classList.toggle("hidden", !show);
+
+  if (show) {
+    badge.title = "La próxima vela coincidió con la señal ✅";
+  } else {
+    badge.title = "";
+  }
+}
 
 /* =========================
    Persistencia
@@ -437,10 +461,16 @@ function updateRowNextArrow(item) {
     el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
   }
 }
+
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
+
+  // ✅ Badge: coincide con la señal
+  item.hit = isMatch(item.direction, outcome);
+
   saveHistory(history);
   updateRowNextArrow(item);
+  updateRowHitBadge(item);
 }
 
 /* =========================
@@ -454,9 +484,12 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
+  const badgeHidden = item.hit ? "" : "hidden";
+
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
+      <span class="hitBadge ${badgeHidden}" title="La próxima vela coincidió con la señal ✅">🎯 ACERTÓ</span>
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -493,6 +526,7 @@ function buildRow(item) {
   });
 
   updateRowNextArrow(item);
+  updateRowHitBadge(item);
   return row;
 }
 
@@ -503,8 +537,16 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  for (const it of history) if (!it.mode) it.mode = "NORMAL";
-  saveHistory(history);
+  // ✅ Backfill: si ya hay nextOutcome guardado, calculamos hit
+  let touched = false;
+  for (const it of history) {
+    if (!it.mode) { it.mode = "NORMAL"; touched = true; }
+    if (it.nextOutcome && typeof it.hit !== "boolean") {
+      it.hit = isMatch(it.direction, it.nextOutcome);
+      touched = true;
+    }
+  }
+  if (touched) saveHistory(history);
 
   signalCount = history.length;
   updateCounter();
@@ -533,11 +575,8 @@ setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
    ✅ FIX: Evaluación por reloj (NO depende del tick)
-   - Dispara en 45/50/55 aunque no llegue tick en ese segundo
 ========================= */
 setInterval(() => {
-  // Si ya sabemos el inicio del minuto por ticks, perfecto.
-  // Si se "quedó" atrasado y el reloj avanzó, lo empujamos adelante para no clavarnos.
   const nowMinuteStart = Math.floor(Date.now() / 60000) * 60000;
   if (!currentMinuteStartMs) currentMinuteStartMs = nowMinuteStart;
   if (nowMinuteStart > currentMinuteStartMs) currentMinuteStartMs = nowMinuteStart;
@@ -645,6 +684,7 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -723,8 +763,6 @@ function onTick(tick) {
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
-  // (Se mantiene) Evaluación por tick si llega después de EVAL_SEC.
-  // El timer ya asegura la evaluación exacta aunque no llegue tick en 45/50/55.
   if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
@@ -796,7 +834,8 @@ function addSignal(minute, symbol, direction, ticks) {
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
-    minuteComplete: false
+    minuteComplete: false,
+    hit: false
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -887,7 +926,11 @@ function connect() {
    Start
 ========================= */
 renderHistory();
-for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
+for (const it of history) {
+  updateRowChartBtn(it);
+  updateRowNextArrow(it);
+  updateRowHitBadge(it);
+}
 updateTickHealthUI();
 updateCountdownUI();
 connect();
