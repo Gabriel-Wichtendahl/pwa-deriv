@@ -35,15 +35,11 @@
       </div>
 
       <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-
       <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
     </div>
 
-    <!-- ✅ Contadores visibles -->
-    <div class="topStatus" style="margin-top:8px">
-      <div id="counter" class="pill">Señales: 0</div>
-      <div id="hitCounter" class="pill">✅ Aciertos: 0</div>
-    </div>
+    <div id="counter" class="counter">Señales: 0</div>
+    <div id="hitCounter" class="counter">✅ Aciertos: 0</div>
   </header>
 
   <main class="main">
@@ -79,9 +75,11 @@
   </div>
 
   <script src="app.js"></script>
+
   <script>
+    // ✅ Fuerza update del SW en Android (cache-busting)
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js");
+      navigator.serviceWorker.register("./sw.js?v=6.2.2");
     }
   </script>
 </body>
