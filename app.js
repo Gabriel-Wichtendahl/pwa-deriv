@@ -1,15 +1,7 @@
-// app.js — V6.8 (fix: no más “Conectando” por bloque duplicado)
-
-window.addEventListener("error", (e) => {
-  const st = document.getElementById("status");
-  if (st) st.textContent = "Error JS – revisar app.js";
-  console.log("JS error:", e?.message, e?.error);
-});
-window.addEventListener("unhandledrejection", (e) => {
-  const st = document.getElementById("status");
-  if (st) st.textContent = "Error Promise – revisar app.js";
-  console.log("Promise error:", e?.reason);
-});
+// app.js — V6.8 (mejora de señales: 2 fases + control de pullback/chop)
+// - Requiere avance 0–30s y confirmación 30–EVAL_SEC
+// - Penaliza “entrada profunda” del contrario en 30–EVAL_SEC
+// - Filtra velas sin dirección (chop) y sobre-extendidas (sin respiro)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -643,7 +635,7 @@ function renderHistory() {
 }
 
 /* =========================
-   Tick health + Countdown (warn/urgent)
+   Tick health + Countdown
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
@@ -670,12 +662,14 @@ function updateCountdownUI() {
   const v = String(remaining).padStart(2, "0");
   if (textEl) textEl.textContent = `⏱️ ${v}`;
 
+  // ✅ Estados: amarillo <=15s, rojo <=5s
   const urgent = remaining <= 5;
   const warn = !urgent && remaining <= 15;
 
   countdownEl.classList.toggle("urgent", urgent);
   countdownEl.classList.toggle("warn", warn);
 
+  // micro tick
   countdownEl.classList.remove("tick");
   void countdownEl.offsetWidth;
   countdownEl.classList.add("tick");
@@ -868,30 +862,208 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Evaluation
+   ✅ Helpers de análisis técnico (2 fases)
+========================= */
+const EPS = 1e-9;
+
+function sliceByMs(ticks, fromMs, toMs) {
+  if (!Array.isArray(ticks) || ticks.length === 0) return [];
+  const out = [];
+  for (const t of ticks) {
+    const ms = Number(t.ms);
+    if (ms >= fromMs && ms <= toMs) out.push(t);
+  }
+  out.sort((a, b) => a.ms - b.ms);
+  return out;
+}
+
+function interpPriceAt(ticks, targetMs) {
+  // ticks ordenados por ms
+  if (!ticks || ticks.length === 0) return null;
+  const tms = Number(targetMs);
+
+  // si está antes del primero o después del último
+  if (tms <= ticks[0].ms) return Number(ticks[0].quote);
+  const last = ticks[ticks.length - 1];
+  if (tms >= last.ms) return Number(last.quote);
+
+  // buscar vecinos
+  for (let i = 1; i < ticks.length; i++) {
+    const a = ticks[i - 1];
+    const b = ticks[i];
+    if (tms <= b.ms) {
+      const am = Number(a.ms), bm = Number(b.ms);
+      const aq = Number(a.quote), bq = Number(b.quote);
+      const span = Math.max(EPS, bm - am);
+      const k = (tms - am) / span;
+      return aq + (bq - aq) * k;
+    }
+  }
+  return Number(last.quote);
+}
+
+function pathLen(ticks) {
+  if (!ticks || ticks.length < 2) return 0;
+  let sum = 0;
+  for (let i = 1; i < ticks.length; i++) {
+    sum += Math.abs(Number(ticks[i].quote) - Number(ticks[i - 1].quote));
+  }
+  return sum;
+}
+
+function chopRatio(ticks, pStart, pEnd) {
+  const net = Math.abs(pEnd - pStart);
+  const path = pathLen(ticks);
+  return net / (path + EPS); // 0..1 (alto = más direccional)
+}
+
+function adverseFromAnchor(ticks, dirSign, anchorPrice) {
+  // dirSign: +1 (sube) o -1 (baja)
+  if (!ticks || ticks.length === 0) return 0;
+  let minQ = Infinity, maxQ = -Infinity;
+  for (const t of ticks) {
+    const q = Number(t.quote);
+    if (q < minQ) minQ = q;
+    if (q > maxQ) maxQ = q;
+  }
+  if (dirSign > 0) return Math.max(0, anchorPrice - minQ); // retroceso contra suba
+  return Math.max(0, maxQ - anchorPrice);                  // retroceso contra baja
+}
+
+function maxDrawAgainstTrend(ticks, dirSign) {
+  // mide el peor “respiro” contra tendencia en el tramo (drawdown si sube, drawup si baja)
+  if (!ticks || ticks.length < 2) return 0;
+  if (dirSign > 0) {
+    let peak = Number(ticks[0].quote);
+    let worst = 0;
+    for (const t of ticks) {
+      const q = Number(t.quote);
+      if (q > peak) peak = q;
+      worst = Math.max(worst, peak - q);
+    }
+    return worst;
+  } else {
+    let trough = Number(ticks[0].quote);
+    let worst = 0;
+    for (const t of ticks) {
+      const q = Number(t.quote);
+      if (q < trough) trough = q;
+      worst = Math.max(worst, q - trough);
+    }
+    return worst;
+  }
+}
+
+/* =========================
+   ✅ Evaluation (MEJORADO)
+   Objetivo:
+   - Fase 1 (0–30): avance claro
+   - Fase 2 (30–EVAL): confirmación en misma dirección
+   - Evitar “entrada profunda” del contrario 30–EVAL
+   - Evitar chop (sin dirección)
+   - Evitar velas sin respiro / sobre-extendidas
 ========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return false;
 
+  const MID_SEC = 30;
+  const END_SEC = EVAL_SEC;
+
   const candidates = [];
   let readySymbols = 0;
 
   for (const sym of SYMBOLS) {
-    const ticks = data[sym] || [];
-    if (ticks.length >= MIN_TICKS) readySymbols++;
+    const raw = data[sym] || [];
+    if (raw.length >= MIN_TICKS) readySymbols++;
+    if (raw.length < MIN_TICKS) continue;
+
+    // trabajamos solo hasta END_SEC para coherencia
+    const ticks = sliceByMs(raw, 0, END_SEC * 1000);
     if (ticks.length < MIN_TICKS) continue;
 
-    const prices = ticks.map(t => t.quote);
-    const move = prices[prices.length - 1] - prices[0];
-    const rawMove = Math.abs(move);
+    const p0 = interpPriceAt(ticks, 0);
+    const pMid = interpPriceAt(ticks, MID_SEC * 1000);
+    const pEnd = interpPriceAt(ticks, END_SEC * 1000);
+    if (p0 == null || pMid == null || pEnd == null) continue;
 
-    let vol = 0;
-    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
-    vol = vol / Math.max(1, prices.length - 1);
+    const move0_30 = pMid - p0;
+    const move30_E = pEnd - pMid;
+    const move0_E = pEnd - p0;
 
-    const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol: sym, move, score, ticks });
+    // Dirección candidata (según el minuto hasta END_SEC)
+    let dirSign = 0;
+    if (move0_E > 0) dirSign = 1;
+    else if (move0_E < 0) dirSign = -1;
+    else continue;
+
+    // Requerimos coherencia por fases:
+    // 0–30 y 30–END deben ir en la misma dirección (al menos no contradecir)
+    const s1 = Math.sign(move0_30);
+    const s2 = Math.sign(move30_E);
+    if (s1 === 0) continue;
+    // Si la fase 2 va contra la fase 1, descartamos (esto mata muchos dislikes)
+    if (s2 !== 0 && s2 !== s1) continue;
+
+    // Segmentos
+    const seg0_30 = sliceByMs(ticks, 0, MID_SEC * 1000);
+    const seg30_E = sliceByMs(ticks, MID_SEC * 1000, END_SEC * 1000);
+
+    const path0_30 = pathLen(seg0_30);
+    const path30_E = pathLen(seg30_E);
+
+    // Impulso normalizado por “camino” (0..1 aprox)
+    const imp1 = (dirSign * move0_30) / (path0_30 + EPS);
+    const imp2 = (dirSign * move30_E) / (path30_E + EPS);
+
+    // Chop (direccionalidad global)
+    const chop = chopRatio(ticks, p0, pEnd); // alto = bueno
+
+    // Entrada profunda del contrario desde 30s (lo que más te molesta)
+    const adverse30 = adverseFromAnchor(seg30_E, dirSign, pMid);
+    const adverseNorm = adverse30 / (Math.abs(move0_E) + EPS);
+
+    // Respiro vs sobre-extendida
+    const pb = maxDrawAgainstTrend(ticks, dirSign);
+    const pbNorm = pb / (Math.abs(move0_E) + EPS);
+
+    // Penalización “sin respiro” (pb demasiado chico) y “demasiado profundo” (pb grande)
+    // (bandas conservadoras para NORMAL)
+    let overextendPenalty = 0;
+    if (pbNorm < 0.04) overextendPenalty += 0.18;  // casi recta: “no respira”
+    if (pbNorm > 0.65) overextendPenalty += 0.35;  // pullback enorme: peligro
+
+    // Filtros mínimos (NORMAL)
+    // - Fase 1 debe mostrar avance real
+    // - Fase 2 debe confirmar (aunque sea suave)
+    // - Chop no puede ser muy bajo (si no, “sin dirección”)
+    // - Adverse desde 30 no puede ser profundo
+    const minImp1 = strongMode ? 0.28 : 0.22;
+    const minImp2 = strongMode ? 0.12 : 0.08;
+    const minChop = strongMode ? 0.52 : 0.45;
+    const maxAdverse = strongMode ? 0.45 : 0.55;
+
+    if (imp1 < minImp1) continue;
+    if (imp2 < minImp2) continue;
+    if (chop < minChop) continue;
+    if (adverseNorm > maxAdverse) continue;
+
+    // Score final (ajustable con feedback)
+    // - Prioriza 0–30 y continuidad 30–END
+    // - Castiga adverse (entrada del contrario) + chop bajo + sobreextensión
+    const score =
+      (1.35 * imp1) +
+      (1.10 * imp2) +
+      (0.80 * chop) -
+      (1.35 * adverseNorm) -
+      overextendPenalty;
+
+    candidates.push({
+      symbol: sym,
+      score,
+      dirSign,
+      ticks: ticks
+    });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
@@ -899,10 +1071,11 @@ function evaluateMinute(minute) {
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
 
-  const threshold = strongMode ? 0.02 : 0.015;
+  // Umbral final de disparo (NORMAL vs FUERTE)
+  const threshold = strongMode ? 1.40 : 1.18;
   if (!best || best.score < threshold) return true;
 
-  addSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT", best.ticks);
+  addSignal(minute, best.symbol, best.dirSign > 0 ? "CALL" : "PUT", best.ticks);
   return true;
 }
 
@@ -997,9 +1170,7 @@ function connect() {
     } catch {}
   };
 
-  ws.onerror = () => {
-    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
-  };
+  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
 
   ws.onclose = () => {
     for (const [id, p] of pending.entries()) {
