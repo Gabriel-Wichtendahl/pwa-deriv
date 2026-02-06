@@ -89,3 +89,4 @@ self.addEventListener("notificationclick", (event) => {
     await clients.openWindow(url);
   })());
 });
+
