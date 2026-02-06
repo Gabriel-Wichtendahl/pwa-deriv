@@ -162,3 +162,4 @@ textarea{
 }
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
 @media (max-width:480px){.modalCard{inset:6%}}
+
