@@ -1,4 +1,15 @@
-// app.js — V6.7 (ring HUD pro en countdown)
+// app.js — V6.8 (fix: no más “Conectando” por bloque duplicado)
+
+window.addEventListener("error", (e) => {
+  const st = document.getElementById("status");
+  if (st) st.textContent = "Error JS – revisar app.js";
+  console.log("JS error:", e?.message, e?.error);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const st = document.getElementById("status");
+  if (st) st.textContent = "Error Promise – revisar app.js";
+  console.log("Promise error:", e?.reason);
+});
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -342,7 +353,7 @@ function showNotification(symbol, direction, modeLabel) {
 }
 
 /* =========================
-   Chart modal (sin cambios)
+   Chart modal
 ========================= */
 function openChartModal(item) {
   if (!item.minuteComplete) return;
@@ -462,7 +473,7 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   Row helpers (igual que antes)
+   Row helpers
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -632,7 +643,7 @@ function renderHistory() {
 }
 
 /* =========================
-   Tick health + Countdown (RING PRO)
+   Tick health + Countdown (warn/urgent)
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
@@ -648,7 +659,7 @@ function updateCountdownUI() {
 
   if (!currentMinuteStartMs) {
     if (textEl) textEl.textContent = "⏱️ 60";
-    countdownEl.classList.remove("urgent", "warn");
+    countdownEl.classList.remove("urgent", "warn", "tick");
     return;
   }
 
@@ -659,34 +670,12 @@ function updateCountdownUI() {
   const v = String(remaining).padStart(2, "0");
   if (textEl) textEl.textContent = `⏱️ ${v}`;
 
-  // ✅ Estados: amarillo <=15s, rojo <=5s
   const urgent = remaining <= 5;
   const warn = !urgent && remaining <= 15;
 
   countdownEl.classList.toggle("urgent", urgent);
   countdownEl.classList.toggle("warn", warn);
 
-  // micro tick
-  countdownEl.classList.remove("tick");
-  void countdownEl.offsetWidth;
-  countdownEl.classList.add("tick");
-}
-
-  const now = Date.now();
-  const msInMinute = (now - currentMinuteStartMs) % 60000;
-
-  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-  const v = String(remaining).padStart(2, "0");
-  if (textEl) textEl.textContent = `⏱️ ${v}`;
-
-  // progreso del aro 0..1
-  const progress = Math.max(0, Math.min(1, msInMinute / 60000));
-  if (ringEl) ringEl.style.setProperty("--p", String(progress));
-
-  // últimos 5s: modo urgente rojo + pulso
-  countdownEl.classList.toggle("urgent", remaining <= 5);
-
-  // micro tick
   countdownEl.classList.remove("tick");
   void countdownEl.offsetWidth;
   countdownEl.classList.add("tick");
@@ -1008,7 +997,9 @@ function connect() {
     } catch {}
   };
 
-  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
+  ws.onerror = () => {
+    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
+  };
 
   ws.onclose = () => {
     for (const [id, p] of pending.entries()) {
