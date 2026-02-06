@@ -1,4 +1,4 @@
-// app.js — V6.6 (hit POP + fail SHAKE + votos cyan)
+// app.js — V6.7 (ring HUD pro en countdown)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -129,7 +129,6 @@ function isHit(item){
   return (item.direction === "CALL" && item.nextOutcome === "up")
       || (item.direction === "PUT" && item.nextOutcome === "down");
 }
-
 function computeHitsCount() {
   let hits = 0;
   for (const it of history) if (isHit(it)) hits++;
@@ -343,7 +342,7 @@ function showNotification(symbol, direction, modeLabel) {
 }
 
 /* =========================
-   Chart modal
+   Chart modal (sin cambios)
 ========================= */
 function openChartModal(item) {
   if (!item.minuteComplete) return;
@@ -367,7 +366,10 @@ function closeChartModal() {
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeChartModal(); closeSettings(); } });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeChartModal(); closeSettings(); }
+});
 if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
   if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
 };
@@ -376,9 +378,6 @@ window.addEventListener("resize", () => {
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
 });
 
-/* =========================
-   Chart
-========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -463,7 +462,7 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   Row helpers
+   Row helpers (igual que antes)
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -501,7 +500,6 @@ function animateHitPop(item){
   const hit = row.querySelector(".hitIcon");
   if (!hit) return;
   hit.classList.remove("pop");
-  // force reflow
   void hit.offsetWidth;
   hit.classList.add("pop");
   setTimeout(() => hit.classList.remove("pop"), 260);
@@ -543,7 +541,6 @@ function setNextOutcome(item, outcome) {
   const ok = updateRowHitIcon(item);
   updateCounter();
 
-  // ✅ Animaciones: hit POP o fail SHAKE
   if (ok) animateHitPop(item);
   else animateFailShake(item);
 }
@@ -635,7 +632,7 @@ function renderHistory() {
 }
 
 /* =========================
-   Tick health + countdown
+   Tick health + Countdown (RING PRO)
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
@@ -647,16 +644,35 @@ function updateTickHealthUI() {
 function updateCountdownUI() {
   if (!countdownEl) return;
 
+  // ✅ soporta ambos: nuevo (#countdownText + .countRing) o viejo (texto directo)
+  const textEl = document.getElementById("countdownText") || countdownEl;
+  const ringEl = countdownEl.querySelector ? countdownEl.querySelector(".countRing") : null;
+
   if (!currentMinuteStartMs) {
-    countdownEl.textContent = "⏱️ 60";
+    if (textEl) textEl.textContent = "⏱️ 60";
+    if (ringEl) ringEl.style.setProperty("--p", "0");
+    countdownEl.classList.remove("urgent");
     return;
   }
 
-  const msInMinute = (Date.now() - currentMinuteStartMs) % 60000;
-  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+  const now = Date.now();
+  const msInMinute = (now - currentMinuteStartMs) % 60000;
 
+  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   const v = String(remaining).padStart(2, "0");
-  countdownEl.textContent = `⏱️ ${v}`;
+  if (textEl) textEl.textContent = `⏱️ ${v}`;
+
+  // progreso del aro 0..1
+  const progress = Math.max(0, Math.min(1, msInMinute / 60000));
+  if (ringEl) ringEl.style.setProperty("--p", String(progress));
+
+  // últimos 5s: modo urgente rojo + pulso
+  countdownEl.classList.toggle("urgent", remaining <= 5);
+
+  // micro tick
+  countdownEl.classList.remove("tick");
+  void countdownEl.offsetWidth;
+  countdownEl.classList.add("tick");
 }
 
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 500);
@@ -665,7 +681,7 @@ setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 500);
    ✅ ticks_history (requests)
 ========================= */
 let reqSeq = 1;
-const pending = new Map(); // req_id -> {resolve, reject, t}
+const pending = new Map();
 
 function wsRequest(payload) {
   return new Promise((resolve, reject) => {
@@ -992,7 +1008,6 @@ function connect() {
    Start
 ========================= */
 renderHistory();
-for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updateRowHitIcon(it); }
 updateTickHealthUI();
 updateCountdownUI();
 connect();
