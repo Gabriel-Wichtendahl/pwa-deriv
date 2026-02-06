@@ -1,4 +1,4 @@
-// app.js — V6.5 (fix hit/tilde + sin reloj analógico + glow fuerte + votos visibles + config prolijo)
+// app.js — V6.6 (hit POP + fail SHAKE + votos cyan)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -486,12 +486,36 @@ function updateRowChartBtn(item) {
 
 function updateRowHitIcon(item){
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
+  if (!row) return false;
   const hit = row.querySelector(".hitIcon");
-  if (!hit) return;
+  if (!hit) return false;
   const show = isHit(item);
   hit.classList.toggle("hidden", !show);
   hit.title = show ? "Acertó" : "";
+  return show;
+}
+
+function animateHitPop(item){
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return;
+  hit.classList.remove("pop");
+  // force reflow
+  void hit.offsetWidth;
+  hit.classList.add("pop");
+  setTimeout(() => hit.classList.remove("pop"), 260);
+}
+
+function animateFailShake(item){
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const arrow = row.querySelector(".nextArrow");
+  if (!arrow) return;
+  arrow.classList.remove("failShake");
+  void arrow.offsetWidth;
+  arrow.classList.add("failShake");
+  setTimeout(() => arrow.classList.remove("failShake"), 260);
 }
 
 function updateRowNextArrow(item) {
@@ -514,9 +538,14 @@ function updateRowNextArrow(item) {
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   saveHistory(history);
+
   updateRowNextArrow(item);
-  updateRowHitIcon(item);
+  const ok = updateRowHitIcon(item);
   updateCounter();
+
+  // ✅ Animaciones: hit POP o fail SHAKE
+  if (ok) animateHitPop(item);
+  else animateFailShake(item);
 }
 
 /* =========================
@@ -551,15 +580,13 @@ function buildRow(item) {
   chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
   updateRowChartBtn(item);
 
-  // estado inicial tilde (solo si ya hay nextOutcome y coincide)
   updateRowHitIcon(item);
 
-  // pintar selección de voto si ya existe
   if (item.vote) {
     const likeBtn = row.querySelector('button[data-v="like"]');
     const disBtn  = row.querySelector('button[data-v="dislike"]');
-    if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected","like");
-    if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected","dislike");
+    if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
+    if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
   }
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
@@ -570,13 +597,8 @@ function buildRow(item) {
       item.vote = btn.dataset.v;
       item.comment = row.querySelector(".row-comment").value || "";
 
-      // UI: marcar seleccionado
       row.classList.add("voted");
-      const likeBtn = row.querySelector('button[data-v="like"]');
-      const disBtn  = row.querySelector('button[data-v="dislike"]');
-
-      if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected","like");
-      if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected","dislike");
+      btn.classList.add("selected");
 
       saveHistory(history);
       rebuildFeedbackFromHistory();
@@ -633,7 +655,6 @@ function updateCountdownUI() {
   const msInMinute = (Date.now() - currentMinuteStartMs) % 60000;
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
 
-  // ✅ pad para que se vea prolijo y no “salte”
   const v = String(remaining).padStart(2, "0");
   countdownEl.textContent = `⏱️ ${v}`;
 }
@@ -733,7 +754,6 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -976,4 +996,3 @@ for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updat
 updateTickHealthUI();
 updateCountdownUI();
 connect();
-
