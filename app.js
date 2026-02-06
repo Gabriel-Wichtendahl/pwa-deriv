@@ -1,8 +1,4 @@
-// app.js — v6.2.2
-// Fixes:
-// - Candado visible siempre (aunque el botón esté disabled)
-// - Animaciones: candado pulse, unlock pop, hit pop
-// - UI: contador de aciertos (hitCounter)
+// app.js — V6.2+ (fix candado + animación + XIAOMI row-text no empuja iconos)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -17,6 +13,7 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
+/** ticks_history para minuto REAL */
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -26,7 +23,6 @@ const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
 const statusEl = $("status");
 const signalsEl = $("signals");
 const counterEl = $("counter");
-const hitCounterEl = $("hitCounter");
 const feedbackEl = $("feedback");
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
@@ -42,6 +38,9 @@ const copyBtn = $("copyFeedback");
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
 
+// (si existe en tu index)
+const hitCounterEl = $("hitCounter");
+
 const chartModal = $("chartModal");
 const modalCloseBtn = $("modalCloseBtn");
 const modalCloseBackdrop = $("modalCloseBackdrop");
@@ -54,13 +53,13 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-let EVAL_SEC = 45;
-let strongMode = false;
+let EVAL_SEC = 45;       // 45/50/55
+let strongMode = false;  // NORMAL/FUERTE
 
 let history = loadHistory();
 let signalCount = 0;
 
-let minuteData = {}; // minute -> symbol -> ticks[]
+let minuteData = {};           // minute -> symbol -> [{ms, quote}, ...]
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -109,7 +108,7 @@ function saveHistory(arr) {
 }
 
 /* =========================
-   Helpers UI
+   Helpers UI / estado
 ========================= */
 function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
 function loadBool(key, fallback) {
@@ -118,34 +117,22 @@ function loadBool(key, fallback) {
 }
 function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
 
+function updateCounter() {
+  if (counterEl) counterEl.textContent = `Señales: ${signalCount}`;
+
+  // ✅ contador de aciertos (si está el nodo en index)
+  if (hitCounterEl) {
+    const hits = history.filter(it => it.hit === true).length;
+    hitCounterEl.textContent = `✅ Aciertos: ${hits}`;
+  }
+}
+
 function escapeHtml(str) {
   return String(str)
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
 function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
-
-function updateCounter() {
-  signalCount = history.length;
-  if (counterEl) counterEl.textContent = `Señales: ${signalCount}`;
-}
-
-function computeHitsCount() {
-  // hit = sólo cuando ya existe nextOutcome y coincide con la dirección de la señal
-  let hits = 0;
-  for (const it of history) {
-    if (!it.nextOutcome) continue;
-    const ok =
-      (it.direction === "CALL" && it.nextOutcome === "up") ||
-      (it.direction === "PUT" && it.nextOutcome === "down");
-    if (ok) hits++;
-  }
-  return hits;
-}
-function updateHitCounter() {
-  if (!hitCounterEl) return;
-  hitCounterEl.textContent = `✅ Aciertos: ${computeHitsCount()}`;
-}
 
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
@@ -267,8 +254,8 @@ if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText
 function clearHistory() {
   history = [];
   saveHistory(history);
+  signalCount = 0;
   updateCounter();
-  updateHitCounter();
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
 }
@@ -423,38 +410,9 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   Hit badge (✅) junto a la flecha
-========================= */
-function ensureHitIcon(row) {
-  let el = row.querySelector(".hitIcon");
-  if (el) return el;
-  const icon = document.createElement("span");
-  icon.className = "hitIcon hidden";
-  icon.textContent = "✓";
-  // lo ponemos justo antes de la flecha (quedan: texto | chart | ✅ | flecha)
-  const arrow = row.querySelector(".nextArrow");
-  if (arrow) arrow.insertAdjacentElement("beforebegin", icon);
-  return icon;
-}
-function setHitIcon(row, show) {
-  const el = ensureHitIcon(row);
-  if (!el) return;
-
-  if (show) {
-    el.classList.remove("hidden");
-    // pop anim
-    el.classList.remove("hitPop");
-    void el.offsetWidth; // reflow
-    el.classList.add("hitPop");
-  } else {
-    el.classList.add("hidden");
-  }
-}
-
-/* =========================
    Row helpers
 ========================= */
-function updateRowChartBtn(item, { pop = false } = {}) {
+function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
   const btn = row.querySelector(".chartBtn");
@@ -463,21 +421,17 @@ function updateRowChartBtn(item, { pop = false } = {}) {
   const ready = !!item.minuteComplete;
   btn.disabled = !ready;
 
+  // ✅ clase para animación de candado
+  btn.classList.toggle("locked", !ready);
+
   if (ready) {
     btn.innerHTML = CHART_ICON_SVG;
     btn.title = "Ver gráfico del minuto (ticks 0–60)";
-    if (pop) {
-      btn.classList.remove("unlockPop");
-      void btn.offsetWidth;
-      btn.classList.add("unlockPop");
-    }
   } else {
-    // ✅ candado SIEMPRE visible (aunque disabled)
-    btn.innerHTML = `<span class="lockBadge lockPulse" aria-hidden="true">🔒</span>`;
+    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
     btn.title = "Esperando cierre del minuto…";
   }
 }
-
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -493,20 +447,31 @@ function updateRowNextArrow(item) {
   } else {
     el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
   }
-
-  // ✅ Mostrar tilde SOLO cuando ya hay resultado y coincide con señal
-  const showHit =
-    !!item.nextOutcome &&
-    ((item.direction === "CALL" && item.nextOutcome === "up") ||
-     (item.direction === "PUT" && item.nextOutcome === "down"));
-  setHitIcon(row, showHit);
 }
-
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
+
+  // ✅ marcar hit SOLO cuando ya hay outcome y coincide
+  const wantsUp = item.direction === "CALL";
+  const hit = (wantsUp && outcome === "up") || (!wantsUp && outcome === "down");
+  item.hit = hit ? true : false;
+
   saveHistory(history);
   updateRowNextArrow(item);
-  updateHitCounter();
+  updateRowHitIcon(item);
+  updateCounter();
+}
+
+/* ✅ icono de acierto al lado de flecha */
+function updateRowHitIcon(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+
+  const icon = row.querySelector(".hitIcon");
+  if (!icon) return;
+
+  const show = item.hit === true && (item.nextOutcome === "up" || item.nextOutcome === "down");
+  icon.classList.toggle("hidden", !show);
 }
 
 /* =========================
@@ -525,6 +490,7 @@ function buildRow(item) {
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
+      <span class="hitIcon hidden" title="Acertó">✓</span>
     </div>
     <div class="row-actions">
       <button data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
@@ -537,9 +503,7 @@ function buildRow(item) {
 
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
-
   updateRowChartBtn(item);
-  updateRowNextArrow(item); // esto también setea hitIcon si aplica
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
@@ -560,6 +524,8 @@ function buildRow(item) {
     rebuildFeedbackFromHistory();
   });
 
+  updateRowNextArrow(item);
+  updateRowHitIcon(item);
   return row;
 }
 
@@ -573,8 +539,8 @@ function renderHistory() {
   for (const it of history) if (!it.mode) it.mode = "NORMAL";
   saveHistory(history);
 
+  signalCount = history.length;
   updateCounter();
-  updateHitCounter();
   rebuildFeedbackFromHistory();
 
   for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
@@ -599,10 +565,10 @@ function updateCountdownUI() {
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
-   Requests WS (ticks_history)
+   WS requests (ticks_history)
 ========================= */
 let reqSeq = 1;
-const pending = new Map();
+const pending = new Map(); // req_id -> {resolve, reject, t}
 
 function wsRequest(payload) {
   return new Promise((resolve, reject) => {
@@ -716,17 +682,17 @@ function finalizeMinute(minute) {
       if (it.minute === minute && !it.minuteComplete) {
         it.minuteComplete = true;
         changed = true;
-        updateRowChartBtn(it, { pop: true }); // ✅ unlock pop
+        updateRowChartBtn(it);
       }
     }
-    if (changed) {
-      saveHistory(history);
-      updateHitCounter();
-    }
+    if (changed) saveHistory(history);
 
     if (modalCurrentItem && modalCurrentItem.minute === minute && modalCurrentItem.minuteComplete) {
       drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
     }
+
+    // refrescar contadores
+    updateCounter();
   })();
 
   delete candleOC[minute - 3];
@@ -844,7 +810,8 @@ function addSignal(minute, symbol, direction, ticks) {
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
-    minuteComplete: false
+    minuteComplete: false,
+    hit: false
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -853,10 +820,11 @@ function addSignal(minute, symbol, direction, ticks) {
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
   saveHistory(history);
 
+  signalCount = history.length;
   updateCounter();
-  updateHitCounter();
 
   if (signalsEl) signalsEl.prepend(buildRow(item));
+  updateRowChartBtn(item);
 
   if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
@@ -934,6 +902,7 @@ function connect() {
    Start
 ========================= */
 renderHistory();
+for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updateRowHitIcon(it); }
 updateTickHealthUI();
 updateCountdownUI();
 connect();
