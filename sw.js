@@ -1,4 +1,5 @@
-const CACHE = "deriv-assets-v6-5-3";
+const CACHE = "deriv-assets-v6-8";
+
 const ASSETS = [
   "./",
   "./index.html",
@@ -12,36 +13,50 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
+  e.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(ASSETS);
+  })());
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.map(k => (k !== CACHE ? caches.delete(k) : null)))
-    )
-  );
-  self.clients.claim();
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.map(k => (k !== CACHE ? caches.delete(k) : null)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  if (
-    url.pathname.endsWith("/index.html") ||
-    url.pathname.endsWith("/app.js") ||
-    e.request.mode === "navigate"
-  ) {
-    e.respondWith(fetch(e.request));
+  const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html");
+  const isCore = url.pathname.endsWith("/app.js") || url.pathname.endsWith("/style.css");
+
+  // ✅ Network-first para no quedar clavado con versiones viejas
+  if (isHTML || isCore) {
+    e.respondWith((async () => {
+      try {
+        const fresh = await fetch(e.request, { cache: "no-store" });
+        const cache = await caches.open(CACHE);
+        cache.put(e.request, fresh.clone());
+        return fresh;
+      } catch {
+        const cached = await caches.match(e.request);
+        return cached || caches.match("./index.html");
+      }
+    })());
     return;
   }
 
+  // ✅ Cache-first para el resto
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request))
   );
 });
 
+/* ✅ Click en notificación: abre Deriv en DEMO / Rise-Fall / símbolo */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
