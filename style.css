@@ -329,7 +329,7 @@ textarea{
 }
 
 /* =========================
-   ⏱️ Reloj PRO (aro HUD)
+   ⏱️ Reloj PRO (aro HUD + scanline)
 ========================= */
 .countdownPill{
   display:flex;
@@ -343,17 +343,23 @@ textarea{
   font-variant-numeric: tabular-nums;
   letter-spacing:.4px;
 }
+
+/* Aro base (progreso) */
 .countRing{
-  --p: 0; /* 0..1 */
+  --p: 0;         /* 0..1 */
+  --ringC: rgba(34,211,238,.95);
+  --trackC: rgba(148,163,184,.18);
+
   width:22px;
   height:22px;
   border-radius:999px;
   position:relative;
 
   background:
-    conic-gradient(rgba(34,211,238,.95) calc(var(--p) * 360deg),
-                   rgba(148,163,184,.18) 0);
+    conic-gradient(var(--ringC) calc(var(--p) * 360deg),
+                   var(--trackC) 0);
 
+  /* agujero central */
   -webkit-mask: radial-gradient(circle at center, transparent 58%, #000 60%);
           mask: radial-gradient(circle at center, transparent 58%, #000 60%);
 
@@ -363,13 +369,62 @@ textarea{
   transform: translateZ(0);
 }
 
+/* ✅ Scanline giratoria (muy sutil) */
+.countRing::after{
+  content:"";
+  position:absolute;
+  inset:-2px;           /* un pelín más grande para glow */
+  border-radius:999px;
+  pointer-events:none;
+
+  /* línea finita + un halo suave */
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 332deg,
+      rgba(34,211,238,.00) 332deg,
+      rgba(34,211,238,.85) 336deg,
+      rgba(34,211,238,.00) 340deg,
+      transparent 340deg,
+      transparent 360deg
+    );
+
+  -webkit-mask: radial-gradient(circle at center, transparent 58%, #000 60%);
+          mask: radial-gradient(circle at center, transparent 58%, #000 60%);
+
+  filter: blur(.15px);
+  opacity:.9;
+  animation: scanSpin 1.25s linear infinite;
+}
+
+@keyframes scanSpin{
+  to{ transform: rotate(360deg); }
+}
+
+/* últimos 5s: rojo + pulso, también cambia scanline a rojo */
 .countdownPill.urgent .countRing{
+  --ringC: rgba(239,68,68,.92);
+
   box-shadow:
     0 0 18px rgba(239,68,68,.35),
     0 0 50px rgba(239,68,68,.14);
   background:
-    conic-gradient(rgba(239,68,68,.92) calc(var(--p) * 360deg),
-                   rgba(148,163,184,.18) 0);
+    conic-gradient(var(--ringC) calc(var(--p) * 360deg),
+                   var(--trackC) 0);
+}
+.countdownPill.urgent .countRing::after{
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      transparent 332deg,
+      rgba(239,68,68,.00) 332deg,
+      rgba(239,68,68,.85) 336deg,
+      rgba(239,68,68,.00) 340deg,
+      transparent 340deg,
+      transparent 360deg
+    );
 }
 
 @keyframes ringPulse{
@@ -381,16 +436,18 @@ textarea{
   animation: ringPulse .65s ease-in-out infinite;
 }
 
+/* micro “tick” del texto */
 @keyframes secTick{
   0%{ transform:translateY(0); }
   40%{ transform:translateY(-1px); }
   100%{ transform:translateY(0); }
 }
-.countdownPill.tick .countText{animation: secTick .16s ease-out}
+.countdownPill.tick .countText{ animation: secTick .16s ease-out; }
 
 @media (prefers-reduced-motion: reduce){
-  .countdownPill.urgent .countRing{animation:none}
-  .countdownPill.tick .countText{animation:none}
+  .countdownPill.urgent .countRing{ animation:none; }
+  .countdownPill.tick .countText{ animation:none; }
+  .countRing::after{ animation:none; }
 }
 
 
