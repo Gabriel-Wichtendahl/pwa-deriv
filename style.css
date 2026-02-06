@@ -18,7 +18,6 @@ body.light{
   --text:#0f172a;
   --muted:#475569;
   --border:rgba(15,23,42,.18);
-
   --btn-bg:rgba(226,232,240,.95);
   --btn-text:#0f172a;
 }
@@ -97,7 +96,9 @@ body.light .bgNeon{display:none}
 .evalBtn.active{opacity:1;border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.55)}
 .modeBtn{font-weight:650}
 .modeBtn.active-strong{border-color:var(--neon-orange);box-shadow:0 0 14px rgba(251,146,60,.55);color:#fdba74}
+
 .counter{margin:8px 0;font-size:14px;color:var(--muted)}
+
 .signals{display:flex;flex-direction:column;gap:8px}
 .row{
   background:var(--bg-card);
@@ -109,18 +110,38 @@ body.light .bgNeon{display:none}
 .row-main{display:flex;align-items:center;gap:8px}
 .row-text{flex:1;cursor:pointer;user-select:none}
 .row-text:hover{text-decoration:underline}
+
 .chartBtn{
   width:38px;height:38px;border-radius:12px;
   display:grid;place-items:center;padding:0;
 }
 .chartBtn svg{width:20px;height:20px}
-.chartBtn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+
+/* 🔒 YA NO USAMOS :disabled PARA EL CANDADO (para que no desaparezca en Android) */
+.chartBtn.locked{
+  cursor:not-allowed;
+  opacity:.95;
+  border-color:rgba(168,85,247,.22);
+  box-shadow:0 0 16px rgba(168,85,247,.12);
+}
+.chartBtn.locked:hover{transform:none; box-shadow:0 0 16px rgba(168,85,247,.18)}
+.chartBtn.locked .lockPulse{
+  animation: lockPulse 1.35s ease-in-out infinite;
+}
+
 .lockBadge{font-size:18px}
+
 .nextArrow{font-size:18px;width:28px;text-align:center}
-.nextArrow.up{color:var(--neon-green)}
-.nextArrow.down{color:var(--neon-red)}
-.nextArrow.flat{color:var(--muted)}
+.nextArrow.up{color:var(--neon-green); animation: arrowIn .18s ease-out}
+.nextArrow.down{color:var(--neon-red); animation: arrowIn .18s ease-out}
+.nextArrow.flat{color:var(--muted); animation: arrowIn .18s ease-out}
 .nextArrow.pending{color:var(--muted)}
+
+@keyframes arrowIn{
+  from{ transform:translateY(2px); opacity:.35 }
+  to{ transform:translateY(0); opacity:1 }
+}
+
 .row-actions{display:flex;gap:6px;margin-top:8px;align-items:center}
 .row-actions button{padding:6px 10px;border-radius:12px}
 .row-comment{
@@ -129,6 +150,7 @@ body.light .bgNeon{display:none}
   border-radius:12px;
   padding:7px 10px;
 }
+
 textarea{
   width:100%;
   background:var(--bg-card);
@@ -138,6 +160,7 @@ textarea{
   padding:10px;
   backdrop-filter:blur(16px);
 }
+
 .modal.hidden{display:none}
 .modalBackdrop{
   position:fixed;inset:0;z-index:20;
@@ -163,8 +186,7 @@ textarea{
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
 @media (max-width:480px){.modalCard{inset:6%}}
 
-
-/* ✅ Ícono cuando la flecha (próxima vela) coincide con la señal */
+/* ✅ Ícono cuando la flecha coincide con la señal */
 .hitIcon{
   width:26px;
   height:26px;
@@ -181,28 +203,21 @@ textarea{
   font-size:14px;
   font-weight:800;
   line-height:1;
-}
 
+  transform:scale(1);
+}
 .hitIcon.hidden{ display:none; }
 
-/* ✅ FIX DEFENSIVO: cualquier .hidden se oculta siempre (evita bugs por cache/orden) */
-.hidden{ display:none !important; }
+.hitIcon.pop{
+  animation: hitPop .22s ease-out;
+}
+@keyframes hitPop{
+  from{ transform:scale(.75); opacity:.45 }
+  to{ transform:scale(1); opacity:1 }
+}
 
-/* ✅ Ícono cuando la flecha (próxima vela) coincide con la señal */
-.hitIcon{
-  width:26px;
-  height:26px;
-  display:inline-grid;
-  place-items:center;
-
-  border-radius:999px;
-  border:1px solid rgba(34,197,94,.55);
-  background:rgba(34,197,94,.14);
-
-  box-shadow:0 0 16px rgba(34,197,94,.35);
-  color:#bbf7d0;
-
-  font-size:14px;
-  font-weight:800;
-  line-height:1;
+@keyframes lockPulse{
+  0%{ transform:scale(1); opacity:1 }
+  50%{ transform:scale(1.07); opacity:.78 }
+  100%{ transform:scale(1); opacity:1 }
 }
