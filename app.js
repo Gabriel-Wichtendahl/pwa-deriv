@@ -644,16 +644,33 @@ function updateTickHealthUI() {
 function updateCountdownUI() {
   if (!countdownEl) return;
 
-  // ✅ soporta ambos: nuevo (#countdownText + .countRing) o viejo (texto directo)
   const textEl = document.getElementById("countdownText") || countdownEl;
-  const ringEl = countdownEl.querySelector ? countdownEl.querySelector(".countRing") : null;
 
   if (!currentMinuteStartMs) {
     if (textEl) textEl.textContent = "⏱️ 60";
-    if (ringEl) ringEl.style.setProperty("--p", "0");
-    countdownEl.classList.remove("urgent");
+    countdownEl.classList.remove("urgent", "warn");
     return;
   }
+
+  const now = Date.now();
+  const msInMinute = (now - currentMinuteStartMs) % 60000;
+
+  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+  const v = String(remaining).padStart(2, "0");
+  if (textEl) textEl.textContent = `⏱️ ${v}`;
+
+  // ✅ Estados: amarillo <=15s, rojo <=5s
+  const urgent = remaining <= 5;
+  const warn = !urgent && remaining <= 15;
+
+  countdownEl.classList.toggle("urgent", urgent);
+  countdownEl.classList.toggle("warn", warn);
+
+  // micro tick
+  countdownEl.classList.remove("tick");
+  void countdownEl.offsetWidth;
+  countdownEl.classList.add("tick");
+}
 
   const now = Date.now();
   const msInMinute = (now - currentMinuteStartMs) % 60000;
