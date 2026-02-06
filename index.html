@@ -12,6 +12,7 @@
 </head>
 
 <body class="neon">
+  <!-- ✅ Fondo neon -->
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
@@ -19,16 +20,21 @@
 
     <div class="topStatus">
       <div id="tickHealth" class="pill">Último tick: —</div>
-      <div id="countdown" class="pill">⏱️ 60</div>
+
+      <!-- ✅ RELOJ PRO: pill + aro -->
+      <div id="countdown" class="pill countdownPill" aria-label="Cuenta regresiva del minuto">
+        <span class="countRing" aria-hidden="true"></span>
+        <span id="countdownText" class="countText">⏱️ 60</span>
+      </div>
     </div>
 
+    <!-- ✅ Tabs + config -->
     <div class="tabsBar">
       <div class="tabs" role="tablist" aria-label="Secciones">
-        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true">🔔 Señales</button>
-        <button class="tab" type="button" data-view="feedback" role="tab" aria-selected="false">📝 Feedback</button>
+        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true">Señales</button>
+        <button class="tab" type="button" data-view="feedback" role="tab" aria-selected="false">Feedback</button>
       </div>
-
-      <button id="configBtn" class="tabIcon" type="button" aria-label="Configuración" title="Configuración">⚙️</button>
+      <button id="configBtn" class="tabIcon" type="button" aria-label="Configuración">⚙️</button>
     </div>
 
     <div id="counter" class="counter">Señales: 0</div>
@@ -40,12 +46,10 @@
       <div id="signals" class="signals"></div>
     </section>
 
-    <section id="feedbackView" class="hidden">
-      <section class="feedback">
-        <h3 class="h3">Feedback</h3>
-        <textarea id="feedback" rows="8"></textarea><br />
-        <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
-      </section>
+    <section id="feedbackView" class="feedback hidden">
+      <h3 class="h3">Feedback</h3>
+      <textarea id="feedback" rows="6"></textarea><br />
+      <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
     </section>
   </main>
 
@@ -72,7 +76,7 @@
     </div>
   </div>
 
-  <!-- ✅ Modal Configuración -->
+  <!-- ✅ Modal configuración -->
   <div id="settingsModal" class="modal hidden" aria-hidden="true">
     <div id="settingsCloseBackdrop" class="modalBackdrop"></div>
 
@@ -101,10 +105,10 @@
           <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
           <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
         </div>
-      </div>
 
-      <div class="modalFooter">
-        <button id="settingsCloseBtn2" class="btn btnGhost" type="button">Cerrar</button>
+        <div class="modalFooter" style="margin-top:10px">
+          <button id="settingsCloseBtn2" class="btn btnGhost" type="button">Cerrar</button>
+        </div>
       </div>
     </div>
   </div>
@@ -118,4 +122,3 @@
   </script>
 </body>
 </html>
-
