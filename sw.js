@@ -1,10 +1,4 @@
-// sw.js — v6.2.2
-// - Network-first: index.html, app.js, style.css, manifest.json
-// - Cache-first: resto de assets
-// - Bump cache para forzar update
-
-const CACHE = "deriv-assets-v6-2-2";
-
+const CACHE = "deriv-assets-v5"; // ✅ bump para forzar update
 const ASSETS = [
   "./",
   "./index.html",
@@ -23,59 +17,33 @@ self.addEventListener("install", (e) => {
 });
 
 self.addEventListener("activate", (e) => {
-  e.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.map(k => (k !== CACHE ? caches.delete(k) : null)));
-    await self.clients.claim();
-  })());
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.map(k => (k !== CACHE ? caches.delete(k) : null)))
+    )
+  );
+  self.clients.claim();
 });
 
-async function networkFirst(request) {
-  try {
-    const fresh = await fetch(request);
-    const cache = await caches.open(CACHE);
-    cache.put(request, fresh.clone());
-    return fresh;
-  } catch {
-    const cached = await caches.match(request);
-    return cached || Response.error();
-  }
-}
-
-async function cacheFirst(request) {
-  const cached = await caches.match(request);
-  if (cached) return cached;
-  const fresh = await fetch(request);
-  const cache = await caches.open(CACHE);
-  cache.put(request, fresh.clone());
-  return fresh;
-}
-
 self.addEventListener("fetch", (e) => {
-  const req = e.request;
-  const url = new URL(req.url);
+  const url = new URL(e.request.url);
 
-  if (url.origin !== self.location.origin) return;
-
-  const isHTML =
-    req.mode === "navigate" ||
+  // Siempre traer lo último del servidor para HTML y JS
+  if (
     url.pathname.endsWith("/index.html") ||
-    (url.pathname.endsWith("/") && !url.pathname.includes("."));
-
-  const isJS = url.pathname.endsWith("/app.js");
-  const isCSS = url.pathname.endsWith("/style.css");
-  const isManifest = url.pathname.endsWith("/manifest.json");
-
-  // ✅ SIEMPRE lo último para HTML/JS/CSS/manifest
-  if (isHTML || isJS || isCSS || isManifest) {
-    e.respondWith(networkFirst(req));
+    url.pathname.endsWith("/app.js") ||
+    e.request.mode === "navigate"
+  ) {
+    e.respondWith(fetch(e.request));
     return;
   }
 
-  e.respondWith(cacheFirst(req));
+  // Cache-first para assets
+  e.respondWith(
+    caches.match(e.request).then(r => r || fetch(e.request))
+  );
 });
 
-/* ✅ Click en notificación: abre Deriv en DEMO / Rise-Fall / símbolo */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
