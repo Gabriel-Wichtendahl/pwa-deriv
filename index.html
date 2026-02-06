@@ -1,121 +1,353 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Deriv Signals</title>
+:root{
+  --bg-main:#020617;
+  --bg-card:rgba(2,6,23,.78);
+  --text:#e5e7eb;
+  --muted:#94a3b8;
+  --border:rgba(148,163,184,.22);
+  --neon-cyan:#22d3ee;
+  --neon-green:#22c55e;
+  --neon-red:#ef4444;
+  --neon-purple:#a855f7;
+  --neon-orange:#fb923c;
+  --btn-bg:rgba(15,23,42,.78);
+  --btn-text:#e5e7eb;
+}
+body.light{
+  --bg-main:#f8fafc;
+  --bg-card:rgba(255,255,255,.92);
+  --text:#0f172a;
+  --muted:#475569;
+  --border:rgba(15,23,42,.18);
+  --btn-bg:rgba(226,232,240,.95);
+  --btn-text:#0f172a;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:var(--text);
+  background:var(--bg-main);
+  padding:10px;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+.bgNeon{
+  position:fixed;
+  inset:0;
+  z-index:0;
+  pointer-events:none;
+  background-image:
+    radial-gradient(circle at 20% 10%, rgba(34,211,238,.18), transparent 45%),
+    radial-gradient(circle at 80% 20%, rgba(168,85,247,.16), transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(34,197,94,.10), transparent 55%),
+    linear-gradient(180deg, rgba(2,6,23,.65), rgba(2,6,23,.88)),
+    url("./bg-neon.png");
+  background-size:cover;
+  background-position:center;
+  background-repeat:no-repeat;
+  image-rendering:-webkit-optimize-contrast;
+  transform:translateZ(0);
+}
+body.light .bgNeon{display:none}
+.header,.main{position:relative;z-index:1}
+.status{margin:0 0 8px;font-weight:650;letter-spacing:.4px}
+.h3{margin:14px 0 8px;color:var(--muted)}
+.topStatus{display:flex;gap:8px;margin-bottom:10px}
 
-  <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#020617" />
+/* ✅ estabilidad numérica */
+#countdown,#tickHealth{
+  font-variant-numeric: tabular-nums;
+}
+#countdown{
+  min-width:84px;
+  text-align:center;
+}
 
-  <link rel="stylesheet" href="style.css" />
-</head>
+.pill{
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:999px;
+  padding:6px 12px;
+  font-size:13px;
+  backdrop-filter:blur(12px);
+}
 
-<body class="neon">
-  <div class="bgNeon" aria-hidden="true"></div>
+/* ✅ Tabs */
+.tabsBar{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  margin-bottom:10px;
+}
+.tabs{flex:1;display:flex;gap:6px}
+.tab{
+  flex:1;
+  background:var(--bg-card);
+  color:var(--muted);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:8px 10px;
+  font-size:14px;
+  cursor:pointer;
+  backdrop-filter:blur(12px);
+  transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease, opacity .12s ease;
+}
+.tab:hover{transform:translateY(-1px);box-shadow:0 0 14px rgba(34,211,238,.18)}
+.tab.active{
+  color:var(--text);
+  border-color:rgba(34,211,238,.7);
+  box-shadow:0 0 14px rgba(34,211,238,.45);
+}
+.tabIcon{
+  width:44px;height:44px;
+  display:grid;place-items:center;
+  background:var(--btn-bg);
+  color:var(--btn-text);
+  border:1px solid var(--border);
+  border-radius:12px;
+  cursor:pointer;
+  backdrop-filter:blur(12px);
+  transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.tabIcon:hover{transform:translateY(-1px);box-shadow:0 0 14px rgba(168,85,247,.25)}
+.tabIcon:active{transform:translateY(0)}
+.tabIcon.spin{transform:rotate(18deg);}
 
-  <header class="header">
-    <h2 id="status" class="status">Conectando…</h2>
+.controls{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-bottom:10px;
+  align-items:center;
+}
+.btn,button{
+  background:var(--btn-bg);
+  color:var(--btn-text);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:7px 12px;
+  font-size:14px;
+  cursor:pointer;
+  backdrop-filter:blur(12px);
+  transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease, opacity .15s ease;
+}
+.btn:hover,button:hover{transform:translateY(-1px);box-shadow:0 0 14px rgba(34,211,238,.22)}
+.btn:active,button:active{transform:translateY(0)}
+.btn.active,button.active{border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.55)}
+.btnDanger{border-color:rgba(239,68,68,.5)}
+.btnDanger:hover{box-shadow:0 0 14px rgba(239,68,68,.25)}
+.btnGhost{opacity:.95}
+.btnPrimary{border-color:rgba(34,211,238,.55);box-shadow:0 0 14px rgba(34,211,238,.35)}
+.btnIcon{
+  width:40px;height:40px;border-radius:12px;padding:0;
+  display:grid;place-items:center;
+}
+#wakeBtn.active{border-color:var(--neon-green);box-shadow:0 0 14px rgba(34,197,94,.55)}
+.btnGroup{display:flex;gap:6px}
+.evalBtn{font-size:13px;opacity:.75}
+.evalBtn.active{opacity:1;border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.55)}
+.modeBtn{font-weight:650}
+.modeBtn.active-strong{border-color:var(--neon-orange);box-shadow:0 0 14px rgba(251,146,60,.55);color:#fdba74}
 
-    <div class="topStatus">
-      <div id="tickHealth" class="pill">Último tick: —</div>
-      <div id="countdown" class="pill">⏱️ 60</div>
-    </div>
+.counter{margin:8px 0;font-size:14px;color:var(--muted)}
+.signals{display:flex;flex-direction:column;gap:8px}
 
-    <div class="tabsBar">
-      <div class="tabs" role="tablist" aria-label="Secciones">
-        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true">🔔 Señales</button>
-        <button class="tab" type="button" data-view="feedback" role="tab" aria-selected="false">📝 Feedback</button>
-      </div>
+.row{
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:10px;
+  backdrop-filter:blur(16px);
+}
 
-      <button id="configBtn" class="tabIcon" type="button" aria-label="Configuración" title="Configuración">⚙️</button>
-    </div>
+/* ✅ Glow MUY fuerte por dirección */
+.row.dir-call{
+  border-color: rgba(34,197,94,.55);
+  box-shadow:
+    0 0 0 1px rgba(34,197,94,.18),
+    0 0 22px rgba(34,197,94,.35),
+    0 0 60px rgba(34,197,94,.18),
+    inset 0 0 22px rgba(34,197,94,.10);
+}
+.row.dir-put{
+  border-color: rgba(239,68,68,.55);
+  box-shadow:
+    0 0 0 1px rgba(239,68,68,.18),
+    0 0 22px rgba(239,68,68,.33),
+    0 0 60px rgba(239,68,68,.16),
+    inset 0 0 22px rgba(239,68,68,.10);
+}
 
-    <div id="counter" class="counter">Señales: 0</div>
-    <div id="hitCounter" class="counter">✅ Aciertos: 0</div>
-  </header>
+.row-main{display:flex;align-items:center;gap:8px}
+.row-text{
+  flex:1;
+  min-width:0;
+  cursor:pointer;
+  user-select:none;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.row-text:hover{text-decoration:underline}
 
-  <main class="main">
-    <section id="signalsView">
-      <div id="signals" class="signals"></div>
-    </section>
+.chartBtn{
+  width:38px;height:38px;border-radius:12px;
+  display:grid;place-items:center;padding:0;
+}
+.chartBtn svg{width:20px;height:20px}
+.chartBtn:disabled{opacity:1;cursor:not-allowed;box-shadow:none}
+.lockBadge{font-size:18px;line-height:1}
 
-    <section id="feedbackView" class="hidden">
-      <section class="feedback">
-        <h3 class="h3">Feedback</h3>
-        <textarea id="feedback" rows="8"></textarea><br />
-        <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
-      </section>
-    </section>
-  </main>
+.nextArrow{font-size:18px;width:28px;text-align:center}
+.nextArrow.up{color:var(--neon-green)}
+.nextArrow.down{color:var(--neon-red)}
+.nextArrow.flat{color:var(--muted)}
+.nextArrow.pending{color:var(--muted)}
 
-  <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
+/* ✅ animaciones: shake fail + pop hit */
+@keyframes arrowShake{
+  0%{ transform:translateX(0); }
+  25%{ transform:translateX(-2px); }
+  50%{ transform:translateX(2px); }
+  75%{ transform:translateX(-1px); }
+  100%{ transform:translateX(0); }
+}
+.nextArrow.failShake{
+  animation: arrowShake .22s ease-in-out;
+}
 
-  <!-- ✅ Modal gráfico -->
-  <div id="chartModal" class="modal hidden" aria-hidden="true">
-    <div id="modalCloseBackdrop" class="modalBackdrop"></div>
+@keyframes hitPop{
+  0%{ transform:scale(.6); opacity:0; }
+  70%{ transform:scale(1.12); opacity:1; }
+  100%{ transform:scale(1); opacity:1; }
+}
+.hitIcon.pop{
+  animation: hitPop .24s ease-out;
+}
 
-    <div class="modalCard" role="dialog" aria-modal="true">
-      <div class="modalHeader">
-        <div>
-          <div id="modalTitle" class="modalTitle">Gráfico</div>
-          <div id="modalSub" class="modalSub">—</div>
-        </div>
-        <button id="modalCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
-      </div>
+/* ✅ Tilde “acierto” */
+.hitIcon{
+  width:26px;height:26px;
+  display:inline-grid;
+  place-items:center;
+  border-radius:999px;
+  border:1px solid rgba(34,197,94,.7);
+  background:rgba(34,197,94,.16);
+  box-shadow:
+    0 0 18px rgba(34,197,94,.45),
+    inset 0 0 16px rgba(34,197,94,.16);
+  color:#bbf7d0;
+  font-size:14px;
+  font-weight:900;
+  line-height:1;
+}
+.hitIcon.hidden{display:none}
 
-      <canvas id="minuteCanvas"></canvas>
+.row-actions{display:flex;gap:6px;margin-top:8px;align-items:center}
+.row-actions button{padding:6px 10px;border-radius:12px}
 
-      <div class="modalFooter">
-        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
-      </div>
-    </div>
-  </div>
+/* ✅ Like/Dislike: seleccionado SIEMPRE azul (cyan) */
+.voteBtn{
+  min-width:44px;
+  opacity:.95;
+}
+.row.voted .voteBtn{
+  opacity:.45;
+  filter:saturate(.75);
+}
+.row.voted .voteBtn.selected{
+  opacity:1;
+  filter:saturate(1.15);
+  transform:translateY(-1px);
+  border-color: rgba(34,211,238,.80) !important;
+  box-shadow: 0 0 18px rgba(34,211,238,.45) !important;
+}
 
-  <!-- ✅ Modal Configuración -->
-  <div id="settingsModal" class="modal hidden" aria-hidden="true">
-    <div id="settingsCloseBackdrop" class="modalBackdrop"></div>
+.row-comment{
+  flex:1;background:transparent;color:var(--text);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:7px 10px;
+}
+textarea{
+  width:100%;
+  background:var(--bg-card);
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:10px;
+  backdrop-filter:blur(16px);
+}
 
-    <div class="modalCard modalCardSmall" role="dialog" aria-modal="true">
-      <div class="modalHeader">
-        <div>
-          <div class="modalTitle">Configuración</div>
-          <div class="modalSub">Preferencias y modo</div>
-        </div>
-        <button id="settingsCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
-      </div>
+.hidden{display:none}
 
-      <div class="settingsBody">
-        <div class="controls">
-          <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
-          <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
-          <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
-          <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
+/* ✅ Modal */
+.modal.hidden{display:none}
+.modalBackdrop{
+  position:fixed;inset:0;z-index:20;
+  background:rgba(0,0,0,.62);
+}
+.modalCard{
+  position:fixed;inset:8%;z-index:21;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:18px;
+  padding:12px;
+  display:flex;
+  flex-direction:column;
+  backdrop-filter:blur(18px);
+}
+.modalCardSmall{
+  inset:10% 8%;
+  max-height:80vh;
+  overflow:auto;
+}
+.modalHeader{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.modalTitle{font-weight:700}
+.modalSub{font-size:13px;color:var(--muted);margin-top:2px}
+#minuteCanvas{
+  flex:1;width:100%;height:100%;min-height:220px;
+  margin:10px 0;border-radius:14px;border:1px solid var(--border);
+}
+.settingsBody{padding:8px 2px 2px}
+.modalFooter{display:flex;justify-content:flex-end;gap:8px}
+@media (max-width:480px){.modalCard{inset:6%}}
 
-          <div class="btnGroup" aria-label="Segundo de evaluación">
-            <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
-            <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
-            <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
-          </div>
+/* ✅ Config modal prolijo */
+.settingsBody .controls{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:8px;
+  align-items:stretch;
+  margin: 8px 0 0;
+}
+.settingsBody .controls .btn,
+.settingsBody .controls button{
+  width:100%;
+  justify-content:center;
+}
+.settingsBody .controls .btnGroup{
+  grid-column: 1 / -1;
+  display:flex;
+  gap:6px;
+  flex-wrap:nowrap;
+}
+.settingsBody .controls .btnGroup .btn{
+  flex:1;
+}
+#modeBtn,#clearHistoryBtn{grid-column: 1 / -1}
+@media (max-width:420px){
+  .settingsBody .controls{grid-template-columns:1fr}
+  .settingsBody .controls .btnGroup{flex-wrap:wrap}
+}
 
-          <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-          <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
-        </div>
-      </div>
-
-      <div class="modalFooter">
-        <button id="settingsCloseBtn2" class="btn btnGhost" type="button">Cerrar</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="app.js"></script>
-
-  <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js");
-    }
-  </script>
-</body>
-</html>
-
+/* ✅ candado pulse suave */
+@keyframes lockPulse{
+  0%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(34,211,238,0)); opacity:.85; }
+  50%{ transform:scale(1.08); filter:drop-shadow(0 0 10px rgba(34,211,238,.35)); opacity:1; }
+  100%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(34,211,238,0)); opacity:.85; }
+}
+.chartBtn.locked .lockBadge{ animation: lockPulse 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce){
+  .chartBtn.locked .lockBadge{ animation:none; }
+}
