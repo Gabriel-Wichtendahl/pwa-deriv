@@ -184,3 +184,25 @@ textarea{
 }
 
 .hitIcon.hidden{ display:none; }
+
+/* ✅ FIX DEFENSIVO: cualquier .hidden se oculta siempre (evita bugs por cache/orden) */
+.hidden{ display:none !important; }
+
+/* ✅ Ícono cuando la flecha (próxima vela) coincide con la señal */
+.hitIcon{
+  width:26px;
+  height:26px;
+  display:inline-grid;
+  place-items:center;
+
+  border-radius:999px;
+  border:1px solid rgba(34,197,94,.55);
+  background:rgba(34,197,94,.14);
+
+  box-shadow:0 0 16px rgba(34,197,94,.35);
+  color:#bbf7d0;
+
+  font-size:14px;
+  font-weight:800;
+  line-height:1;
+}
