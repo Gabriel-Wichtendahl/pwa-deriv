@@ -1,9 +1,9 @@
-// app.js — V6.2
+// app.js — V6.3
 // - Eval 45/50/55 + modo NORMAL/FUERTE
 // - Historial + feedback + notificaciones
-// - Flecha de próxima vela (resultado) + ✅ acierto SOLO cuando corresponde
+// - Flecha de próxima vela + ✅ acierto SOLO cuando corresponde
 // - Modal con gráfico 0–60 real usando ticks_history
-// - Contadores: Señales + ✅ Aciertos
+// - Contadores: Señales + ✅ Aciertos (en pills)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -62,7 +62,6 @@ let history = loadHistory();
 let minuteData = {};     // minute -> symbol -> [{ms, quote}, ...]
 let candleOC = {};       // minute -> symbol -> {open, close}
 
-let signalCount = 0;
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -98,12 +97,9 @@ function escapeHtml(str) {
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
-
 function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
-function setBtnActive(btn, active) {
-  btn && btn.classList.toggle("active", !!active);
-}
+function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
 
 function loadBool(key, fallback) {
   const v = localStorage.getItem(key);
@@ -111,7 +107,7 @@ function loadBool(key, fallback) {
 }
 function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
 
-/* ✅ Coincidencia señal vs próxima vela */
+/* ✅ Match: señal vs próxima vela */
 function isMatch(direction, outcome) {
   if (!direction || !outcome) return false;
   if (outcome === "up" && direction === "CALL") return true;
@@ -153,9 +149,8 @@ function updateCounters() {
   const total = history.length;
   const hits = countHits(history);
 
-  signalCount = total;
   if (counterEl) counterEl.textContent = `Señales: ${total}`;
-  if (hitCounterEl) hitCounterEl.textContent = `✅: ${hits}`;
+  if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${hits}`;
 }
 
 /* =========================
@@ -173,10 +168,7 @@ function rebuildFeedbackFromHistory() {
   }
   feedbackEl.value = text;
 }
-
-if (copyBtn && feedbackEl) {
-  copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
-}
+if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
 
 /* =========================
    Theme
@@ -290,6 +282,7 @@ function applyTheme(theme) {
 function clearHistory() {
   history = [];
   saveHistory(history);
+
   minuteData = {};
   candleOC = {};
   lastSeenMinute = null;
@@ -311,7 +304,6 @@ if (clearHistoryBtn) {
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
 }
-
 function showNotification(symbol, direction, modeLabel) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
@@ -350,14 +342,12 @@ function openChartModal(item) {
     drawDerivLikeChart(minuteCanvas, item.ticks || []);
   }));
 }
-
 function closeChartModal() {
   if (!chartModal) return;
   chartModal.classList.add("hidden");
   chartModal.setAttribute("aria-hidden", "true");
   modalCurrentItem = null;
 }
-
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChartModal(); });
@@ -367,7 +357,6 @@ if (modalOpenDerivBtn) {
     if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
   };
 }
-
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
@@ -462,7 +451,7 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   UI row: arrow + ✅ + chart
+   Row helpers (arrow + ✅ + chart)
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -517,9 +506,7 @@ function setNextOutcome(item, outcome) {
   saveHistory(history);
   updateRowNextArrow(item);
   updateRowHitIcon(item);
-
-  // ✅ actualizar contador de aciertos inmediatamente
-  updateCounters();
+  updateCounters(); // ✅ actualiza aciertos al resolverse
 }
 
 /* =========================
@@ -533,7 +520,6 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
-  // defensivo: por default oculto (updateRowHitIcon decide)
   const showHit = !!item.nextOutcome && item.hit === true;
   const iconHidden = showHit ? "" : "hidden";
 
@@ -554,10 +540,7 @@ function buildRow(item) {
   row.querySelector(".row-text").onclick = () => { window.location.href = derivUrl; };
 
   const chartBtn = row.querySelector(".chartBtn");
-  chartBtn.onclick = (e) => {
-    e.stopPropagation();
-    if (item.minuteComplete) openChartModal(item);
-  };
+  chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
   updateRowChartBtn(item);
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
@@ -587,7 +570,7 @@ function buildRow(item) {
 }
 
 /* =========================
-   Render
+   Render + normalización defensiva
 ========================= */
 function normalizeHistory() {
   let touched = false;
@@ -598,7 +581,7 @@ function normalizeHistory() {
     // hit boolean real
     if (typeof it.hit !== "boolean") { it.hit = (it.hit === true); touched = true; }
 
-    // sin nextOutcome => hit debe ser false
+    // sin nextOutcome => hit siempre false
     if (!it.nextOutcome) {
       if (it.hit !== false) { it.hit = false; touched = true; }
     } else {
@@ -670,6 +653,7 @@ const pending = new Map(); // req_id -> {resolve, reject, t}
 function wsRequest(payload) {
   return new Promise((resolve, reject) => {
     if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
+
     const req_id = reqSeq++;
     const t = setTimeout(() => {
       pending.delete(req_id);
@@ -688,7 +672,7 @@ function normalizeTicksForMinute(minute, times, prices) {
   const out = [];
 
   for (let i = 0; i < Math.min(times.length, prices.length); i++) {
-    const ms = (Number(times[i]) * 1000) - startMs; // epoch(s) -> ms relativo
+    const ms = (Number(times[i]) * 1000) - startMs;
     if (ms < 0 || ms > 60000) continue;
     out.push({ ms, quote: Number(prices[i]) });
   }
@@ -995,9 +979,7 @@ function connect() {
     } catch {}
   };
 
-  ws.onerror = () => {
-    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
-  };
+  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
 
   ws.onclose = () => {
     for (const [id, p] of pending.entries()) {
