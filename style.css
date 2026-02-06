@@ -97,6 +97,7 @@ body.light .bgNeon{display:none}
 .evalBtn.active{opacity:1;border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.55)}
 .modeBtn{font-weight:650}
 .modeBtn.active-strong{border-color:var(--neon-orange);box-shadow:0 0 14px rgba(251,146,60,.55);color:#fdba74}
+
 .counter{margin:8px 0;font-size:14px;color:var(--muted)}
 .signals{display:flex;flex-direction:column;gap:8px}
 .row{
@@ -107,7 +108,19 @@ body.light .bgNeon{display:none}
   backdrop-filter:blur(16px);
 }
 .row-main{display:flex;align-items:center;gap:8px}
-.row-text{flex:1;cursor:pointer;user-select:none}
+
+/* ✅ FIX XIAOMI / pantallas angostas:
+   el texto ya NO empuja el candado/íconos fuera de vista */
+.row-text{
+  flex:1;
+  min-width:0;
+  cursor:pointer;
+  user-select:none;
+
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
 .row-text:hover{text-decoration:underline}
 
 .chartBtn{
@@ -115,15 +128,21 @@ body.light .bgNeon{display:none}
   display:grid;place-items:center;padding:0;
 }
 .chartBtn svg{width:20px;height:20px}
+.chartBtn:disabled{opacity:.85;cursor:not-allowed;box-shadow:none}
 
-/* ✅ IMPORTANTE: no “mates” el icono cuando está disabled */
-.chartBtn:disabled{
-  opacity:1;               /* antes 0.45 */
-  cursor:not-allowed;
-  box-shadow:none;
+/* ✅ Candado visible + animación */
+.lockBadge{font-size:18px;line-height:1}
+.chartBtn.locked .lockBadge{
+  animation: lockPulse 1.1s ease-in-out infinite;
 }
-
-.lockBadge{font-size:18px}
+@keyframes lockPulse{
+  0%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(34,211,238,0)); opacity:.85; }
+  50%{ transform:scale(1.08); filter:drop-shadow(0 0 10px rgba(34,211,238,.35)); opacity:1; }
+  100%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(34,211,238,0)); opacity:.85; }
+}
+@media (prefers-reduced-motion: reduce){
+  .chartBtn.locked .lockBadge{ animation:none; }
+}
 
 .nextArrow{font-size:18px;width:28px;text-align:center}
 .nextArrow.up{color:var(--neon-green)}
@@ -139,7 +158,6 @@ body.light .bgNeon{display:none}
   border-radius:12px;
   padding:7px 10px;
 }
-
 textarea{
   width:100%;
   background:var(--bg-card);
@@ -149,6 +167,7 @@ textarea{
   padding:10px;
   backdrop-filter:blur(16px);
 }
+
 .modal.hidden{display:none}
 .modalBackdrop{
   position:fixed;inset:0;z-index:20;
@@ -174,7 +193,6 @@ textarea{
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
 @media (max-width:480px){.modalCard{inset:6%}}
 
-
 /* ✅ Ícono cuando la flecha (próxima vela) coincide con la señal */
 .hitIcon{
   width:26px;
@@ -194,29 +212,3 @@ textarea{
   line-height:1;
 }
 .hitIcon.hidden{ display:none; }
-
-/* =========================
-   ✅ Animaciones
-========================= */
-@keyframes popIn {
-  0% { transform: scale(.6); opacity: .2; }
-  60% { transform: scale(1.12); opacity: 1; }
-  100% { transform: scale(1); }
-}
-@keyframes pulseSoft {
-  0% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(34,211,238,0)); }
-  50% { transform: scale(1.08); filter: drop-shadow(0 0 10px rgba(34,211,238,.45)); }
-  100% { transform: scale(1); filter: drop-shadow(0 0 0 rgba(34,211,238,0)); }
-}
-
-.lockPulse{
-  animation: pulseSoft 1.2s ease-in-out infinite;
-}
-
-.unlockPop{
-  animation: popIn .25s ease-out 1;
-}
-
-.hitPop{
-  animation: popIn .22s ease-out 1;
-}
