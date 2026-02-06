@@ -351,3 +351,5 @@ textarea{
 @media (prefers-reduced-motion: reduce){
   .chartBtn.locked .lockBadge{ animation:none; }
 }
+
+
