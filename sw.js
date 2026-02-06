@@ -1,9 +1,9 @@
-// sw.js — v6.2.1
-// - Network-first para HTML/JS (siempre lo último)
-// - Cache-first para assets
-// - Bump de cache para forzar actualización en PWA
+// sw.js — v6.2.2
+// - Network-first: index.html, app.js, style.css, manifest.json
+// - Cache-first: resto de assets
+// - Bump cache para forzar update
 
-const CACHE = "deriv-assets-v6-2-1";
+const CACHE = "deriv-assets-v6-2-2";
 
 const ASSETS = [
   "./",
@@ -18,9 +18,7 @@ const ASSETS = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(CACHE).then(cache => cache.addAll(ASSETS))
-  );
+  e.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
   self.skipWaiting();
 });
 
@@ -47,7 +45,6 @@ async function networkFirst(request) {
 async function cacheFirst(request) {
   const cached = await caches.match(request);
   if (cached) return cached;
-
   const fresh = await fetch(request);
   const cache = await caches.open(CACHE);
   cache.put(request, fresh.clone());
@@ -58,7 +55,6 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   const url = new URL(req.url);
 
-  // Solo manejar requests del mismo origen
   if (url.origin !== self.location.origin) return;
 
   const isHTML =
@@ -67,14 +63,15 @@ self.addEventListener("fetch", (e) => {
     (url.pathname.endsWith("/") && !url.pathname.includes("."));
 
   const isJS = url.pathname.endsWith("/app.js");
+  const isCSS = url.pathname.endsWith("/style.css");
+  const isManifest = url.pathname.endsWith("/manifest.json");
 
-  // ✅ Siempre lo último para HTML y JS (si hay internet)
-  if (isHTML || isJS) {
+  // ✅ SIEMPRE lo último para HTML/JS/CSS/manifest
+  if (isHTML || isJS || isCSS || isManifest) {
     e.respondWith(networkFirst(req));
     return;
   }
 
-  // ✅ Assets: cache-first
   e.respondWith(cacheFirst(req));
 });
 
