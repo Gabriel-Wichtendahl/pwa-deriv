@@ -12,25 +12,16 @@
 </head>
 
 <body class="neon">
-  <!-- ✅ Fondo neon -->
   <div class="bgNeon" aria-hidden="true"></div>
-
-  <!-- ✅ Reloj analógico fijo (HUD) -->
-  <div id="analogClock" class="analogClock" aria-hidden="true">
-    <div class="acRing"></div>
-    <div class="acHand"></div>
-    <div class="acDot"></div>
-  </div>
 
   <header class="header">
     <h2 id="status" class="status">Conectando…</h2>
 
     <div class="topStatus">
       <div id="tickHealth" class="pill">Último tick: —</div>
-      <div id="countdown" class="pill">⏳ 60</div>
+      <div id="countdown" class="pill">⏱️ 60</div>
     </div>
 
-    <!-- ✅ Tabs + Config -->
     <div class="tabsBar">
       <div class="tabs" role="tablist" aria-label="Secciones">
         <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true">🔔 Señales</button>
@@ -45,12 +36,10 @@
   </header>
 
   <main class="main">
-    <!-- ✅ Vista Señales -->
     <section id="signalsView">
       <div id="signals" class="signals"></div>
     </section>
 
-    <!-- ✅ Vista Feedback -->
     <section id="feedbackView" class="hidden">
       <section class="feedback">
         <h3 class="h3">Feedback</h3>
