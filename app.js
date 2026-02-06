@@ -1,4 +1,5 @@
-// app.js — V6.2+ (fix candado + animación + XIAOMI row-text no empuja iconos)
+// app.js — V6.3 (Tabs Señales/Feedback + Modal Config)
+// Mantiene TODO lo previo (WS, eval 45/50/55, modo, historial, candado, próxima vela, etc.)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -13,7 +14,7 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-/** ticks_history para minuto REAL */
+/** ticks_history para completar minuto REAL */
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -23,6 +24,7 @@ const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
 const statusEl = $("status");
 const signalsEl = $("signals");
 const counterEl = $("counter");
+const hitCounterEl = $("hitCounter");
 const feedbackEl = $("feedback");
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
@@ -38,9 +40,19 @@ const copyBtn = $("copyFeedback");
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
 
-// (si existe en tu index)
-const hitCounterEl = $("hitCounter");
+// Tabs
+const tabs = qsAll(".tab[data-view]");
+const signalsView = $("signalsView");
+const feedbackView = $("feedbackView");
 
+// Settings modal
+const configBtn = $("configBtn");
+const settingsModal = $("settingsModal");
+const settingsCloseBackdrop = $("settingsCloseBackdrop");
+const settingsCloseBtn = $("settingsCloseBtn");
+const settingsCloseBtn2 = $("settingsCloseBtn2");
+
+// Chart modal
 const chartModal = $("chartModal");
 const modalCloseBtn = $("modalCloseBtn");
 const modalCloseBackdrop = $("modalCloseBackdrop");
@@ -108,7 +120,7 @@ function saveHistory(arr) {
 }
 
 /* =========================
-   Helpers UI / estado
+   Helpers UI
 ========================= */
 function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
 function loadBool(key, fallback) {
@@ -118,13 +130,21 @@ function loadBool(key, fallback) {
 function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
 
 function updateCounter() {
+  signalCount = history.length;
   if (counterEl) counterEl.textContent = `Señales: ${signalCount}`;
-
-  // ✅ contador de aciertos (si está el nodo en index)
-  if (hitCounterEl) {
-    const hits = history.filter(it => it.hit === true).length;
-    hitCounterEl.textContent = `✅ Aciertos: ${hits}`;
+  if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${computeHitsCount()}`;
+}
+function computeHitsCount() {
+  // hit: sólo cuando nextOutcome coincide con dirección
+  let hits = 0;
+  for (const it of history) {
+    if (!it.nextOutcome) continue;
+    const ok =
+      (it.direction === "CALL" && it.nextOutcome === "up") ||
+      (it.direction === "PUT" && it.nextOutcome === "down");
+    if (ok) hits++;
   }
+  return hits;
 }
 
 function escapeHtml(str) {
@@ -146,6 +166,47 @@ function rebuildFeedbackFromHistory() {
   }
   feedbackEl.value = text;
 }
+
+/* =========================
+   Tabs
+========================= */
+function setActiveView(name) {
+  const isSignals = name === "signals";
+  if (signalsView) signalsView.classList.toggle("hidden", !isSignals);
+  if (feedbackView) feedbackView.classList.toggle("hidden", isSignals);
+
+  tabs.forEach(t => {
+    const active = t.dataset.view === name;
+    t.classList.toggle("active", active);
+    t.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  localStorage.setItem("activeView", name);
+}
+(function initTabs() {
+  const saved = localStorage.getItem("activeView") || "signals";
+  setActiveView(saved === "feedback" ? "feedback" : "signals");
+  tabs.forEach(t => t.onclick = () => setActiveView(t.dataset.view));
+})();
+
+/* =========================
+   Settings modal
+========================= */
+function openSettings() {
+  if (!settingsModal) return;
+  settingsModal.classList.remove("hidden");
+  settingsModal.setAttribute("aria-hidden", "false");
+  if (configBtn) { configBtn.classList.add("spin"); setTimeout(() => configBtn.classList.remove("spin"), 180); }
+}
+function closeSettings() {
+  if (!settingsModal) return;
+  settingsModal.classList.add("hidden");
+  settingsModal.setAttribute("aria-hidden", "true");
+}
+if (configBtn) configBtn.onclick = openSettings;
+if (settingsCloseBtn) settingsCloseBtn.onclick = closeSettings;
+if (settingsCloseBtn2) settingsCloseBtn2.onclick = closeSettings;
+if (settingsCloseBackdrop) settingsCloseBackdrop.onclick = closeSettings;
 
 /* =========================
    Theme
@@ -254,7 +315,6 @@ if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText
 function clearHistory() {
   history = [];
   saveHistory(history);
-  signalCount = 0;
   updateCounter();
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
@@ -290,7 +350,7 @@ function showNotification(symbol, direction, modeLabel) {
 }
 
 /* =========================
-   Modal
+   Chart modal
 ========================= */
 function openChartModal(item) {
   if (!item.minuteComplete) return;
@@ -314,7 +374,9 @@ function closeChartModal() {
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChartModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeChartModal(); closeSettings(); }
+});
 if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
   if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
 };
@@ -420,8 +482,6 @@ function updateRowChartBtn(item) {
 
   const ready = !!item.minuteComplete;
   btn.disabled = !ready;
-
-  // ✅ clase para animación de candado
   btn.classList.toggle("locked", !ready);
 
   if (ready) {
@@ -450,28 +510,9 @@ function updateRowNextArrow(item) {
 }
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
-
-  // ✅ marcar hit SOLO cuando ya hay outcome y coincide
-  const wantsUp = item.direction === "CALL";
-  const hit = (wantsUp && outcome === "up") || (!wantsUp && outcome === "down");
-  item.hit = hit ? true : false;
-
   saveHistory(history);
   updateRowNextArrow(item);
-  updateRowHitIcon(item);
   updateCounter();
-}
-
-/* ✅ icono de acierto al lado de flecha */
-function updateRowHitIcon(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-
-  const icon = row.querySelector(".hitIcon");
-  if (!icon) return;
-
-  const show = item.hit === true && (item.nextOutcome === "up" || item.nextOutcome === "down");
-  icon.classList.toggle("hidden", !show);
 }
 
 /* =========================
@@ -490,7 +531,6 @@ function buildRow(item) {
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
-      <span class="hitIcon hidden" title="Acertó">✓</span>
     </div>
     <div class="row-actions">
       <button data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
@@ -525,7 +565,6 @@ function buildRow(item) {
   });
 
   updateRowNextArrow(item);
-  updateRowHitIcon(item);
   return row;
 }
 
@@ -539,7 +578,6 @@ function renderHistory() {
   for (const it of history) if (!it.mode) it.mode = "NORMAL";
   saveHistory(history);
 
-  signalCount = history.length;
   updateCounter();
   rebuildFeedbackFromHistory();
 
@@ -565,7 +603,7 @@ function updateCountdownUI() {
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
-   WS requests (ticks_history)
+   Requests WS (ticks_history)
 ========================= */
 let reqSeq = 1;
 const pending = new Map(); // req_id -> {resolve, reject, t}
@@ -690,9 +728,6 @@ function finalizeMinute(minute) {
     if (modalCurrentItem && modalCurrentItem.minute === minute && modalCurrentItem.minuteComplete) {
       drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
     }
-
-    // refrescar contadores
-    updateCounter();
   })();
 
   delete candleOC[minute - 3];
@@ -810,8 +845,7 @@ function addSignal(minute, symbol, direction, ticks) {
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
-    minuteComplete: false,
-    hit: false
+    minuteComplete: false
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -820,7 +854,6 @@ function addSignal(minute, symbol, direction, ticks) {
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
   saveHistory(history);
 
-  signalCount = history.length;
   updateCounter();
 
   if (signalsEl) signalsEl.prepend(buildRow(item));
@@ -902,7 +935,7 @@ function connect() {
    Start
 ========================= */
 renderHistory();
-for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updateRowHitIcon(it); }
+for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); }
 updateTickHealthUI();
 updateCountdownUI();
 connect();
