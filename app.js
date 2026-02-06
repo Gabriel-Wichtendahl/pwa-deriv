@@ -1,5 +1,5 @@
 // app.js — V6.1 (fix evaluación por reloj + gráfico 0–60 REAL usando ticks_history)
-// + ✅ Badge visual cuando la flecha (próxima vela) coincide con la señal
+// + ✅ Ícono visual cuando la próxima vela coincide con la señal (solo icono)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -14,7 +14,6 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-/** ✅ ticks_history para completar minuto REAL */
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -51,13 +50,13 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-let EVAL_SEC = 45;       // 45/50/55
-let strongMode = false;  // NORMAL/FUERTE
+let EVAL_SEC = 45;
+let strongMode = false;
 
 let history = loadHistory();
 let signalCount = 0;
 
-let minuteData = {};           // minute -> symbol -> [{ms, quote}, ...]
+let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -65,7 +64,7 @@ let lastTickEpochMs = null;
 let currentMinuteStartMs = null;
 
 let lastSeenMinute = null;
-let candleOC = {}; // minute -> symbol -> {open, close}
+let candleOC = {};
 
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
@@ -87,7 +86,7 @@ function makeDerivTraderUrl(symbol) {
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
 /* =========================
-   ✅ Badge match helpers
+   ✅ Match (señal vs próxima vela)
 ========================= */
 function isMatch(direction, outcome) {
   if (!direction || !outcome) return false;
@@ -95,20 +94,18 @@ function isMatch(direction, outcome) {
   if (outcome === "down" && direction === "PUT") return true;
   return false;
 }
-function updateRowHitBadge(item) {
+
+function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
+
+function updateRowHitIcon(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
-  const badge = row.querySelector(".hitBadge");
-  if (!badge) return;
+  const icon = row.querySelector(".hitIcon");
+  if (!icon) return;
 
-  const show = !!item.hit; // boolean
-  badge.classList.toggle("hidden", !show);
-
-  if (show) {
-    badge.title = "La próxima vela coincidió con la señal ✅";
-  } else {
-    badge.title = "";
-  }
+  const show = !!item.hit;
+  icon.classList.toggle("hidden", !show);
+  icon.title = show ? "Coincidió con la próxima vela ✅" : "";
 }
 
 /* =========================
@@ -149,7 +146,6 @@ function escapeHtml(str) {
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
 }
-function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
@@ -445,6 +441,7 @@ function updateRowChartBtn(item) {
     btn.title = "Esperando cierre del minuto…";
   }
 }
+
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -464,13 +461,11 @@ function updateRowNextArrow(item) {
 
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
-
-  // ✅ Badge: coincide con la señal
   item.hit = isMatch(item.direction, outcome);
 
   saveHistory(history);
   updateRowNextArrow(item);
-  updateRowHitBadge(item);
+  updateRowHitIcon(item);
 }
 
 /* =========================
@@ -484,12 +479,12 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
-  const badgeHidden = item.hit ? "" : "hidden";
+  const iconHidden = item.hit ? "" : "hidden";
 
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <span class="hitBadge ${badgeHidden}" title="La próxima vela coincidió con la señal ✅">🎯 ACERTÓ</span>
+      <span class="hitIcon ${iconHidden}" aria-label="Coincidió" title="Coincidió con la próxima vela ✅">✅</span>
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -526,7 +521,7 @@ function buildRow(item) {
   });
 
   updateRowNextArrow(item);
-  updateRowHitBadge(item);
+  updateRowHitIcon(item);
   return row;
 }
 
@@ -537,7 +532,6 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  // ✅ Backfill: si ya hay nextOutcome guardado, calculamos hit
   let touched = false;
   for (const it of history) {
     if (!it.mode) { it.mode = "NORMAL"; touched = true; }
@@ -678,13 +672,12 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   Finalize minute: next candle + minuto completo + unlock
+   Finalize minute
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -929,7 +922,7 @@ renderHistory();
 for (const it of history) {
   updateRowChartBtn(it);
   updateRowNextArrow(it);
-  updateRowHitBadge(it);
+  updateRowHitIcon(it);
 }
 updateTickHealthUI();
 updateCountdownUI();
