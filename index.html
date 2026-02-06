@@ -22,20 +22,14 @@
       <div id="countdown" class="pill">⏱️ 60</div>
     </div>
 
-    <div class="controls">
-      <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
-      <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
-      <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
-      <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
-
-      <div class="btnGroup" aria-label="Segundo de evaluación">
-        <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
-        <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
-        <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
+    <!-- ✅ Tabs + Config -->
+    <div class="tabsBar">
+      <div class="tabs" role="tablist" aria-label="Secciones">
+        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true">🔔 Señales</button>
+        <button class="tab" type="button" data-view="feedback" role="tab" aria-selected="false">📝 Feedback</button>
       </div>
 
-      <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-      <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+      <button id="configBtn" class="tabIcon" type="button" aria-label="Configuración" title="Configuración">⚙️</button>
     </div>
 
     <div id="counter" class="counter">Señales: 0</div>
@@ -43,17 +37,24 @@
   </header>
 
   <main class="main">
-    <div id="signals" class="signals"></div>
+    <!-- ✅ Vista Señales -->
+    <section id="signalsView">
+      <div id="signals" class="signals"></div>
+    </section>
 
-    <section class="feedback">
-      <h3 class="h3">Feedback</h3>
-      <textarea id="feedback" rows="6"></textarea><br />
-      <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
+    <!-- ✅ Vista Feedback -->
+    <section id="feedbackView" class="hidden">
+      <section class="feedback">
+        <h3 class="h3">Feedback</h3>
+        <textarea id="feedback" rows="8"></textarea><br />
+        <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
+      </section>
     </section>
   </main>
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
+  <!-- ✅ Modal gráfico -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
@@ -74,12 +75,48 @@
     </div>
   </div>
 
+  <!-- ✅ Modal Configuración -->
+  <div id="settingsModal" class="modal hidden" aria-hidden="true">
+    <div id="settingsCloseBackdrop" class="modalBackdrop"></div>
+
+    <div class="modalCard modalCardSmall" role="dialog" aria-modal="true">
+      <div class="modalHeader">
+        <div>
+          <div class="modalTitle">Configuración</div>
+          <div class="modalSub">Preferencias y modo</div>
+        </div>
+        <button id="settingsCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
+      </div>
+
+      <div class="settingsBody">
+        <div class="controls">
+          <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
+          <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
+          <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
+          <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
+
+          <div class="btnGroup" aria-label="Segundo de evaluación">
+            <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
+            <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
+            <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
+          </div>
+
+          <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
+          <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+        </div>
+      </div>
+
+      <div class="modalFooter">
+        <button id="settingsCloseBtn2" class="btn btnGhost" type="button">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 
   <script>
-    // ✅ Fuerza update del SW en Android (cache-busting)
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js?v=6.2.2");
+      navigator.serviceWorker.register("./sw.js");
     }
   </script>
 </body>
