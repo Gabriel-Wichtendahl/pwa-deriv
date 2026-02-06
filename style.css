@@ -329,158 +329,181 @@ textarea{
 }
 
 /* =========================
-   ⏱️ Reloj PRO (solo scanline visible)
-   - Sin progreso azul (no fill)
-   - Colores: cyan normal, amarillo <=15s, rojo <=5s
+   ⏱️ HUD en #countdown (REAL)
+   - Haz largo con cola (degradé hacia atrás)
+   - Cyan normal, Amarillo <=15s, Rojo <=5s
+   - Punto/LED en la cabeza del haz
 ========================= */
-.countdownPill{
+
+/* Sobre-escribe el #countdown anterior (evita “saltos” de ancho) */
+#countdown{
+  position:relative;
   display:flex;
   align-items:center;
-  gap:10px;
   justify-content:center;
+  gap:10px;
+
+  padding-left:44px;
   min-width:112px;
-  position:relative;
-}
-.countText{
+  text-align:center;
+
   font-variant-numeric: tabular-nums;
   letter-spacing:.4px;
 }
 
-/* Base: aro “track” sutil (NO progreso) */
-.countRing{
-  width:22px;
-  height:22px;
-  border-radius:999px;
-  position:relative;
-
-  /* solo un aro leve de fondo */
-  background:
-    radial-gradient(circle at center,
-      transparent 58%,
-      rgba(148,163,184,.22) 60%,
-      rgba(148,163,184,.22) 62%,
-      transparent 64%
-    );
-
-  box-shadow:
-    0 0 10px rgba(34,211,238,.10),
-    inset 0 0 10px rgba(34,211,238,.05);
-
-  transform: translateZ(0);
-}
-
-/* ✅ Scanline MÁS visible */
-.countRing::after{
+/* Punto/LED */
+#countdown::before{
   content:"";
   position:absolute;
-  inset:-3px;
+  left:24px;
+  top:50%;
+  width:6px;
+  height:6px;
   border-radius:999px;
+  transform: translate(-50%, -50%);
   pointer-events:none;
 
-  /* “rayo” más ancho (aprox 14–18deg) */
+  background: rgba(34,211,238,1);
+  box-shadow:
+    0 0 6px rgba(34,211,238,.95),
+    0 0 14px rgba(34,211,238,.55),
+    0 0 26px rgba(34,211,238,.25);
+  opacity:.95;
+}
+
+/* Haz giratorio con cola */
+#countdown::after{
+  content:"";
+  position:absolute;
+  left:12px;
+  top:50%;
+  width:26px;
+  height:26px;
+  border-radius:999px;
+  transform: translateY(-50%);
+  pointer-events:none;
+
   background:
     conic-gradient(
       from 0deg,
       transparent 0deg,
-      transparent 320deg,
 
-      rgba(34,211,238,.00) 320deg,
-      rgba(34,211,238,.95) 330deg,
-      rgba(34,211,238,.55) 336deg,
-      rgba(34,211,238,.00) 342deg,
+      rgba(34,211,238,.00) 220deg,
+      rgba(34,211,238,.06) 255deg,
+      rgba(34,211,238,.12) 285deg,
+      rgba(34,211,238,.22) 305deg,
+      rgba(34,211,238,.38) 322deg,
 
-      transparent 342deg,
+      rgba(34,211,238,.98) 334deg,
+      rgba(34,211,238,.70) 340deg,
+      rgba(34,211,238,.18) 348deg,
+
+      rgba(34,211,238,.00) 352deg,
       transparent 360deg
     );
 
-  /* recortar para que sea aro */
   -webkit-mask: radial-gradient(circle at center, transparent 58%, #000 60%);
           mask: radial-gradient(circle at center, transparent 58%, #000 60%);
 
+  filter: blur(.28px);
   opacity:1;
-  filter: blur(.25px);
-  animation: scanSpin .95s linear infinite;
 
-  /* glow fuerte */
-  box-shadow: 0 0 0 rgba(0,0,0,0);
-}
-
-@keyframes scanSpin{
-  to{ transform: rotate(360deg); }
-}
-
-/* ====== Estados de color ====== */
-/* Amarillo <=15s */
-.countdownPill.warn .countRing{
   box-shadow:
-    0 0 12px rgba(251,191,36,.18),
-    inset 0 0 12px rgba(251,191,36,.08);
+    0 0 18px rgba(34,211,238,.22),
+    inset 0 0 10px rgba(34,211,238,.08);
+
+  animation: scanSpinCountdown .92s linear infinite;
 }
-.countdownPill.warn .countRing::after{
+
+@keyframes scanSpinCountdown{
+  to{ transform: translateY(-50%) rotate(360deg); }
+}
+
+/* Amarillo <=15s */
+#countdown.warn::before{
+  background: rgba(251,191,36,1);
+  box-shadow:
+    0 0 6px rgba(251,191,36,.95),
+    0 0 14px rgba(251,191,36,.55),
+    0 0 26px rgba(251,191,36,.25);
+}
+#countdown.warn::after{
   background:
     conic-gradient(
       from 0deg,
       transparent 0deg,
-      transparent 320deg,
 
-      rgba(251,191,36,.00) 320deg,
-      rgba(251,191,36,.98) 330deg,
-      rgba(251,191,36,.60) 336deg,
-      rgba(251,191,36,.00) 342deg,
+      rgba(251,191,36,.00) 220deg,
+      rgba(251,191,36,.06) 255deg,
+      rgba(251,191,36,.12) 285deg,
+      rgba(251,191,36,.22) 305deg,
+      rgba(251,191,36,.40) 322deg,
 
-      transparent 342deg,
+      rgba(251,191,36,.98) 334deg,
+      rgba(251,191,36,.72) 340deg,
+      rgba(251,191,36,.20) 348deg,
+
+      rgba(251,191,36,.00) 352deg,
       transparent 360deg
     );
-  filter: blur(.28px);
+
+  box-shadow:
+    0 0 18px rgba(251,191,36,.22),
+    inset 0 0 10px rgba(251,191,36,.08);
 }
 
 /* Rojo <=5s + pulso */
-.countdownPill.urgent .countRing{
+#countdown.urgent::before{
+  background: rgba(239,68,68,1);
   box-shadow:
-    0 0 18px rgba(239,68,68,.28),
-    inset 0 0 14px rgba(239,68,68,.10);
+    0 0 8px rgba(239,68,68,.95),
+    0 0 18px rgba(239,68,68,.60),
+    0 0 34px rgba(239,68,68,.28);
 }
-.countdownPill.urgent .countRing::after{
+#countdown.urgent::after{
   background:
     conic-gradient(
       from 0deg,
       transparent 0deg,
-      transparent 320deg,
 
-      rgba(239,68,68,.00) 320deg,
-      rgba(239,68,68,.98) 330deg,
-      rgba(239,68,68,.62) 336deg,
-      rgba(239,68,68,.00) 342deg,
+      rgba(239,68,68,.00) 220deg,
+      rgba(239,68,68,.06) 255deg,
+      rgba(239,68,68,.12) 285deg,
+      rgba(239,68,68,.24) 305deg,
+      rgba(239,68,68,.44) 322deg,
 
-      transparent 342deg,
+      rgba(239,68,68,.98) 334deg,
+      rgba(239,68,68,.76) 340deg,
+      rgba(239,68,68,.22) 348deg,
+
+      rgba(239,68,68,.00) 352deg,
       transparent 360deg
     );
-  filter: blur(.3px);
+
+  box-shadow:
+    0 0 22px rgba(239,68,68,.28),
+    inset 0 0 12px rgba(239,68,68,.10);
+
+  animation: scanSpinCountdown .78s linear infinite, countdownPulse .55s ease-in-out infinite;
 }
 
-@keyframes ringPulse{
-  0%{ transform:scale(1); }
-  55%{ transform:scale(1.08); }
-  100%{ transform:scale(1); }
-}
-.countdownPill.urgent .countRing{
-  animation: ringPulse .55s ease-in-out infinite;
+@keyframes countdownPulse{
+  0%{ filter: blur(.28px) drop-shadow(0 0 0 rgba(239,68,68,0)); }
+  55%{ filter: blur(.28px) drop-shadow(0 0 10px rgba(239,68,68,.35)); }
+  100%{ filter: blur(.28px) drop-shadow(0 0 0 rgba(239,68,68,0)); }
 }
 
-/* micro “tick” del texto */
-@keyframes secTick{
+/* Micro tick (tu JS agrega .tick) */
+@keyframes secTick2{
   0%{ transform:translateY(0); }
   40%{ transform:translateY(-1px); }
   100%{ transform:translateY(0); }
 }
-.countdownPill.tick .countText{ animation: secTick .16s ease-out; }
+#countdown.tick{ animation: secTick2 .16s ease-out; }
 
 @media (prefers-reduced-motion: reduce){
-  .countdownPill.urgent .countRing{ animation:none; }
-  .countRing::after{ animation:none; }
-  .countdownPill.tick .countText{ animation:none; }
+  #countdown::after{ animation:none; }
+  #countdown.urgent::after{ animation:none; }
+  #countdown.tick{ animation:none; }
 }
-
-
-
-
+```0
