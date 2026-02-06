@@ -1,5 +1,5 @@
-// app.js — V6.3 (Tabs Señales/Feedback + Modal Config)
-// Mantiene TODO lo previo (WS, eval 45/50/55, modo, historial, candado, próxima vela, etc.)
+// app.js — V6.4 (Estética: reloj fijo + hourglass anim + glow filas + settings prolijo)
+// Mantiene TODO lo anterior (WS, eval 45/50/55, modo, historial, candado, próxima vela, gráfico, etc.)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -14,7 +14,6 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-/** ticks_history para completar minuto REAL */
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -65,13 +64,12 @@ let ws;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-let EVAL_SEC = 45;       // 45/50/55
-let strongMode = false;  // NORMAL/FUERTE
+let EVAL_SEC = 45;
+let strongMode = false;
 
 let history = loadHistory();
-let signalCount = 0;
 
-let minuteData = {};           // minute -> symbol -> [{ms, quote}, ...]
+let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -79,7 +77,7 @@ let lastTickEpochMs = null;
 let currentMinuteStartMs = null;
 
 let lastSeenMinute = null;
-let candleOC = {}; // minute -> symbol -> {open, close}
+let candleOC = {};
 
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
@@ -129,13 +127,7 @@ function loadBool(key, fallback) {
 }
 function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
 
-function updateCounter() {
-  signalCount = history.length;
-  if (counterEl) counterEl.textContent = `Señales: ${signalCount}`;
-  if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${computeHitsCount()}`;
-}
 function computeHitsCount() {
-  // hit: sólo cuando nextOutcome coincide con dirección
   let hits = 0;
   for (const it of history) {
     if (!it.nextOutcome) continue;
@@ -145,6 +137,10 @@ function computeHitsCount() {
     if (ok) hits++;
   }
   return hits;
+}
+function updateCounter() {
+  if (counterEl) counterEl.textContent = `Señales: ${history.length}`;
+  if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${computeHitsCount()}`;
 }
 
 function escapeHtml(str) {
@@ -520,7 +516,7 @@ function setNextOutcome(item, outcome) {
 ========================= */
 function buildRow(item) {
   const row = document.createElement("div");
-  row.className = "row";
+  row.className = "row " + (item.direction === "CALL" ? "dir-call" : "dir-put");
   row.dataset.id = item.id;
 
   const derivUrl = makeDerivTraderUrl(item.symbol);
@@ -585,7 +581,7 @@ function renderHistory() {
 }
 
 /* =========================
-   Tick health + countdown
+   Tick health + countdown (con animaciones)
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
@@ -593,14 +589,26 @@ function updateTickHealthUI() {
   const ageSec = Math.max(0, Math.floor((Date.now() - lastTickEpochMs) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
+
 function updateCountdownUI() {
   if (!countdownEl) return;
-  if (!currentMinuteStartMs) { countdownEl.textContent = "⏱️ 60"; return; }
+
+  if (!currentMinuteStartMs) {
+    countdownEl.innerHTML = `<span class="hourglass">⏳</span><span class="cdNum">60</span>`;
+    return;
+  }
+
   const msInMinute = (Date.now() - currentMinuteStartMs) % 60000;
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-  countdownEl.textContent = `⏱️ ${remaining}`;
+
+  countdownEl.innerHTML = `<span class="hourglass">⏳</span><span class="cdNum">${remaining}</span>`;
+
+  // ✅ reloj analógico: rotación continua durante el minuto
+  const rot = (msInMinute / 60000) * 360;
+  document.documentElement.style.setProperty("--sec-rot", `${rot}deg`);
 }
-setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
+
+setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 250);
 
 /* =========================
    Requests WS (ticks_history)
@@ -695,7 +703,6 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  // outcome para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -856,7 +863,17 @@ function addSignal(minute, symbol, direction, ticks) {
 
   updateCounter();
 
-  if (signalsEl) signalsEl.prepend(buildRow(item));
+  if (signalsEl) {
+    signalsEl.prepend(buildRow(item));
+
+    // ✅ micro animación al aparecer
+    const newRow = signalsEl.firstElementChild;
+    if (newRow) {
+      newRow.classList.add("justAdded");
+      setTimeout(() => newRow.classList.remove("justAdded"), 250);
+    }
+  }
+
   updateRowChartBtn(item);
 
   if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
