@@ -11,6 +11,9 @@
   --neon-orange:#fb923c;
   --btn-bg:rgba(15,23,42,.78);
   --btn-text:#e5e7eb;
+
+  /* reloj analógico (se actualiza por JS) */
+  --sec-rot: 0deg;
 }
 body.light{
   --bg-main:#f8fafc;
@@ -18,7 +21,6 @@ body.light{
   --text:#0f172a;
   --muted:#475569;
   --border:rgba(15,23,42,.18);
-
   --btn-bg:rgba(226,232,240,.95);
   --btn-text:#0f172a;
 }
@@ -54,6 +56,12 @@ body.light .bgNeon{display:none}
 .status{margin:0 0 8px;font-weight:650;letter-spacing:.4px}
 .h3{margin:14px 0 8px;color:var(--muted)}
 .topStatus{display:flex;gap:8px;margin-bottom:10px}
+
+/* ✅ estabilidad numérica (evita "bailes") */
+#countdown, #tickHealth{
+  font-variant-numeric: tabular-nums;
+}
+
 .pill{
   background:var(--bg-card);
   border:1px solid var(--border);
@@ -61,6 +69,76 @@ body.light .bgNeon{display:none}
   padding:6px 12px;
   font-size:13px;
   backdrop-filter:blur(12px);
+}
+
+/* ✅ countdown: hourglass + ancho fijo */
+#countdown{
+  min-width:92px;
+  text-align:center;
+}
+.hourglass{
+  display:inline-block;
+  margin-right:6px;
+  transform-origin:50% 50%;
+  animation: hgFlip 1.2s ease-in-out infinite;
+}
+@keyframes hgFlip{
+  0%{ transform: rotate(0deg); opacity:.85; }
+  50%{ transform: rotate(180deg); opacity:1; }
+  100%{ transform: rotate(360deg); opacity:.85; }
+}
+.cdNum{
+  display:inline-block;
+  width:2ch;
+  text-align:right;
+}
+
+/* ✅ Reloj analógico fijo (HUD) */
+.analogClock{
+  position:fixed;
+  right:12px;
+  top:12px;
+  width:56px;
+  height:56px;
+  z-index:30;
+  pointer-events:none;
+
+  border-radius:999px;
+  background:rgba(2,6,23,.55);
+  border:1px solid rgba(34,211,238,.28);
+  box-shadow:
+    0 0 18px rgba(34,211,238,.18),
+    inset 0 0 18px rgba(168,85,247,.08);
+  backdrop-filter: blur(12px);
+}
+.analogClock .acRing{
+  position:absolute; inset:7px;
+  border-radius:999px;
+  border:1px solid rgba(148,163,184,.22);
+  opacity:.9;
+}
+.analogClock .acHand{
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:2px;
+  height:18px;
+  background:rgba(34,211,238,.95);
+  border-radius:999px;
+  transform-origin:50% calc(100% - 2px);
+  transform: translate(-50%, -100%) rotate(var(--sec-rot));
+  box-shadow: 0 0 10px rgba(34,211,238,.35);
+}
+.analogClock .acDot{
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:6px;
+  height:6px;
+  transform:translate(-50%,-50%);
+  border-radius:999px;
+  background:rgba(168,85,247,.95);
+  box-shadow:0 0 12px rgba(168,85,247,.35);
 }
 
 /* ✅ Tabs */
@@ -143,8 +221,10 @@ body.light .bgNeon{display:none}
 .evalBtn.active{opacity:1;border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.55)}
 .modeBtn{font-weight:650}
 .modeBtn.active-strong{border-color:var(--neon-orange);box-shadow:0 0 14px rgba(251,146,60,.55);color:#fdba74}
+
 .counter{margin:8px 0;font-size:14px;color:var(--muted)}
 .signals{display:flex;flex-direction:column;gap:8px}
+
 .row{
   background:var(--bg-card);
   border:1px solid var(--border);
@@ -153,6 +233,25 @@ body.light .bgNeon{display:none}
   backdrop-filter:blur(16px);
 }
 .row-main{display:flex;align-items:center;gap:8px}
+
+/* ✅ Glow por dirección (COMPRA/VENTA) */
+.row.dir-call{
+  border-color: rgba(34,197,94,.32);
+  box-shadow: 0 0 18px rgba(34,197,94,.10);
+}
+.row.dir-put{
+  border-color: rgba(239,68,68,.28);
+  box-shadow: 0 0 18px rgba(239,68,68,.10);
+}
+
+/* ✅ animación suave al aparecer una señal */
+@keyframes rowPop{
+  0%{ transform: translateY(6px); opacity:0; }
+  100%{ transform: translateY(0); opacity:1; }
+}
+.row.justAdded{
+  animation: rowPop .18s ease-out;
+}
 
 /* ✅ FIX pantallas angostas: no empuja íconos */
 .row-text{
@@ -171,6 +270,7 @@ body.light .bgNeon{display:none}
   display:grid;place-items:center;padding:0;
 }
 .chartBtn svg{width:20px;height:20px}
+
 /* no “matar” el candado cuando está disabled */
 .chartBtn:disabled{opacity:1;cursor:not-allowed;box-shadow:none}
 .lockBadge{font-size:18px;line-height:1}
@@ -219,6 +319,8 @@ textarea{
 }
 .modalCardSmall{
   inset:10% 8%;
+  max-height: 80vh;
+  overflow:auto;
 }
 .modalHeader{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .modalTitle{font-weight:700}
@@ -233,25 +335,37 @@ textarea{
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
 @media (max-width:480px){.modalCard{inset:6%}}
 
-/* ✅ Ícono acierto (si lo seguís usando) */
-.hitIcon{
-  width:26px;
-  height:26px;
-  display:inline-grid;
-  place-items:center;
-
-  border-radius:999px;
-  border:1px solid rgba(34,197,94,.55);
-  background:rgba(34,197,94,.14);
-
-  box-shadow:0 0 16px rgba(34,197,94,.35);
-  color:#bbf7d0;
-
-  font-size:14px;
-  font-weight:800;
-  line-height:1;
+/* ✅ Config modal ordenado: grid prolijo */
+.settingsBody .controls{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:8px;
+  align-items:stretch;
+  margin: 8px 0 0;
 }
-.hitIcon.hidden{ display:none; }
+.settingsBody .controls .btn,
+.settingsBody .controls button{
+  width:100%;
+  justify-content:center;
+}
+.settingsBody .controls .btnGroup{
+  grid-column: 1 / -1;
+  display:flex;
+  gap:6px;
+  flex-wrap:nowrap;
+  justify-content:space-between;
+}
+#modeBtn, #clearHistoryBtn{
+  grid-column: 1 / -1;
+}
+@media (max-width:420px){
+  .settingsBody .controls{
+    grid-template-columns: 1fr;
+  }
+  .settingsBody .controls .btnGroup{
+    flex-wrap:wrap;
+  }
+}
 
 /* ✅ candado pulse suave */
 @keyframes lockPulse{
