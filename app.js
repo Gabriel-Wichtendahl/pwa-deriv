@@ -1,10 +1,8 @@
-// app.js — V6.2
-// - Eval 45/50/55 + modo NORMAL/FUERTE
-// - Historial + feedback + notificaciones
-// - Flecha de próxima vela (nextOutcome)
-// - ✅ Acierto SOLO cuando coincide con nextOutcome
-// - Contadores: Señales + ✅ Aciertos (global)
-// - Modal con gráfico 0–60 real usando ticks_history
+// app.js — V6.2.1 (candado reparado + animaciones)
+// - Candado siempre visible: ya no depende de :disabled (Android lo apagaba demasiado)
+// - Candado SVG con pulse mientras espera
+// - Flecha animada al aparecer
+// - Hit icon con pop al aparecer
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -19,7 +17,6 @@ const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
-// ticks_history para completar minuto real 0–60
 const HISTORY_TIMEOUT_MS = 7000;
 const HISTORY_COUNT_MAX = 5000;
 
@@ -29,7 +26,6 @@ const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
 const statusEl = $("status");
 const signalsEl = $("signals");
 
-// ✅ Fallback: si alguna vez volvés a usar .counter en CSS, igual lo encuentra
 const counterEl = $("counter") || document.querySelector(".counter");
 const hitCounterEl = $("hitCounter");
 
@@ -65,8 +61,8 @@ let strongMode = false;
 
 let history = loadHistory();
 
-let minuteData = {}; // minute -> symbol -> [{ms, quote}]
-let candleOC = {};   // minute -> symbol -> {open, close}
+let minuteData = {};
+let candleOC = {};
 
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
@@ -85,6 +81,11 @@ const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 <path d="M6 14l4-4 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <circle cx="10" cy="10" r="1" fill="currentColor"/><circle cx="13" cy="13" r="1" fill="currentColor"/><circle cx="18" cy="6" r="1" fill="currentColor"/>
+</svg>`;
+
+const LOCK_ICON_SVG = `<svg class="lockPulse" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+<path d="M7 11V8a5 5 0 0 1 10 0v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+<path d="M6.5 11h11A2.5 2.5 0 0 1 20 13.5v5A2.5 2.5 0 0 1 17.5 21h-11A2.5 2.5 0 0 1 4 18.5v-5A2.5 2.5 0 0 1 6.5 11Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
 </svg>`;
 
 function makeDerivTraderUrl(symbol) {
@@ -131,7 +132,6 @@ function escapeHtml(str) {
 function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
 
 function isHit(item) {
-  // ✅ cuenta solo si ya hay nextOutcome (resultado de la próxima vela)
   if (!item || !item.nextOutcome) return false;
   if (item.direction === "CALL" && item.nextOutcome === "up") return true;
   if (item.direction === "PUT" && item.nextOutcome === "down") return true;
@@ -341,7 +341,7 @@ window.addEventListener("resize", () => {
 });
 
 /* =========================
-   Chart
+   Chart (igual que antes)
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
@@ -438,8 +438,18 @@ function updateRowChartBtn(item) {
   if (!btn) return;
 
   const ready = !!item.minuteComplete;
-  btn.disabled = !ready;
-  btn.innerHTML = ready ? CHART_ICON_SVG : `<span class="lockBadge" aria-hidden="true">🔒</span>`;
+
+  // ✅ ya no usamos disabled para evitar "candado invisible" en Android
+  btn.classList.toggle("locked", !ready);
+  btn.setAttribute("aria-disabled", ready ? "false" : "true");
+
+  if (ready) {
+    btn.innerHTML = CHART_ICON_SVG;
+    btn.title = "Ver gráfico del minuto (ticks 0–60)";
+  } else {
+    btn.innerHTML = LOCK_ICON_SVG;
+    btn.title = "Esperando cierre del minuto…";
+  }
 }
 
 function updateRowNextArrow(item) {
@@ -449,13 +459,13 @@ function updateRowNextArrow(item) {
   if (!el) return;
 
   if (item.nextOutcome === "up") {
-    el.textContent = "⬆️"; el.className = "nextArrow up";
+    el.textContent = "⬆️"; el.className = "nextArrow up"; el.title = "Próxima vela: alcista";
   } else if (item.nextOutcome === "down") {
-    el.textContent = "⬇️"; el.className = "nextArrow down";
+    el.textContent = "⬇️"; el.className = "nextArrow down"; el.title = "Próxima vela: bajista";
   } else if (item.nextOutcome === "flat") {
-    el.textContent = "➖"; el.className = "nextArrow flat";
+    el.textContent = "➖"; el.className = "nextArrow flat"; el.title = "Próxima vela: plana";
   } else {
-    el.textContent = "⏳"; el.className = "nextArrow pending";
+    el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
   }
 }
 
@@ -466,7 +476,21 @@ function updateRowHitIcon(item) {
   if (!el) return;
 
   const show = isHit(item);
-  el.classList.toggle("hidden", !show);
+  if (!show) {
+    el.classList.add("hidden");
+    el.classList.remove("pop");
+    return;
+  }
+
+  // mostrar + pop
+  const wasHidden = el.classList.contains("hidden");
+  el.classList.remove("hidden");
+  if (wasHidden) {
+    el.classList.remove("pop");
+    // reflow para reiniciar anim
+    void el.offsetWidth;
+    el.classList.add("pop");
+  }
 }
 
 function setNextOutcome(item, outcome) {
@@ -475,7 +499,7 @@ function setNextOutcome(item, outcome) {
 
   updateRowNextArrow(item);
   updateRowHitIcon(item);
-  updateCounters(); // ✅ contador global se actualiza cuando se conoce outcome
+  updateCounters();
 }
 
 /* =========================
@@ -492,14 +516,10 @@ function buildRow(item) {
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-
-      <!-- ✅ solo se muestra si hay acierto -->
       <span class="hitIcon hidden" aria-label="Acierto" title="Acierto">✓</span>
-
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
-
     <div class="row-actions">
       <button data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
       <button data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
@@ -510,7 +530,10 @@ function buildRow(item) {
   row.querySelector(".row-text").onclick = () => { window.location.href = derivUrl; };
 
   const chartBtn = row.querySelector(".chartBtn");
-  chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
+  chartBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (item.minuteComplete) openChartModal(item);
+  };
   updateRowChartBtn(item);
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
@@ -544,10 +567,10 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  // normalización suave
   for (const it of history) {
     if (!it.mode) it.mode = "NORMAL";
     if (!it.nextOutcome) it.nextOutcome = "";
+    if (typeof it.minuteComplete !== "boolean") it.minuteComplete = !!it.minuteComplete;
   }
   saveHistory(history);
 
@@ -599,13 +622,11 @@ function minuteToEpochSec(minute) { return minute * 60; }
 function normalizeTicksForMinute(minute, times, prices) {
   const startMs = minute * 60000;
   const out = [];
-
   for (let i = 0; i < Math.min(times.length, prices.length); i++) {
     const ms = (Number(times[i]) * 1000) - startMs;
     if (ms < 0 || ms > 60000) continue;
     out.push({ ms, quote: Number(prices[i]) });
   }
-
   out.sort((a, b) => a.ms - b.ms);
 
   if (out.length) {
@@ -631,7 +652,6 @@ async function fetchFullMinuteTicks(symbol, minute) {
 
   const h = res?.history;
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
-
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
 
@@ -641,7 +661,6 @@ async function hydrateSignalsFromDerivHistory(minute) {
 
   let any = false;
   const bySym = new Map();
-
   for (const it of items) {
     if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
     bySym.get(it.symbol).push(it);
@@ -666,7 +685,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   Finalize minute: nextOutcome + completar minuto
+   Finalize minute
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
@@ -689,7 +708,6 @@ function finalizeMinute(minute) {
     }
   }
 
-  // completar minuto real para señales del minuto actual
   (async () => {
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
@@ -698,7 +716,7 @@ function finalizeMinute(minute) {
       if (it.minute === minute && !it.minuteComplete) {
         it.minuteComplete = true;
         changed = true;
-        updateRowChartBtn(it);
+        updateRowChartBtn(it); // ✅ acá desaparecía visualmente (ahora se ve siempre)
       }
     }
     if (changed) saveHistory(history);
@@ -837,7 +855,7 @@ function addSignal(minute, symbol, direction, ticks) {
 
   if (signalsEl) signalsEl.prepend(buildRow(item));
 
-  updateCounters(); // ✅ total sube inmediatamente (aciertos quedarán cuando haya nextOutcome)
+  updateCounters();
 
   if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
@@ -886,7 +904,6 @@ function connect() {
     try {
       const data = JSON.parse(e.data);
 
-      // respuesta ticks_history
       if (data && data.req_id && pending.has(data.req_id) && data.msg_type === "history") {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
