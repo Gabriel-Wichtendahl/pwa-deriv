@@ -1,6 +1,9 @@
-// app.js — V6.1 (gráfico 0–60 REAL usando ticks_history)
-// + ✅ Ícono ✅ solo cuando coincide señal vs resultado de la PRÓXIMA vela
-// + ✅ FIX: nunca se muestra ✅ si todavía no existe nextOutcome
+// app.js — V6.2
+// - Eval 45/50/55 + modo NORMAL/FUERTE
+// - Historial + feedback + notificaciones
+// - Flecha de próxima vela (resultado) + ✅ acierto SOLO cuando corresponde
+// - Modal con gráfico 0–60 real usando ticks_history
+// - Contadores: Señales + ✅ Aciertos
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -24,6 +27,7 @@ const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
 const statusEl = $("status");
 const signalsEl = $("signals");
 const counterEl = $("counter");
+const hitCounterEl = $("hitCounter");
 const feedbackEl = $("feedback");
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
@@ -55,9 +59,10 @@ let EVAL_SEC = 45;       // 45/50/55
 let strongMode = false;  // NORMAL/FUERTE
 
 let history = loadHistory();
-let signalCount = 0;
+let minuteData = {};     // minute -> symbol -> [{ms, quote}, ...]
+let candleOC = {};       // minute -> symbol -> {open, close}
 
-let minuteData = {};           // minute -> symbol -> [{ms, quote}, ...]
+let signalCount = 0;
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -65,13 +70,14 @@ let lastTickEpochMs = null;
 let currentMinuteStartMs = null;
 
 let lastSeenMinute = null;
-let candleOC = {}; // minute -> symbol -> {open, close}
-
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
 let modalCurrentItem = null;
 
+/* =========================
+   Utils
+========================= */
 const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -84,11 +90,28 @@ function makeDerivTraderUrl(symbol) {
   u.searchParams.set("symbol", symbol);
   return u.toString();
 }
+
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
-/* =========================
-   ✅ Match (señal vs próxima vela)
-========================= */
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+}
+
+function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
+
+function setBtnActive(btn, active) {
+  btn && btn.classList.toggle("active", !!active);
+}
+
+function loadBool(key, fallback) {
+  const v = localStorage.getItem(key);
+  return v === null ? fallback : v === "1";
+}
+function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
+
+/* ✅ Coincidencia señal vs próxima vela */
 function isMatch(direction, outcome) {
   if (!direction || !outcome) return false;
   if (outcome === "up" && direction === "CALL") return true;
@@ -116,26 +139,28 @@ function saveHistory(arr) {
 }
 
 /* =========================
-   Helpers UI / estado
+   Contadores
 ========================= */
-function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
-function loadBool(key, fallback) {
-  const v = localStorage.getItem(key);
-  return v === null ? fallback : v === "1";
-}
-function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
-
-function updateCounter() {
-  if (counterEl) counterEl.textContent = `Señales: ${signalCount}`;
+function countHits(arr) {
+  let hits = 0;
+  for (const it of arr) {
+    if (it.nextOutcome && it.hit === true) hits++;
+  }
+  return hits;
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
-}
-function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
+function updateCounters() {
+  const total = history.length;
+  const hits = countHits(history);
 
+  signalCount = total;
+  if (counterEl) counterEl.textContent = `Señales: ${total}`;
+  if (hitCounterEl) hitCounterEl.textContent = `✅: ${hits}`;
+}
+
+/* =========================
+   Feedback
+========================= */
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
   let text = "";
@@ -147,6 +172,10 @@ function rebuildFeedbackFromHistory() {
     text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | ${comment}\n`;
   }
   feedbackEl.value = text;
+}
+
+if (copyBtn && feedbackEl) {
+  copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
 }
 
 /* =========================
@@ -213,17 +242,26 @@ function applyTheme(theme) {
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
       try {
-        sound.muted = false; sound.volume = 1; sound.currentTime = 0;
-        await sound.play(); sound.pause();
-        soundEnabled = true; saveBool("soundEnabled", true);
-        setBtnActive(soundBtn, true); soundBtn.textContent = "🔊 Sonido ON";
+        sound.muted = false;
+        sound.volume = 1;
+        sound.currentTime = 0;
+        await sound.play();
+        sound.pause();
+
+        soundEnabled = true;
+        saveBool("soundEnabled", true);
+        setBtnActive(soundBtn, true);
+        soundBtn.textContent = "🔊 Sonido ON";
       } catch {
         alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
       }
       return;
     }
-    soundEnabled = false; saveBool("soundEnabled", false);
-    setBtnActive(soundBtn, false); soundBtn.textContent = "🔇 Sonido OFF";
+
+    soundEnabled = false;
+    saveBool("soundEnabled", false);
+    setBtnActive(soundBtn, false);
+    soundBtn.textContent = "🔇 Sonido OFF";
   };
 })();
 
@@ -233,6 +271,7 @@ function applyTheme(theme) {
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
   if (!vibrateBtn) return;
+
   setBtnActive(vibrateBtn, vibrateEnabled);
   vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
 
@@ -246,24 +285,25 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Copy feedback
-========================= */
-if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
-
-/* =========================
    Clear history
 ========================= */
 function clearHistory() {
   history = [];
   saveHistory(history);
-  signalCount = 0;
-  updateCounter();
+  minuteData = {};
+  candleOC = {};
+  lastSeenMinute = null;
+
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
+
+  updateCounters();
 }
-if (clearHistoryBtn) clearHistoryBtn.onclick = () => {
-  if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
-};
+if (clearHistoryBtn) {
+  clearHistoryBtn.onclick = () => {
+    if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
+  };
+}
 
 /* =========================
    Notifications
@@ -271,6 +311,7 @@ if (clearHistoryBtn) clearHistoryBtn.onclick = () => {
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
 }
+
 function showNotification(symbol, direction, modeLabel) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
@@ -301,6 +342,7 @@ function openChartModal(item) {
 
   modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
   modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
+
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
@@ -308,20 +350,24 @@ function openChartModal(item) {
     drawDerivLikeChart(minuteCanvas, item.ticks || []);
   }));
 }
+
 function closeChartModal() {
   if (!chartModal) return;
   chartModal.classList.add("hidden");
   chartModal.setAttribute("aria-hidden", "true");
   modalCurrentItem = null;
 }
-if (modalCloseBtn) modalCloseChartModal;
-function modalCloseChartModal() { closeChartModal(); }
+
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeChartModal(); });
-if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
-  if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
-};
+
+if (modalOpenDerivBtn) {
+  modalOpenDerivBtn.onclick = () => {
+    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
+  };
+}
+
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
@@ -335,12 +381,14 @@ function drawDerivLikeChart(canvas, ticks) {
   const ctx = canvas.getContext("2d");
   const cssW = canvas.clientWidth || 1, cssH = canvas.clientHeight || 1;
   const dpr = window.devicePixelRatio || 1;
+
   canvas.width = Math.floor(cssW * dpr);
   canvas.height = Math.floor(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const w = cssW, h = cssH;
   ctx.clearRect(0, 0, w, h);
+
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, 0, w, h);
@@ -414,7 +462,7 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
-   Row helpers
+   UI row: arrow + ✅ + chart
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -424,6 +472,7 @@ function updateRowChartBtn(item) {
 
   const ready = !!item.minuteComplete;
   btn.disabled = !ready;
+
   if (ready) {
     btn.innerHTML = CHART_ICON_SVG;
     btn.title = "Ver gráfico del minuto (ticks 0–60)";
@@ -456,7 +505,7 @@ function updateRowHitIcon(item) {
   const icon = row.querySelector(".hitIcon");
   if (!icon) return;
 
-  const show = !!item.nextOutcome && item.hit === true; // ✅ CLAVE
+  const show = !!item.nextOutcome && item.hit === true;
   icon.classList.toggle("hidden", !show);
   icon.title = show ? "Coincidió con la próxima vela ✅" : "";
 }
@@ -464,9 +513,13 @@ function updateRowHitIcon(item) {
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   item.hit = isMatch(item.direction, outcome);
+
   saveHistory(history);
   updateRowNextArrow(item);
   updateRowHitIcon(item);
+
+  // ✅ actualizar contador de aciertos inmediatamente
+  updateCounters();
 }
 
 /* =========================
@@ -480,13 +533,14 @@ function buildRow(item) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
+  // defensivo: por default oculto (updateRowHitIcon decide)
   const showHit = !!item.nextOutcome && item.hit === true;
   const iconHidden = showHit ? "" : "hidden";
 
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <span class="hitIcon ${iconHidden} hidden" aria-label="Coincidió" title="Coincidió con la próxima vela ✅">✅</span>
+      <span class="hitIcon ${iconHidden}" aria-label="Coincidió" title="Coincidió con la próxima vela ✅">✅</span>
       <button class="chartBtn" type="button"></button>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -497,25 +551,25 @@ function buildRow(item) {
     </div>
   `;
 
-  // ✅ Forzamos hidden por default SIEMPRE (defensivo)
-  // (si corresponde mostrarlo, updateRowHitIcon lo habilita)
-  const icon = row.querySelector(".hitIcon");
-  if (icon) icon.classList.add("hidden");
-
   row.querySelector(".row-text").onclick = () => { window.location.href = derivUrl; };
 
   const chartBtn = row.querySelector(".chartBtn");
-  chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
+  chartBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (item.minuteComplete) openChartModal(item);
+  };
   updateRowChartBtn(item);
 
   row.querySelectorAll('button[data-v]').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
       if (item.vote) return;
+
       item.vote = btn.dataset.v;
       item.comment = row.querySelector(".row-comment").value || "";
       saveHistory(history);
       rebuildFeedbackFromHistory();
+
       row.querySelectorAll('button[data-v]').forEach(b => (b.disabled = true));
     };
   });
@@ -535,18 +589,16 @@ function buildRow(item) {
 /* =========================
    Render
 ========================= */
-function renderHistory() {
-  if (!signalsEl) return;
-  signalsEl.innerHTML = "";
-
+function normalizeHistory() {
   let touched = false;
+
   for (const it of history) {
     if (!it.mode) { it.mode = "NORMAL"; touched = true; }
 
-    // hit debe ser boolean real
+    // hit boolean real
     if (typeof it.hit !== "boolean") { it.hit = (it.hit === true); touched = true; }
 
-    // si no hay nextOutcome, hit debe ser false siempre
+    // sin nextOutcome => hit debe ser false
     if (!it.nextOutcome) {
       if (it.hit !== false) { it.hit = false; touched = true; }
     } else {
@@ -554,13 +606,21 @@ function renderHistory() {
       if (it.hit !== newHit) { it.hit = newHit; touched = true; }
     }
   }
-  if (touched) saveHistory(history);
 
-  signalCount = history.length;
-  updateCounter();
+  if (touched) saveHistory(history);
+}
+
+function renderHistory() {
+  if (!signalsEl) return;
+  signalsEl.innerHTML = "";
+
+  normalizeHistory();
+  updateCounters();
   rebuildFeedbackFromHistory();
 
-  for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
+  for (const it of [...history].reverse()) {
+    signalsEl.appendChild(buildRow(it));
+  }
 }
 
 /* =========================
@@ -572,6 +632,7 @@ function updateTickHealthUI() {
   const ageSec = Math.max(0, Math.floor((Date.now() - lastTickEpochMs) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
+
 function updateCountdownUI() {
   if (!countdownEl) return;
   if (!currentMinuteStartMs) { countdownEl.textContent = "⏱️ 60"; return; }
@@ -579,6 +640,7 @@ function updateCountdownUI() {
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   countdownEl.textContent = `⏱️ ${remaining}`;
 }
+
 setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 1000);
 
 /* =========================
@@ -600,7 +662,7 @@ setInterval(() => {
 }, 250);
 
 /* =========================
-   ✅ ticks_history requests
+   ✅ WS request system (ticks_history)
 ========================= */
 let reqSeq = 1;
 const pending = new Map(); // req_id -> {resolve, reject, t}
@@ -613,6 +675,7 @@ function wsRequest(payload) {
       pending.delete(req_id);
       reject(new Error("timeout"));
     }, HISTORY_TIMEOUT_MS);
+
     pending.set(req_id, { resolve, reject, t });
     ws.send(JSON.stringify({ ...payload, req_id }));
   });
@@ -623,11 +686,13 @@ function minuteToEpochSec(minute) { return minute * 60; }
 function normalizeTicksForMinute(minute, times, prices) {
   const startMs = minute * 60000;
   const out = [];
+
   for (let i = 0; i < Math.min(times.length, prices.length); i++) {
-    const ms = (Number(times[i]) * 1000) - startMs;
+    const ms = (Number(times[i]) * 1000) - startMs; // epoch(s) -> ms relativo
     if (ms < 0 || ms > 60000) continue;
     out.push({ ms, quote: Number(prices[i]) });
   }
+
   out.sort((a, b) => a.ms - b.ms);
 
   if (out.length) {
@@ -661,6 +726,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
   if (!items.length) return false;
 
   let any = false;
+
   const bySym = new Map();
   for (const it of items) {
     if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
@@ -692,6 +758,7 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+  // outcome del minuto "minute" para señales del minuto anterior
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
@@ -708,6 +775,7 @@ function finalizeMinute(minute) {
     }
   }
 
+  // completar minuto real para señales de este minuto
   (async () => {
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
@@ -752,6 +820,7 @@ function onTick(tick) {
     lastMinuteSeenBySymbol[symbol] = minute;
     (minuteData[minute] ||= {});
     (minuteData[minute][symbol] ||= []);
+
     if (minuteData[minute][symbol].length === 0 && prevLast != null) {
       minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
@@ -776,6 +845,7 @@ function onTick(tick) {
     if (!ok) scheduleRetry(minute);
   }
 }
+
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
@@ -828,8 +898,10 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
+
 function addSignal(minute, symbol, direction, ticks) {
   const modeLabel = strongMode ? "FUERTE" : "NORMAL";
+
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
@@ -840,9 +912,9 @@ function addSignal(minute, symbol, direction, ticks) {
     vote: "",
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
-    nextOutcome: "",        // ✅ aún no hay próxima vela
+    nextOutcome: "",
     minuteComplete: false,
-    hit: false              // ✅ nunca se muestra al crear
+    hit: false
   };
 
   if (history.some(x => x.id === item.id)) return;
@@ -851,14 +923,16 @@ function addSignal(minute, symbol, direction, ticks) {
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
   saveHistory(history);
 
-  signalCount = history.length;
-  updateCounter();
-
   if (signalsEl) signalsEl.prepend(buildRow(item));
+
+  updateCounters();
   updateRowChartBtn(item);
   updateRowHitIcon(item);
 
-  if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
+  if (soundEnabled && sound) {
+    sound.currentTime = 0;
+    sound.play().catch(() => {});
+  }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel);
@@ -868,22 +942,25 @@ function addSignal(minute, symbol, direction, ticks) {
    Wake lock
 ========================= */
 let wakeLock = null;
-if (wakeBtn) wakeBtn.onclick = async () => {
-  try {
-    if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-      wakeBtn.textContent = "🔓 Pantalla activa";
-      wakeBtn.classList.remove("active");
-    } else {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeBtn.textContent = "🔒 Pantalla activa";
-      wakeBtn.classList.add("active");
+
+if (wakeBtn) {
+  wakeBtn.onclick = async () => {
+    try {
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeBtn.textContent = "🔒 Pantalla activa";
+        wakeBtn.classList.add("active");
+      }
+    } catch {
+      alert("No se pudo mantener la pantalla activa");
     }
-  } catch {
-    alert("No se pudo mantener la pantalla activa");
-  }
-};
+  };
+}
 
 /* =========================
    WebSocket
@@ -905,6 +982,7 @@ function connect() {
     try {
       const data = JSON.parse(e.data);
 
+      // Respuesta a ticks_history
       if (data && data.req_id && pending.has(data.req_id) && data.msg_type === "history") {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
@@ -917,7 +995,9 @@ function connect() {
     } catch {}
   };
 
-  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
+  ws.onerror = () => {
+    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
+  };
 
   ws.onclose = () => {
     for (const [id, p] of pending.entries()) {
@@ -934,11 +1014,6 @@ function connect() {
    Start
 ========================= */
 renderHistory();
-for (const it of history) {
-  updateRowChartBtn(it);
-  updateRowNextArrow(it);
-  updateRowHitIcon(it);
-}
 updateTickHealthUI();
 updateCountdownUI();
 connect();
