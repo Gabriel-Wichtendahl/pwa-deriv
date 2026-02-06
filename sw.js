@@ -1,4 +1,4 @@
-const CACHE = "deriv-assets-v5"; // ✅ bump para forzar update
+const CACHE = "deriv-assets-v6-3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,7 +28,6 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  // Siempre traer lo último del servidor para HTML y JS
   if (
     url.pathname.endsWith("/index.html") ||
     url.pathname.endsWith("/app.js") ||
@@ -38,7 +37,6 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Cache-first para assets
   e.respondWith(
     caches.match(e.request).then(r => r || fetch(e.request))
   );
