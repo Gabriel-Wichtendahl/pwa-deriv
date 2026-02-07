@@ -1,4 +1,5 @@
 // app.js — V6.8 (mejora análisis técnico: NORMAL vs FUERTE)
+// ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -111,23 +112,31 @@ function loadHistory() {
   }
 }
 function saveHistory(arr) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(arr.slice(-MAX_HISTORY))); } catch {}
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(arr.slice(-MAX_HISTORY)));
+  } catch {}
 }
 
 /* =========================
    Helpers UI
 ========================= */
-function setBtnActive(btn, active) { btn && btn.classList.toggle("active", !!active); }
+function setBtnActive(btn, active) {
+  btn && btn.classList.toggle("active", !!active);
+}
 function loadBool(key, fallback) {
   const v = localStorage.getItem(key);
   return v === null ? fallback : v === "1";
 }
-function saveBool(key, value) { localStorage.setItem(key, value ? "1" : "0"); }
+function saveBool(key, value) {
+  localStorage.setItem(key, value ? "1" : "0");
+}
 
-function isHit(item){
+function isHit(item) {
   if (!item || !item.nextOutcome) return false;
-  return (item.direction === "CALL" && item.nextOutcome === "up")
-      || (item.direction === "PUT" && item.nextOutcome === "down");
+  return (
+    (item.direction === "CALL" && item.nextOutcome === "up") ||
+    (item.direction === "PUT" && item.nextOutcome === "down")
+  );
 }
 function computeHitsCount() {
   let hits = 0;
@@ -141,10 +150,15 @@ function updateCounter() {
 
 function escapeHtml(str) {
   return String(str)
-    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
-function cssEscape(s) { return String(s).replace(/"/g, '\\"'); }
+function cssEscape(s) {
+  return String(s).replace(/"/g, '\\"');
+}
 
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
@@ -167,7 +181,7 @@ function setActiveView(name) {
   if (signalsView) signalsView.classList.toggle("hidden", !isSignals);
   if (feedbackView) feedbackView.classList.toggle("hidden", isSignals);
 
-  tabs.forEach(t => {
+  tabs.forEach((t) => {
     const active = t.dataset.view === name;
     t.classList.toggle("active", active);
     t.setAttribute("aria-selected", active ? "true" : "false");
@@ -178,7 +192,7 @@ function setActiveView(name) {
 (function initTabs() {
   const saved = localStorage.getItem("activeView") || "signals";
   setActiveView(saved === "feedback" ? "feedback" : "signals");
-  tabs.forEach(t => t.onclick = () => setActiveView(t.dataset.view));
+  tabs.forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 })();
 
 /* =========================
@@ -188,7 +202,10 @@ function openSettings() {
   if (!settingsModal) return;
   settingsModal.classList.remove("hidden");
   settingsModal.setAttribute("aria-hidden", "false");
-  if (configBtn) { configBtn.classList.add("spin"); setTimeout(() => configBtn.classList.remove("spin"), 180); }
+  if (configBtn) {
+    configBtn.classList.add("spin");
+    setTimeout(() => configBtn.classList.remove("spin"), 180);
+  }
 }
 function closeSettings() {
   if (!settingsModal) return;
@@ -211,10 +228,11 @@ function applyTheme(theme) {
 }
 (function initTheme() {
   applyTheme(localStorage.getItem("theme") || "dark");
-  if (themeBtn) themeBtn.onclick = () => {
-    const current = document.body.classList.contains("light") ? "light" : "dark";
-    applyTheme(current === "light" ? "dark" : "light");
-  };
+  if (themeBtn)
+    themeBtn.onclick = () => {
+      const current = document.body.classList.contains("light") ? "light" : "dark";
+      applyTheme(current === "light" ? "dark" : "light");
+    };
 })();
 
 /* =========================
@@ -224,18 +242,22 @@ function applyTheme(theme) {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
   EVAL_SEC = [45, 50, 55].includes(savedSec) ? savedSec : 45;
 
-  const paintEval = () => evalBtns.forEach(b => {
-    const sec = parseInt(b.dataset.sec || "0", 10);
-    b.classList.toggle("active", sec === EVAL_SEC);
-  });
+  const paintEval = () =>
+    evalBtns.forEach((b) => {
+      const sec = parseInt(b.dataset.sec || "0", 10);
+      b.classList.toggle("active", sec === EVAL_SEC);
+    });
   paintEval();
 
-  evalBtns.forEach(b => b.onclick = () => {
-    const v = parseInt(b.dataset.sec || "45", 10);
-    EVAL_SEC = [45, 50, 55].includes(v) ? v : 45;
-    localStorage.setItem("evalSec", String(EVAL_SEC));
-    paintEval();
-  });
+  evalBtns.forEach(
+    (b) =>
+      (b.onclick = () => {
+        const v = parseInt(b.dataset.sec || "45", 10);
+        EVAL_SEC = [45, 50, 55].includes(v) ? v : 45;
+        localStorage.setItem("evalSec", String(EVAL_SEC));
+        paintEval();
+      })
+  );
 
   strongMode = loadBool("strongMode", false);
   const paintMode = () => {
@@ -245,11 +267,12 @@ function applyTheme(theme) {
   };
   paintMode();
 
-  if (modeBtn) modeBtn.onclick = () => {
-    strongMode = !strongMode;
-    saveBool("strongMode", strongMode);
-    paintMode();
-  };
+  if (modeBtn)
+    modeBtn.onclick = () => {
+      strongMode = !strongMode;
+      saveBool("strongMode", strongMode);
+      paintMode();
+    };
 })();
 
 /* =========================
@@ -264,17 +287,24 @@ function applyTheme(theme) {
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
       try {
-        sound.muted = false; sound.volume = 1; sound.currentTime = 0;
-        await sound.play(); sound.pause();
-        soundEnabled = true; saveBool("soundEnabled", true);
-        setBtnActive(soundBtn, true); soundBtn.textContent = "🔊 Sonido ON";
+        sound.muted = false;
+        sound.volume = 1;
+        sound.currentTime = 0;
+        await sound.play();
+        sound.pause();
+        soundEnabled = true;
+        saveBool("soundEnabled", true);
+        setBtnActive(soundBtn, true);
+        soundBtn.textContent = "🔊 Sonido ON";
       } catch {
         alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
       }
       return;
     }
-    soundEnabled = false; saveBool("soundEnabled", false);
-    setBtnActive(soundBtn, false); soundBtn.textContent = "🔇 Sonido OFF";
+    soundEnabled = false;
+    saveBool("soundEnabled", false);
+    setBtnActive(soundBtn, false);
+    soundBtn.textContent = "🔇 Sonido OFF";
   };
 })();
 
@@ -311,9 +341,10 @@ function clearHistory() {
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
 }
-if (clearHistoryBtn) clearHistoryBtn.onclick = () => {
-  if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
-};
+if (clearHistoryBtn)
+  clearHistoryBtn.onclick = () => {
+    if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
+  };
 
 /* =========================
    Notifications
@@ -325,7 +356,7 @@ function showNotification(symbol, direction, modeLabel) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
 
-  navigator.serviceWorker.getRegistration().then(reg => {
+  navigator.serviceWorker.getRegistration().then((reg) => {
     if (!reg) return;
     reg.showNotification("📈 Deriv Signal", {
       body: `${symbol} – ${labelDir(direction)} – [${modeLabel || "NORMAL"}]`,
@@ -336,7 +367,7 @@ function showNotification(symbol, direction, modeLabel) {
       requireInteraction: true,
       silent: false,
       vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
-      data: { url: makeDerivTraderUrl(symbol), symbol, direction }
+      data: { url: makeDerivTraderUrl(symbol), symbol, direction },
     });
   });
 }
@@ -354,9 +385,11 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    drawDerivLikeChart(minuteCanvas, item.ticks || []);
-  }));
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      drawDerivLikeChart(minuteCanvas, item.ticks || []);
+    })
+  );
 }
 function closeChartModal() {
   if (!chartModal) return;
@@ -368,11 +401,15 @@ if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") { closeChartModal(); closeSettings(); }
+  if (e.key === "Escape") {
+    closeChartModal();
+    closeSettings();
+  }
 });
-if (modalOpenDerivBtn) modalOpenDerivBtn.onclick = () => {
-  if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
-};
+if (modalOpenDerivBtn)
+  modalOpenDerivBtn.onclick = () => {
+    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
+  };
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
@@ -381,13 +418,15 @@ window.addEventListener("resize", () => {
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
-  const cssW = canvas.clientWidth || 1, cssH = canvas.clientHeight || 1;
+  const cssW = canvas.clientWidth || 1,
+    cssH = canvas.clientHeight || 1;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.floor(cssW * dpr);
   canvas.height = Math.floor(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  const w = cssW, h = cssH;
+  const w = cssW,
+    h = cssH;
   ctx.clearRect(0, 0, w, h);
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
@@ -400,20 +439,27 @@ function drawDerivLikeChart(canvas, ticks) {
   const last = pts[pts.length - 1];
   if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
 
-  const quotes = pts.map(p => p.quote);
-  let min = Math.min(...quotes), max = Math.max(...quotes);
-  let range = max - min; if (range < 1e-9) range = 1e-9;
-  const pad = range * 0.08; min -= pad; max += pad;
+  const quotes = pts.map((p) => p.quote);
+  let min = Math.min(...quotes),
+    max = Math.max(...quotes);
+  let range = max - min;
+  if (range < 1e-9) range = 1e-9;
+  const pad = range * 0.08;
+  min -= pad;
+  max += pad;
 
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
-  const yOf = (q) => (1 - ((q - min) / (max - min))) * (h - 30) + 10;
+  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
   for (let i = 1; i <= 4; i++) {
     const y = (h / 5) * i;
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
@@ -421,7 +467,10 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
   ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(x30, 10); ctx.lineTo(x30, h - 20); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x30, 10);
+  ctx.lineTo(x30, h - 20);
+  ctx.stroke();
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -444,15 +493,20 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.lineCap = "round";
   ctx.beginPath();
   pts.forEach((p, i) => {
-    const x = xOf(p.ms), y = yOf(p.quote);
-    if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    const x = xOf(p.ms),
+      y = yOf(p.quote);
+    if (!i) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
   });
   ctx.stroke();
 
-  const lx = xOf(pts[pts.length - 1].ms), ly = yOf(pts[pts.length - 1].quote);
+  const lx = xOf(pts[pts.length - 1].ms),
+    ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
   ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.beginPath(); ctx.arc(lx, ly, 3.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.fill();
   ctx.globalAlpha = 0.85;
   ctx.fillStyle = "rgba(255,255,255,0.75)";
   ctx.font = "12px system-ui, sans-serif";
@@ -483,7 +537,7 @@ function updateRowChartBtn(item) {
   }
 }
 
-function updateRowHitIcon(item){
+function updateRowHitIcon(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return false;
   const hit = row.querySelector(".hitIcon");
@@ -494,7 +548,7 @@ function updateRowHitIcon(item){
   return show;
 }
 
-function animateHitPop(item){
+function animateHitPop(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
   const hit = row.querySelector(".hitIcon");
@@ -505,7 +559,7 @@ function animateHitPop(item){
   setTimeout(() => hit.classList.remove("pop"), 260);
 }
 
-function animateFailShake(item){
+function animateFailShake(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
   const arrow = row.querySelector(".nextArrow");
@@ -523,13 +577,21 @@ function updateRowNextArrow(item) {
   if (!el) return;
 
   if (item.nextOutcome === "up") {
-    el.textContent = "⬆️"; el.className = "nextArrow up"; el.title = "Próxima vela: alcista";
+    el.textContent = "⬆️";
+    el.className = "nextArrow up";
+    el.title = "Próxima vela: alcista";
   } else if (item.nextOutcome === "down") {
-    el.textContent = "⬇️"; el.className = "nextArrow down"; el.title = "Próxima vela: bajista";
+    el.textContent = "⬇️";
+    el.className = "nextArrow down";
+    el.title = "Próxima vela: bajista";
   } else if (item.nextOutcome === "flat") {
-    el.textContent = "➖"; el.className = "nextArrow flat"; el.title = "Próxima vela: plana";
+    el.textContent = "➖";
+    el.className = "nextArrow flat";
+    el.title = "Próxima vela: plana";
   } else {
-    el.textContent = "⏳"; el.className = "nextArrow pending"; el.title = "Próxima vela: esperando…";
+    el.textContent = "⏳";
+    el.className = "nextArrow pending";
+    el.title = "Próxima vela: esperando…";
   }
 }
 
@@ -571,22 +633,27 @@ function buildRow(item) {
     </div>
   `;
 
-  row.querySelector(".row-text").onclick = () => { window.location.href = derivUrl; };
+  row.querySelector(".row-text").onclick = () => {
+    window.location.href = derivUrl;
+  };
 
   const chartBtn = row.querySelector(".chartBtn");
-  chartBtn.onclick = (e) => { e.stopPropagation(); if (item.minuteComplete) openChartModal(item); };
+  chartBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (item.minuteComplete) openChartModal(item);
+  };
   updateRowChartBtn(item);
 
   updateRowHitIcon(item);
 
   if (item.vote) {
     const likeBtn = row.querySelector('button[data-v="like"]');
-    const disBtn  = row.querySelector('button[data-v="dislike"]');
+    const disBtn = row.querySelector('button[data-v="dislike"]');
     if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
     if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
   }
 
-  row.querySelectorAll('button[data-v]').forEach(btn => {
+  row.querySelectorAll("button[data-v]").forEach((btn) => {
     btn.onclick = (e) => {
       e.stopPropagation();
       if (item.vote) return;
@@ -600,7 +667,7 @@ function buildRow(item) {
       saveHistory(history);
       rebuildFeedbackFromHistory();
 
-      row.querySelectorAll('button[data-v]').forEach(b => (b.disabled = true));
+      row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
     };
   });
 
@@ -636,7 +703,10 @@ function renderHistory() {
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
-  if (!lastTickEpochMs) { tickHealthEl.textContent = "Último tick: —"; return; }
+  if (!lastTickEpochMs) {
+    tickHealthEl.textContent = "Último tick: —";
+    return;
+  }
   const ageSec = Math.max(0, Math.floor((Date.now() - lastTickEpochMs) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
@@ -670,7 +740,10 @@ function updateCountdownUI() {
   countdownEl.classList.add("tick");
 }
 
-setInterval(() => { updateTickHealthUI(); updateCountdownUI(); }, 500);
+setInterval(() => {
+  updateTickHealthUI();
+  updateCountdownUI();
+}, 500);
 
 /* =========================
    ✅ ticks_history (requests)
@@ -691,13 +764,15 @@ function wsRequest(payload) {
   });
 }
 
-function minuteToEpochSec(minute) { return minute * 60; }
+function minuteToEpochSec(minute) {
+  return minute * 60;
+}
 
 function normalizeTicksForMinute(minute, times, prices) {
   const startMs = minute * 60000;
   const out = [];
   for (let i = 0; i < Math.min(times.length, prices.length); i++) {
-    const ms = (Number(times[i]) * 1000) - startMs;
+    const ms = Number(times[i]) * 1000 - startMs;
     if (ms < 0 || ms > 60000) continue;
     out.push({ ms, quote: Number(prices[i]) });
   }
@@ -721,7 +796,7 @@ async function fetchFullMinuteTicks(symbol, minute) {
     end,
     style: "ticks",
     count: HISTORY_COUNT_MAX,
-    adjust_start_time: 1
+    adjust_start_time: 1,
   });
 
   const h = res?.history;
@@ -730,7 +805,7 @@ async function fetchFullMinuteTicks(symbol, minute) {
 }
 
 async function hydrateSignalsFromDerivHistory(minute) {
-  const items = history.filter(it => it.minute === minute);
+  const items = history.filter((it) => it.minute === minute);
   if (!items.length) return false;
 
   let any = false;
@@ -745,7 +820,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
       const full = await fetchFullMinuteTicks(symbol, minute);
       if (!full || full.length < 2) continue;
 
-      (minuteData[minute] ||= {});
+      minuteData[minute] ||= {};
       minuteData[minute][symbol] = full.slice();
 
       for (const it of its) {
@@ -756,6 +831,101 @@ async function hydrateSignalsFromDerivHistory(minute) {
   }
 
   return any;
+}
+
+/* =========================
+   ✅ Rehidratar historial al abrir
+   - Completa ticks 0–60 y habilita gráfico
+   - Calcula nextOutcome para flecha/acierto
+========================= */
+const REHYDRATE_MAX_ITEMS = 60; // cuántas señales viejas rehidratar
+const REHYDRATE_SLEEP_MS = 180; // pausa suave para no saturar WS
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchMinuteOC(symbol, minute) {
+  // devuelve {open, close} del minuto (ticks style)
+  const start = minuteToEpochSec(minute);
+  const end = minuteToEpochSec(minute + 1);
+
+  const res = await wsRequest({
+    ticks_history: symbol,
+    start,
+    end,
+    style: "ticks",
+    count: HISTORY_COUNT_MAX,
+    adjust_start_time: 1,
+  });
+
+  const h = res?.history;
+  if (!h || !Array.isArray(h.prices) || h.prices.length < 2) return null;
+
+  const open = Number(h.prices[0]);
+  const close = Number(h.prices[h.prices.length - 1]);
+  if (!isFinite(open) || !isFinite(close)) return null;
+
+  return { open, close };
+}
+function ocToOutcome(oc) {
+  if (!oc) return null;
+  if (oc.close > oc.open) return "up";
+  if (oc.close < oc.open) return "down";
+  return "flat";
+}
+
+async function rehydrateHistoryOnBoot() {
+  if (!ws || ws.readyState !== 1) return;
+
+  // limit: solo lo último, para no hacer mil requests
+  const slice = history.slice(-REHYDRATE_MAX_ITEMS);
+
+  // 1) ticks completos + minuteComplete (para gráfico)
+  // hidratamos por minuto (agrupa por símbolo adentro)
+  const minutes = [...new Set(slice.map((it) => it.minute))].sort((a, b) => a - b);
+  for (const m of minutes) {
+    // solo minutos ya cerrados (si es el minuto actual, todavía cambia)
+    const nowMin = Math.floor(Date.now() / 60000);
+    if (m >= nowMin) continue;
+
+    try {
+      const changed = await hydrateSignalsFromDerivHistory(m);
+
+      let anyMark = false;
+      for (const it of history) {
+        if (it.minute === m) {
+          if (!it.minuteComplete) {
+            it.minuteComplete = true;
+            anyMark = true;
+          }
+          updateRowChartBtn(it);
+        }
+      }
+
+      if (changed || anyMark) saveHistory(history);
+    } catch {}
+    await sleep(REHYDRATE_SLEEP_MS);
+  }
+
+  // 2) nextOutcome (flecha/acierto): para una señal en minuto m,
+  // necesitamos el outcome del minuto m+1
+  const nowMin = Math.floor(Date.now() / 60000);
+  for (const it of slice) {
+    if (it.nextOutcome) continue;
+    const targetMinute = it.minute + 1;
+
+    // solo si el minuto siguiente ya cerró
+    if (targetMinute >= nowMin) continue;
+
+    try {
+      const oc = await fetchMinuteOC(it.symbol, targetMinute);
+      const outcome = ocToOutcome(oc);
+      if (outcome) setNextOutcome(it, outcome);
+    } catch {}
+    await sleep(REHYDRATE_SLEEP_MS);
+  }
+
+  // refrescos finales UI
+  updateCounter();
+  rebuildFeedbackFromHistory();
 }
 
 /* =========================
@@ -823,8 +993,8 @@ function onTick(tick) {
 
   if (lastMinuteSeenBySymbol[symbol] !== minute) {
     lastMinuteSeenBySymbol[symbol] = minute;
-    (minuteData[minute] ||= {});
-    (minuteData[minute][symbol] ||= []);
+    minuteData[minute] ||= {};
+    minuteData[minute][symbol] ||= [];
     if (minuteData[minute][symbol].length === 0 && prevLast != null) {
       minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
@@ -836,10 +1006,11 @@ function onTick(tick) {
     lastSeenMinute = minute;
   }
 
-  (minuteData[minute] ||= {});
-  (minuteData[minute][symbol] ||= []).push({ ms: msInMinute, quote: tick.quote });
+  minuteData[minute] ||= {};
+  minuteData[minute][symbol] ||= [];
+  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
 
-  (candleOC[minute] ||= {});
+  candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
@@ -859,11 +1030,13 @@ function scheduleRetry(minute) {
 /* =========================
    ✅ NUEVO: filtros técnicos (0-30, 30-45, ataque contrario, respiro)
 ========================= */
-function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
+function clamp(n, a, b) {
+  return Math.max(a, Math.min(b, n));
+}
 
-function getPriceAtMs(ticks, ms){
+function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
-  const pts = ticks.slice().sort((a,b)=>a.ms-b.ms);
+  const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
 
   if (ms <= pts[0].ms) return pts[0].quote;
   const last = pts[pts.length - 1];
@@ -876,17 +1049,18 @@ function getPriceAtMs(ticks, ms){
   return pts[0].quote;
 }
 
-function sliceTicks(ticks, aMs, bMs){
+function sliceTicks(ticks, aMs, bMs) {
   if (!ticks || ticks.length === 0) return [];
-  return ticks.filter(t => t.ms >= aMs && t.ms <= bMs).sort((x,y)=>x.ms-y.ms);
+  return ticks.filter((t) => t.ms >= aMs && t.ms <= bMs).sort((x, y) => x.ms - y.ms);
 }
 
 // ratio de micro-movimientos en dirección (consistencia)
-function directionalRatio(ticks, dirSign){
+function directionalRatio(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
-  let ok = 0, total = 0;
+  let ok = 0,
+    total = 0;
   for (let i = 1; i < ticks.length; i++) {
-    const d = ticks[i].quote - ticks[i-1].quote;
+    const d = ticks[i].quote - ticks[i - 1].quote;
     if (Math.abs(d) < 1e-12) continue;
     total++;
     if (Math.sign(d) === Math.sign(dirSign)) ok++;
@@ -895,7 +1069,7 @@ function directionalRatio(ticks, dirSign){
 }
 
 // retrace máximo contra la dirección dentro de un tramo
-function maxRetraceAgainst(ticks, dirSign){
+function maxRetraceAgainst(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
 
   if (dirSign > 0) {
@@ -920,7 +1094,7 @@ function maxRetraceAgainst(ticks, dirSign){
 }
 
 // ataque contrario 30–45 desde el “punto 30”
-function oppositeAttackDepth(ticks30_45, dirSign, p30){
+function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   if (!ticks30_45 || ticks30_45.length === 0 || p30 == null) return 0;
   if (dirSign > 0) {
     // CALL: ataque es caída bajo p30
@@ -939,8 +1113,8 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30){
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
-  dirRatioMin_30_45: 0.50,
-  move30_fracOfTotal: 0.30,
+  dirRatioMin_30_45: 0.5,
+  move30_fracOfTotal: 0.3,
   move45_fracOfTotal: 0.12,
   oppAttack_maxFracMove30: 0.62,
   rest_minFracTotal: 0.06,
@@ -948,21 +1122,21 @@ const RULES_NORMAL = {
 };
 
 const RULES_STRONG = {
-  scoreMin: 0.020,               // más exigente que normal
-  dirRatioMin_0_30: 0.58,        // más consistencia
+  scoreMin: 0.02, // más exigente que normal
+  dirRatioMin_0_30: 0.58, // más consistencia
   dirRatioMin_30_45: 0.56,
-  move30_fracOfTotal: 0.38,      // avance 0-30 más claro
-  move45_fracOfTotal: 0.20,      // confirmación 30-45 más clara
+  move30_fracOfTotal: 0.38, // avance 0-30 más claro
+  move45_fracOfTotal: 0.2, // confirmación 30-45 más clara
   oppAttack_maxFracMove30: 0.48, // menos “entradas profundas”
-  rest_minFracTotal: 0.10,       // exige “respiro” visible
-  rest_maxFracTotal: 0.56,       // pero no un retroceso gigante
+  rest_minFracTotal: 0.1, // exige “respiro” visible
+  rest_maxFracTotal: 0.56, // pero no un retroceso gigante
 };
 
-function passesTechnicalFilters(best, vol, rules){
+function passesTechnicalFilters(best, vol, rules) {
   const ticks = best.ticks || [];
   if (ticks.length < 3) return false;
 
-  const p0  = getPriceAtMs(ticks, 0);
+  const p0 = getPriceAtMs(ticks, 0);
   const p30 = getPriceAtMs(ticks, 30000);
   const p45 = getPriceAtMs(ticks, EVAL_SEC * 1000);
 
@@ -970,8 +1144,8 @@ function passesTechnicalFilters(best, vol, rules){
 
   const dirSign = best.move > 0 ? 1 : -1;
 
-  const totalMove = (p45 - p0) * dirSign;       // en dirección
-  const move0_30  = (p30 - p0) * dirSign;
+  const totalMove = (p45 - p0) * dirSign; // en dirección
+  const move0_30 = (p30 - p0) * dirSign;
   const move30_45 = (p45 - p30) * dirSign;
 
   const absTotal = Math.abs(p45 - p0) + 1e-12;
@@ -981,10 +1155,10 @@ function passesTechnicalFilters(best, vol, rules){
   if (move30_45 <= absTotal * rules.move45_fracOfTotal) return false;
 
   // consistencia por tramo
-  const t0_30  = sliceTicks(ticks, 0, 30000);
+  const t0_30 = sliceTicks(ticks, 0, 30000);
   const t30_45 = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
 
-  const r0_30  = directionalRatio(t0_30, dirSign);
+  const r0_30 = directionalRatio(t0_30, dirSign);
   const r30_45 = directionalRatio(t30_45, dirSign);
 
   if (r0_30 < rules.dirRatioMin_0_30) return false;
@@ -1008,7 +1182,6 @@ function passesTechnicalFilters(best, vol, rules){
   if (maxRet > maxRest) return false;
 
   // extra: evitar señales con “tendencia” aparente pero puro serrucho (vol muy alta vs total)
-  // (suave, no bloquea mucho)
   const totalScore = Math.abs(best.move) / (vol || 1e-9);
   if (totalScore < rules.scoreMin) return false;
 
@@ -1030,7 +1203,7 @@ function evaluateMinute(minute) {
     if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
 
-    const prices = ticks.map(t => t.quote);
+    const prices = ticks.map((t) => t.quote);
     const move = prices[prices.length - 1] - prices[0];
     const rawMove = Math.abs(move);
 
@@ -1081,10 +1254,10 @@ function addSignal(minute, symbol, direction, ticks) {
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
-    minuteComplete: false
+    minuteComplete: false,
   };
 
-  if (history.some(x => x.id === item.id)) return;
+  if (history.some((x) => x.id === item.id)) return;
 
   history.push(item);
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -1095,7 +1268,10 @@ function addSignal(minute, symbol, direction, ticks) {
   if (signalsEl) signalsEl.prepend(buildRow(item));
   updateRowChartBtn(item);
 
-  if (soundEnabled && sound) { sound.currentTime = 0; sound.play().catch(() => {}); }
+  if (soundEnabled && sound) {
+    sound.currentTime = 0;
+    sound.play().catch(() => {});
+  }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel);
@@ -1105,36 +1281,43 @@ function addSignal(minute, symbol, direction, ticks) {
    Wake lock
 ========================= */
 let wakeLock = null;
-if (wakeBtn) wakeBtn.onclick = async () => {
-  try {
-    if (wakeLock) {
-      await wakeLock.release();
-      wakeLock = null;
-      wakeBtn.textContent = "🔓 Pantalla activa";
-      wakeBtn.classList.remove("active");
-    } else {
-      wakeLock = await navigator.wakeLock.request("screen");
-      wakeBtn.textContent = "🔒 Pantalla activa";
-      wakeBtn.classList.add("active");
+if (wakeBtn)
+  wakeBtn.onclick = async () => {
+    try {
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeBtn.textContent = "🔒 Pantalla activa";
+        wakeBtn.classList.add("active");
+      }
+    } catch {
+      alert("No se pudo mantener la pantalla activa");
     }
-  } catch {
-    alert("No se pudo mantener la pantalla activa");
-  }
-};
+  };
 
 /* =========================
    WebSocket
 ========================= */
 function connect() {
-  try { ws = new WebSocket(WS_URL); }
-  catch {
+  try {
+    ws = new WebSocket(WS_URL);
+  } catch {
     if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
     return;
   }
 
   ws.onopen = () => {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
-    SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+    SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+
+    // ✅ Rehidrata lo guardado al abrir (gráfico + flechas + aciertos)
+    setTimeout(() => {
+      rehydrateHistoryOnBoot();
+    }, 350);
   };
 
   ws.onmessage = (e) => {
@@ -1153,7 +1336,9 @@ function connect() {
     } catch {}
   };
 
-  ws.onerror = () => { if (statusEl) statusEl.textContent = "Error WS – reconectando…"; };
+  ws.onerror = () => {
+    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
+  };
 
   ws.onclose = () => {
     for (const [id, p] of pending.entries()) {
