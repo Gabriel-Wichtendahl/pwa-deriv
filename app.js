@@ -1,5 +1,8 @@
 // app.js — V6.8 (mejora análisis técnico: NORMAL vs FUERTE)
 // ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
+// ✅ MEJORA: Loader "Rehidratando... x/y"
+// ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
+// ✅ FIX: nextOutcome más robusto (fallback a candles)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -834,37 +837,83 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
+   ✅ Loader rehidratación (usa statusEl)
+========================= */
+let rehydrateRunning = false;
+let lastStatusBeforeRehydrate = "";
+
+function setRehydrateStatus(text) {
+  if (!statusEl) return;
+  if (!rehydrateRunning) {
+    lastStatusBeforeRehydrate = statusEl.textContent || "";
+    rehydrateRunning = true;
+  }
+  statusEl.textContent = text;
+}
+function clearRehydrateStatus() {
+  if (!statusEl) return;
+  if (!rehydrateRunning) return;
+  rehydrateRunning = false;
+  statusEl.textContent = lastStatusBeforeRehydrate || "Conectado – Analizando";
+}
+
+/* =========================
    ✅ Rehidratar historial al abrir
    - Completa ticks 0–60 y habilita gráfico
-   - Calcula nextOutcome para flecha/acierto
+   - Calcula nextOutcome para flecha/acierto (fallback a candles)
 ========================= */
 const REHYDRATE_MAX_ITEMS = 60; // cuántas señales viejas rehidratar
 const REHYDRATE_SLEEP_MS = 180; // pausa suave para no saturar WS
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchMinuteOC(symbol, minute) {
-  // devuelve {open, close} del minuto (ticks style)
-  const start = minuteToEpochSec(minute);
-  const end = minuteToEpochSec(minute + 1);
+  // Intento 1: ticks (open=primer tick, close=último tick)
+  try {
+    const start = minuteToEpochSec(minute);
+    const end = minuteToEpochSec(minute + 1);
 
-  const res = await wsRequest({
-    ticks_history: symbol,
-    start,
-    end,
-    style: "ticks",
-    count: HISTORY_COUNT_MAX,
-    adjust_start_time: 1,
-  });
+    const res = await wsRequest({
+      ticks_history: symbol,
+      start,
+      end,
+      style: "ticks",
+      count: HISTORY_COUNT_MAX,
+      adjust_start_time: 1,
+    });
 
-  const h = res?.history;
-  if (!h || !Array.isArray(h.prices) || h.prices.length < 2) return null;
+    const h = res?.history;
+    if (h && Array.isArray(h.prices) && h.prices.length >= 2) {
+      const open = Number(h.prices[0]);
+      const close = Number(h.prices[h.prices.length - 1]);
+      if (isFinite(open) && isFinite(close)) return { open, close };
+    }
+  } catch {}
 
-  const open = Number(h.prices[0]);
-  const close = Number(h.prices[h.prices.length - 1]);
-  if (!isFinite(open) || !isFinite(close)) return null;
+  // Intento 2: candles (fallback)
+  try {
+    const start = minuteToEpochSec(minute);
+    const end = minuteToEpochSec(minute + 1);
 
-  return { open, close };
+    const res2 = await wsRequest({
+      ticks_history: symbol,
+      start,
+      end,
+      style: "candles",
+      granularity: 60,
+      count: 1,
+    });
+
+    const c = res2?.candles?.[0];
+    if (c) {
+      const open = Number(c.open);
+      const close = Number(c.close);
+      if (isFinite(open) && isFinite(close)) return { open, close };
+    }
+  } catch {}
+
+  return null;
 }
+
 function ocToOutcome(oc) {
   if (!oc) return null;
   if (oc.close > oc.open) return "up";
@@ -875,16 +924,20 @@ function ocToOutcome(oc) {
 async function rehydrateHistoryOnBoot() {
   if (!ws || ws.readyState !== 1) return;
 
-  // limit: solo lo último, para no hacer mil requests
   const slice = history.slice(-REHYDRATE_MAX_ITEMS);
+  const nowMin = Math.floor(Date.now() / 60000);
 
-  // 1) ticks completos + minuteComplete (para gráfico)
-  // hidratamos por minuto (agrupa por símbolo adentro)
-  const minutes = [...new Set(slice.map((it) => it.minute))].sort((a, b) => a - b);
+  // A) gráficos (ticks completos + minuteComplete)
+  const minutes = [...new Set(slice.map((it) => it.minute))]
+    .filter((m) => m < nowMin)
+    .sort((a, b) => a - b);
+
+  const totalA = minutes.length || 1;
+  let doneA = 0;
+
   for (const m of minutes) {
-    // solo minutos ya cerrados (si es el minuto actual, todavía cambia)
-    const nowMin = Math.floor(Date.now() / 60000);
-    if (m >= nowMin) continue;
+    doneA++;
+    setRehydrateStatus(`♻️ Rehidratando gráficos… ${doneA}/${totalA}`);
 
     try {
       const changed = await hydrateSignalsFromDerivHistory(m);
@@ -899,33 +952,44 @@ async function rehydrateHistoryOnBoot() {
           updateRowChartBtn(it);
         }
       }
-
       if (changed || anyMark) saveHistory(history);
     } catch {}
+
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  // 2) nextOutcome (flecha/acierto): para una señal en minuto m,
-  // necesitamos el outcome del minuto m+1
-  const nowMin = Math.floor(Date.now() / 60000);
-  for (const it of slice) {
-    if (it.nextOutcome) continue;
-    const targetMinute = it.minute + 1;
+  // B) resultados (nextOutcome => flecha + ✓)
+  const pendingOutcomes = slice.filter((it) => !it.nextOutcome && it.minute + 1 < nowMin);
+  const totalB = pendingOutcomes.length || 1;
+  let doneB = 0;
 
-    // solo si el minuto siguiente ya cerró
-    if (targetMinute >= nowMin) continue;
+  for (const it of pendingOutcomes) {
+    doneB++;
+    setRehydrateStatus(`♻️ Rehidratando resultados… ${doneB}/${totalB}`);
 
     try {
-      const oc = await fetchMinuteOC(it.symbol, targetMinute);
+      const oc = await fetchMinuteOC(it.symbol, it.minute + 1);
       const outcome = ocToOutcome(oc);
       if (outcome) setNextOutcome(it, outcome);
     } catch {}
+
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  // refrescos finales UI
+  // Refresh final por si alguna fila quedó sin pintar
+  try {
+    for (const it of history) {
+      updateRowNextArrow(it);
+      updateRowHitIcon(it);
+      updateRowChartBtn(it);
+    }
+  } catch {}
+
+  saveHistory(history);
   updateCounter();
   rebuildFeedbackFromHistory();
+
+  clearRehydrateStatus();
 }
 
 /* =========================
@@ -1144,7 +1208,6 @@ function passesTechnicalFilters(best, vol, rules) {
 
   const dirSign = best.move > 0 ? 1 : -1;
 
-  const totalMove = (p45 - p0) * dirSign; // en dirección
   const move0_30 = (p30 - p0) * dirSign;
   const move30_45 = (p45 - p30) * dirSign;
 
@@ -1176,12 +1239,9 @@ function passesTechnicalFilters(best, vol, rules) {
   const minRest = absTotal * rules.rest_minFracTotal;
   const maxRest = absTotal * rules.rest_maxFracTotal;
 
-  // si no hay retrace (casi 0) => “no respira”
-  // si es muy grande => “se metió profundo el contrario”
   if (maxRet < minRest) return false;
   if (maxRet > maxRest) return false;
 
-  // extra: evitar señales con “tendencia” aparente pero puro serrucho (vol muy alta vs total)
   const totalScore = Math.abs(best.move) / (vol || 1e-9);
   if (totalScore < rules.scoreMin) return false;
 
@@ -1221,13 +1281,11 @@ function evaluateMinute(minute) {
   const best = candidates[0];
   if (!best) return false;
 
-  // Elegimos reglas según modo
   const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
 
   // Si el “mejor” ni llega al mínimo, igual devolvemos true (no reintentar)
   if (best.score < rules.scoreMin) return true;
 
-  // ✅ Filtros técnicos basados en tu feedback
   const ok = passesTechnicalFilters(best, best.vol, rules);
   if (!ok) return true;
 
@@ -1314,7 +1372,7 @@ function connect() {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
-    // ✅ Rehidrata lo guardado al abrir (gráfico + flechas + aciertos)
+    // ✅ Rehidrata lo guardado al abrir (gráfico + flechas + aciertos) con loader
     setTimeout(() => {
       rehydrateHistoryOnBoot();
     }, 350);
@@ -1324,7 +1382,8 @@ function connect() {
     try {
       const data = JSON.parse(e.data);
 
-      if (data && data.req_id && pending.has(data.req_id) && data.msg_type === "history") {
+      // ✅ FIX: resolver por req_id (sin depender de msg_type)
+      if (data && data.req_id && pending.has(data.req_id)) {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
         pending.delete(data.req_id);
