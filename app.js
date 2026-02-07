@@ -211,7 +211,7 @@ function showSignal(minute, symbol, direction) {
     btn.onclick = () => {
       const comment = row.querySelector("input").value || "";
       feedbackEl.value +=
-        \`${time} | ${symbol} | ${direction} | ${btn.dataset.v} | \\n${comment}\\n\`;
+        \`${time} | ${symbol} | ${direction} | ${btn.dataset.v} | \n${comment}\n\`;
       btn.disabled = true;
     };
   });
