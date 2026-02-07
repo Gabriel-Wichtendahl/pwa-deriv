@@ -1163,4 +1163,4 @@ function connect() {
 renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
-connect();
+connect(); 
