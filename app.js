@@ -1,7 +1,9 @@
-// app.js — V7.0 (2 sets: NORMAL más leve, FUERTE estricto)
-// - NORMAL: más señales (filtros alivianados)
-// - FUERTE: filtros estrictos (setup “pro”)
-// Mantiene todo lo demás (UI, candado, hit, countdown, ticks_history, etc.)
+// app.js — V7.1
+// ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / minuto completo)
+// - Si la app estuvo cerrada, las flechas y aciertos no se pueden deducir sin pedir history.
+// - Al iniciar, completa:
+//   a) ticks completos del minuto de la señal (0–60) -> gráfico + candado
+//   b) outcome de la vela siguiente (minuto+1) -> flecha + tilde + contador aciertos
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -497,28 +499,6 @@ function updateRowHitIcon(item){
   return show;
 }
 
-function animateHitPop(item){
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return;
-  hit.classList.remove("pop");
-  void hit.offsetWidth;
-  hit.classList.add("pop");
-  setTimeout(() => hit.classList.remove("pop"), 260);
-}
-
-function animateFailShake(item){
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const arrow = row.querySelector(".nextArrow");
-  if (!arrow) return;
-  arrow.classList.remove("failShake");
-  void arrow.offsetWidth;
-  arrow.classList.add("failShake");
-  setTimeout(() => arrow.classList.remove("failShake"), 260);
-}
-
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -539,13 +519,9 @@ function updateRowNextArrow(item) {
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   saveHistory(history);
-
   updateRowNextArrow(item);
-  const ok = updateRowHitIcon(item);
+  updateRowHitIcon(item);
   updateCounter();
-
-  if (ok) animateHitPop(item);
-  else animateFailShake(item);
 }
 
 /* =========================
@@ -732,6 +708,128 @@ async function fetchFullMinuteTicks(symbol, minute) {
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
 
+/* =========================
+   ✅ NUEVO: OHLC del minuto (para outcome up/down/flat)
+========================= */
+function calcOutcomeFromTicks(ticks) {
+  if (!ticks || ticks.length < 2) return null;
+  const open = Number(ticks[0].quote);
+  const close = Number(ticks[ticks.length - 1].quote);
+  if (close > open) return "up";
+  if (close < open) return "down";
+  return "flat";
+}
+
+/* =========================
+   ✅ NUEVO: Rehidratar historial al iniciar
+   - Completa ticks del minuto de la señal si faltan
+   - Calcula nextOutcome con ticks del minuto siguiente si falta
+========================= */
+let didRehydrate = false;
+async function rehydrateHistoryFromApi() {
+  if (didRehydrate) return;
+  didRehydrate = true;
+
+  if (!history.length) return;
+
+  // Solo señales ya “cerradas” (minuto anterior o más viejo)
+  const nowMinute = Math.floor(Date.now() / 60000);
+
+  // Agrupar por símbolo+minuto para no spamear
+  const needMinuteTicks = new Map(); // key: sym|minute -> {symbol, minute}
+  const needNextOutcome = new Map(); // key: sym|minuteNext -> {symbol, minuteNext, prevMinute}
+
+  for (const it of history) {
+    if (typeof it.minute !== "number") continue;
+    if (it.minute >= nowMinute) continue; // no tocar minuto en curso
+
+    // minuto completo para gráfico/candado
+    if (!it.minuteComplete || !Array.isArray(it.ticks) || it.ticks.length < 2) {
+      const key = `${it.symbol}|${it.minute}`;
+      needMinuteTicks.set(key, { symbol: it.symbol, minute: it.minute });
+    }
+
+    // outcome de la próxima vela (minuto siguiente)
+    if (!it.nextOutcome) {
+      const minuteNext = it.minute + 1;
+      if (minuteNext < nowMinute) {
+        const key2 = `${it.symbol}|${minuteNext}`;
+        needNextOutcome.set(key2, { symbol: it.symbol, minuteNext, prevMinute: it.minute });
+      }
+    }
+  }
+
+  // Si no hay nada que reparar, listo
+  if (needMinuteTicks.size === 0 && needNextOutcome.size === 0) {
+    // asegurar UI correcta igual
+    for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updateRowHitIcon(it); }
+    updateCounter();
+    return;
+  }
+
+  // Esperar WS listo (hasta 6s)
+  const waitWs = async () => {
+    const deadline = Date.now() + 6000;
+    while ((!ws || ws.readyState !== 1) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 120));
+    }
+    return ws && ws.readyState === 1;
+  };
+  const ok = await waitWs();
+  if (!ok) return;
+
+  if (statusEl) statusEl.textContent = "Conectado – Reparando historial…";
+
+  let changed = false;
+
+  // 1) Ticks minuto señal
+  for (const { symbol, minute } of needMinuteTicks.values()) {
+    try {
+      const full = await fetchFullMinuteTicks(symbol, minute);
+      if (!full || full.length < 2) continue;
+
+      // asignar a todas las señales de ese minuto/símbolo
+      for (const it of history) {
+        if (it.symbol === symbol && it.minute === minute) {
+          it.ticks = full.slice();
+          it.minuteComplete = true;
+          changed = true;
+          updateRowChartBtn(it);
+        }
+      }
+    } catch {}
+  }
+
+  // 2) Outcome minuto siguiente
+  for (const { symbol, minuteNext, prevMinute } of needNextOutcome.values()) {
+    try {
+      const nxt = await fetchFullMinuteTicks(symbol, minuteNext);
+      const outcome = calcOutcomeFromTicks(nxt);
+      if (!outcome) continue;
+
+      for (const it of history) {
+        if (it.symbol === symbol && it.minute === prevMinute && !it.nextOutcome) {
+          it.nextOutcome = outcome;
+          changed = true;
+          updateRowNextArrow(it);
+          updateRowHitIcon(it);
+        }
+      }
+    } catch {}
+  }
+
+  if (changed) saveHistory(history);
+
+  // refrescar UI/contadores
+  updateCounter();
+  rebuildFeedbackFromHistory();
+
+  if (statusEl) statusEl.textContent = "Conectado – Analizando";
+}
+
+/* =========================
+   Finalize minute (igual que antes)
+========================= */
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter(it => it.minute === minute);
   if (!items.length) return false;
@@ -757,13 +855,9 @@ async function hydrateSignalsFromDerivHistory(minute) {
       }
     } catch {}
   }
-
   return any;
 }
 
-/* =========================
-   Finalize minute
-========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
@@ -860,7 +954,8 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   ✅ Helpers análisis técnico (2 fases)
+   ✅ Evaluation (tu V7.0 “doble set”)
+   (Lo dejo idéntico a lo que veníamos usando: NORMAL más leve, FUERTE estricto)
 ========================= */
 const EPS = 1e-9;
 
@@ -874,7 +969,6 @@ function sliceByMs(ticks, fromMs, toMs) {
   out.sort((a, b) => a.ms - b.ms);
   return out;
 }
-
 function interpPriceAt(ticks, targetMs) {
   if (!ticks || ticks.length === 0) return null;
   const tms = Number(targetMs);
@@ -896,7 +990,6 @@ function interpPriceAt(ticks, targetMs) {
   }
   return Number(last.quote);
 }
-
 function pathLen(ticks) {
   if (!ticks || ticks.length < 2) return 0;
   let sum = 0;
@@ -905,13 +998,11 @@ function pathLen(ticks) {
   }
   return sum;
 }
-
 function chopRatio(ticks, pStart, pEnd) {
   const net = Math.abs(pEnd - pStart);
   const path = pathLen(ticks);
   return net / (path + EPS);
 }
-
 function adverseFromAnchor(ticks, dirSign, anchorPrice) {
   if (!ticks || ticks.length === 0) return 0;
   let minQ = Infinity, maxQ = -Infinity;
@@ -923,7 +1014,6 @@ function adverseFromAnchor(ticks, dirSign, anchorPrice) {
   if (dirSign > 0) return Math.max(0, anchorPrice - minQ);
   return Math.max(0, maxQ - anchorPrice);
 }
-
 function maxDrawAgainstTrend(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
   if (dirSign > 0) {
@@ -947,9 +1037,6 @@ function maxDrawAgainstTrend(ticks, dirSign) {
   }
 }
 
-/* =========================
-   ✅ Evaluation (DOBLE SET)
-========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return false;
@@ -957,11 +1044,7 @@ function evaluateMinute(minute) {
   const MID_SEC = 30;
   const END_SEC = EVAL_SEC;
 
-  // ✅ PARAMETROS POR MODO
-  // NORMAL = más señales (menos estricto)
-  // FUERTE = setup estricto (el de antes)
   const P = strongMode ? {
-    // FUERTE (estricto)
     minImp1: 0.28,
     minImp2: 0.12,
     minChop: 0.52,
@@ -977,13 +1060,12 @@ function evaluateMinute(minute) {
     pbHighCut: 0.65,
     penHighPB: 0.35
   } : {
-    // NORMAL (aliviado)
     minImp1: 0.20,
     minImp2: 0.06,
     minChop: 0.40,
     maxAdverse: 0.55,
-    minBreath: 0.02,     // deja pasar más (pero evita “laser recto” extremo)
-    thr: 1.05,           // más señales
+    minBreath: 0.02,
+    thr: 1.05,
     wImp1: 1.15,
     wImp2: 0.95,
     wChop: 0.60,
@@ -1034,24 +1116,18 @@ function evaluateMinute(minute) {
     const imp2 = (dirSign * move30_E) / (path30_E + EPS);
 
     const chop = chopRatio(ticks, p0, pEnd);
-
     const adverse30 = adverseFromAnchor(seg30_E, dirSign, pMid);
-
-    // ✅ SIEMPRE normalizado vs 0–30 (tu criterio)
     const adverseNorm = adverse30 / (Math.abs(move0_30) + EPS);
 
     const pb = maxDrawAgainstTrend(ticks, dirSign);
     const pbNorm = pb / (Math.abs(move0_E) + EPS);
 
-    // ✅ mínimo respiro (por modo)
     if (pbNorm < P.minBreath) continue;
 
-    // Penalización por extremos
     let overextendPenalty = 0;
     if (pbNorm < P.pbLowCut) overextendPenalty += P.penLowPB;
     if (pbNorm > P.pbHighCut) overextendPenalty += P.penHighPB;
 
-    // Filtros por modo
     if (imp1 < P.minImp1) continue;
     if (imp2 < P.minImp2) continue;
     if (chop < P.minChop) continue;
@@ -1064,12 +1140,7 @@ function evaluateMinute(minute) {
       (P.wAdv  * adverseNorm) -
       overextendPenalty;
 
-    candidates.push({
-      symbol: sym,
-      score,
-      dirSign,
-      ticks: ticks
-    });
+    candidates.push({ symbol: sym, score, dirSign, ticks });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
@@ -1087,7 +1158,7 @@ function evaluateMinute(minute) {
    Add signal
 ========================= */
 function fmtTimeUTC(minute) {
-  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+  return new Date(minute * 60000).toISOString().substr(11, 8) + "UTC";
 }
 function addSignal(minute, symbol, direction, ticks) {
   const modeLabel = strongMode ? "FUERTE" : "NORMAL";
@@ -1156,6 +1227,9 @@ function connect() {
   ws.onopen = () => {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
     SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+
+    // ✅ En cuanto abre WS, rehidratar historial viejo
+    rehydrateHistoryFromApi().catch(() => {});
   };
 
   ws.onmessage = (e) => {
@@ -1191,6 +1265,7 @@ function connect() {
    Start
 ========================= */
 renderHistory();
+updateCounter();
 updateTickHealthUI();
 updateCountdownUI();
 connect();
