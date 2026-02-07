@@ -1,9 +1,4 @@
-// app.js — V7.1
-// ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / minuto completo)
-// ✅ MEJORA: Continuidad con respecto a la vela siguiente (minuto+1)
-// - Agrega filtro inter-minuto (cierre previo -> precio en EVAL_SEC)
-// - Agrega confirmación 2-de-3 dentro del minuto (0→20,20→40,40→EVAL)
-// - Agrega penalización por sobre-extensión (reduce reversión next minute)
+// app.js — V6.8 (mejora análisis técnico: NORMAL vs FUERTE)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -87,9 +82,6 @@ let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
 let modalCurrentItem = null;
-
-// ✅ NUEVO: cierre confirmado del minuto anterior por símbolo
-let lastClosedCloseBySymbol = {}; // { R_10: number, ... }
 
 const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -502,6 +494,28 @@ function updateRowHitIcon(item){
   return show;
 }
 
+function animateHitPop(item){
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return;
+  hit.classList.remove("pop");
+  void hit.offsetWidth;
+  hit.classList.add("pop");
+  setTimeout(() => hit.classList.remove("pop"), 260);
+}
+
+function animateFailShake(item){
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const arrow = row.querySelector(".nextArrow");
+  if (!arrow) return;
+  arrow.classList.remove("failShake");
+  void arrow.offsetWidth;
+  arrow.classList.add("failShake");
+  setTimeout(() => arrow.classList.remove("failShake"), 260);
+}
+
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -522,9 +536,13 @@ function updateRowNextArrow(item) {
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   saveHistory(history);
+
   updateRowNextArrow(item);
-  updateRowHitIcon(item);
+  const ok = updateRowHitIcon(item);
   updateCounter();
+
+  if (ok) animateHitPop(item);
+  else animateFailShake(item);
 }
 
 /* =========================
@@ -711,117 +729,6 @@ async function fetchFullMinuteTicks(symbol, minute) {
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
 
-/* =========================
-   ✅ NUEVO: OHLC del minuto (para outcome up/down/flat)
-========================= */
-function calcOutcomeFromTicks(ticks) {
-  if (!ticks || ticks.length < 2) return null;
-  const open = Number(ticks[0].quote);
-  const close = Number(ticks[ticks.length - 1].quote);
-  if (close > open) return "up";
-  if (close < open) return "down";
-  return "flat";
-}
-
-/* =========================
-   ✅ NUEVO: Rehidratar historial al iniciar
-   - Completa ticks del minuto de la señal si faltan
-   - Calcula nextOutcome con ticks del minuto siguiente si falta
-========================= */
-let didRehydrate = false;
-async function rehydrateHistoryFromApi() {
-  if (didRehydrate) return;
-  didRehydrate = true;
-
-  if (!history.length) return;
-
-  const nowMinute = Math.floor(Date.now() / 60000);
-
-  const needMinuteTicks = new Map();
-  const needNextOutcome = new Map();
-
-  for (const it of history) {
-    if (typeof it.minute !== "number") continue;
-    if (it.minute >= nowMinute) continue;
-
-    if (!it.minuteComplete || !Array.isArray(it.ticks) || it.ticks.length < 2) {
-      const key = `${it.symbol}|${it.minute}`;
-      needMinuteTicks.set(key, { symbol: it.symbol, minute: it.minute });
-    }
-
-    if (!it.nextOutcome) {
-      const minuteNext = it.minute + 1;
-      if (minuteNext < nowMinute) {
-        const key2 = `${it.symbol}|${minuteNext}`;
-        needNextOutcome.set(key2, { symbol: it.symbol, minuteNext, prevMinute: it.minute });
-      }
-    }
-  }
-
-  if (needMinuteTicks.size === 0 && needNextOutcome.size === 0) {
-    for (const it of history) { updateRowChartBtn(it); updateRowNextArrow(it); updateRowHitIcon(it); }
-    updateCounter();
-    return;
-  }
-
-  const waitWs = async () => {
-    const deadline = Date.now() + 6000;
-    while ((!ws || ws.readyState !== 1) && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 120));
-    }
-    return ws && ws.readyState === 1;
-  };
-  const ok = await waitWs();
-  if (!ok) return;
-
-  if (statusEl) statusEl.textContent = "Conectado – Reparando historial…";
-
-  let changed = false;
-
-  for (const { symbol, minute } of needMinuteTicks.values()) {
-    try {
-      const full = await fetchFullMinuteTicks(symbol, minute);
-      if (!full || full.length < 2) continue;
-
-      for (const it of history) {
-        if (it.symbol === symbol && it.minute === minute) {
-          it.ticks = full.slice();
-          it.minuteComplete = true;
-          changed = true;
-          updateRowChartBtn(it);
-        }
-      }
-    } catch {}
-  }
-
-  for (const { symbol, minuteNext, prevMinute } of needNextOutcome.values()) {
-    try {
-      const nxt = await fetchFullMinuteTicks(symbol, minuteNext);
-      const outcome = calcOutcomeFromTicks(nxt);
-      if (!outcome) continue;
-
-      for (const it of history) {
-        if (it.symbol === symbol && it.minute === prevMinute && !it.nextOutcome) {
-          it.nextOutcome = outcome;
-          changed = true;
-          updateRowNextArrow(it);
-          updateRowHitIcon(it);
-        }
-      }
-    } catch {}
-  }
-
-  if (changed) saveHistory(history);
-
-  updateCounter();
-  rebuildFeedbackFromHistory();
-
-  if (statusEl) statusEl.textContent = "Conectado – Analizando";
-}
-
-/* =========================
-   Finalize minute (igual que antes)
-========================= */
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter(it => it.minute === minute);
   if (!items.length) return false;
@@ -847,9 +754,13 @@ async function hydrateSignalsFromDerivHistory(minute) {
       }
     } catch {}
   }
+
   return any;
 }
 
+/* =========================
+   Finalize minute
+========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
@@ -857,9 +768,6 @@ function finalizeMinute(minute) {
   for (const symbol of Object.keys(oc)) {
     const { open, close } = oc[symbol];
     if (open == null || close == null) continue;
-
-    // ✅ NUEVO: guardar cierre confirmado para continuidad inter-minuto
-    lastClosedCloseBySymbol[symbol] = close;
 
     let outcome = "flat";
     if (close > open) outcome = "up";
@@ -949,284 +857,208 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   ✅ Evaluation (tu V7.0 “doble set” + filtro continuidad next candle)
+   ✅ NUEVO: filtros técnicos (0-30, 30-45, ataque contrario, respiro)
 ========================= */
-const EPS = 1e-9;
+function clamp(n, a, b){ return Math.max(a, Math.min(b, n)); }
 
-// (Tu código original no usaba NORMALIZATION; lo agrego solo para umbrales del filtro)
-const CONT_NORM = {
-  R_10: 1,
-  R_25: 2,
-  R_50: 3,
-  R_75: 4
+function getPriceAtMs(ticks, ms){
+  if (!ticks || !ticks.length) return null;
+  const pts = ticks.slice().sort((a,b)=>a.ms-b.ms);
+
+  if (ms <= pts[0].ms) return pts[0].quote;
+  const last = pts[pts.length - 1];
+  if (ms >= last.ms) return last.quote;
+
+  // tomar el último <= ms (sin interpolar para mantener simple/robusto)
+  for (let i = pts.length - 1; i >= 0; i--) {
+    if (pts[i].ms <= ms) return pts[i].quote;
+  }
+  return pts[0].quote;
+}
+
+function sliceTicks(ticks, aMs, bMs){
+  if (!ticks || ticks.length === 0) return [];
+  return ticks.filter(t => t.ms >= aMs && t.ms <= bMs).sort((x,y)=>x.ms-y.ms);
+}
+
+// ratio de micro-movimientos en dirección (consistencia)
+function directionalRatio(ticks, dirSign){
+  if (!ticks || ticks.length < 2) return 0;
+  let ok = 0, total = 0;
+  for (let i = 1; i < ticks.length; i++) {
+    const d = ticks[i].quote - ticks[i-1].quote;
+    if (Math.abs(d) < 1e-12) continue;
+    total++;
+    if (Math.sign(d) === Math.sign(dirSign)) ok++;
+  }
+  return total ? ok / total : 0;
+}
+
+// retrace máximo contra la dirección dentro de un tramo
+function maxRetraceAgainst(ticks, dirSign){
+  if (!ticks || ticks.length < 2) return 0;
+
+  if (dirSign > 0) {
+    // CALL: sube, retrace = (máximo previo - precio actual)
+    let runMax = ticks[0].quote;
+    let maxRet = 0;
+    for (const t of ticks) {
+      runMax = Math.max(runMax, t.quote);
+      maxRet = Math.max(maxRet, runMax - t.quote);
+    }
+    return maxRet;
+  } else {
+    // PUT: baja, retrace = (precio actual - mínimo previo)
+    let runMin = ticks[0].quote;
+    let maxRet = 0;
+    for (const t of ticks) {
+      runMin = Math.min(runMin, t.quote);
+      maxRet = Math.max(maxRet, t.quote - runMin);
+    }
+    return maxRet;
+  }
+}
+
+// ataque contrario 30–45 desde el “punto 30”
+function oppositeAttackDepth(ticks30_45, dirSign, p30){
+  if (!ticks30_45 || ticks30_45.length === 0 || p30 == null) return 0;
+  if (dirSign > 0) {
+    // CALL: ataque es caída bajo p30
+    let minP = p30;
+    for (const t of ticks30_45) minP = Math.min(minP, t.quote);
+    return Math.max(0, p30 - minP);
+  } else {
+    // PUT: ataque es subida sobre p30
+    let maxP = p30;
+    for (const t of ticks30_45) maxP = Math.max(maxP, t.quote);
+    return Math.max(0, maxP - p30);
+  }
+}
+
+// Configs (NORMAL más laxo, FUERTE más estricto)
+const RULES_NORMAL = {
+  scoreMin: 0.015,
+  dirRatioMin_0_30: 0.52,
+  dirRatioMin_30_45: 0.50,
+  move30_fracOfTotal: 0.30,
+  move45_fracOfTotal: 0.12,
+  oppAttack_maxFracMove30: 0.62,
+  rest_minFracTotal: 0.06,
+  rest_maxFracTotal: 0.68,
 };
 
-// ✅ Umbral mínimo de impulso inter-minuto (cierre previo → precio en EVAL_SEC)
-function minInterMoveNorm(sym) {
-  // NORMAL más permisivo, FUERTE más exigente
-  const base = strongMode ? 0.020 : 0.015;
-  // un poco más exigente en símbolos más volátiles
-  const add =
-    sym === "R_75" ? (strongMode ? 0.012 : 0.010) :
-    sym === "R_50" ? (strongMode ? 0.008 : 0.006) :
-    sym === "R_25" ? (strongMode ? 0.004 : 0.003) :
-    0.0;
-  return base + add;
+const RULES_STRONG = {
+  scoreMin: 0.020,               // más exigente que normal
+  dirRatioMin_0_30: 0.58,        // más consistencia
+  dirRatioMin_30_45: 0.56,
+  move30_fracOfTotal: 0.38,      // avance 0-30 más claro
+  move45_fracOfTotal: 0.20,      // confirmación 30-45 más clara
+  oppAttack_maxFracMove30: 0.48, // menos “entradas profundas”
+  rest_minFracTotal: 0.10,       // exige “respiro” visible
+  rest_maxFracTotal: 0.56,       // pero no un retroceso gigante
+};
+
+function passesTechnicalFilters(best, vol, rules){
+  const ticks = best.ticks || [];
+  if (ticks.length < 3) return false;
+
+  const p0  = getPriceAtMs(ticks, 0);
+  const p30 = getPriceAtMs(ticks, 30000);
+  const p45 = getPriceAtMs(ticks, EVAL_SEC * 1000);
+
+  if (p0 == null || p30 == null || p45 == null) return false;
+
+  const dirSign = best.move > 0 ? 1 : -1;
+
+  const totalMove = (p45 - p0) * dirSign;       // en dirección
+  const move0_30  = (p30 - p0) * dirSign;
+  const move30_45 = (p45 - p30) * dirSign;
+
+  const absTotal = Math.abs(p45 - p0) + 1e-12;
+
+  // 0–30 y 30–45 deben avanzar (no solo “ruido”)
+  if (move0_30 <= absTotal * rules.move30_fracOfTotal) return false;
+  if (move30_45 <= absTotal * rules.move45_fracOfTotal) return false;
+
+  // consistencia por tramo
+  const t0_30  = sliceTicks(ticks, 0, 30000);
+  const t30_45 = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
+
+  const r0_30  = directionalRatio(t0_30, dirSign);
+  const r30_45 = directionalRatio(t30_45, dirSign);
+
+  if (r0_30 < rules.dirRatioMin_0_30) return false;
+  if (r30_45 < rules.dirRatioMin_30_45) return false;
+
+  // ataque contrario 30–45: limitado vs avance 0–30
+  const oppAttack = oppositeAttackDepth(t30_45, dirSign, p30);
+  const move30Abs = Math.abs(p30 - p0) + 1e-12;
+  if (oppAttack > move30Abs * rules.oppAttack_maxFracMove30) return false;
+
+  // “respiro sano” (retracement contra tendencia) en 0–45
+  const t0_45 = sliceTicks(ticks, 0, EVAL_SEC * 1000);
+  const maxRet = maxRetraceAgainst(t0_45, dirSign);
+
+  const minRest = absTotal * rules.rest_minFracTotal;
+  const maxRest = absTotal * rules.rest_maxFracTotal;
+
+  // si no hay retrace (casi 0) => “no respira”
+  // si es muy grande => “se metió profundo el contrario”
+  if (maxRet < minRest) return false;
+  if (maxRet > maxRest) return false;
+
+  // extra: evitar señales con “tendencia” aparente pero puro serrucho (vol muy alta vs total)
+  // (suave, no bloquea mucho)
+  const totalScore = Math.abs(best.move) / (vol || 1e-9);
+  if (totalScore < rules.scoreMin) return false;
+
+  return true;
 }
 
-function sliceByMs(ticks, fromMs, toMs) {
-  if (!Array.isArray(ticks) || ticks.length === 0) return [];
-  const out = [];
-  for (const t of ticks) {
-    const ms = Number(t.ms);
-    if (ms >= fromMs && ms <= toMs) out.push(t);
-  }
-  out.sort((a, b) => a.ms - b.ms);
-  return out;
-}
-function interpPriceAt(ticks, targetMs) {
-  if (!ticks || ticks.length === 0) return null;
-  const tms = Number(targetMs);
-
-  if (tms <= ticks[0].ms) return Number(ticks[0].quote);
-  const last = ticks[ticks.length - 1];
-  if (tms >= last.ms) return Number(last.quote);
-
-  for (let i = 1; i < ticks.length; i++) {
-    const a = ticks[i - 1];
-    const b = ticks[i];
-    if (tms <= b.ms) {
-      const am = Number(a.ms), bm = Number(b.ms);
-      const aq = Number(a.quote), bq = Number(b.quote);
-      const span = Math.max(EPS, bm - am);
-      const k = (tms - am) / span;
-      return aq + (bq - aq) * k;
-    }
-  }
-  return Number(last.quote);
-}
-function pathLen(ticks) {
-  if (!ticks || ticks.length < 2) return 0;
-  let sum = 0;
-  for (let i = 1; i < ticks.length; i++) {
-    sum += Math.abs(Number(ticks[i].quote) - Number(ticks[i - 1].quote));
-  }
-  return sum;
-}
-function chopRatio(ticks, pStart, pEnd) {
-  const net = Math.abs(pEnd - pStart);
-  const path = pathLen(ticks);
-  return net / (path + EPS);
-}
-function adverseFromAnchor(ticks, dirSign, anchorPrice) {
-  if (!ticks || ticks.length === 0) return 0;
-  let minQ = Infinity, maxQ = -Infinity;
-  for (const t of ticks) {
-    const q = Number(t.quote);
-    if (q < minQ) minQ = q;
-    if (q > maxQ) maxQ = q;
-  }
-  if (dirSign > 0) return Math.max(0, anchorPrice - minQ);
-  return Math.max(0, maxQ - anchorPrice);
-}
-function maxDrawAgainstTrend(ticks, dirSign) {
-  if (!ticks || ticks.length < 2) return 0;
-  if (dirSign > 0) {
-    let peak = Number(ticks[0].quote);
-    let worst = 0;
-    for (const t of ticks) {
-      const q = Number(t.quote);
-      if (q > peak) peak = q;
-      worst = Math.max(worst, peak - q);
-    }
-    return worst;
-  } else {
-    let trough = Number(ticks[0].quote);
-    let worst = 0;
-    for (const t of ticks) {
-      const q = Number(t.quote);
-      if (q < trough) trough = q;
-      worst = Math.max(worst, q - trough);
-    }
-    return worst;
-  }
-}
-
-// ✅ NUEVO: confirmación 2-de-3 (0→20, 20→40, 40→EVAL)
-function twoOfThreeConfirm(ticks, endSec, dirSign) {
-  const a = 20, b = 40;
-  if (endSec <= a) return true; // por seguridad
-  const tA = Math.min(a, endSec);
-  const tB = Math.min(b, endSec);
-
-  const p0 = interpPriceAt(ticks, 0);
-  const pA = interpPriceAt(ticks, tA * 1000);
-  const pB = interpPriceAt(ticks, tB * 1000);
-  const pE = interpPriceAt(ticks, endSec * 1000);
-  if (p0 == null || pA == null || pB == null || pE == null) return false;
-
-  const s01 = Math.sign(pA - p0);
-  const s12 = Math.sign(pB - pA);
-  const s2E = Math.sign(pE - pB);
-
-  let ok = 0;
-  if (s01 === dirSign) ok++;
-  if (s12 === dirSign) ok++;
-  if (s2E === dirSign) ok++;
-
-  // permitimos 1 neutro / contra, pero pedimos 2 a favor
-  return ok >= 2;
-}
-
-// ✅ NUEVO: gate continuidad inter-minuto
-function passesInterMinuteGate(sym, dirSign, pEnd) {
-  const prevClose = lastClosedCloseBySymbol[sym];
-  if (prevClose == null) return false; // sin cierre previo confirmado, no gate
-  const interMove = pEnd - prevClose;
-  const s = Math.sign(interMove);
-  if (s !== dirSign) return false;
-
-  const norm = CONT_NORM[sym] || 1;
-  const interNorm = Math.abs(interMove) / norm;
-
-  return interNorm >= minInterMoveNorm(sym);
-}
-
+/* =========================
+   Evaluation
+========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return false;
-
-  const MID_SEC = 30;
-  const END_SEC = EVAL_SEC;
-
-  const P = strongMode ? {
-    minImp1: 0.28,
-    minImp2: 0.12,
-    minChop: 0.52,
-    maxAdverse: 0.40,
-    minBreath: 0.02,
-    thr: 1.40,
-    wImp1: 1.35,
-    wImp2: 1.10,
-    wChop: 0.80,
-    wAdv:  1.35,
-    penLowPB: 0.28,
-    pbLowCut: 0.05,
-    pbHighCut: 0.65,
-    penHighPB: 0.35,
-    // ✅ NUEVO: penalización extra por sobre-extensión (para continuidad)
-    overExtPBSoft: 0.08,
-    overExtNetSoft: 0.85,
-    penOverExt: 0.18
-  } : {
-    minImp1: 0.20,
-    minImp2: 0.06,
-    minChop: 0.40,
-    maxAdverse: 0.55,
-    minBreath: 0.02,
-    thr: 1.05,
-    wImp1: 1.15,
-    wImp2: 0.95,
-    wChop: 0.60,
-    wAdv:  1.05,
-    penLowPB: 0.16,
-    pbLowCut: 0.045,
-    pbHighCut: 0.70,
-    penHighPB: 0.26,
-    // ✅ NUEVO
-    overExtPBSoft: 0.07,
-    overExtNetSoft: 0.82,
-    penOverExt: 0.12
-  };
 
   const candidates = [];
   let readySymbols = 0;
 
   for (const sym of SYMBOLS) {
-    const raw = data[sym] || [];
-    if (raw.length >= MIN_TICKS) readySymbols++;
-    if (raw.length < MIN_TICKS) continue;
-
-    const ticks = sliceByMs(raw, 0, END_SEC * 1000);
+    const ticks = data[sym] || [];
+    if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
 
-    const p0 = interpPriceAt(ticks, 0);
-    const pMid = interpPriceAt(ticks, MID_SEC * 1000);
-    const pEnd = interpPriceAt(ticks, END_SEC * 1000);
-    if (p0 == null || pMid == null || pEnd == null) continue;
+    const prices = ticks.map(t => t.quote);
+    const move = prices[prices.length - 1] - prices[0];
+    const rawMove = Math.abs(move);
 
-    const move0_30 = pMid - p0;
-    const move30_E = pEnd - pMid;
-    const move0_E = pEnd - p0;
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
+    vol = vol / Math.max(1, prices.length - 1);
 
-    let dirSign = 0;
-    if (move0_E > 0) dirSign = 1;
-    else if (move0_E < 0) dirSign = -1;
-    else continue;
-
-    const s1 = Math.sign(move0_30);
-    const s2 = Math.sign(move30_E);
-    if (s1 === 0) continue;
-    if (s2 !== 0 && s2 !== s1) continue;
-
-    // ✅ NUEVO: confirmación 2-de-3 para continuidad
-    if (!twoOfThreeConfirm(ticks, END_SEC, dirSign)) continue;
-
-    const seg0_30 = sliceByMs(ticks, 0, MID_SEC * 1000);
-    const seg30_E = sliceByMs(ticks, MID_SEC * 1000, END_SEC * 1000);
-
-    const path0_30 = pathLen(seg0_30);
-    const path30_E = pathLen(seg30_E);
-
-    const imp1 = (dirSign * move0_30) / (path0_30 + EPS);
-    const imp2 = (dirSign * move30_E) / (path30_E + EPS);
-
-    const chop = chopRatio(ticks, p0, pEnd);
-    const adverse30 = adverseFromAnchor(seg30_E, dirSign, pMid);
-    const adverseNorm = adverse30 / (Math.abs(move0_30) + EPS);
-
-    const pb = maxDrawAgainstTrend(ticks, dirSign);
-    const pbNorm = pb / (Math.abs(move0_E) + EPS);
-
-    if (pbNorm < P.minBreath) continue;
-
-    let overextendPenalty = 0;
-    if (pbNorm < P.pbLowCut) overextendPenalty += P.penLowPB;
-    if (pbNorm > P.pbHighCut) overextendPenalty += P.penHighPB;
-
-    // ✅ NUEVO: penalización por “minuto muy extendido” (suele revertir next minute)
-    const netOverPath = Math.abs(move0_E) / (pathLen(ticks) + EPS); // similar a chop pero lo usamos como alerta
-    if (pbNorm < P.overExtPBSoft && netOverPath > P.overExtNetSoft) {
-      overextendPenalty += P.penOverExt;
-    }
-
-    if (imp1 < P.minImp1) continue;
-    if (imp2 < P.minImp2) continue;
-    if (chop < P.minChop) continue;
-    if (adverseNorm > P.maxAdverse) continue;
-
-    // ✅ NUEVO: gate inter-minuto (cierre previo → pEnd)
-    const interOk = passesInterMinuteGate(sym, dirSign, pEnd);
-    if (!interOk) continue;
-
-    const score =
-      (P.wImp1 * imp1) +
-      (P.wImp2 * imp2) +
-      (P.wChop * chop) -
-      (P.wAdv  * adverseNorm) -
-      overextendPenalty;
-
-    candidates.push({ symbol: sym, score, dirSign, ticks });
+    const score = rawMove / (vol || 1e-9);
+    candidates.push({ symbol: sym, move, score, ticks, vol });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
 
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
+  if (!best) return false;
 
-  if (!best || best.score < P.thr) return true;
+  // Elegimos reglas según modo
+  const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
 
-  addSignal(minute, best.symbol, best.dirSign > 0 ? "CALL" : "PUT", best.ticks);
+  // Si el “mejor” ni llega al mínimo, igual devolvemos true (no reintentar)
+  if (best.score < rules.scoreMin) return true;
+
+  // ✅ Filtros técnicos basados en tu feedback
+  const ok = passesTechnicalFilters(best, best.vol, rules);
+  if (!ok) return true;
+
+  addSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT", best.ticks);
   return true;
 }
 
@@ -1234,7 +1066,7 @@ function evaluateMinute(minute) {
    Add signal
 ========================= */
 function fmtTimeUTC(minute) {
-  return new Date(minute * 60000).toISOString().substr(11, 8) + "UTC";
+  return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 function addSignal(minute, symbol, direction, ticks) {
   const modeLabel = strongMode ? "FUERTE" : "NORMAL";
@@ -1303,9 +1135,6 @@ function connect() {
   ws.onopen = () => {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
     SYMBOLS.forEach(sym => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
-
-    // ✅ En cuanto abre WS, rehidratar historial viejo
-    rehydrateHistoryFromApi().catch(() => {});
   };
 
   ws.onmessage = (e) => {
@@ -1341,7 +1170,6 @@ function connect() {
    Start
 ========================= */
 renderHistory();
-updateCounter();
 updateTickHealthUI();
 updateCountdownUI();
 connect();
