@@ -1,7 +1,7 @@
-// app.js — V6.9 (mejora señales: 2 fases + respiro obligatorio + adverse más estricto)
-// - Requiere avance 0–30s y confirmación 30–EVAL_SEC
-// - Filtra entradas profundas del contrario en 30–EVAL (normalizado vs impulso 0–30)
-// - Filtra chop (sin dirección) y velas sin respiro (sobre-extendidas)
+// app.js — V7.0 (2 sets: NORMAL más leve, FUERTE estricto)
+// - NORMAL: más señales (filtros alivianados)
+// - FUERTE: filtros estrictos (setup “pro”)
+// Mantiene todo lo demás (UI, candado, hit, countdown, ticks_history, etc.)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -909,7 +909,7 @@ function pathLen(ticks) {
 function chopRatio(ticks, pStart, pEnd) {
   const net = Math.abs(pEnd - pStart);
   const path = pathLen(ticks);
-  return net / (path + EPS); // 0..1 (alto = direccional)
+  return net / (path + EPS);
 }
 
 function adverseFromAnchor(ticks, dirSign, anchorPrice) {
@@ -948,7 +948,7 @@ function maxDrawAgainstTrend(ticks, dirSign) {
 }
 
 /* =========================
-   ✅ Evaluation (MEJORADO)
+   ✅ Evaluation (DOBLE SET)
 ========================= */
 function evaluateMinute(minute) {
   const data = minuteData[minute];
@@ -956,6 +956,43 @@ function evaluateMinute(minute) {
 
   const MID_SEC = 30;
   const END_SEC = EVAL_SEC;
+
+  // ✅ PARAMETROS POR MODO
+  // NORMAL = más señales (menos estricto)
+  // FUERTE = setup estricto (el de antes)
+  const P = strongMode ? {
+    // FUERTE (estricto)
+    minImp1: 0.28,
+    minImp2: 0.12,
+    minChop: 0.52,
+    maxAdverse: 0.40,
+    minBreath: 0.02,
+    thr: 1.40,
+    wImp1: 1.35,
+    wImp2: 1.10,
+    wChop: 0.80,
+    wAdv:  1.35,
+    penLowPB: 0.28,
+    pbLowCut: 0.05,
+    pbHighCut: 0.65,
+    penHighPB: 0.35
+  } : {
+    // NORMAL (aliviado)
+    minImp1: 0.20,
+    minImp2: 0.06,
+    minChop: 0.40,
+    maxAdverse: 0.55,
+    minBreath: 0.02,     // deja pasar más (pero evita “laser recto” extremo)
+    thr: 1.05,           // más señales
+    wImp1: 1.15,
+    wImp2: 0.95,
+    wChop: 0.60,
+    wAdv:  1.05,
+    penLowPB: 0.16,
+    pbLowCut: 0.045,
+    pbHighCut: 0.70,
+    penHighPB: 0.26
+  };
 
   const candidates = [];
   let readySymbols = 0;
@@ -1000,37 +1037,31 @@ function evaluateMinute(minute) {
 
     const adverse30 = adverseFromAnchor(seg30_E, dirSign, pMid);
 
-    // ✅ CAMBIO: normalizado vs impulso 0–30 (más fiel a tu criterio)
+    // ✅ SIEMPRE normalizado vs 0–30 (tu criterio)
     const adverseNorm = adverse30 / (Math.abs(move0_30) + EPS);
 
     const pb = maxDrawAgainstTrend(ticks, dirSign);
     const pbNorm = pb / (Math.abs(move0_E) + EPS);
 
-    // ✅ NUEVO: mínimo respiro obligatorio (evita velas “rectas”)
-    const minBreath = strongMode ? 0.02 : 0.03;
-    if (pbNorm < minBreath) continue;
+    // ✅ mínimo respiro (por modo)
+    if (pbNorm < P.minBreath) continue;
 
+    // Penalización por extremos
     let overextendPenalty = 0;
-    if (pbNorm < 0.05) overextendPenalty += 0.28; // más fuerte
-    if (pbNorm > 0.65) overextendPenalty += 0.35;
+    if (pbNorm < P.pbLowCut) overextendPenalty += P.penLowPB;
+    if (pbNorm > P.pbHighCut) overextendPenalty += P.penHighPB;
 
-    const minImp1 = strongMode ? 0.28 : 0.22;
-    const minImp2 = strongMode ? 0.12 : 0.08;
-    const minChop = strongMode ? 0.52 : 0.45;
-
-    // ✅ CAMBIO: más estricto contra ataques profundos
-    const maxAdverse = strongMode ? 0.40 : 0.45;
-
-    if (imp1 < minImp1) continue;
-    if (imp2 < minImp2) continue;
-    if (chop < minChop) continue;
-    if (adverseNorm > maxAdverse) continue;
+    // Filtros por modo
+    if (imp1 < P.minImp1) continue;
+    if (imp2 < P.minImp2) continue;
+    if (chop < P.minChop) continue;
+    if (adverseNorm > P.maxAdverse) continue;
 
     const score =
-      (1.35 * imp1) +
-      (1.10 * imp2) +
-      (0.80 * chop) -
-      (1.35 * adverseNorm) -
+      (P.wImp1 * imp1) +
+      (P.wImp2 * imp2) +
+      (P.wChop * chop) -
+      (P.wAdv  * adverseNorm) -
       overextendPenalty;
 
     candidates.push({
@@ -1046,8 +1077,7 @@ function evaluateMinute(minute) {
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
 
-  const threshold = strongMode ? 1.40 : 1.18;
-  if (!best || best.score < threshold) return true;
+  if (!best || best.score < P.thr) return true;
 
   addSignal(minute, best.symbol, best.dirSign > 0 ? "CALL" : "PUT", best.ticks);
   return true;
@@ -1163,4 +1193,4 @@ function connect() {
 renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
-connect(); 
+connect();
