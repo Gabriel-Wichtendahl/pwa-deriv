@@ -4,6 +4,7 @@
 // ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
 // ✅ FIX: nextOutcome más robusto (fallback a candles)
 // ✅ NUEVO: Exportar JSON (solo señales con voto) desde Settings (sin tocar index.html)
+// ✅ NUEVO: Feedback incluye NEXT (flecha/estado próxima vela) y se refresca al llegar nextOutcome
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -164,6 +165,20 @@ function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
 }
 
+// ✅ NUEVO: helpers para mostrar NEXT en feedback
+function nextOutcomeToArrow(outcome) {
+  if (outcome === "up") return "⬆️";
+  if (outcome === "down") return "⬇️";
+  if (outcome === "flat") return "➖";
+  return "⏳";
+}
+function nextOutcomeToText(outcome) {
+  if (outcome === "up") return "ALCISTA";
+  if (outcome === "down") return "BAJISTA";
+  if (outcome === "flat") return "PLANA";
+  return "PENDIENTE";
+}
+
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
   let text = "";
@@ -171,8 +186,14 @@ function rebuildFeedbackFromHistory() {
     const vote = it.vote || "";
     const comment = it.comment || "";
     if (!vote && !comment) continue;
+
     const modeLabel = it.mode || "NORMAL";
-    text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | ${comment}\n`;
+    const out = it.nextOutcome || "";
+    const outArrow = nextOutcomeToArrow(out);
+    const outText = nextOutcomeToText(out);
+
+    // ✅ incluye la flecha/estado de la próxima vela
+    text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | NEXT: ${outArrow} ${outText} | ${comment}\n`;
   }
   feedbackEl.value = text;
 }
@@ -696,6 +717,9 @@ function setNextOutcome(item, outcome) {
   updateRowNextArrow(item);
   const ok = updateRowHitIcon(item);
   updateCounter();
+
+  // ✅ NUEVO: refresca feedback cuando llega nextOutcome (rehidratación o cierre)
+  rebuildFeedbackFromHistory();
 
   if (ok) animateHitPop(item);
   else animateFailShake(item);
