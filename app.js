@@ -3,6 +3,7 @@
 // ✅ MEJORA: Loader "Rehidratando... x/y"
 // ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
 // ✅ FIX: nextOutcome más robusto (fallback a candles)
+// ✅ NUEVO: Exportar JSON (solo señales con voto) desde Settings (sin tocar index.html)
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -219,6 +220,96 @@ if (configBtn) configBtn.onclick = openSettings;
 if (settingsCloseBtn) settingsCloseBtn.onclick = closeSettings;
 if (settingsCloseBtn2) settingsCloseBtn2.onclick = closeSettings;
 if (settingsCloseBackdrop) settingsCloseBackdrop.onclick = closeSettings;
+
+/* =========================
+   ✅ Export (solo señales con voto)
+   - Sin tocar index.html: se crea botón dentro del settings modal
+========================= */
+function buildExportPayloadVoted() {
+  const voted = (history || []).filter((it) => it && it.vote); // like/dislike
+  return {
+    exported_at: new Date().toISOString(),
+    count_total_history: (history || []).length,
+    count_voted: voted.length,
+    signals: voted.map((it) => ({
+      id: it.id,
+      minute: it.minute,
+      time: it.time,
+      symbol: it.symbol,
+      direction: it.direction,
+      mode: it.mode,
+      vote: it.vote,
+      comment: it.comment || "",
+      nextOutcome: it.nextOutcome || "",
+      minuteComplete: !!it.minuteComplete,
+      ticks: Array.isArray(it.ticks) ? it.ticks : [], // [{ms, quote}]
+    })),
+  };
+}
+
+function downloadTextFile(filename, text, mime = "application/json") {
+  try {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  } catch {
+    alert("No se pudo descargar el archivo. Probá copiar desde el portapapeles.");
+  }
+}
+
+async function exportVotedSignals() {
+  const payload = buildExportPayloadVoted();
+  const json = JSON.stringify(payload, null, 2);
+
+  if (!payload.count_voted) {
+    alert("No hay señales con voto (like/dislike) para exportar todavía.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(json);
+    alert(`✅ Exportado al portapapeles (${payload.count_voted}). Pegalo acá en el chat.`);
+    return;
+  } catch {
+    const ts = new Date().toISOString().replaceAll(":", "-");
+    downloadTextFile(`deriv-signals-voted-${ts}.json`, json);
+    alert(`📥 Descargado JSON (${payload.count_voted}).`);
+  }
+}
+
+function ensureExportButton() {
+  let btn = document.getElementById("exportVotedBtn");
+  if (btn) return btn;
+
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+
+  if (!host) return null;
+
+  btn = document.createElement("button");
+  btn.id = "exportVotedBtn";
+  btn.type = "button";
+  btn.className = "btn btnGhost";
+  btn.textContent = "📤 Exportar (solo con voto)";
+  btn.title = "Copia al portapapeles / descarga JSON con señales like/dislike";
+  host.appendChild(btn);
+
+  return btn;
+}
+
+(function initExportVoted() {
+  const btn = ensureExportButton();
+  if (!btn) return;
+  btn.onclick = exportVotedSignals;
+})();
 
 /* =========================
    Theme
@@ -859,15 +950,12 @@ function clearRehydrateStatus() {
 
 /* =========================
    ✅ Rehidratar historial al abrir
-   - Completa ticks 0–60 y habilita gráfico
-   - Calcula nextOutcome para flecha/acierto (fallback a candles)
 ========================= */
-const REHYDRATE_MAX_ITEMS = 60; // cuántas señales viejas rehidratar
-const REHYDRATE_SLEEP_MS = 180; // pausa suave para no saturar WS
+const REHYDRATE_MAX_ITEMS = 60;
+const REHYDRATE_SLEEP_MS = 180;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchMinuteOC(symbol, minute) {
-  // Intento 1: ticks (open=primer tick, close=último tick)
   try {
     const start = minuteToEpochSec(minute);
     const end = minuteToEpochSec(minute + 1);
@@ -889,7 +977,6 @@ async function fetchMinuteOC(symbol, minute) {
     }
   } catch {}
 
-  // Intento 2: candles (fallback)
   try {
     const start = minuteToEpochSec(minute);
     const end = minuteToEpochSec(minute + 1);
@@ -927,7 +1014,6 @@ async function rehydrateHistoryOnBoot() {
   const slice = history.slice(-REHYDRATE_MAX_ITEMS);
   const nowMin = Math.floor(Date.now() / 60000);
 
-  // A) gráficos (ticks completos + minuteComplete)
   const minutes = [...new Set(slice.map((it) => it.minute))]
     .filter((m) => m < nowMin)
     .sort((a, b) => a - b);
@@ -958,7 +1044,6 @@ async function rehydrateHistoryOnBoot() {
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  // B) resultados (nextOutcome => flecha + ✓)
   const pendingOutcomes = slice.filter((it) => !it.nextOutcome && it.minute + 1 < nowMin);
   const totalB = pendingOutcomes.length || 1;
   let doneB = 0;
@@ -976,7 +1061,6 @@ async function rehydrateHistoryOnBoot() {
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  // Refresh final por si alguna fila quedó sin pintar
   try {
     for (const it of history) {
       updateRowNextArrow(it);
@@ -1106,7 +1190,6 @@ function getPriceAtMs(ticks, ms) {
   const last = pts[pts.length - 1];
   if (ms >= last.ms) return last.quote;
 
-  // tomar el último <= ms (sin interpolar para mantener simple/robusto)
   for (let i = pts.length - 1; i >= 0; i--) {
     if (pts[i].ms <= ms) return pts[i].quote;
   }
@@ -1118,7 +1201,6 @@ function sliceTicks(ticks, aMs, bMs) {
   return ticks.filter((t) => t.ms >= aMs && t.ms <= bMs).sort((x, y) => x.ms - y.ms);
 }
 
-// ratio de micro-movimientos en dirección (consistencia)
 function directionalRatio(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
   let ok = 0,
@@ -1132,12 +1214,10 @@ function directionalRatio(ticks, dirSign) {
   return total ? ok / total : 0;
 }
 
-// retrace máximo contra la dirección dentro de un tramo
 function maxRetraceAgainst(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
 
   if (dirSign > 0) {
-    // CALL: sube, retrace = (máximo previo - precio actual)
     let runMax = ticks[0].quote;
     let maxRet = 0;
     for (const t of ticks) {
@@ -1146,7 +1226,6 @@ function maxRetraceAgainst(ticks, dirSign) {
     }
     return maxRet;
   } else {
-    // PUT: baja, retrace = (precio actual - mínimo previo)
     let runMin = ticks[0].quote;
     let maxRet = 0;
     for (const t of ticks) {
@@ -1157,23 +1236,19 @@ function maxRetraceAgainst(ticks, dirSign) {
   }
 }
 
-// ataque contrario 30–45 desde el “punto 30”
 function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   if (!ticks30_45 || ticks30_45.length === 0 || p30 == null) return 0;
   if (dirSign > 0) {
-    // CALL: ataque es caída bajo p30
     let minP = p30;
     for (const t of ticks30_45) minP = Math.min(minP, t.quote);
     return Math.max(0, p30 - minP);
   } else {
-    // PUT: ataque es subida sobre p30
     let maxP = p30;
     for (const t of ticks30_45) maxP = Math.max(maxP, t.quote);
     return Math.max(0, maxP - p30);
   }
 }
 
-// Configs (NORMAL más laxo, FUERTE más estricto)
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
@@ -1186,14 +1261,14 @@ const RULES_NORMAL = {
 };
 
 const RULES_STRONG = {
-  scoreMin: 0.02, // más exigente que normal
-  dirRatioMin_0_30: 0.58, // más consistencia
+  scoreMin: 0.02,
+  dirRatioMin_0_30: 0.58,
   dirRatioMin_30_45: 0.56,
-  move30_fracOfTotal: 0.38, // avance 0-30 más claro
-  move45_fracOfTotal: 0.2, // confirmación 30-45 más clara
-  oppAttack_maxFracMove30: 0.48, // menos “entradas profundas”
-  rest_minFracTotal: 0.1, // exige “respiro” visible
-  rest_maxFracTotal: 0.56, // pero no un retroceso gigante
+  move30_fracOfTotal: 0.38,
+  move45_fracOfTotal: 0.2,
+  oppAttack_maxFracMove30: 0.48,
+  rest_minFracTotal: 0.1,
+  rest_maxFracTotal: 0.56,
 };
 
 function passesTechnicalFilters(best, vol, rules) {
@@ -1213,11 +1288,9 @@ function passesTechnicalFilters(best, vol, rules) {
 
   const absTotal = Math.abs(p45 - p0) + 1e-12;
 
-  // 0–30 y 30–45 deben avanzar (no solo “ruido”)
   if (move0_30 <= absTotal * rules.move30_fracOfTotal) return false;
   if (move30_45 <= absTotal * rules.move45_fracOfTotal) return false;
 
-  // consistencia por tramo
   const t0_30 = sliceTicks(ticks, 0, 30000);
   const t30_45 = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
 
@@ -1227,12 +1300,10 @@ function passesTechnicalFilters(best, vol, rules) {
   if (r0_30 < rules.dirRatioMin_0_30) return false;
   if (r30_45 < rules.dirRatioMin_30_45) return false;
 
-  // ataque contrario 30–45: limitado vs avance 0–30
   const oppAttack = oppositeAttackDepth(t30_45, dirSign, p30);
   const move30Abs = Math.abs(p30 - p0) + 1e-12;
   if (oppAttack > move30Abs * rules.oppAttack_maxFracMove30) return false;
 
-  // “respiro sano” (retracement contra tendencia) en 0–45
   const t0_45 = sliceTicks(ticks, 0, EVAL_SEC * 1000);
   const maxRet = maxRetraceAgainst(t0_45, dirSign);
 
@@ -1283,7 +1354,6 @@ function evaluateMinute(minute) {
 
   const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
 
-  // Si el “mejor” ni llega al mínimo, igual devolvemos true (no reintentar)
   if (best.score < rules.scoreMin) return true;
 
   const ok = passesTechnicalFilters(best, best.vol, rules);
