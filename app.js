@@ -1,10 +1,11 @@
-// app.js — V6.8 (mejora análisis técnico: NORMAL vs FUERTE)
+// app.js — V6.8 + Low Power Mode (sin perder símbolos)
 // ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
 // ✅ MEJORA: Loader "Rehidratando... x/y"
 // ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
 // ✅ FIX: nextOutcome más robusto (fallback a candles)
 // ✅ NUEVO: Exportar JSON (solo señales con voto) desde Settings (sin tocar index.html)
 // ✅ NUEVO: Feedback incluye NEXT (flecha/estado próxima vela) y se refresca al llegar nextOutcome
+// ✅ NUEVO: 🪫 Modo Bajo Consumo (botón) — baja interval UI, baja count history, cierra WS en background
 
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
@@ -20,6 +21,7 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
+// ⚠️ ya no lo usamos directo en ticks_history; se usa getHistoryCountMax()
 const HISTORY_COUNT_MAX = 5000;
 
 const $ = (id) => document.getElementById(id);
@@ -104,6 +106,104 @@ function makeDerivTraderUrl(symbol) {
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
 /* =========================
+   🪫 Low power mode
+   - sin perder símbolos
+========================= */
+let lowPowerMode = false;
+const LOWPOWER_KEY = "lowPowerMode_v1";
+
+const UI_INTERVAL_NORMAL_MS = 500;
+const UI_INTERVAL_LOW_MS = 1200;
+
+const HISTORY_COUNT_MAX_NORMAL = 5000;
+const HISTORY_COUNT_MAX_LOW = 1200;
+
+let uiTimer = null;
+
+function loadLowPowerMode() {
+  try {
+    lowPowerMode = localStorage.getItem(LOWPOWER_KEY) === "1";
+  } catch {
+    lowPowerMode = false;
+  }
+}
+function saveLowPowerMode() {
+  try {
+    localStorage.setItem(LOWPOWER_KEY, lowPowerMode ? "1" : "0");
+  } catch {}
+}
+
+function getUiIntervalMs() {
+  return lowPowerMode ? UI_INTERVAL_LOW_MS : UI_INTERVAL_NORMAL_MS;
+}
+function getHistoryCountMax() {
+  return lowPowerMode ? HISTORY_COUNT_MAX_LOW : HISTORY_COUNT_MAX_NORMAL;
+}
+
+function startUiTimers() {
+  if (uiTimer) clearInterval(uiTimer);
+  uiTimer = setInterval(() => {
+    updateTickHealthUI();
+    updateCountdownUI();
+  }, getUiIntervalMs());
+}
+
+function ensureLowPowerButton() {
+  let btn = document.getElementById("lowPowerBtn");
+  if (btn) return btn;
+
+  // Preferimos meterlo en la misma barra de controles si existe, sino en settings
+  const host =
+    document.querySelector(".topControls") ||
+    document.querySelector("header .controls") ||
+    document.querySelector(".controls") ||
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.body;
+
+  btn = document.createElement("button");
+  btn.id = "lowPowerBtn";
+  btn.type = "button";
+  btn.className = "btn btnGhost";
+  btn.style.marginLeft = "8px";
+  btn.onclick = () => {
+    lowPowerMode = !lowPowerMode;
+    saveLowPowerMode();
+    applyLowPowerModeUI();
+
+    // Si activás bajo consumo y estaba el wakeLock prendido, lo soltamos (ahorra MUCHO)
+    if (lowPowerMode && wakeLock) {
+      wakeLock.release().catch(() => {});
+      wakeLock = null;
+      if (wakeBtn) {
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      }
+    }
+
+    // si hay WS abierto, lo cerramos para que reconecte limpio
+    try {
+      if (ws && ws.readyState === 1) ws.close();
+    } catch {}
+  };
+
+  host.appendChild(btn);
+  return btn;
+}
+
+function applyLowPowerModeUI() {
+  const btn = document.getElementById("lowPowerBtn");
+  if (btn) {
+    btn.textContent = lowPowerMode ? "🪫 Bajo consumo ON" : "🔋 Bajo consumo OFF";
+    btn.classList.toggle("active", lowPowerMode);
+    btn.title = lowPowerMode
+      ? "Ahorra batería: UI más lenta, histórico más liviano, WS se corta en background"
+      : "Modo normal";
+  }
+
+  startUiTimers();
+}
+
+/* =========================
    Persistencia
 ========================= */
 function loadHistory() {
@@ -165,7 +265,7 @@ function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
 }
 
-// ✅ NUEVO: helpers para mostrar NEXT en feedback
+// helpers NEXT
 function nextOutcomeToArrow(outcome) {
   if (outcome === "up") return "⬆️";
   if (outcome === "down") return "⬇️";
@@ -192,7 +292,6 @@ function rebuildFeedbackFromHistory() {
     const outArrow = nextOutcomeToArrow(out);
     const outText = nextOutcomeToText(out);
 
-    // ✅ incluye la flecha/estado de la próxima vela
     text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | NEXT: ${outArrow} ${outText} | ${comment}\n`;
   }
   feedbackEl.value = text;
@@ -243,11 +342,10 @@ if (settingsCloseBtn2) settingsCloseBtn2.onclick = closeSettings;
 if (settingsCloseBackdrop) settingsCloseBackdrop.onclick = closeSettings;
 
 /* =========================
-   ✅ Export (solo señales con voto)
-   - Sin tocar index.html: se crea botón dentro del settings modal
+   Export (solo señales con voto)
 ========================= */
 function buildExportPayloadVoted() {
-  const voted = (history || []).filter((it) => it && it.vote); // like/dislike
+  const voted = (history || []).filter((it) => it && it.vote);
   return {
     exported_at: new Date().toISOString(),
     count_total_history: (history || []).length,
@@ -263,7 +361,7 @@ function buildExportPayloadVoted() {
       comment: it.comment || "",
       nextOutcome: it.nextOutcome || "",
       minuteComplete: !!it.minuteComplete,
-      ticks: Array.isArray(it.ticks) ? it.ticks : [], // [{ms, quote}]
+      ticks: Array.isArray(it.ticks) ? it.ticks : [],
     })),
   };
 }
@@ -622,11 +720,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.beginPath();
   ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 0.85;
-  ctx.fillStyle = "rgba(255,255,255,0.75)";
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("0s", 10, h - 10);
-  ctx.fillText("60s", w - 34, h - 10);
   ctx.globalAlpha = 1;
 }
 
@@ -718,7 +811,6 @@ function setNextOutcome(item, outcome) {
   const ok = updateRowHitIcon(item);
   updateCounter();
 
-  // ✅ NUEVO: refresca feedback cuando llega nextOutcome (rehidratación o cierre)
   rebuildFeedbackFromHistory();
 
   if (ok) animateHitPop(item);
@@ -858,13 +950,8 @@ function updateCountdownUI() {
   countdownEl.classList.add("tick");
 }
 
-setInterval(() => {
-  updateTickHealthUI();
-  updateCountdownUI();
-}, 500);
-
 /* =========================
-   ✅ ticks_history (requests)
+   ticks_history (requests)
 ========================= */
 let reqSeq = 1;
 const pending = new Map();
@@ -913,7 +1000,7 @@ async function fetchFullMinuteTicks(symbol, minute) {
     start,
     end,
     style: "ticks",
-    count: HISTORY_COUNT_MAX,
+    count: getHistoryCountMax(),
     adjust_start_time: 1,
   });
 
@@ -952,7 +1039,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   ✅ Loader rehidratación (usa statusEl)
+   Loader rehidratación (usa statusEl)
 ========================= */
 let rehydrateRunning = false;
 let lastStatusBeforeRehydrate = "";
@@ -973,7 +1060,7 @@ function clearRehydrateStatus() {
 }
 
 /* =========================
-   ✅ Rehidratar historial al abrir
+   Rehidratar historial al abrir
 ========================= */
 const REHYDRATE_MAX_ITEMS = 60;
 const REHYDRATE_SLEEP_MS = 180;
@@ -989,7 +1076,7 @@ async function fetchMinuteOC(symbol, minute) {
       start,
       end,
       style: "ticks",
-      count: HISTORY_COUNT_MAX,
+      count: getHistoryCountMax(),
       adjust_start_time: 1,
     });
 
@@ -1200,7 +1287,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   ✅ NUEVO: filtros técnicos (0-30, 30-45, ataque contrario, respiro)
+   Filtros técnicos (tu lógica)
 ========================= */
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -1466,7 +1553,6 @@ function connect() {
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
-    // ✅ Rehidrata lo guardado al abrir (gráfico + flechas + aciertos) con loader
     setTimeout(() => {
       rehydrateHistoryOnBoot();
     }, 350);
@@ -1476,7 +1562,6 @@ function connect() {
     try {
       const data = JSON.parse(e.data);
 
-      // ✅ FIX: resolver por req_id (sin depender de msg_type)
       if (data && data.req_id && pending.has(data.req_id)) {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
@@ -1500,14 +1585,41 @@ function connect() {
       p.reject(new Error("closed"));
     }
     if (statusEl) statusEl.textContent = "Desconectado – reconectando…";
+
+    // en bajo consumo, si se cerró por background, no reconectamos hasta volver visible
+    if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
+
     setTimeout(connect, 1500);
   };
 }
 
 /* =========================
+   🪫 Behavior en background/foreground
+========================= */
+document.addEventListener("visibilitychange", () => {
+  if (!("visibilityState" in document)) return;
+
+  if (document.visibilityState === "hidden") {
+    if (lowPowerMode && ws && ws.readyState === 1) {
+      try { ws.close(); } catch {}
+    }
+    return;
+  }
+
+  if (document.visibilityState === "visible") {
+    if (!ws || ws.readyState === 3) {
+      try { connect(); } catch {}
+    }
+  }
+});
+
+/* =========================
    Start
 ========================= */
+loadLowPowerMode();
 renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
+ensureLowPowerButton();
+applyLowPowerModeUI();  // pinta el botón + arranca timer con intervalo correcto
 connect();
