@@ -70,15 +70,15 @@
 
       <canvas id="minuteCanvas"></canvas>
 
+      <!-- ✅ Footer: LIVE + COMPRAR/VENDER + Abrir Deriv -->
       <div class="modalFooter">
-        <!-- ✅ Trade row dentro del modal -->
         <div class="tradeRow">
+          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="false">📡 LIVE OFF</button>
           <button id="modalBuyCallBtn" class="btn" type="button">🟢 COMPRAR</button>
           <button id="modalBuyPutBtn" class="btn" type="button">🔴 VENDER</button>
-          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="true">📡 LIVE ON</button>
         </div>
 
-        <div style="display:flex; justify-content:flex-end; gap:8px; width:100%;">
+        <div style="display:flex; justify-content:flex-end; gap:8px;">
           <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
         </div>
       </div>
@@ -113,29 +113,7 @@
 
           <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
           <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
-
-          <!-- 🔐 Token Deriv (DEMO) -->
-          <div class="tokenBox" id="tokenBox">
-            <div class="tokenTitle">🔐 Token Deriv (DEMO)</div>
-
-            <input
-              id="derivTokenInput"
-              class="tokenInput"
-              type="password"
-              inputmode="text"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="Pegá tu API Token (Read + Trade)"
-            />
-
-            <div class="tokenActions">
-              <button id="saveTokenBtn" class="btn btnPrimary" type="button">💾 Guardar</button>
-              <button id="clearTokenBtn" class="btn btnDanger" type="button">🗑️ Borrar</button>
-              <button id="toggleTokenBtn" class="btn btnGhost" type="button">👁️ Mostrar</button>
-            </div>
-
-            <div id="tokenStatus" class="tokenStatus">Estado: —</div>
-          </div>
+          <!-- export/reset/lowpower/token UI se agrega desde app.js -->
         </div>
 
         <div class="modalFooter" style="margin-top:10px">
@@ -154,5 +132,3 @@
   </script>
 </body>
 </html>
-
-
