@@ -1,14 +1,15 @@
-// app.js — V6.8 + Low Power Mode + DEMO 1-Click Trade + Minuto server-sync + Debug visible + Reset SW/Cache
-// ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
-// ✅ MEJORA: Loader "Rehidratando... x/y"
-// ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
-// ✅ FIX: nextOutcome más robusto (fallback a candles)
-// ✅ NUEVO: Exportar JSON (solo señales con voto) desde Settings (sin tocar index.html)
-// ✅ NUEVO: Feedback incluye NEXT (flecha/estado próxima vela) y se refresca al llegar nextOutcome
-// ✅ NUEVO: 🪫 Modo Bajo Consumo (botón) — baja interval UI, baja count history, cierra WS en background
-// ✅ NUEVO (DEMO): Botones 🟢 COMPRAR (CALL) / 🔴 VENDER (PUT) desde la PWA (authorize + buy)
-// ✅ NUEVO: Minuto en vivo sincronizado a tiempo servidor (offset por tick.epoch)
-// ✅ NUEVO: Debug visible (errores JS en status) + botón 🧹 Reset Cache/SW (solo app.js)
+// app.js — V6.9 (LIMPIO) + Low Power + DEMO 1-Click Trade + Minuto server-sync + Debug visible + Reset SW/Cache
+// ✅ Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
+// ✅ Loader "Rehidratando... x/y"
+// ✅ wsRequest por req_id
+// ✅ nextOutcome robusto (fallback a candles)
+// ✅ Exportar JSON (solo señales con voto) desde Settings
+// ✅ Feedback incluye NEXT
+// ✅ 🪫 Modo Bajo Consumo (UI + history count + cierra WS en background)
+// ✅ DEMO: Botones 🟢 COMPRAR (CALL) / 🔴 VENDER (PUT) (authorize + buy)
+// ✅ Minuto en vivo sincronizado a tiempo servidor (offset por tick.epoch)
+// ✅ Debug visible (errores JS en status)
+// ✅ Botón 🧹 Reset Cache/SW (desregistra SW + borra caches + recarga)
 
 "use strict";
 
@@ -29,12 +30,11 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
-const HISTORY_COUNT_MAX = 5000;
 
 /* =========================
-   DEMO Trade config
+   DEMO Trade config (solo demo)
 ========================= */
-const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
+const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo (Read + Trade)
 const TRADE_STAKE_KEY = "tradeStake_v1";
 
 const DEFAULT_STAKE = 1; // USD
@@ -89,7 +89,7 @@ const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
 /* =========================
-   🧯 Debug visible + Reset SW/Cache (solo app.js)
+   🧯 Debug visible + Reset SW/Cache
 ========================= */
 (function initVisibleDebug() {
   const show = (msg) => {
@@ -100,7 +100,9 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
   window.addEventListener("error", (e) => {
     const m = e?.message || "Error";
-    const src = e?.filename ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}` : "";
+    const src = e?.filename
+      ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}`
+      : "";
     show(`❌ JS: ${m}${src}`);
   });
 
@@ -167,7 +169,7 @@ let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
-// Tiempo/ticks
+// Tiempo/ticks (server sync)
 let lastTickEpochMs = null;
 let lastTickLocalNowMs = null;
 let serverOffsetMs = 0;
@@ -182,6 +184,9 @@ let lastMinuteSeenBySymbol = {};
 
 // modal chart
 let modalCurrentItem = null;
+
+// wake lock
+let wakeLock = null;
 
 /* =========================
    Assets
@@ -250,22 +255,22 @@ function ensureLowPowerButton() {
   if (btn) return btn;
 
   const host =
-    document.querySelector(".topControls") ||
-    document.querySelector("header .controls") ||
-    document.querySelector(".controls") ||
     document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
     document.body;
 
   btn = document.createElement("button");
   btn.id = "lowPowerBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.style.marginLeft = "8px";
+  btn.textContent = "🔋 Bajo consumo OFF";
+  btn.title = "Modo normal";
   btn.onclick = () => {
     lowPowerMode = !lowPowerMode;
     saveLowPowerMode();
     applyLowPowerModeUI();
 
+    // si activás bajo consumo y estaba el wakeLock prendido, lo soltamos
     if (lowPowerMode && wakeLock) {
       wakeLock.release().catch(() => {});
       wakeLock = null;
@@ -275,6 +280,7 @@ function ensureLowPowerButton() {
       }
     }
 
+    // si hay WS abierto, lo cerramos para reconectar limpio
     try {
       if (ws && ws.readyState === 1) ws.close();
     } catch {}
@@ -518,7 +524,6 @@ function ensureExportButton() {
 
   return btn;
 }
-
 (function initExportVoted() {
   const btn = ensureExportButton();
   if (!btn) return;
@@ -633,6 +638,31 @@ function applyTheme(theme) {
     if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([80]);
   };
 })();
+
+/* =========================
+   Wake lock
+========================= */
+if (wakeBtn)
+  wakeBtn.onclick = async () => {
+    try {
+      if (!("wakeLock" in navigator)) {
+        alert("Wake Lock no soportado en este navegador.");
+        return;
+      }
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeBtn.textContent = "🔒 Pantalla activa";
+        wakeBtn.classList.add("active");
+      }
+    } catch {
+      alert("No se pudo mantener la pantalla activa");
+    }
+  };
 
 /* =========================
    Copy feedback
@@ -1175,13 +1205,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
 
 function ensureTradeButtons() {
   const host =
-    document.querySelector(".topControls") ||
-    document.querySelector("header .controls") ||
-    document.querySelector(".controls") ||
     document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
     document.body;
-
-  if (!host) return;
 
   const askStake = () => {
     const cur = getTradeStake();
@@ -1200,7 +1226,6 @@ function ensureTradeButtons() {
     b.className = "btn";
     b.textContent = "🟢 COMPRAR";
     b.title = "CALL 1m (DEMO) — mantener apretado para cambiar stake";
-    b.style.marginLeft = "8px";
     b.oncontextmenu = (e) => {
       e.preventDefault();
       askStake();
@@ -1243,7 +1268,6 @@ function ensureTradeButtons() {
     b.className = "btn";
     b.textContent = "🔴 VENDER";
     b.title = "PUT 1m (DEMO) — mantener apretado para cambiar stake";
-    b.style.marginLeft = "8px";
     b.oncontextmenu = (e) => {
       e.preventDefault();
       askStake();
@@ -1437,7 +1461,7 @@ async function rehydrateHistoryOnBoot() {
   if (!ws || ws.readyState !== 1) return;
 
   const slice = history.slice(-REHYDRATE_MAX_ITEMS);
-  const nowMin = Math.floor(Date.now() / 60000);
+  const nowMin = Math.floor((Date.now() + (serverOffsetMs || 0)) / 60000);
 
   const minutes = [...new Set(slice.map((it) => it.minute))]
     .filter((m) => m < nowMin)
@@ -1601,7 +1625,8 @@ function onTick(tick) {
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
-    if (Math.floor(Date.now() / 60000) === minute) evaluateMinute(minute);
+    const nowMin = Math.floor((Date.now() + (serverOffsetMs || 0)) / 60000);
+    if (nowMin === minute) evaluateMinute(minute);
   }, RETRY_DELAY_MS);
 }
 
@@ -1845,12 +1870,7 @@ function connect() {
   }
 
   ws.onopen = () => {
-    if (typeof resetAuthState === "function") {
-      try {
-        resetAuthState();
-      } catch {}
-    }
-
+    resetAuthState();
     if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
@@ -1878,6 +1898,9 @@ function connect() {
       }
 
       if (data.tick) onTick(data.tick);
+      if (data.tick && statusEl && statusEl.textContent.startsWith("Conectado")) {
+        statusEl.textContent = "Conectado – Analizando";
+      }
     } catch (err) {
       if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
     }
@@ -1888,11 +1911,7 @@ function connect() {
   };
 
   ws.onclose = (ev) => {
-    if (typeof resetAuthState === "function") {
-      try {
-        resetAuthState();
-      } catch {}
-    }
+    resetAuthState();
 
     for (const [id, p] of pending.entries()) {
       clearTimeout(p.t);
@@ -1948,4 +1967,3 @@ ensureTradeButtons();
 ensureResetCacheButton();
 
 connect();
-```0
