@@ -1,4 +1,4 @@
-// app.js — V6.8 + Low Power Mode (sin perder símbolos)
+// app.js — V6.8 + Low Power Mode + DEMO 1-Click Trade + Minuto server-sync
 // ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
 // ✅ MEJORA: Loader "Rehidratando... x/y"
 // ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
@@ -6,7 +6,14 @@
 // ✅ NUEVO: Exportar JSON (solo señales con voto) desde Settings (sin tocar index.html)
 // ✅ NUEVO: Feedback incluye NEXT (flecha/estado próxima vela) y se refresca al llegar nextOutcome
 // ✅ NUEVO: 🪫 Modo Bajo Consumo (botón) — baja interval UI, baja count history, cierra WS en background
+// ✅ NUEVO (DEMO): Botones 🟢 COMPRAR (CALL) / 🔴 VENDER (PUT) desde la PWA (authorize + buy)
+// ✅ NUEVO: Minuto en vivo sincronizado a tiempo servidor (offset por tick.epoch)
 
+"use strict";
+
+/* =========================
+   Config
+========================= */
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
@@ -24,6 +31,20 @@ const HISTORY_TIMEOUT_MS = 7000;
 // ⚠️ ya no lo usamos directo en ticks_history; se usa getHistoryCountMax()
 const HISTORY_COUNT_MAX = 5000;
 
+/* =========================
+   DEMO Trade config
+========================= */
+const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
+const TRADE_STAKE_KEY = "tradeStake_v1";     // opcional: permite cambiar sin tocar HTML
+
+const DEFAULT_STAKE = 1;          // USD
+const DEFAULT_DURATION = 1;       // 1 minuto
+const DEFAULT_DURATION_UNIT = "m";
+const DEFAULT_CURRENCY = "USD";
+
+/* =========================
+   DOM helpers
+========================= */
 const $ = (id) => document.getElementById(id);
 const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -67,7 +88,11 @@ const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
+/* =========================
+   State
+========================= */
 let ws;
+
 let soundEnabled = false;
 let vibrateEnabled = true;
 
@@ -80,17 +105,25 @@ let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
-let lastTickEpochMs = null;
-let currentMinuteStartMs = null;
+// Tiempo/ticks
+let lastTickEpochMs = null;        // epoch del tick (servidor)
+let lastTickLocalNowMs = null;     // Date.now() cuando llegó el último tick
+let serverOffsetMs = 0;            // epochMs - Date.now() (se recalcula en cada tick)
+let currentMinuteStartMs = null;   // inicio del minuto (epoch ms)
 
+// min/candles
 let lastSeenMinute = null;
 let candleOC = {};
 
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
+// modal chart
 let modalCurrentItem = null;
 
+/* =========================
+   Assets
+========================= */
 const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <path d="M4 18V6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 <path d="M4 18H20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -98,6 +131,9 @@ const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 <circle cx="10" cy="10" r="1" fill="currentColor"/><circle cx="13" cy="13" r="1" fill="currentColor"/><circle cx="18" cy="6" r="1" fill="currentColor"/>
 </svg>`;
 
+/* =========================
+   URL helpers
+========================= */
 function makeDerivTraderUrl(symbol) {
   const u = new URL(DERIV_DTRADER_TEMPLATE);
   u.searchParams.set("symbol", symbol);
@@ -152,7 +188,6 @@ function ensureLowPowerButton() {
   let btn = document.getElementById("lowPowerBtn");
   if (btn) return btn;
 
-  // Preferimos meterlo en la misma barra de controles si existe, sino en settings
   const host =
     document.querySelector(".topControls") ||
     document.querySelector("header .controls") ||
@@ -913,11 +948,11 @@ function renderHistory() {
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
-  if (!lastTickEpochMs) {
+  if (!lastTickLocalNowMs) {
     tickHealthEl.textContent = "Último tick: —";
     return;
   }
-  const ageSec = Math.max(0, Math.floor((Date.now() - lastTickEpochMs) / 1000));
+  const ageSec = Math.max(0, Math.floor((Date.now() - lastTickLocalNowMs) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
 
@@ -932,8 +967,9 @@ function updateCountdownUI() {
     return;
   }
 
-  const now = Date.now();
-  const msInMinute = (now - currentMinuteStartMs) % 60000;
+  // ✅ Tiempo servidor estimado (ajustado cada tick)
+  const serverNow = Date.now() + (serverOffsetMs || 0);
+  const msInMinute = (serverNow - currentMinuteStartMs) % 60000;
 
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   const v = String(remaining).padStart(2, "0");
@@ -951,7 +987,7 @@ function updateCountdownUI() {
 }
 
 /* =========================
-   ticks_history (requests)
+   WS requests (req_id)
 ========================= */
 let reqSeq = 1;
 const pending = new Map();
@@ -969,6 +1005,217 @@ function wsRequest(payload) {
   });
 }
 
+/* =========================
+   DEMO 1-click trade
+========================= */
+function getDerivToken() {
+  try {
+    return localStorage.getItem(DERIV_TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+function setDerivToken(t) {
+  try {
+    localStorage.setItem(DERIV_TOKEN_KEY, t || "");
+  } catch {}
+}
+
+function getTradeStake() {
+  const raw = localStorage.getItem(TRADE_STAKE_KEY);
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_STAKE;
+}
+function setTradeStake(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return;
+  try {
+    localStorage.setItem(TRADE_STAKE_KEY, String(v));
+  } catch {}
+}
+
+let isAuthorized = false;
+let authorizeInFlight = null;
+let tradeInFlight = false;
+
+function resetAuthState() {
+  isAuthorized = false;
+  authorizeInFlight = null;
+  tradeInFlight = false;
+}
+
+async function ensureAuthorized() {
+  const token = getDerivToken();
+  if (!token) {
+    const t = prompt("Pegá tu TOKEN DEMO de Deriv (permiso: Read + Trade):");
+    if (!t) throw new Error("Sin token DEMO");
+    setDerivToken(t.trim());
+  }
+
+  if (isAuthorized) return true;
+  if (authorizeInFlight) return authorizeInFlight;
+
+  authorizeInFlight = wsRequest({ authorize: getDerivToken() })
+    .then((res) => {
+      if (res?.error) throw new Error(res.error.message || "authorize error");
+      isAuthorized = true;
+      return true;
+    })
+    .finally(() => {
+      authorizeInFlight = null;
+    });
+
+  return authorizeInFlight;
+}
+
+function getDefaultTradeSymbol() {
+  // preferimos el último signal (más “contextual”)
+  const last = history && history.length ? history[history.length - 1] : null;
+  return (last && last.symbol) || "R_25";
+}
+
+async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
+  if (tradeInFlight) throw new Error("Operación en curso");
+  tradeInFlight = true;
+
+  try {
+    await ensureAuthorized();
+
+    const symbol = symbolOverride || getDefaultTradeSymbol();
+    const stake = getTradeStake();
+
+    const res = await wsRequest({
+      buy: 1,
+      price: stake,
+      parameters: {
+        amount: stake,
+        basis: "stake",
+        contract_type: side, // CALL / PUT
+        currency: DEFAULT_CURRENCY,
+        duration: DEFAULT_DURATION,
+        duration_unit: DEFAULT_DURATION_UNIT,
+        symbol,
+      },
+    });
+
+    if (res?.error) throw new Error(res.error.message || "buy error");
+    return res;
+  } finally {
+    tradeInFlight = false;
+  }
+}
+
+function ensureTradeButtons() {
+  const host =
+    document.querySelector(".topControls") ||
+    document.querySelector("header .controls") ||
+    document.querySelector(".controls") ||
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.body;
+
+  if (!host) return;
+
+  // stake quick-edit (opcional) en long press
+  const askStake = () => {
+    const cur = getTradeStake();
+    const v = prompt(`Stake DEMO (USD). Actual: ${cur}`, String(cur));
+    if (v == null) return;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
+    setTradeStake(n);
+    alert(`✅ Stake guardado: ${n} USD`);
+  };
+
+  if (!document.getElementById("buyCallBtn")) {
+    const b = document.createElement("button");
+    b.id = "buyCallBtn";
+    b.type = "button";
+    b.className = "btn";
+    b.textContent = "🟢 COMPRAR";
+    b.title = "CALL 1m (DEMO) — mantener apretado para cambiar stake";
+    b.style.marginLeft = "8px";
+    b.oncontextmenu = (e) => {
+      e.preventDefault();
+      askStake();
+    };
+    b.onpointerdown = (() => {
+      let t = null;
+      return () => {
+        t = setTimeout(() => askStake(), 650);
+        const up = () => {
+          if (t) clearTimeout(t);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+        };
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      };
+    })();
+
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
+        const r = await buyOneClick("CALL");
+        const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+        if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
+      } finally {
+        b.disabled = false;
+      }
+    };
+
+    host.appendChild(b);
+  }
+
+  if (!document.getElementById("buyPutBtn")) {
+    const b = document.createElement("button");
+    b.id = "buyPutBtn";
+    b.type = "button";
+    b.className = "btn";
+    b.textContent = "🔴 VENDER";
+    b.title = "PUT 1m (DEMO) — mantener apretado para cambiar stake";
+    b.style.marginLeft = "8px";
+    b.oncontextmenu = (e) => {
+      e.preventDefault();
+      askStake();
+    };
+    b.onpointerdown = (() => {
+      let t = null;
+      return () => {
+        t = setTimeout(() => askStake(), 650);
+        const up = () => {
+          if (t) clearTimeout(t);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+        };
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      };
+    })();
+
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
+        const r = await buyOneClick("PUT");
+        const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+        if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
+      } finally {
+        b.disabled = false;
+      }
+    };
+
+    host.appendChild(b);
+  }
+}
+
+/* =========================
+   ticks_history helpers
+========================= */
 function minuteToEpochSec(minute) {
   return minute * 60;
 }
@@ -1039,7 +1286,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   Loader rehidratación (usa statusEl)
+   Loader rehidratación
 ========================= */
 let rehydrateRunning = false;
 let lastStatusBeforeRehydrate = "";
@@ -1237,8 +1484,12 @@ function finalizeMinute(minute) {
 ========================= */
 function onTick(tick) {
   const epochMs = Math.round(Number(tick.epoch) * 1000);
-  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
 
+  // ✅ recalibramos offset servidor en cada tick
+  lastTickLocalNowMs = Date.now();
+  serverOffsetMs = epochMs - lastTickLocalNowMs;
+
+  const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
   const minute = Math.floor(epochMs / 60000);
   const msInMinute = epochMs - minuteStartMs;
   const sec = Math.floor(msInMinute / 1000);
@@ -1279,6 +1530,7 @@ function onTick(tick) {
     if (!ok) scheduleRetry(minute);
   }
 }
+
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
@@ -1287,7 +1539,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Filtros técnicos (tu lógica)
+   Filtros técnicos
 ========================= */
 function clamp(n, a, b) {
   return Math.max(a, Math.min(b, n));
@@ -1550,6 +1802,7 @@ function connect() {
   }
 
   ws.onopen = () => {
+    resetAuthState();
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
@@ -1579,6 +1832,8 @@ function connect() {
   };
 
   ws.onclose = () => {
+    resetAuthState();
+
     for (const [id, p] of pending.entries()) {
       clearTimeout(p.t);
       pending.delete(id);
@@ -1601,14 +1856,18 @@ document.addEventListener("visibilitychange", () => {
 
   if (document.visibilityState === "hidden") {
     if (lowPowerMode && ws && ws.readyState === 1) {
-      try { ws.close(); } catch {}
+      try {
+        ws.close();
+      } catch {}
     }
     return;
   }
 
   if (document.visibilityState === "visible") {
     if (!ws || ws.readyState === 3) {
-      try { connect(); } catch {}
+      try {
+        connect();
+      } catch {}
     }
   }
 });
@@ -1620,6 +1879,10 @@ loadLowPowerMode();
 renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
+
 ensureLowPowerButton();
-applyLowPowerModeUI();  // pinta el botón + arranca timer con intervalo correcto
+applyLowPowerModeUI(); // pinta el botón + arranca timer con intervalo correcto
+
+ensureTradeButtons();  // ✅ DEMO: agrega 🟢 COMPRAR / 🔴 VENDER
 connect();
+```0
