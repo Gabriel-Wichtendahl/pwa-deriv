@@ -13,7 +13,7 @@
   --btn-text:#e5e7eb;
 }
 body.light{
-  --bg-main:#f8fafc;
+  --bg-main:#f8fafc; 
   --bg-card:rgba(255,255,255,.92);
   --text:#0f172a;
   --muted:#475569;
