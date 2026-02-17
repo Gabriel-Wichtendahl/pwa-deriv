@@ -1,8 +1,4 @@
-// sw.js — Deriv Signals (Neon Pro) V6.9.3
-// ✅ Network-first para HTML/CSS/JS (evita quedar clavado con versiones viejas)
-// ✅ Cache-first para assets estáticos
-
-const CACHE = "deriv-assets-v6-9-3";
+const CACHE = "deriv-assets-v7-live-trade-1";
 
 const ASSETS = [
   "./",
@@ -36,12 +32,9 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
   const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html");
-  const isCore =
-    url.pathname.endsWith("/app.js") ||
-    url.pathname.endsWith("/style.css") ||
-    url.pathname.endsWith("/manifest.json");
+  const isCore = url.pathname.endsWith("/app.js") || url.pathname.endsWith("/style.css");
 
-  // ✅ Network-first para core
+  // ✅ Network-first para core (evita quedar clavado)
   if (isHTML || isCore) {
     e.respondWith((async () => {
       try {
@@ -57,13 +50,13 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // ✅ Cache-first para el resto
+  // ✅ Cache-first resto
   e.respondWith(
-    caches.match(e.request).then((r) => r || fetch(e.request))
+    caches.match(e.request).then(r => r || fetch(e.request))
   );
 });
 
-/* ✅ Click en notificación: abre Deriv en DEMO / Rise-Fall / símbolo */
+/* Click notificación */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
@@ -72,7 +65,7 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({
       type: "window",
-      includeUncontrolled: true,
+      includeUncontrolled: true
     });
 
     for (const client of allClients) {
