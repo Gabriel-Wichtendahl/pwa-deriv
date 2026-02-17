@@ -6,7 +6,7 @@
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
 
-const DERIV_DTRADER_TEMPLATE =
+const DERIV_DTRADER_TEMPLATE = 
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
 const STORE_KEY = "derivSignalsHistory_v2";
