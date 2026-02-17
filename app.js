@@ -1,16 +1,4 @@
-// app.js — V6.9 (LIMPIO) + Low Power + DEMO 1-Click Trade + Minuto server-sync + Debug visible + Reset SW/Cache
-// ✅ Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
-// ✅ Loader "Rehidratando... x/y"
-// ✅ wsRequest por req_id
-// ✅ nextOutcome robusto (fallback a candles)
-// ✅ Exportar JSON (solo señales con voto) desde Settings
-// ✅ Feedback incluye NEXT
-// ✅ 🪫 Modo Bajo Consumo (UI + history count + cierra WS en background)
-// ✅ DEMO: Botones 🟢 COMPRAR (CALL) / 🔴 VENDER (PUT) (authorize + buy)
-// ✅ Minuto en vivo sincronizado a tiempo servidor (offset por tick.epoch)
-// ✅ Debug visible (errores JS en status)
-// ✅ Botón 🧹 Reset Cache/SW (desregistra SW + borra caches + recarga)
-
+// app.js — V6.9 (LIVE Chart Modal + Trade in Modal + Low Power + Server Sync + Debug + Reset SW/Cache)
 "use strict";
 
 /* =========================
@@ -31,12 +19,15 @@ const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
 
-/* =========================
-   DEMO Trade config (solo demo)
-========================= */
-const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo (Read + Trade)
-const TRADE_STAKE_KEY = "tradeStake_v1";
+// ⚠️ para ticks_history (lo ajusta getHistoryCountMax())
+const HISTORY_COUNT_MAX_NORMAL = 5000;
+const HISTORY_COUNT_MAX_LOW = 1200;
 
+/* =========================
+   DEMO Trade config
+========================= */
+const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
+const TRADE_STAKE_KEY = "tradeStake_v1";
 const DEFAULT_STAKE = 1; // USD
 const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
@@ -89,7 +80,7 @@ const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
 /* =========================
-   🧯 Debug visible + Reset SW/Cache
+   Debug visible
 ========================= */
 (function initVisibleDebug() {
   const show = (msg) => {
@@ -100,9 +91,7 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
   window.addEventListener("error", (e) => {
     const m = e?.message || "Error";
-    const src = e?.filename
-      ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}`
-      : "";
+    const src = e?.filename ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}` : "";
     show(`❌ JS: ${m}${src}`);
   });
 
@@ -113,6 +102,9 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
   });
 })();
 
+/* =========================
+   Reset SW / Cache
+========================= */
 async function resetServiceWorkerAndCaches() {
   try {
     if ("serviceWorker" in navigator) {
@@ -153,6 +145,16 @@ function ensureResetCacheButton() {
 }
 
 /* =========================
+   URL helpers
+========================= */
+function makeDerivTraderUrl(symbol) {
+  const u = new URL(DERIV_DTRADER_TEMPLATE);
+  u.searchParams.set("symbol", symbol);
+  return u.toString();
+}
+const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+
+/* =========================
    State
 ========================= */
 let ws;
@@ -169,7 +171,7 @@ let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
-// Tiempo/ticks (server sync)
+// Tiempo/ticks
 let lastTickEpochMs = null;
 let lastTickLocalNowMs = null;
 let serverOffsetMs = 0;
@@ -182,10 +184,7 @@ let candleOC = {};
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
-// modal chart
-let modalCurrentItem = null;
-
-// wake lock
+// wake
 let wakeLock = null;
 
 /* =========================
@@ -199,16 +198,6 @@ const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 </svg>`;
 
 /* =========================
-   URL helpers
-========================= */
-function makeDerivTraderUrl(symbol) {
-  const u = new URL(DERIV_DTRADER_TEMPLATE);
-  u.searchParams.set("symbol", symbol);
-  return u.toString();
-}
-const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
-
-/* =========================
    🪫 Low power mode
 ========================= */
 let lowPowerMode = false;
@@ -216,9 +205,6 @@ const LOWPOWER_KEY = "lowPowerMode_v1";
 
 const UI_INTERVAL_NORMAL_MS = 500;
 const UI_INTERVAL_LOW_MS = 1200;
-
-const HISTORY_COUNT_MAX_NORMAL = 5000;
-const HISTORY_COUNT_MAX_LOW = 1200;
 
 let uiTimer = null;
 
@@ -255,16 +241,17 @@ function ensureLowPowerButton() {
   if (btn) return btn;
 
   const host =
+    document.querySelector(".topControls") ||
+    document.querySelector("header .controls") ||
+    document.querySelector(".controls") ||
     document.querySelector("#settingsModal .settingsBody .controls") ||
-    document.querySelector(".settingsBody .controls") ||
     document.body;
 
   btn = document.createElement("button");
   btn.id = "lowPowerBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "🔋 Bajo consumo OFF";
-  btn.title = "Modo normal";
+  btn.style.marginLeft = "8px";
   btn.onclick = () => {
     lowPowerMode = !lowPowerMode;
     saveLowPowerMode();
@@ -280,7 +267,7 @@ function ensureLowPowerButton() {
       }
     }
 
-    // si hay WS abierto, lo cerramos para reconectar limpio
+    // reconectar limpio
     try {
       if (ws && ws.readyState === 1) ws.close();
     } catch {}
@@ -524,6 +511,7 @@ function ensureExportButton() {
 
   return btn;
 }
+
 (function initExportVoted() {
   const btn = ensureExportButton();
   if (!btn) return;
@@ -640,31 +628,6 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Wake lock
-========================= */
-if (wakeBtn)
-  wakeBtn.onclick = async () => {
-    try {
-      if (!("wakeLock" in navigator)) {
-        alert("Wake Lock no soportado en este navegador.");
-        return;
-      }
-      if (wakeLock) {
-        await wakeLock.release();
-        wakeLock = null;
-        wakeBtn.textContent = "🔓 Pantalla activa";
-        wakeBtn.classList.remove("active");
-      } else {
-        wakeLock = await navigator.wakeLock.request("screen");
-        wakeBtn.textContent = "🔒 Pantalla activa";
-        wakeBtn.classList.add("active");
-      }
-    } catch {
-      alert("No se pudo mantener la pantalla activa");
-    }
-  };
-
-/* =========================
    Copy feedback
 ========================= */
 if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
@@ -709,49 +672,6 @@ function showNotification(symbol, direction, modeLabel) {
     });
   });
 }
-
-/* =========================
-   Chart modal
-========================= */
-function openChartModal(item) {
-  if (!item.minuteComplete) return;
-  modalCurrentItem = item;
-  if (!chartModal || !modalTitle || !modalSub) return;
-
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
-  modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
-  chartModal.classList.remove("hidden");
-  chartModal.setAttribute("aria-hidden", "false");
-
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      drawDerivLikeChart(minuteCanvas, item.ticks || []);
-    })
-  );
-}
-function closeChartModal() {
-  if (!chartModal) return;
-  chartModal.classList.add("hidden");
-  chartModal.setAttribute("aria-hidden", "true");
-  modalCurrentItem = null;
-}
-if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
-if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    closeChartModal();
-    closeSettings();
-  }
-});
-if (modalOpenDerivBtn)
-  modalOpenDerivBtn.onclick = () => {
-    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
-  };
-window.addEventListener("resize", () => {
-  if (!chartModal || chartModal.classList.contains("hidden")) return;
-  if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
-});
 
 /* =========================
    Canvas chart
@@ -852,6 +772,188 @@ function drawDerivLikeChart(canvas, ticks) {
 }
 
 /* =========================
+   LIVE Chart Modal + Trade in Modal
+========================= */
+let modalCurrentItem = null;
+let modalLiveRaf = 0;
+let modalLiveLastDraw = 0;
+
+function getTicksForItem(item) {
+  if (!item) return [];
+  const m = item.minute;
+  const s = item.symbol;
+  const live = minuteData?.[m]?.[s];
+  if (Array.isArray(live) && live.length) return live;
+  if (Array.isArray(item.ticks) && item.ticks.length) return item.ticks;
+  return [];
+}
+
+function isItemLiveNow(item) {
+  if (!item) return false;
+  const nowMin = Math.floor((Date.now() + (serverOffsetMs || 0)) / 60000);
+  return item.minute === nowMin;
+}
+
+function scheduleModalLiveDraw(force = false) {
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (!modalCurrentItem) return;
+
+  const now = performance.now();
+  if (!force && now - modalLiveLastDraw < 140) return;
+
+  if (modalLiveRaf) return;
+  modalLiveRaf = requestAnimationFrame(() => {
+    modalLiveRaf = 0;
+    modalLiveLastDraw = performance.now();
+    try {
+      const ticks = getTicksForItem(modalCurrentItem);
+      drawDerivLikeChart(minuteCanvas, ticks);
+    } catch {}
+  });
+}
+
+function ensureModalOpenDerivButton() {
+  if (!modalOpenDerivBtn) return;
+  modalOpenDerivBtn.onclick = () => {
+    if (!modalCurrentItem) return;
+    window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
+  };
+}
+
+function ensureModalTradeButtons() {
+  if (!chartModal) return;
+  const footer = chartModal.querySelector(".modalFooter");
+  if (!footer) return;
+
+  if (footer.querySelector("#modalBuyCallBtn")) return;
+
+  const askStake = () => {
+    const cur = getTradeStake();
+    const v = prompt(`Stake DEMO (USD). Actual: ${cur}`, String(cur));
+    if (v == null) return;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
+    setTradeStake(n);
+    alert(`✅ Stake guardado: ${n} USD`);
+  };
+
+  const mkBtn = (id, text, title) => {
+    const b = document.createElement("button");
+    b.id = id;
+    b.type = "button";
+    b.className = "btn";
+    b.textContent = text;
+    b.title = title;
+    b.style.marginRight = "8px";
+    b.oncontextmenu = (e) => {
+      e.preventDefault();
+      askStake();
+    };
+    b.onpointerdown = (() => {
+      let t = null;
+      return () => {
+        t = setTimeout(() => askStake(), 650);
+        const up = () => {
+          if (t) clearTimeout(t);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+        };
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      };
+    })();
+    return b;
+  };
+
+  const callBtn = mkBtn("modalBuyCallBtn", "🟢 COMPRAR", "CALL 1m (DEMO) — mantener apretado para stake");
+  const putBtn = mkBtn("modalBuyPutBtn", "🔴 VENDER", "PUT 1m (DEMO) — mantener apretado para stake");
+
+  callBtn.onclick = async () => {
+    callBtn.disabled = true;
+    try {
+      if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
+      const sym = modalCurrentItem?.symbol || null;
+      const r = await buyOneClick("CALL", sym);
+      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+      if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
+    } finally {
+      callBtn.disabled = false;
+    }
+  };
+
+  putBtn.onclick = async () => {
+    putBtn.disabled = true;
+    try {
+      if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
+      const sym = modalCurrentItem?.symbol || null;
+      const r = await buyOneClick("PUT", sym);
+      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+      if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
+    } finally {
+      putBtn.disabled = false;
+    }
+  };
+
+  // Insertar antes del "Abrir Deriv" si existe
+  if (modalOpenDerivBtn && footer.contains(modalOpenDerivBtn)) {
+    footer.insertBefore(putBtn, modalOpenDerivBtn);
+    footer.insertBefore(callBtn, putBtn);
+  } else {
+    footer.appendChild(callBtn);
+    footer.appendChild(putBtn);
+  }
+}
+
+function openChartModal(item) {
+  modalCurrentItem = item;
+  if (!chartModal || !modalTitle || !modalSub) return;
+
+  const live = isItemLiveNow(item) && !item.minuteComplete;
+  const modeLabel = item.mode || "NORMAL";
+  const ticksLen = getTicksForItem(item).length;
+
+  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${modeLabel}]`;
+  modalSub.textContent = live ? `EN VIVO • ${item.time} • ticks: ${ticksLen}` : `${item.time} • ticks: ${ticksLen}`;
+
+  chartModal.classList.remove("hidden");
+  chartModal.setAttribute("aria-hidden", "false");
+
+  ensureModalTradeButtons();
+  ensureModalOpenDerivButton();
+
+  scheduleModalLiveDraw(true);
+}
+
+function closeChartModal() {
+  if (!chartModal) return;
+  chartModal.classList.add("hidden");
+  chartModal.setAttribute("aria-hidden", "true");
+  modalCurrentItem = null;
+
+  if (modalLiveRaf) cancelAnimationFrame(modalLiveRaf);
+  modalLiveRaf = 0;
+}
+
+if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
+if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeChartModal();
+    closeSettings();
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  scheduleModalLiveDraw(true);
+});
+
+/* =========================
    Row helpers
 ========================= */
 function updateRowChartBtn(item) {
@@ -860,16 +962,20 @@ function updateRowChartBtn(item) {
   const btn = row.querySelector(".chartBtn");
   if (!btn) return;
 
-  const ready = !!item.minuteComplete;
-  btn.disabled = !ready;
-  btn.classList.toggle("locked", !ready);
+  // ✅ siempre habilitado
+  btn.disabled = false;
+  btn.classList.remove("locked");
 
-  if (ready) {
+  const live = isItemLiveNow(item) && !item.minuteComplete;
+
+  if (item.minuteComplete) {
     btn.innerHTML = CHART_ICON_SVG;
     btn.title = "Ver gráfico del minuto (ticks 0–60)";
   } else {
-    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto…";
+    btn.innerHTML = live
+      ? `<span class="liveBadge" aria-hidden="true">🟢</span>`
+      : `<span class="lockBadge" aria-hidden="true">⏳</span>`;
+    btn.title = live ? "Ver gráfico EN VIVO" : "Cargando gráfico…";
   }
 }
 
@@ -938,7 +1044,6 @@ function setNextOutcome(item, outcome) {
   updateRowNextArrow(item);
   const ok = updateRowHitIcon(item);
   updateCounter();
-
   rebuildFeedbackFromHistory();
 
   if (ok) animateHitPop(item);
@@ -978,7 +1083,7 @@ function buildRow(item) {
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
-    if (item.minuteComplete) openChartModal(item);
+    openChartModal(item); // ✅ siempre abre (live o completo)
   };
   updateRowChartBtn(item);
 
@@ -1105,7 +1210,7 @@ function wsRequest(payload) {
 }
 
 /* =========================
-   DEMO 1-click trade
+   DEMO Trade
 ========================= */
 function getDerivToken() {
   try {
@@ -1167,11 +1272,6 @@ async function ensureAuthorized() {
   return authorizeInFlight;
 }
 
-function getDefaultTradeSymbol() {
-  const last = history && history.length ? history[history.length - 1] : null;
-  return (last && last.symbol) || "R_25";
-}
-
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
@@ -1179,7 +1279,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   try {
     await ensureAuthorized();
 
-    const symbol = symbolOverride || getDefaultTradeSymbol();
+    const symbol = symbolOverride || "R_25";
     const stake = getTradeStake();
 
     const res = await wsRequest({
@@ -1200,107 +1300,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     return res;
   } finally {
     tradeInFlight = false;
-  }
-}
-
-function ensureTradeButtons() {
-  const host =
-    document.querySelector("#settingsModal .settingsBody .controls") ||
-    document.querySelector(".settingsBody .controls") ||
-    document.body;
-
-  const askStake = () => {
-    const cur = getTradeStake();
-    const v = prompt(`Stake DEMO (USD). Actual: ${cur}`, String(cur));
-    if (v == null) return;
-    const n = Number(v);
-    if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
-    setTradeStake(n);
-    alert(`✅ Stake guardado: ${n} USD`);
-  };
-
-  if (!document.getElementById("buyCallBtn")) {
-    const b = document.createElement("button");
-    b.id = "buyCallBtn";
-    b.type = "button";
-    b.className = "btn";
-    b.textContent = "🟢 COMPRAR";
-    b.title = "CALL 1m (DEMO) — mantener apretado para cambiar stake";
-    b.oncontextmenu = (e) => {
-      e.preventDefault();
-      askStake();
-    };
-    b.onpointerdown = (() => {
-      let t = null;
-      return () => {
-        t = setTimeout(() => askStake(), 650);
-        const up = () => {
-          if (t) clearTimeout(t);
-          window.removeEventListener("pointerup", up);
-          window.removeEventListener("pointercancel", up);
-        };
-        window.addEventListener("pointerup", up);
-        window.addEventListener("pointercancel", up);
-      };
-    })();
-
-    b.onclick = async () => {
-      b.disabled = true;
-      try {
-        if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
-        const r = await buyOneClick("CALL");
-        const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
-        if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
-      } catch (e) {
-        if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
-      } finally {
-        b.disabled = false;
-      }
-    };
-
-    host.appendChild(b);
-  }
-
-  if (!document.getElementById("buyPutBtn")) {
-    const b = document.createElement("button");
-    b.id = "buyPutBtn";
-    b.type = "button";
-    b.className = "btn";
-    b.textContent = "🔴 VENDER";
-    b.title = "PUT 1m (DEMO) — mantener apretado para cambiar stake";
-    b.oncontextmenu = (e) => {
-      e.preventDefault();
-      askStake();
-    };
-    b.onpointerdown = (() => {
-      let t = null;
-      return () => {
-        t = setTimeout(() => askStake(), 650);
-        const up = () => {
-          if (t) clearTimeout(t);
-          window.removeEventListener("pointerup", up);
-          window.removeEventListener("pointercancel", up);
-        };
-        window.addEventListener("pointerup", up);
-        window.addEventListener("pointercancel", up);
-      };
-    })();
-
-    b.onclick = async () => {
-      b.disabled = true;
-      try {
-        if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
-        const r = await buyOneClick("PUT");
-        const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
-        if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
-      } catch (e) {
-        if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
-      } finally {
-        b.disabled = false;
-      }
-    };
-
-    host.appendChild(b);
   }
 }
 
@@ -1561,8 +1560,8 @@ function finalizeMinute(minute) {
     }
     if (changed) saveHistory(history);
 
-    if (modalCurrentItem && modalCurrentItem.minute === minute && modalCurrentItem.minuteComplete) {
-      drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
+    if (modalCurrentItem && modalCurrentItem.minute === minute) {
+      scheduleModalLiveDraw(true);
     }
   })();
 
@@ -1588,6 +1587,10 @@ function onTick(tick) {
 
   lastTickEpochMs = epochMs;
   currentMinuteStartMs = minuteStartMs;
+
+  if (statusEl && statusEl.textContent && statusEl.textContent.startsWith("Conectando")) {
+    statusEl.textContent = "Conectado – Analizando";
+  }
 
   const prevLast = lastQuoteBySymbol[symbol];
   lastQuoteBySymbol[symbol] = tick.quote;
@@ -1620,13 +1623,31 @@ function onTick(tick) {
     const ok = evaluateMinute(minute);
     if (!ok) scheduleRetry(minute);
   }
+
+  // ✅ Live redraw del modal si coincide minuto + símbolo
+  try {
+    if (
+      modalCurrentItem &&
+      modalCurrentItem.symbol === symbol &&
+      modalCurrentItem.minute === minute &&
+      chartModal &&
+      !chartModal.classList.contains("hidden")
+    ) {
+      if (modalSub) {
+        const live = isItemLiveNow(modalCurrentItem) && !modalCurrentItem.minuteComplete;
+        modalSub.textContent = live
+          ? `EN VIVO • ${modalCurrentItem.time} • ticks: ${getTicksForItem(modalCurrentItem).length}`
+          : `${modalCurrentItem.time} • ticks: ${getTicksForItem(modalCurrentItem).length}`;
+      }
+      scheduleModalLiveDraw(false);
+    }
+  } catch {}
 }
 
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
-    const nowMin = Math.floor((Date.now() + (serverOffsetMs || 0)) / 60000);
-    if (nowMin === minute) evaluateMinute(minute);
+    if (Math.floor((Date.now() + (serverOffsetMs || 0)) / 60000) === minute) evaluateMinute(minute);
   }, RETRY_DELAY_MS);
 }
 
@@ -1806,7 +1827,6 @@ function evaluateMinute(minute) {
   const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
 
   if (best.score < rules.scoreMin) return true;
-
   const ok = passesTechnicalFilters(best, best.vol, rules);
   if (!ok) return true;
 
@@ -1858,6 +1878,27 @@ function addSignal(minute, symbol, direction, ticks) {
 }
 
 /* =========================
+   Wake lock
+========================= */
+if (wakeBtn)
+  wakeBtn.onclick = async () => {
+    try {
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeBtn.textContent = "🔒 Pantalla activa";
+        wakeBtn.classList.add("active");
+      }
+    } catch {
+      alert("No se pudo mantener la pantalla activa");
+    }
+  };
+
+/* =========================
    WebSocket
 ========================= */
 function connect() {
@@ -1871,6 +1912,7 @@ function connect() {
 
   ws.onopen = () => {
     resetAuthState();
+
     if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
@@ -1898,9 +1940,6 @@ function connect() {
       }
 
       if (data.tick) onTick(data.tick);
-      if (data.tick && statusEl && statusEl.textContent.startsWith("Conectado")) {
-        statusEl.textContent = "Conectado – Analizando";
-      }
     } catch (err) {
       if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
     }
@@ -1923,7 +1962,9 @@ function connect() {
     const reason = ev?.reason || "";
     if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`;
 
+    // en bajo consumo, si se cerró por background, no reconectamos hasta volver visible
     if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
+
     setTimeout(connect, 1500);
   };
 }
@@ -1963,7 +2004,7 @@ updateCountdownUI();
 ensureLowPowerButton();
 applyLowPowerModeUI();
 
-ensureTradeButtons();
 ensureResetCacheButton();
+ensureModalOpenDerivButton(); // por si el modal ya estaba listo
 
 connect();
