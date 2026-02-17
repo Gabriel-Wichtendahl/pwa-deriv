@@ -1,9 +1,10 @@
-// app.js — V6.8 BASE ✅ + Low Power Mode ✅ + Modal gráfico LIVE real ✅ + Trade DEMO desde Config ✅
-// - LIVE: al abrir gráfico del minuto actual se forma con ticks reales al instante y corta al 60.
-// - Candado: solo bloquea si NO es el minuto actual y todavía no está completo.
-// - Config: campo único para TOKEN DEMO + botón borrar token + stake.
-// - Debug visible: errores JS en status.
-// - Reset Cache/SW: botón en Config.
+// app.js — BASE (la que te funcionó) + FIX duplicados + FIX LIVE real-time (solo minuto actual) + FIX candado
+// ✅ No toca tu HTML/CSS/SW
+// ✅ Elimina duplicados (Token/Stake + TradeRow del modal) si quedaron por inyección previa
+// ✅ LIVE por defecto OFF, solo habilitable si el item es del minuto actual y aún no cerró
+// ✅ El gráfico se redibuja EN CADA TICK (se ve “como Deriv”) mientras LIVE está ON
+// ✅ Al llegar 60s (minuto cerrado) LIVE se corta y el gráfico queda fijo
+// ✅ Candado: permite abrir gráfico en vivo para la señal del minuto actual (aunque no esté complete)
 
 "use strict";
 
@@ -81,10 +82,37 @@ const modalTitle = $("modalTitle");
 const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
-const modalFooterEl = chartModal ? chartModal.querySelector(".modalFooter") : null;
 
 /* =========================
-   🧯 Debug visible
+   Dedupe helpers (FIX duplicados)
+========================= */
+function dedupeById(id) {
+  try {
+    const all = Array.from(document.querySelectorAll(`#${CSS.escape(id)}`));
+    if (all.length <= 1) return all[0] || null;
+    const keep = all[0];
+    for (let i = 1; i < all.length; i++) all[i].remove();
+    return keep;
+  } catch {
+    // fallback viejo
+    const all = Array.from(document.querySelectorAll(`#${id}`));
+    if (all.length <= 1) return all[0] || null;
+    const keep = all[0];
+    for (let i = 1; i < all.length; i++) all[i].remove();
+    return keep;
+  }
+}
+
+function dedupeBySelector(sel) {
+  const all = Array.from(document.querySelectorAll(sel));
+  if (all.length <= 1) return all[0] || null;
+  const keep = all[0];
+  for (let i = 1; i < all.length; i++) all[i].remove();
+  return keep;
+}
+
+/* =========================
+   🧯 Debug visible + Reset SW/Cache (solo app.js)
 ========================= */
 (function initVisibleDebug() {
   const show = (msg) => {
@@ -106,9 +134,6 @@ const modalFooterEl = chartModal ? chartModal.querySelector(".modalFooter") : nu
   });
 })();
 
-/* =========================
-   Reset SW/Cache (desde app.js)
-========================= */
 async function resetServiceWorkerAndCaches() {
   try {
     if ("serviceWorker" in navigator) {
@@ -119,21 +144,28 @@ async function resetServiceWorkerAndCaches() {
       const keys = await caches.keys();
       await Promise.all(keys.map((k) => caches.delete(k).catch(() => {})));
     }
-  } catch {}
-  location.reload();
+    location.reload();
+  } catch {
+    location.reload();
+  }
 }
 
 function ensureResetCacheButton() {
-  let btn = document.getElementById("resetCacheBtn");
-  if (btn) return btn;
+  // si tu HTML ya lo trae, dedupea y usa ese
+  const existing = dedupeById("resetCacheBtn");
+  if (existing) {
+    existing.onclick = resetServiceWorkerAndCaches;
+    return existing;
+  }
 
   const host =
     document.querySelector("#settingsModal .settingsBody .controls") ||
     document.querySelector(".settingsBody .controls") ||
     null;
+
   if (!host) return null;
 
-  btn = document.createElement("button");
+  const btn = document.createElement("button");
   btn.id = "resetCacheBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
@@ -158,7 +190,7 @@ let strongMode = false;
 
 let history = loadHistory();
 
-let minuteData = {}; // minute -> {symbol: [{ms,quote}]}
+let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -177,8 +209,10 @@ let lastMinuteSeenBySymbol = {};
 
 // modal chart
 let modalCurrentItem = null;
+
+// LIVE control (modal)
 let modalLiveOn = false;
-let modalRafPending = false;
+let modalLiveRaf = null;
 
 /* =========================
    Assets
@@ -226,14 +260,12 @@ function saveLowPowerMode() {
     localStorage.setItem(LOWPOWER_KEY, lowPowerMode ? "1" : "0");
   } catch {}
 }
-
 function getUiIntervalMs() {
   return lowPowerMode ? UI_INTERVAL_LOW_MS : UI_INTERVAL_NORMAL_MS;
 }
 function getHistoryCountMax() {
   return lowPowerMode ? HISTORY_COUNT_MAX_LOW : HISTORY_COUNT_MAX_NORMAL;
 }
-
 function startUiTimers() {
   if (uiTimer) clearInterval(uiTimer);
   uiTimer = setInterval(() => {
@@ -243,8 +275,29 @@ function startUiTimers() {
 }
 
 function ensureLowPowerButton() {
-  let btn = document.getElementById("lowPowerBtn");
-  if (btn) return btn;
+  // si existe en HTML o quedó duplicado
+  const existing = dedupeById("lowPowerBtn");
+  if (existing) {
+    existing.onclick = () => {
+      lowPowerMode = !lowPowerMode;
+      saveLowPowerMode();
+      applyLowPowerModeUI();
+
+      // wakeLock se declara más abajo, pero puede existir
+      if (lowPowerMode && wakeLock) {
+        wakeLock.release().catch(() => {});
+        wakeLock = null;
+        if (wakeBtn) {
+          wakeBtn.textContent = "🔓 Pantalla activa";
+          wakeBtn.classList.remove("active");
+        }
+      }
+      try {
+        if (ws && ws.readyState === 1) ws.close();
+      } catch {}
+    };
+    return existing;
+  }
 
   const host =
     document.querySelector(".topControls") ||
@@ -253,7 +306,7 @@ function ensureLowPowerButton() {
     document.querySelector("#settingsModal .settingsBody .controls") ||
     document.body;
 
-  btn = document.createElement("button");
+  const btn = document.createElement("button");
   btn.id = "lowPowerBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
@@ -263,7 +316,6 @@ function ensureLowPowerButton() {
     saveLowPowerMode();
     applyLowPowerModeUI();
 
-    // Si activás bajo consumo y estaba el wakeLock prendido, lo soltamos
     if (lowPowerMode && wakeLock) {
       wakeLock.release().catch(() => {});
       wakeLock = null;
@@ -273,7 +325,6 @@ function ensureLowPowerButton() {
       }
     }
 
-    // reconexión limpia
     try {
       if (ws && ws.readyState === 1) ws.close();
     } catch {}
@@ -328,18 +379,6 @@ function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
 
-function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-function cssEscape(s) {
-  return String(s).replace(/"/g, '\\"');
-}
-
 function isHit(item) {
   if (!item || !item.nextOutcome) return false;
   return (
@@ -355,6 +394,18 @@ function computeHitsCount() {
 function updateCounter() {
   if (counterEl) counterEl.textContent = `Señales: ${history.length}`;
   if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${computeHitsCount()}`;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+function cssEscape(s) {
+  return String(s).replace(/"/g, '\\"');
 }
 
 /* =========================
@@ -497,8 +548,11 @@ async function exportVotedSignals() {
 }
 
 function ensureExportButton() {
-  let btn = document.getElementById("exportVotedBtn");
-  if (btn) return btn;
+  const existing = dedupeById("exportVotedBtn");
+  if (existing) {
+    existing.onclick = exportVotedSignals;
+    return existing;
+  }
 
   const host =
     document.querySelector("#settingsModal .settingsBody .controls") ||
@@ -507,7 +561,7 @@ function ensureExportButton() {
 
   if (!host) return null;
 
-  btn = document.createElement("button");
+  const btn = document.createElement("button");
   btn.id = "exportVotedBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
@@ -515,13 +569,9 @@ function ensureExportButton() {
   btn.title = "Copia al portapapeles / descarga JSON con señales like/dislike";
   host.appendChild(btn);
 
+  btn.onclick = exportVotedSignals;
   return btn;
 }
-(function initExportVoted() {
-  const btn = ensureExportButton();
-  if (!btn) return;
-  btn.onclick = exportVotedSignals;
-})();
 
 /* =========================
    Theme
@@ -679,538 +729,6 @@ function showNotification(symbol, direction, modeLabel) {
 }
 
 /* =========================
-   Tiempo/minuto — helpers robustos ✅
-========================= */
-function getCurrentMinuteSafe() {
-  // ✅ si ya tenemos minuto sincronizado por ticks, usarlo
-  if (typeof currentMinuteStartMs === "number" && currentMinuteStartMs) {
-    return Math.floor(currentMinuteStartMs / 60000);
-  }
-  // ✅ fallback: si aún no llegó un tick, usar reloj local
-  return Math.floor(Date.now() / 60000);
-}
-
-function isItemMinuteOpen(item) {
-  if (!item) return false;
-  const nowMin = getCurrentMinuteSafe();
-  return item.minute === nowMin;
-}
-
-/* =========================
-   Chart modal LIVE + Trade row
-========================= */
-function ensureModalTradeRow() {
-  if (!modalFooterEl) return;
-
-  let row = document.getElementById("modalTradeRow");
-  if (row) return row;
-
-  row = document.createElement("div");
-  row.id = "modalTradeRow";
-  row.className = "tradeRow";
-
-  // LIVE toggle
-  const liveBtn = document.createElement("button");
-  liveBtn.id = "modalLiveBtn";
-  liveBtn.type = "button";
-  liveBtn.className = "btn btnGhost";
-  liveBtn.setAttribute("aria-pressed", "false");
-  liveBtn.textContent = "📡 LIVE OFF";
-  liveBtn.title = "LIVE: redibuja con ticks del WS (solo minuto actual)";
-  liveBtn.onclick = () => {
-    setModalLive(!modalLiveOn);
-  };
-
-  // BUY CALL
-  const buyCall = document.createElement("button");
-  buyCall.id = "modalBuyCallBtn";
-  buyCall.type = "button";
-  buyCall.className = "btn";
-  buyCall.textContent = "🟢 COMPRAR";
-  buyCall.title = "CALL 1m (DEMO)";
-
-  // SELL PUT
-  const buyPut = document.createElement("button");
-  buyPut.id = "modalBuyPutBtn";
-  buyPut.type = "button";
-  buyPut.className = "btn";
-  buyPut.textContent = "🔴 VENDER";
-  buyPut.title = "PUT 1m (DEMO)";
-
-  buyCall.onclick = async () => {
-    buyCall.disabled = true;
-    try {
-      const symbol = modalCurrentItem?.symbol || getDefaultTradeSymbol();
-      if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
-      const r = await buyOneClick("CALL", symbol);
-      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
-      if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
-    } catch (e) {
-      if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
-    } finally {
-      buyCall.disabled = false;
-    }
-  };
-
-  buyPut.onclick = async () => {
-    buyPut.disabled = true;
-    try {
-      const symbol = modalCurrentItem?.symbol || getDefaultTradeSymbol();
-      if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
-      const r = await buyOneClick("PUT", symbol);
-      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
-      if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
-    } catch (e) {
-      if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
-    } finally {
-      buyPut.disabled = false;
-    }
-  };
-
-  row.appendChild(buyCall);
-  row.appendChild(buyPut);
-  row.appendChild(liveBtn);
-
-  // Insertar arriba del botón "Abrir Deriv" (si existe)
-  const openBtn = document.getElementById("modalOpenDerivBtn");
-  if (openBtn && openBtn.parentElement === modalFooterEl) {
-    modalFooterEl.insertBefore(row, openBtn);
-  } else {
-    modalFooterEl.appendChild(row);
-  }
-
-  return row;
-}
-
-function setModalLive(on) {
-  modalLiveOn = !!on;
-  const b = document.getElementById("modalLiveBtn");
-  if (b) {
-    b.setAttribute("aria-pressed", modalLiveOn ? "true" : "false");
-    b.textContent = modalLiveOn ? "📡 LIVE ON" : "📡 LIVE OFF";
-  }
-}
-
-function requestModalRedraw() {
-  if (modalRafPending) return;
-  modalRafPending = true;
-  requestAnimationFrame(() => {
-    modalRafPending = false;
-    drawChartFromCurrent();
-  });
-}
-
-function drawChartFromCurrent() {
-  if (!modalCurrentItem) return;
-  const m = modalCurrentItem.minute;
-  const s = modalCurrentItem.symbol;
-
-  // prioridad: si el item tiene ticks (rehidratado o guardado)
-  let ticks = Array.isArray(modalCurrentItem.ticks) ? modalCurrentItem.ticks : [];
-
-  // si estamos en LIVE (minuto actual), usar minuteData en tiempo real
-  if (!modalCurrentItem.minuteComplete && isItemMinuteOpen(modalCurrentItem)) {
-    const live = minuteData?.[m]?.[s];
-    if (Array.isArray(live) && live.length >= 2) ticks = live;
-  }
-
-  drawDerivLikeChart(minuteCanvas, ticks || []);
-}
-
-/* =========================
-   Modal open/close
-========================= */
-function openChartModal(item) {
-  modalCurrentItem = item;
-  if (!chartModal || !modalTitle || !modalSub) return;
-
-  ensureModalTradeRow();
-
-  const modeLabel = item.mode || "NORMAL";
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${modeLabel}]`;
-  modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
-
-  chartModal.classList.remove("hidden");
-  chartModal.setAttribute("aria-hidden", "false");
-
-  // ✅ Live default robusto: si es del minuto actual y no cerró => LIVE ON
-  const shouldLive = !item.minuteComplete && isItemMinuteOpen(item);
-  setModalLive(shouldLive);
-
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      drawChartFromCurrent();
-    })
-  );
-}
-
-function closeChartModal() {
-  if (!chartModal) return;
-  chartModal.classList.add("hidden");
-  chartModal.setAttribute("aria-hidden", "true");
-  modalCurrentItem = null;
-  setModalLive(false);
-}
-
-if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
-if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    closeChartModal();
-    closeSettings();
-  }
-});
-
-if (modalOpenDerivBtn)
-  modalOpenDerivBtn.onclick = () => {
-    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
-  };
-
-window.addEventListener("resize", () => {
-  if (!chartModal || chartModal.classList.contains("hidden")) return;
-  requestModalRedraw();
-});
-
-/* =========================
-   Canvas chart (Deriv-like)
-========================= */
-function drawDerivLikeChart(canvas, ticks) {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const cssW = canvas.clientWidth || 1,
-    cssH = canvas.clientHeight || 1;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(cssW * dpr);
-  canvas.height = Math.floor(cssH * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  const w = cssW,
-    h = cssH;
-  ctx.clearRect(0, 0, w, h);
-  ctx.globalAlpha = 0.18;
-  ctx.fillStyle = "rgba(255,255,255,0.06)";
-  ctx.fillRect(0, 0, w, h);
-  ctx.globalAlpha = 1;
-
-  if (!ticks || ticks.length < 2) return;
-
-  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
-  const last = pts[pts.length - 1];
-  if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
-
-  const quotes = pts.map((p) => p.quote);
-  let min = Math.min(...quotes),
-    max = Math.max(...quotes);
-  let range = max - min;
-  if (range < 1e-9) range = 1e-9;
-  const pad = range * 0.08;
-  min -= pad;
-  max += pad;
-
-  const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
-  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
-
-  // grid
-  ctx.globalAlpha = 0.22;
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
-  ctx.lineWidth = 1;
-  for (let i = 1; i <= 4; i++) {
-    const y = (h / 5) * i;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
-
-  // 30s marker
-  const x30 = xOf(30000);
-  ctx.globalAlpha = 0.55;
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x30, 10);
-  ctx.lineTo(x30, h - 20);
-  ctx.stroke();
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "rgba(255,255,255,0.75)";
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
-  ctx.globalAlpha = 1;
-
-  // area fill
-  ctx.beginPath();
-  ctx.moveTo(xOf(pts[0].ms), h - 20);
-  for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
-  ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
-  ctx.closePath();
-  ctx.globalAlpha = 0.18;
-  ctx.fillStyle = "rgba(255,255,255,0.85)";
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  // line
-  ctx.strokeStyle = "rgba(255,255,255,0.95)";
-  ctx.lineWidth = 2;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  pts.forEach((p, i) => {
-    const x = xOf(p.ms),
-      y = yOf(p.quote);
-    if (!i) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-
-  // last dot
-  const lx = xOf(pts[pts.length - 1].ms),
-    ly = yOf(pts[pts.length - 1].quote);
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
-  ctx.beginPath();
-  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-}
-
-/* =========================
-   Row helpers
-========================= */
-function updateRowChartBtn(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const btn = row.querySelector(".chartBtn");
-  if (!btn) return;
-
-  // ✅ habilitar si está completo O si es minuto actual (para LIVE)
-  const canOpen = !!item.minuteComplete || isItemMinuteOpen(item);
-  btn.disabled = !canOpen;
-  btn.classList.toggle("locked", !canOpen);
-
-  if (canOpen) {
-    btn.innerHTML = CHART_ICON_SVG;
-    btn.title = item.minuteComplete ? "Ver gráfico del minuto (ticks 0–60)" : "Ver gráfico LIVE (minuto actual)";
-  } else {
-    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto…";
-  }
-}
-
-function updateRowHitIcon(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return false;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return false;
-  const show = isHit(item);
-  hit.classList.toggle("hidden", !show);
-  hit.title = show ? "Acertó" : "";
-  return show;
-}
-
-function animateHitPop(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return;
-  hit.classList.remove("pop");
-  void hit.offsetWidth;
-  hit.classList.add("pop");
-  setTimeout(() => hit.classList.remove("pop"), 260);
-}
-
-function animateFailShake(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const arrow = row.querySelector(".nextArrow");
-  if (!arrow) return;
-  arrow.classList.remove("failShake");
-  void arrow.offsetWidth;
-  arrow.classList.add("failShake");
-  setTimeout(() => arrow.classList.remove("failShake"), 260);
-}
-
-function updateRowNextArrow(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const el = row.querySelector(".nextArrow");
-  if (!el) return;
-
-  if (item.nextOutcome === "up") {
-    el.textContent = "⬆️";
-    el.className = "nextArrow up";
-    el.title = "Próxima vela: alcista";
-  } else if (item.nextOutcome === "down") {
-    el.textContent = "⬇️";
-    el.className = "nextArrow down";
-    el.title = "Próxima vela: bajista";
-  } else if (item.nextOutcome === "flat") {
-    el.textContent = "➖";
-    el.className = "nextArrow flat";
-    el.title = "Próxima vela: plana";
-  } else {
-    el.textContent = "⏳";
-    el.className = "nextArrow pending";
-    el.title = "Próxima vela: esperando…";
-  }
-}
-
-function setNextOutcome(item, outcome) {
-  item.nextOutcome = outcome;
-  saveHistory(history);
-
-  updateRowNextArrow(item);
-  const ok = updateRowHitIcon(item);
-  updateCounter();
-  rebuildFeedbackFromHistory();
-
-  if (ok) animateHitPop(item);
-  else animateFailShake(item);
-}
-
-/* =========================
-   Build row
-========================= */
-function buildRow(item) {
-  const row = document.createElement("div");
-  row.className = "row " + (item.direction === "CALL" ? "dir-call" : "dir-put");
-  if (item.vote) row.classList.add("voted");
-  row.dataset.id = item.id;
-
-  const derivUrl = makeDerivTraderUrl(item.symbol);
-  const modeLabel = item.mode || "NORMAL";
-
-  row.innerHTML = `
-    <div class="row-main">
-      <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <button class="chartBtn" type="button"></button>
-      <span class="hitIcon hidden" aria-label="Acertó">✓</span>
-      <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
-    </div>
-    <div class="row-actions">
-      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
-      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
-      <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
-    </div>
-  `;
-
-  row.querySelector(".row-text").onclick = () => {
-    window.location.href = derivUrl;
-  };
-
-  const chartBtn = row.querySelector(".chartBtn");
-  chartBtn.onclick = (e) => {
-    e.stopPropagation();
-    // ✅ permitir abrir si está completo o si es minuto actual
-    if (item.minuteComplete || isItemMinuteOpen(item)) openChartModal(item);
-  };
-  updateRowChartBtn(item);
-
-  updateRowHitIcon(item);
-
-  if (item.vote) {
-    const likeBtn = row.querySelector('button[data-v="like"]');
-    const disBtn = row.querySelector('button[data-v="dislike"]');
-    if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
-    if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
-  }
-
-  row.querySelectorAll("button[data-v]").forEach((btn) => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (item.vote) return;
-
-      item.vote = btn.dataset.v;
-      item.comment = row.querySelector(".row-comment").value || "";
-
-      row.classList.add("voted");
-      btn.classList.add("selected");
-
-      saveHistory(history);
-      rebuildFeedbackFromHistory();
-
-      row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
-    };
-  });
-
-  const input = row.querySelector(".row-comment");
-  input.addEventListener("blur", () => {
-    item.comment = input.value || "";
-    saveHistory(history);
-    rebuildFeedbackFromHistory();
-  });
-
-  updateRowNextArrow(item);
-  return row;
-}
-
-/* =========================
-   Render
-========================= */
-function renderHistory() {
-  if (!signalsEl) return;
-  signalsEl.innerHTML = "";
-
-  for (const it of history) if (!it.mode) it.mode = "NORMAL";
-  saveHistory(history);
-
-  updateCounter();
-  rebuildFeedbackFromHistory();
-
-  for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
-}
-
-/* =========================
-   Tick health + Countdown
-========================= */
-function updateTickHealthUI() {
-  if (!tickHealthEl) return;
-
-  const base =
-    (typeof lastTickLocalNowMs === "number" && lastTickLocalNowMs) ||
-    (typeof lastTickEpochMs === "number" && lastTickEpochMs) ||
-    null;
-
-  if (!base) {
-    tickHealthEl.textContent = "Último tick: —";
-    return;
-  }
-
-  const ageSec = Math.max(0, Math.floor((Date.now() - base) / 1000));
-  tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
-}
-
-function updateCountdownUI() {
-  if (!countdownEl) return;
-
-  const textEl = document.getElementById("countdownText") || countdownEl;
-
-  if (!currentMinuteStartMs) {
-    if (textEl) textEl.textContent = "⏱️ 60";
-    countdownEl.classList.remove("urgent", "warn", "tick");
-    return;
-  }
-
-  const serverNow = Date.now() + (serverOffsetMs || 0);
-  const msInMinute = (serverNow - currentMinuteStartMs) % 60000;
-
-  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-  const v = String(remaining).padStart(2, "0");
-  if (textEl) textEl.textContent = `⏱️ ${v}`;
-
-  const urgent = remaining <= 5;
-  const warn = !urgent && remaining <= 15;
-
-  countdownEl.classList.toggle("urgent", urgent);
-  countdownEl.classList.toggle("warn", warn);
-
-  countdownEl.classList.remove("tick");
-  void countdownEl.offsetWidth;
-  countdownEl.classList.add("tick");
-}
-
-/* =========================
    WS requests (req_id)
 ========================= */
 let reqSeq = 1;
@@ -1230,7 +748,7 @@ function wsRequest(payload) {
 }
 
 /* =========================
-   DEMO Token + Stake UI en Config ✅ (sin duplicar)
+   DEMO 1-click trade (token desde config)
 ========================= */
 function getDerivToken() {
   try {
@@ -1258,83 +776,6 @@ function setTradeStake(n) {
   } catch {}
 }
 
-function ensureTokenConfigUI() {
-  // si ya existe, no duplicar
-  if (document.getElementById("derivTokenWrap")) return;
-
-  const host =
-    document.querySelector("#settingsModal .settingsBody") ||
-    document.querySelector(".settingsBody") ||
-    null;
-  if (!host) return;
-
-  const wrap = document.createElement("div");
-  wrap.id = "derivTokenWrap";
-  wrap.style.marginTop = "10px";
-
-  wrap.innerHTML = `
-    <div class="h3" style="margin:10px 0 8px;">Trade DEMO (opcional)</div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-      <input id="derivTokenInput" class="row-comment" style="flex:1; min-width:220px;" placeholder="TOKEN DEMO (Read + Trade)" />
-      <button id="derivTokenSaveBtn" class="btn btnGhost" type="button">💾 Guardar</button>
-      <button id="derivTokenClearBtn" class="btn btnGhost" type="button">🗑️ Borrar</button>
-    </div>
-    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center;">
-      <button id="stakeBtn" class="btn btnGhost" type="button">💵 Stake: --</button>
-      <div style="font-size:12px; color:var(--muted); line-height:1.3;">
-        Se guarda en el dispositivo. Si no querés usar trade, dejalo vacío.
-      </div>
-    </div>
-  `;
-
-  host.appendChild(wrap);
-
-  const input = document.getElementById("derivTokenInput");
-  const saveBtn = document.getElementById("derivTokenSaveBtn");
-  const clearBtn = document.getElementById("derivTokenClearBtn");
-  const stakeBtn = document.getElementById("stakeBtn");
-
-  if (input) input.value = getDerivToken();
-
-  const paintStake = () => {
-    const s = getTradeStake();
-    if (stakeBtn) stakeBtn.textContent = `💵 Stake: ${s} USD`;
-  };
-  paintStake();
-
-  if (saveBtn)
-    saveBtn.onclick = () => {
-      const v = (input?.value || "").trim();
-      setDerivToken(v);
-      alert(v ? "✅ Token guardado" : "✅ Token vacío");
-      resetAuthState();
-    };
-
-  if (clearBtn)
-    clearBtn.onclick = () => {
-      if (!confirm("¿Borrar el token guardado?")) return;
-      setDerivToken("");
-      if (input) input.value = "";
-      alert("🗑️ Token borrado");
-      resetAuthState();
-    };
-
-  if (stakeBtn)
-    stakeBtn.onclick = () => {
-      const cur = getTradeStake();
-      const v = prompt(`Stake DEMO (USD). Actual: ${cur}`, String(cur));
-      if (v == null) return;
-      const n = Number(v);
-      if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
-      setTradeStake(n);
-      paintStake();
-      alert(`✅ Stake guardado: ${n} USD`);
-    };
-}
-
-/* =========================
-   DEMO 1-click trade
-========================= */
 let isAuthorized = false;
 let authorizeInFlight = null;
 let tradeInFlight = false;
@@ -1347,7 +788,7 @@ function resetAuthState() {
 
 async function ensureAuthorized() {
   const token = getDerivToken();
-  if (!token) throw new Error("No hay TOKEN DEMO (cargalo en Configuración)");
+  if (!token) throw new Error("Pegá el TOKEN DEMO en Configuración");
 
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
@@ -1398,6 +839,88 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     return res;
   } finally {
     tradeInFlight = false;
+  }
+}
+
+/* =========================
+   FIX: No inyectar token/stake UI (y dedupe si quedó duplicado)
+   - Reusa lo que ya tengas en tu HTML
+   - Si tus IDs son distintos, igual intenta dedupe por placeholder
+========================= */
+function wireTokenStakeConfig() {
+  // Si en tu HTML existen estos IDs, los usamos.
+  const tokenInput =
+    dedupeById("derivTokenInput") ||
+    dedupeById("tokenDerivInput") ||
+    dedupeBySelector('input[placeholder*="token"][placeholder*="DEMO" i]');
+
+  const tokenSave =
+    dedupeById("derivTokenSaveBtn") ||
+    dedupeById("tokenDerivSaveBtn") ||
+    dedupeBySelector('button[id*="Token"][id*="Save" i]');
+
+  const tokenClear =
+    dedupeById("derivTokenClearBtn") ||
+    dedupeById("tokenDerivClearBtn") ||
+    dedupeBySelector('button[id*="Token"][id*="Clear" i]');
+
+  if (tokenInput) tokenInput.value = getDerivToken();
+
+  if (tokenSave && tokenInput) {
+    tokenSave.onclick = () => {
+      const v = (tokenInput.value || "").trim();
+      setDerivToken(v);
+      resetAuthState();
+      alert(v ? "✅ Token guardado" : "✅ Token vacío");
+    };
+  }
+
+  if (tokenClear) {
+    tokenClear.onclick = () => {
+      if (!confirm("¿Borrar el token guardado?")) return;
+      setDerivToken("");
+      resetAuthState();
+      if (tokenInput) tokenInput.value = "";
+      alert("🗑️ Token borrado");
+    };
+  }
+
+  const stakeInput =
+    dedupeById("stakeInput") ||
+    dedupeById("tradeStakeInput") ||
+    dedupeBySelector('input[placeholder*="Stake" i]');
+
+  const stakeSave =
+    dedupeById("stakeSaveBtn") ||
+    dedupeById("tradeStakeSaveBtn") ||
+    dedupeBySelector('button[id*="Stake"][id*="Save" i]');
+
+  const stakeDefault =
+    dedupeById("stakeDefaultBtn") ||
+    dedupeById("tradeStakeDefaultBtn") ||
+    dedupeBySelector('button[id*="Stake"][id*="Default" i]');
+
+  const paintStake = () => {
+    if (stakeInput) stakeInput.value = String(getTradeStake().toFixed(2));
+  };
+  paintStake();
+
+  if (stakeSave && stakeInput) {
+    stakeSave.onclick = () => {
+      const n = Number(stakeInput.value || "");
+      if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
+      setTradeStake(n);
+      paintStake();
+      alert("✅ Stake guardado");
+    };
+  }
+
+  if (stakeDefault) {
+    stakeDefault.onclick = () => {
+      setTradeStake(DEFAULT_STAKE);
+      paintStake();
+      alert("↩️ Stake default aplicado");
+    };
   }
 }
 
@@ -1558,7 +1081,7 @@ async function rehydrateHistoryOnBoot() {
   if (!ws || ws.readyState !== 1) return;
 
   const slice = history.slice(-REHYDRATE_MAX_ITEMS);
-  const nowMin = getCurrentMinuteSafe();
+  const nowMin = getServerMinute();
 
   const minutes = [...new Set(slice.map((it) => it.minute))]
     .filter((m) => m < nowMin)
@@ -1623,7 +1146,601 @@ async function rehydrateHistoryOnBoot() {
 }
 
 /* =========================
-   Finalize minute (corta LIVE al 60) ✅
+   Server minute helpers
+========================= */
+function getServerNowMs() {
+  return Date.now() + (serverOffsetMs || 0);
+}
+function getServerMinute() {
+  return Math.floor(getServerNowMs() / 60000);
+}
+
+/* =========================
+   Tick health + Countdown
+========================= */
+function updateTickHealthUI() {
+  if (!tickHealthEl) return;
+
+  const base =
+    (typeof lastTickLocalNowMs === "number" && lastTickLocalNowMs) ||
+    (typeof lastTickEpochMs === "number" && lastTickEpochMs) ||
+    null;
+
+  if (!base) {
+    tickHealthEl.textContent = "Último tick: —";
+    return;
+  }
+
+  const ageSec = Math.max(0, Math.floor((Date.now() - base) / 1000));
+  tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
+}
+
+function updateCountdownUI() {
+  if (!countdownEl) return;
+
+  const textEl = document.getElementById("countdownText") || countdownEl;
+
+  if (!currentMinuteStartMs) {
+    if (textEl) textEl.textContent = "⏱️ 60";
+    countdownEl.classList.remove("urgent", "warn", "tick");
+    return;
+  }
+
+  const serverNow = getServerNowMs();
+  const msInMinute = (serverNow - currentMinuteStartMs) % 60000;
+
+  const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+  const v = String(remaining).padStart(2, "0");
+  if (textEl) textEl.textContent = `⏱️ ${v}`;
+
+  const urgent = remaining <= 5;
+  const warn = !urgent && remaining <= 15;
+
+  countdownEl.classList.toggle("urgent", urgent);
+  countdownEl.classList.toggle("warn", warn);
+
+  countdownEl.classList.remove("tick");
+  void countdownEl.offsetWidth;
+  countdownEl.classList.add("tick");
+}
+
+/* =========================
+   Row helpers (FIX candado)
+========================= */
+function isItemCurrentMinute(item) {
+  if (!item) return false;
+  const cur = getServerMinute();
+  return item.minute === cur;
+}
+
+function updateRowChartBtn(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const btn = row.querySelector(".chartBtn");
+  if (!btn) return;
+
+  const canLive = isItemCurrentMinute(item) && !item.minuteComplete;
+  const ready = !!item.minuteComplete;
+
+  // ✅ Antes: solo ready => ahora: ready OR canLive
+  btn.disabled = !(ready || canLive);
+  btn.classList.toggle("locked", !(ready || canLive));
+
+  if (ready || canLive) {
+    btn.innerHTML = CHART_ICON_SVG;
+    btn.title = canLive ? "Ver gráfico LIVE (minuto actual)" : "Ver gráfico del minuto (ticks 0–60)";
+  } else {
+    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
+    btn.title = "Esperando cierre del minuto…";
+  }
+}
+
+function updateRowHitIcon(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return false;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return false;
+  const show = isHit(item);
+  hit.classList.toggle("hidden", !show);
+  hit.title = show ? "Acertó" : "";
+  return show;
+}
+
+function animateHitPop(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return;
+  hit.classList.remove("pop");
+  void hit.offsetWidth;
+  hit.classList.add("pop");
+  setTimeout(() => hit.classList.remove("pop"), 260);
+}
+
+function animateFailShake(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const arrow = row.querySelector(".nextArrow");
+  if (!arrow) return;
+  arrow.classList.remove("failShake");
+  void arrow.offsetWidth;
+  arrow.classList.add("failShake");
+  setTimeout(() => arrow.classList.remove("failShake"), 260);
+}
+
+function updateRowNextArrow(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const el = row.querySelector(".nextArrow");
+  if (!el) return;
+
+  if (item.nextOutcome === "up") {
+    el.textContent = "⬆️";
+    el.className = "nextArrow up";
+    el.title = "Próxima vela: alcista";
+  } else if (item.nextOutcome === "down") {
+    el.textContent = "⬇️";
+    el.className = "nextArrow down";
+    el.title = "Próxima vela: bajista";
+  } else if (item.nextOutcome === "flat") {
+    el.textContent = "➖";
+    el.className = "nextArrow flat";
+    el.title = "Próxima vela: plana";
+  } else {
+    el.textContent = "⏳";
+    el.className = "nextArrow pending";
+    el.title = "Próxima vela: esperando…";
+  }
+}
+
+function setNextOutcome(item, outcome) {
+  item.nextOutcome = outcome;
+  saveHistory(history);
+
+  updateRowNextArrow(item);
+  const ok = updateRowHitIcon(item);
+  updateCounter();
+
+  rebuildFeedbackFromHistory();
+
+  if (ok) animateHitPop(item);
+  else animateFailShake(item);
+}
+
+/* =========================
+   Build row
+========================= */
+function buildRow(item) {
+  const row = document.createElement("div");
+  row.className = "row " + (item.direction === "CALL" ? "dir-call" : "dir-put");
+  if (item.vote) row.classList.add("voted");
+  row.dataset.id = item.id;
+
+  const derivUrl = makeDerivTraderUrl(item.symbol);
+  const modeLabel = item.mode || "NORMAL";
+
+  row.innerHTML = `
+    <div class="row-main">
+      <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
+      <button class="chartBtn" type="button"></button>
+      <span class="hitIcon hidden" aria-label="Acertó">✓</span>
+      <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
+    </div>
+    <div class="row-actions">
+      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
+      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
+      <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
+    </div>
+  `;
+
+  row.querySelector(".row-text").onclick = () => {
+    window.location.href = derivUrl;
+  };
+
+  const chartBtn = row.querySelector(".chartBtn");
+  chartBtn.onclick = (e) => {
+    e.stopPropagation();
+    openChartModal(item); // ✅ ahora puede abrir si es LIVE minuto actual
+  };
+  updateRowChartBtn(item);
+
+  updateRowHitIcon(item);
+
+  if (item.vote) {
+    const likeBtn = row.querySelector('button[data-v="like"]');
+    const disBtn = row.querySelector('button[data-v="dislike"]');
+    if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
+    if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
+  }
+
+  row.querySelectorAll("button[data-v]").forEach((btn) => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (item.vote) return;
+
+      item.vote = btn.dataset.v;
+      item.comment = row.querySelector(".row-comment").value || "";
+
+      row.classList.add("voted");
+      btn.classList.add("selected");
+
+      saveHistory(history);
+      rebuildFeedbackFromHistory();
+
+      row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
+    };
+  });
+
+  const input = row.querySelector(".row-comment");
+  input.addEventListener("blur", () => {
+    item.comment = input.value || "";
+    saveHistory(history);
+    rebuildFeedbackFromHistory();
+  });
+
+  updateRowNextArrow(item);
+  return row;
+}
+
+/* =========================
+   Render
+========================= */
+function renderHistory() {
+  if (!signalsEl) return;
+  signalsEl.innerHTML = "";
+
+  for (const it of history) if (!it.mode) it.mode = "NORMAL";
+  saveHistory(history);
+
+  updateCounter();
+  rebuildFeedbackFromHistory();
+
+  for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
+}
+
+/* =========================
+   Canvas chart
+========================= */
+function drawDerivLikeChart(canvas, ticks) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1,
+    cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW,
+    h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
+
+  if (!ticks || ticks.length < 2) return;
+
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+
+  // asegura cierre visual a 60s para que se vea como Deriv
+  const last = pts[pts.length - 1];
+  if (last.ms < 60000) pts.push({ ms: 60000, quote: last.quote });
+
+  const quotes = pts.map((p) => p.quote);
+  let min = Math.min(...quotes),
+    max = Math.max(...quotes);
+  let range = max - min;
+  if (range < 1e-9) range = 1e-9;
+  const pad = range * 0.08;
+  min -= pad;
+  max += pad;
+
+  const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
+  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
+
+  // grid
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) {
+    const y = (h / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // 30s marker
+  const x30 = xOf(30000);
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x30, 10);
+  ctx.lineTo(x30, h - 20);
+  ctx.stroke();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
+  ctx.globalAlpha = 1;
+
+  // area
+  ctx.beginPath();
+  ctx.moveTo(xOf(pts[0].ms), h - 20);
+  for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
+  ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
+  ctx.closePath();
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // line
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = xOf(p.ms),
+      y = yOf(p.quote);
+    if (!i) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // last dot
+  const lx = xOf(pts[pts.length - 1].ms),
+    ly = yOf(pts[pts.length - 1].quote);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/* =========================
+   Modal LIVE logic
+========================= */
+function stopModalLive() {
+  modalLiveOn = false;
+  if (modalLiveRaf) cancelAnimationFrame(modalLiveRaf);
+  modalLiveRaf = null;
+
+  const liveBtn = document.getElementById("modalLiveBtn");
+  if (liveBtn) {
+    liveBtn.setAttribute("aria-pressed", "false");
+    liveBtn.textContent = "📡 LIVE OFF";
+  }
+}
+
+function canModalLive(item) {
+  if (!item) return false;
+  // solo minuto actual y aún no completo
+  return isItemCurrentMinute(item) && !item.minuteComplete;
+}
+
+function setModalLive(on) {
+  if (!modalCurrentItem) return;
+
+  if (on) {
+    if (!canModalLive(modalCurrentItem)) {
+      stopModalLive();
+      return;
+    }
+    modalLiveOn = true;
+  } else {
+    stopModalLive();
+    return;
+  }
+
+  const liveBtn = document.getElementById("modalLiveBtn");
+  if (liveBtn) {
+    liveBtn.setAttribute("aria-pressed", "true");
+    liveBtn.textContent = "📡 LIVE ON";
+  }
+
+  // primer draw inmediato
+  requestAnimationFrame(() => redrawModalChart(true));
+}
+
+function redrawModalChart(force = false) {
+  if (!modalCurrentItem || !minuteCanvas) return;
+  const item = modalCurrentItem;
+
+  // si ya cerró el minuto mientras estábamos en LIVE -> cortar
+  if (modalLiveOn && !canModalLive(item)) {
+    stopModalLive();
+  }
+
+  // ticks fuente
+  let ticks = item.ticks || [];
+  if (modalLiveOn) {
+    const d = minuteData[item.minute]?.[item.symbol] || [];
+    if (d && d.length >= 2) ticks = d;
+  }
+
+  if (force || modalLiveOn) {
+    drawDerivLikeChart(minuteCanvas, ticks || []);
+    if (modalSub) {
+      const count = Array.isArray(ticks) ? ticks.length : 0;
+      modalSub.textContent = `${item.time} | ticks: ${count}${modalLiveOn ? " | LIVE" : ""}`;
+    }
+  }
+}
+
+/* =========================
+   Modal gráfico (FIX duplicados + LIVE OFF default)
+========================= */
+function ensureModalTradeRow() {
+  const footer = chartModal ? chartModal.querySelector(".modalFooter") : null;
+  if (!footer) return null;
+
+  // dedupe si quedó duplicado
+  let row = dedupeById("modalTradeRow");
+  if (row) return row;
+
+  // si el HTML ya trae botones, los dedupeamos y reusamos
+  const existingCall = dedupeById("modalBuyCallBtn");
+  const existingPut = dedupeById("modalBuyPutBtn");
+  const existingLive = dedupeById("modalLiveBtn");
+  const openBtn = dedupeById("modalOpenDerivBtn"); // existe en tu HTML
+
+  row = document.createElement("div");
+  row.id = "modalTradeRow";
+  row.className = "tradeRow";
+
+  // ordenar: COMPRAR, VENDER, LIVE
+  const callBtn =
+    existingCall ||
+    (() => {
+      const b = document.createElement("button");
+      b.id = "modalBuyCallBtn";
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = "🟢 COMPRAR";
+      return b;
+    })();
+
+  const putBtn =
+    existingPut ||
+    (() => {
+      const b = document.createElement("button");
+      b.id = "modalBuyPutBtn";
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = "🔴 VENDER";
+      return b;
+    })();
+
+  const liveBtn =
+    existingLive ||
+    (() => {
+      const b = document.createElement("button");
+      b.id = "modalLiveBtn";
+      b.type = "button";
+      b.className = "btn btnGhost";
+      b.setAttribute("aria-pressed", "false");
+      b.textContent = "📡 LIVE OFF";
+      return b;
+    })();
+
+  row.appendChild(callBtn);
+  row.appendChild(putBtn);
+  row.appendChild(liveBtn);
+
+  // insertar arriba de Abrir Deriv
+  if (openBtn && openBtn.parentElement === footer) footer.insertBefore(row, openBtn);
+  else footer.appendChild(row);
+
+  // handlers
+  liveBtn.onclick = () => setModalLive(!modalLiveOn);
+
+  callBtn.onclick = async () => {
+    callBtn.disabled = true;
+    try {
+      const symbol = modalCurrentItem?.symbol || getDefaultTradeSymbol();
+      if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
+      const r = await buyOneClick("CALL", symbol);
+      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+      if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
+    } finally {
+      callBtn.disabled = false;
+    }
+  };
+
+  putBtn.onclick = async () => {
+    putBtn.disabled = true;
+    try {
+      const symbol = modalCurrentItem?.symbol || getDefaultTradeSymbol();
+      if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
+      const r = await buyOneClick("PUT", symbol);
+      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+      if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
+    } finally {
+      putBtn.disabled = false;
+    }
+  };
+
+  return row;
+}
+
+function openChartModal(item) {
+  // ✅ se puede abrir si minuteComplete OR si es minuto actual (LIVE)
+  const canOpen = !!item?.minuteComplete || isItemCurrentMinute(item);
+  if (!canOpen) return;
+
+  modalCurrentItem = item;
+  stopModalLive(); // ✅ default OFF siempre al abrir
+  ensureModalTradeRow(); // ✅ dedupe e integra botones
+
+  if (!chartModal || !modalTitle || !modalSub) return;
+
+  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
+
+  const baseTicks =
+    item.minuteComplete && Array.isArray(item.ticks) && item.ticks.length >= 2
+      ? item.ticks
+      : minuteData[item.minute]?.[item.symbol] || item.ticks || [];
+
+  modalSub.textContent = `${item.time} | ticks: ${(baseTicks || []).length}`;
+
+  chartModal.classList.remove("hidden");
+  chartModal.setAttribute("aria-hidden", "false");
+
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      drawDerivLikeChart(minuteCanvas, baseTicks || []);
+      // LIVE solo habilitado si corresponde; si no, deshabilitamos el botón (visual)
+      const liveBtn = document.getElementById("modalLiveBtn");
+      if (liveBtn) {
+        const ok = canModalLive(item);
+        liveBtn.disabled = !ok;
+        liveBtn.title = ok ? "LIVE: redibuja con ticks del WS (solo minuto actual)" : "LIVE solo para el minuto actual";
+        liveBtn.setAttribute("aria-pressed", "false");
+        liveBtn.textContent = "📡 LIVE OFF";
+      }
+    })
+  );
+}
+
+function closeChartModal() {
+  if (!chartModal) return;
+  stopModalLive();
+  chartModal.classList.add("hidden");
+  chartModal.setAttribute("aria-hidden", "true");
+  modalCurrentItem = null;
+}
+
+if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
+if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeChartModal();
+    closeSettings();
+  }
+});
+if (modalOpenDerivBtn)
+  modalOpenDerivBtn.onclick = () => {
+    if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
+  };
+
+window.addEventListener("resize", () => {
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (modalCurrentItem) redrawModalChart(true);
+});
+
+/* =========================
+   Finalize minute (corta LIVE al cierre)
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
@@ -1658,11 +1775,10 @@ function finalizeMinute(minute) {
     }
     if (changed) saveHistory(history);
 
-    // ✅ si el modal estaba en ese minuto, congelar y cortar LIVE
+    // ✅ Si el modal está viendo ese minuto y acaba de completar => dibuja final y corta LIVE
     if (modalCurrentItem && modalCurrentItem.minute === minute) {
-      modalCurrentItem.minuteComplete = true;
-      setModalLive(false);
-      drawChartFromCurrent();
+      stopModalLive();
+      redrawModalChart(true);
     }
   })();
 
@@ -1671,7 +1787,7 @@ function finalizeMinute(minute) {
 }
 
 /* =========================
-   Tick flow (LIVE real por tick) ✅
+   Tick flow (LIVE: redibuja en cada tick)
 ========================= */
 function onTick(tick) {
   const epochMs = Math.round(Number(tick.epoch) * 1000);
@@ -1715,20 +1831,13 @@ function onTick(tick) {
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
-  // ✅ LIVE REAL: si modal abierto con mismo símbolo/minuto, cada tick redibuja
-  if (
-    modalCurrentItem &&
-    chartModal &&
-    !chartModal.classList.contains("hidden") &&
-    modalCurrentItem.symbol === symbol &&
-    modalCurrentItem.minute === minute &&
-    !modalCurrentItem.minuteComplete
-  ) {
-    // si es minuto actual, forzar LIVE ON
-    if (isItemMinuteOpen(modalCurrentItem) && !modalLiveOn) {
-      setModalLive(true);
-    }
-    requestModalRedraw();
+  // ✅ LIVE real-time: redibuja en cada tick (sin “esperar al final”)
+  if (modalLiveOn && modalCurrentItem && modalCurrentItem.minute === minute && modalCurrentItem.symbol === symbol) {
+    if (modalLiveRaf) cancelAnimationFrame(modalLiveRaf);
+    modalLiveRaf = requestAnimationFrame(() => {
+      modalLiveRaf = null;
+      redrawModalChart(true);
+    });
   }
 
   if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
@@ -1741,7 +1850,7 @@ function onTick(tick) {
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
-    if (getCurrentMinuteSafe() === minute) evaluateMinute(minute);
+    if (getServerMinute() === minute) evaluateMinute(minute);
   }, RETRY_DELAY_MS);
 }
 
@@ -1973,28 +2082,6 @@ function addSignal(minute, symbol, direction, ticks) {
 }
 
 /* =========================
-   Wake lock
-========================= */
-let wakeLock = null;
-if (wakeBtn)
-  wakeBtn.onclick = async () => {
-    try {
-      if (wakeLock) {
-        await wakeLock.release();
-        wakeLock = null;
-        wakeBtn.textContent = "🔓 Pantalla activa";
-        wakeBtn.classList.remove("active");
-      } else {
-        wakeLock = await navigator.wakeLock.request("screen");
-        wakeBtn.textContent = "🔒 Pantalla activa";
-        wakeBtn.classList.add("active");
-      }
-    } catch {
-      alert("No se pudo mantener la pantalla activa");
-    }
-  };
-
-/* =========================
    WebSocket
 ========================= */
 function connect() {
@@ -2007,7 +2094,9 @@ function connect() {
   }
 
   ws.onopen = () => {
-    resetAuthState();
+    try {
+      resetAuthState();
+    } catch {}
 
     if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
@@ -2033,7 +2122,6 @@ function connect() {
 
       if (data?.error) {
         if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
-        return;
       }
 
       if (data.tick) onTick(data.tick);
@@ -2047,7 +2135,9 @@ function connect() {
   };
 
   ws.onclose = (ev) => {
-    resetAuthState();
+    try {
+      resetAuthState();
+    } catch {}
 
     for (const [id, p] of pending.entries()) {
       clearTimeout(p.t);
@@ -2059,9 +2149,7 @@ function connect() {
     const reason = ev?.reason || "";
     if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`;
 
-    // en bajo consumo, si se cerró por background, no reconectamos hasta volver visible
     if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
-
     setTimeout(connect, 1500);
   };
 }
@@ -2091,6 +2179,28 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* =========================
+   Wake lock
+========================= */
+let wakeLock = null;
+if (wakeBtn)
+  wakeBtn.onclick = async () => {
+    try {
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeBtn.textContent = "🔒 Pantalla activa";
+        wakeBtn.classList.add("active");
+      }
+    } catch {
+      alert("No se pudo mantener la pantalla activa");
+    }
+  };
+
+/* =========================
    Start
 ========================= */
 loadLowPowerMode();
@@ -2101,7 +2211,9 @@ updateCountdownUI();
 ensureLowPowerButton();
 applyLowPowerModeUI();
 
-ensureTokenConfigUI();
-ensureResetCacheButton();
+wireTokenStakeConfig();   // ✅ usa tu UI y dedupea duplicados
+ensureResetCacheButton(); // ✅ dedupea si existe
+
+ensureExportButton();     // ✅ dedupea si existe
 
 connect();
