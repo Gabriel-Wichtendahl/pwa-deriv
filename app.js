@@ -30,7 +30,7 @@ const DEFAULT_DURATION = 1;
 const DEFAULT_DURATION_UNIT = "m";
 
 /* =========================
-   Low power mode
+   Low power mode 
 ========================= */
 let lowPowerMode = false;
 const LOWPOWER_KEY = "lowPowerMode_v1";
