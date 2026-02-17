@@ -1,12 +1,13 @@
-// app.js — V6.9.3 (Neon Pro) + Low Power + Export Voted + DEMO 1-Click Trade
-// + Modal LIVE por minuto de señal (se corta al cerrar minuto) + Token en Settings + Reset Cache/SW
-// ✅ FIX: candado NO bloquea click (chartBtn no se disablea)
-// ✅ FIX: LIVE usa el minuto de la señal (no el actual) y se apaga al cerrar el minuto
-// ✅ FIX: si abrís una señal vieja, LIVE arranca OFF
-// ✅ NUEVO: Token DEMO en Config (input + guardar + borrar) y stake
-// ✅ NUEVO: Botones COMPRAR/VENDER + LIVE dentro del modal gráfico
+// app.js — V6.9.4 (Neon Pro)
+// ✅ Modal gráfico LIVE manual (no auto)
+// ✅ LIVE funciona aun con candado (minuto incompleto)
+// ✅ LIVE se corta al cerrar el minuto del item (se congela)
+// ✅ Trade buttons en el modal (no inyecta arriba)
+// ✅ Token + Stake en Configuración (guardar/borrar)
+// ✅ Low Power Mode (UI interval + count max + WS close on background)
+// ✅ Export JSON (solo con voto) + Rehidratación historial + NextOutcome + Hits
 
-"use strict"; 
+"use strict";
 
 /* =========================
    Config
@@ -29,7 +30,7 @@ const HISTORY_TIMEOUT_MS = 7000;
 /* =========================
    DEMO Trade config
 ========================= */
-const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // DEMO token
+const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
 const TRADE_STAKE_KEY = "tradeStake_v1";
 
 const DEFAULT_STAKE = 1; // USD
@@ -83,105 +84,10 @@ const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
-/* =========================
-   Debug visible
-========================= */
-(function initVisibleDebug() {
-  const show = (msg) => {
-    try {
-      if (statusEl) statusEl.textContent = msg;
-    } catch {}
-  };
-
-  window.addEventListener("error", (e) => {
-    const m = e?.message || "Error";
-    const src = e?.filename ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}` : "";
-    show(`❌ JS: ${m}${src}`);
-  });
-
-  window.addEventListener("unhandledrejection", (e) => {
-    const r = e?.reason;
-    const m = (r && (r.message || String(r))) || "Promise rejection";
-    show(`❌ Promise: ${m}`);
-  });
-})();
-
-/* =========================
-   Reset SW/Cache (button)
-========================= */
-async function resetServiceWorkerAndCaches() {
-  try {
-    if ("serviceWorker" in navigator) {
-      const regs = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(regs.map((r) => r.unregister().catch(() => {})));
-    }
-    if ("caches" in window) {
-      const keys = await caches.keys();
-      await Promise.all(keys.map((k) => caches.delete(k).catch(() => {})));
-    }
-    location.reload();
-  } catch {
-    location.reload();
-  }
-}
-
-function ensureResetCacheButton() {
-  let btn = document.getElementById("resetCacheBtn");
-  if (btn) return btn;
-
-  const host = document.querySelector("#settingsModal .settingsBody .controls") || null;
-  if (!host) return null;
-
-  btn = document.createElement("button");
-  btn.id = "resetCacheBtn";
-  btn.type = "button";
-  btn.className = "btn btnGhost";
-  btn.textContent = "🧹 Reset Cache/SW";
-  btn.title = "Borra caches + desregistra Service Worker y recarga";
-  btn.onclick = resetServiceWorkerAndCaches;
-
-  host.appendChild(btn);
-  return btn;
-}
-
-/* =========================
-   State
-========================= */
-let ws;
-
-let soundEnabled = false;
-let vibrateEnabled = true;
-
-let EVAL_SEC = 45;
-let strongMode = false;
-
-let history = loadHistory();
-
-let minuteData = {};
-let lastEvaluatedMinute = null;
-let evalRetryTimer = null;
-
-// tiempo/ticks
-let lastTickEpochMs = null;
-let lastTickLocalNowMs = null;
-let serverOffsetMs = 0;
-let currentMinuteStartMs = null;
-
-// min/candles
-let lastSeenMinute = null;
-let candleOC = {};
-
-let lastQuoteBySymbol = {};
-let lastMinuteSeenBySymbol = {};
-
-// modal chart
-let modalCurrentItem = null;
-
-// ✅ LIVE modal (por minuto de señal)
-let modalLiveOn = false;
-let modalLiveSymbol = null;
-let modalLiveMinute = null; // minuto que se está mostrando en vivo (el de la señal)
-let modalLiveTimer = null;
+// Modal trade/live buttons (del HTML)
+const modalLiveBtn = $("modalLiveBtn");
+const modalBuyCallBtn = $("modalBuyCallBtn");
+const modalBuyPutBtn = $("modalBuyPutBtn");
 
 /* =========================
    Assets
@@ -202,6 +108,44 @@ function makeDerivTraderUrl(symbol) {
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+
+/* =========================
+   State
+========================= */
+let ws;
+
+let soundEnabled = false;
+let vibrateEnabled = true;
+
+let EVAL_SEC = 45;
+let strongMode = false;
+
+let history = loadHistory();
+
+// ticks por minuto
+let minuteData = {}; // minute -> { symbol -> [{ms,quote}] }
+let lastEvaluatedMinute = null;
+let evalRetryTimer = null;
+
+// tiempo/ticks
+let lastTickEpochMs = null;
+let lastTickLocalNowMs = null;
+let serverOffsetMs = 0; // epochMs - localNowMs
+let currentMinuteStartMs = null;
+
+// min/candles
+let lastSeenMinute = null;
+let candleOC = {};
+
+let lastQuoteBySymbol = {};
+let lastMinuteSeenBySymbol = {};
+
+// modal chart
+let modalCurrentItem = null;
+
+// LIVE modal state
+let modalLiveOn = false;
+let modalLiveTimer = null;
 
 /* =========================
    🪫 Low power mode
@@ -229,27 +173,28 @@ function saveLowPowerMode() {
     localStorage.setItem(LOWPOWER_KEY, lowPowerMode ? "1" : "0");
   } catch {}
 }
-
 function getUiIntervalMs() {
   return lowPowerMode ? UI_INTERVAL_LOW_MS : UI_INTERVAL_NORMAL_MS;
 }
 function getHistoryCountMax() {
   return lowPowerMode ? HISTORY_COUNT_MAX_LOW : HISTORY_COUNT_MAX_NORMAL;
 }
-
 function startUiTimers() {
   if (uiTimer) clearInterval(uiTimer);
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
+    tickModalLiveLoop(); // si modal está LIVE, dibuja con throttling
   }, getUiIntervalMs());
 }
-
 function ensureLowPowerButton() {
   let btn = document.getElementById("lowPowerBtn");
   if (btn) return btn;
 
-  const host = document.querySelector("#settingsModal .settingsBody .controls") || document.body;
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    document.body;
 
   btn = document.createElement("button");
   btn.id = "lowPowerBtn";
@@ -257,7 +202,6 @@ function ensureLowPowerButton() {
   btn.className = "btn btnGhost";
   btn.textContent = "🔋 Bajo consumo OFF";
   btn.title = "Ahorra batería: UI más lenta, histórico más liviano, WS se corta en background";
-
   btn.onclick = () => {
     lowPowerMode = !lowPowerMode;
     saveLowPowerMode();
@@ -273,6 +217,7 @@ function ensureLowPowerButton() {
       }
     }
 
+    // reconectar limpio
     try {
       if (ws && ws.readyState === 1) ws.close();
     } catch {}
@@ -281,7 +226,6 @@ function ensureLowPowerButton() {
   host.appendChild(btn);
   return btn;
 }
-
 function applyLowPowerModeUI() {
   const btn = document.getElementById("lowPowerBtn");
   if (btn) {
@@ -368,7 +312,6 @@ function nextOutcomeToText(outcome) {
   if (outcome === "flat") return "PLANA";
   return "PENDIENTE";
 }
-
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
   let text = "";
@@ -455,7 +398,6 @@ function buildExportPayloadVoted() {
     })),
   };
 }
-
 function downloadTextFile(filename, text, mime = "application/json") {
   try {
     const blob = new Blob([text], { type: mime });
@@ -471,7 +413,6 @@ function downloadTextFile(filename, text, mime = "application/json") {
     alert("No se pudo descargar el archivo. Probá copiar desde el portapapeles.");
   }
 }
-
 async function exportVotedSignals() {
   const payload = buildExportPayloadVoted();
   const json = JSON.stringify(payload, null, 2);
@@ -491,12 +432,14 @@ async function exportVotedSignals() {
     alert(`📥 Descargado JSON (${payload.count_voted}).`);
   }
 }
-
 function ensureExportButton() {
   let btn = document.getElementById("exportVotedBtn");
   if (btn) return btn;
 
-  const host = document.querySelector("#settingsModal .settingsBody .controls") || null;
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
   if (!host) return null;
 
   btn = document.createElement("button");
@@ -506,15 +449,10 @@ function ensureExportButton() {
   btn.textContent = "📤 Exportar (solo con voto)";
   btn.title = "Copia al portapapeles / descarga JSON con señales like/dislike";
   host.appendChild(btn);
+  btn.onclick = exportVotedSignals;
 
   return btn;
 }
-
-(function initExportVoted() {
-  const btn = ensureExportButton();
-  if (!btn) return;
-  btn.onclick = exportVotedSignals;
-})();
 
 /* =========================
    Theme
@@ -672,173 +610,392 @@ function showNotification(symbol, direction, modeLabel) {
 }
 
 /* =========================
-   Modal LIVE controls (buttons inside modal)
+   ticks_history (req_id)
 ========================= */
-function isModalOpen() {
-  return !!chartModal && !chartModal.classList.contains("hidden");
-}
+let reqSeq = 1;
+const pending = new Map();
 
-function ensureModalTradeRow() {
-  if (!chartModal) return;
-
-  let footer = chartModal.querySelector(".modalFooter");
-  if (!footer) return;
-
-  // Si ya existe, no duplicar
-  if (document.getElementById("modalLiveBtn")) return;
-
-  // footer actual tenía "Abrir Deriv", lo dejamos como botón extra
-  // y metemos tradeRow arriba
-  const tradeRow = document.createElement("div");
-  tradeRow.className = "tradeRow";
-
-  const liveBtn = document.createElement("button");
-  liveBtn.id = "modalLiveBtn";
-  liveBtn.type = "button";
-  liveBtn.className = "btn btnGhost";
-  liveBtn.setAttribute("aria-pressed", "false");
-  liveBtn.textContent = "📡 LIVE OFF";
-  liveBtn.title = "LIVE del minuto de esta señal (se corta al cerrar el minuto)";
-
-  const buyBtn = document.createElement("button");
-  buyBtn.id = "modalBuyCallBtn";
-  buyBtn.type = "button";
-  buyBtn.className = "btn";
-  buyBtn.textContent = "🟢 COMPRAR";
-  buyBtn.title = "CALL 1m (DEMO)";
-
-  const sellBtn = document.createElement("button");
-  sellBtn.id = "modalBuyPutBtn";
-  sellBtn.type = "button";
-  sellBtn.className = "btn";
-  sellBtn.textContent = "🔴 VENDER";
-  sellBtn.title = "PUT 1m (DEMO)";
-
-  tradeRow.appendChild(liveBtn);
-  tradeRow.appendChild(buyBtn);
-  tradeRow.appendChild(sellBtn);
-
-  // Insertamos tradeRow al principio del footer
-  footer.prepend(tradeRow);
-
-  liveBtn.onclick = () => {
-    // Solo se permite LIVE si todavía estamos en el minuto de la señal
-    // Si ya cerró minuteComplete, esto solo alterna entre "mostrar ticks live capturados"
-    modalLiveOn = !modalLiveOn;
-    // si está vieja, igual permitimos togglear pero va a quedar estático
-    paintModalLiveBtn();
-    requestModalDraw();
-  };
-
-  buyBtn.onclick = async () => {
-    buyBtn.disabled = true;
-    try {
-      if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
-      const r = await buyOneClick("CALL", modalLiveSymbol || null);
-      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
-      if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
-    } catch (e) {
-      if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
-    } finally {
-      buyBtn.disabled = false;
-    }
-  };
-
-  sellBtn.onclick = async () => {
-    sellBtn.disabled = true;
-    try {
-      if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
-      const r = await buyOneClick("PUT", modalLiveSymbol || null);
-      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
-      if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
-    } catch (e) {
-      if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
-    } finally {
-      sellBtn.disabled = false;
-    }
-  };
-}
-
-function paintModalLiveBtn() {
-  const b = document.getElementById("modalLiveBtn");
-  if (!b) return;
-  b.setAttribute("aria-pressed", modalLiveOn ? "true" : "false");
-  b.textContent = modalLiveOn ? "📡 LIVE ON" : "📡 LIVE OFF";
+function wsRequest(payload) {
+  return new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
+    const req_id = reqSeq++;
+    const t = setTimeout(() => {
+      pending.delete(req_id);
+      reject(new Error("timeout"));
+    }, HISTORY_TIMEOUT_MS);
+    pending.set(req_id, { resolve, reject, t });
+    ws.send(JSON.stringify({ ...payload, req_id }));
+  });
 }
 
 /* =========================
-   Chart modal open/close
+   Token + Stake UI (Settings)
 ========================= */
-function requestModalDraw() {
-  if (!isModalOpen()) return;
-  // throttle suave
-  if (modalLiveTimer) return;
-  modalLiveTimer = setTimeout(() => {
+function getDerivToken() {
+  try {
+    return localStorage.getItem(DERIV_TOKEN_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+function setDerivToken(t) {
+  try {
+    localStorage.setItem(DERIV_TOKEN_KEY, t || "");
+  } catch {}
+}
+function clearDerivToken() {
+  try {
+    localStorage.removeItem(DERIV_TOKEN_KEY);
+  } catch {}
+}
+
+function getTradeStake() {
+  const raw = localStorage.getItem(TRADE_STAKE_KEY);
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_STAKE;
+}
+function setTradeStake(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return;
+  try {
+    localStorage.setItem(TRADE_STAKE_KEY, String(v));
+  } catch {}
+}
+
+function ensureTokenStakeUI() {
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+  if (!host) return;
+
+  if (document.getElementById("tokenBox")) return;
+
+  const box = document.createElement("div");
+  box.id = "tokenBox";
+  box.style.gridColumn = "1 / -1";
+  box.style.display = "flex";
+  box.style.flexDirection = "column";
+  box.style.gap = "8px";
+  box.style.marginTop = "4px";
+
+  const tokenRow = document.createElement("div");
+  tokenRow.style.display = "flex";
+  tokenRow.style.gap = "8px";
+  tokenRow.style.flexWrap = "wrap";
+  tokenRow.style.alignItems = "center";
+
+  const tokenInput = document.createElement("input");
+  tokenInput.id = "tokenInput";
+  tokenInput.type = "password";
+  tokenInput.placeholder = "Token DEMO Deriv (Read + Trade)";
+  tokenInput.value = getDerivToken();
+  tokenInput.className = "row-comment";
+  tokenInput.style.flex = "1";
+  tokenInput.style.minWidth = "220px";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "btn btnGhost";
+  saveBtn.textContent = "💾 Guardar token";
+
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "btn btnGhost";
+  delBtn.textContent = "🗑️ Borrar token";
+
+  saveBtn.onclick = () => {
+    const v = (tokenInput.value || "").trim();
+    setDerivToken(v);
+    alert(v ? "✅ Token guardado" : "⚠️ Token vacío");
+  };
+  delBtn.onclick = () => {
+    tokenInput.value = "";
+    clearDerivToken();
+    alert("🧹 Token borrado");
+  };
+
+  tokenRow.appendChild(tokenInput);
+  tokenRow.appendChild(saveBtn);
+  tokenRow.appendChild(delBtn);
+
+  const stakeRow = document.createElement("div");
+  stakeRow.style.display = "flex";
+  stakeRow.style.gap = "8px";
+  stakeRow.style.flexWrap = "wrap";
+  stakeRow.style.alignItems = "center";
+
+  const stakeInput = document.createElement("input");
+  stakeInput.id = "stakeInput";
+  stakeInput.type = "number";
+  stakeInput.step = "0.1";
+  stakeInput.min = "0.35";
+  stakeInput.placeholder = "Stake DEMO (USD)";
+  stakeInput.value = String(getTradeStake());
+  stakeInput.className = "row-comment";
+  stakeInput.style.flex = "1";
+  stakeInput.style.minWidth = "140px";
+
+  const stakeSave = document.createElement("button");
+  stakeSave.type = "button";
+  stakeSave.className = "btn btnGhost";
+  stakeSave.textContent = "💾 Guardar stake";
+
+  stakeSave.onclick = () => {
+    const n = Number(stakeInput.value);
+    if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
+    setTradeStake(n);
+    alert(`✅ Stake guardado: ${n} USD`);
+  };
+
+  stakeRow.appendChild(stakeInput);
+  stakeRow.appendChild(stakeSave);
+
+  box.appendChild(tokenRow);
+  box.appendChild(stakeRow);
+  host.appendChild(box);
+}
+
+/* =========================
+   DEMO Trade (authorize + buy)
+========================= */
+let isAuthorized = false;
+let authorizeInFlight = null;
+let tradeInFlight = false;
+
+function resetAuthState() {
+  isAuthorized = false;
+  authorizeInFlight = null;
+  tradeInFlight = false;
+}
+
+async function ensureAuthorized() {
+  const token = getDerivToken();
+  if (!token) throw new Error("Cargá el token DEMO en Configuración");
+
+  if (isAuthorized) return true;
+  if (authorizeInFlight) return authorizeInFlight;
+
+  authorizeInFlight = wsRequest({ authorize: token })
+    .then((res) => {
+      if (res?.error) throw new Error(res.error.message || "authorize error");
+      isAuthorized = true;
+      return true;
+    })
+    .finally(() => {
+      authorizeInFlight = null;
+    });
+
+  return authorizeInFlight;
+}
+
+function getDefaultTradeSymbol() {
+  // si hay modal abierto, preferimos el símbolo del item
+  if (modalCurrentItem && modalCurrentItem.symbol) return modalCurrentItem.symbol;
+  const last = history && history.length ? history[history.length - 1] : null;
+  return (last && last.symbol) || "R_25";
+}
+
+async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
+  if (tradeInFlight) throw new Error("Operación en curso");
+  tradeInFlight = true;
+
+  try {
+    await ensureAuthorized();
+
+    const symbol = symbolOverride || getDefaultTradeSymbol();
+    const stake = getTradeStake();
+
+    const res = await wsRequest({
+      buy: 1,
+      price: stake,
+      parameters: {
+        amount: stake,
+        basis: "stake",
+        contract_type: side,
+        currency: DEFAULT_CURRENCY,
+        duration: DEFAULT_DURATION,
+        duration_unit: DEFAULT_DURATION_UNIT,
+        symbol,
+      },
+    });
+
+    if (res?.error) throw new Error(res.error.message || "buy error");
+    return res;
+  } finally {
+    tradeInFlight = false;
+  }
+}
+
+/* =========================
+   Chart modal + LIVE control
+========================= */
+function setModalLiveUI(on) {
+  modalLiveOn = !!on;
+  if (modalLiveBtn) {
+    modalLiveBtn.setAttribute("aria-pressed", modalLiveOn ? "true" : "false");
+    modalLiveBtn.textContent = modalLiveOn ? "📡 LIVE ON" : "📡 LIVE OFF";
+  }
+}
+
+function stopModalLive(reason = "") {
+  if (modalLiveTimer) {
+    clearInterval(modalLiveTimer);
     modalLiveTimer = null;
-    drawModalNow();
-  }, lowPowerMode ? 120 : 60);
+  }
+  if (modalLiveOn) setModalLiveUI(false);
+
+  // opcional: si querés indicar por qué se cortó
+  if (reason && modalSub && modalCurrentItem) {
+    // no machacamos todo el sub, solo agregamos una nota corta
+    const base = `${modalCurrentItem.time} | ticks: ${(modalCurrentItem.ticks || []).length}`;
+    modalSub.textContent = `${base} | ${reason}`;
+  }
 }
 
-function getLiveTicksForMinuteSymbol(minute, sym) {
-  if (minute == null || !sym) return [];
-  const data = minuteData[minute] || {};
-  const ticks = data[sym] || [];
-  return ticks.slice();
+function minuteIsClosedForItem(item) {
+  if (!item) return true;
+  // se considera cerrado si minuteComplete ya fue marcado
+  if (item.minuteComplete) return true;
+
+  // si tenemos serverNow, calculamos si ya pasó el cierre del minuto del item
+  const serverNow = Date.now() + (serverOffsetMs || 0);
+  const itemMinuteStart = item.minute * 60000;
+  const itemMinuteEnd = itemMinuteStart + 60000;
+  return serverNow >= itemMinuteEnd;
 }
 
-function drawModalNow() {
-  if (!minuteCanvas) return;
+function getLiveTicksForItem(item) {
+  if (!item) return [];
+  const minute = item.minute;
+  const sym = item.symbol;
+  const data = minuteData?.[minute]?.[sym];
+  if (Array.isArray(data) && data.length >= 2) return data.slice();
+  // fallback a item.ticks si existe algo
+  if (Array.isArray(item.ticks) && item.ticks.length >= 2) return item.ticks.slice();
+  return [];
+}
 
-  if (modalLiveOn && modalLiveSymbol && modalLiveMinute != null) {
-    const liveTicks = getLiveTicksForMinuteSymbol(modalLiveMinute, modalLiveSymbol);
-    drawDerivLikeChart(minuteCanvas, liveTicks);
+function tickModalLiveLoop() {
+  // Esto corre desde startUiTimers (throttling ya dado por el intervalo UI)
+  if (!modalCurrentItem || !chartModal || chartModal.classList.contains("hidden")) return;
+  if (!modalLiveOn) return;
+
+  // si el minuto del item ya cerró, cortar LIVE y congelar
+  if (minuteIsClosedForItem(modalCurrentItem)) {
+    // marcamos complete y congelamos datos finales si podemos
+    if (!modalCurrentItem.minuteComplete) {
+      modalCurrentItem.minuteComplete = true;
+      saveHistory(history);
+      updateRowChartBtn(modalCurrentItem);
+    }
+    stopModalLive("⏸️ minuto cerrado");
+    // dibujamos una última vez con lo último disponible
+    const ticks = getLiveTicksForItem(modalCurrentItem);
+    if (ticks.length >= 2) drawDerivLikeChart(minuteCanvas, ticks);
     return;
   }
 
-  if (modalCurrentItem) {
-    const fallback =
-      (modalCurrentItem.ticks && modalCurrentItem.ticks.length)
-        ? modalCurrentItem.ticks
-        : (modalLiveMinute != null ? getLiveTicksForMinuteSymbol(modalLiveMinute, modalLiveSymbol) : []);
-    drawDerivLikeChart(minuteCanvas, fallback);
-  }
+  const ticks = getLiveTicksForItem(modalCurrentItem);
+  if (ticks.length >= 2) drawDerivLikeChart(minuteCanvas, ticks);
 }
 
 function openChartModal(item) {
+  // Permitimos abrir SIEMPRE (aunque minuto incompleto / candado)
   modalCurrentItem = item;
-  modalLiveSymbol = item?.symbol || null;
-  modalLiveMinute = item?.minute ?? null;
-
-  // ✅ LIVE solo si el minuto de ESA señal no está completo
-  // (si es vieja, LIVE arranca OFF)
-  modalLiveOn = !item?.minuteComplete;
-  paintModalLiveBtn();
-
   if (!chartModal || !modalTitle || !modalSub) return;
 
-  const modeLabel = item?.mode || "NORMAL";
+  const modeLabel = item.mode || "NORMAL";
   modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${modeLabel}]`;
-  modalSub.textContent = `${item.time} | ticks: ${(item.ticks || []).length}`;
+
+  const ticksNow = getLiveTicksForItem(item);
+  modalSub.textContent = `${item.time} | ticks: ${ticksNow.length}`;
 
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  ensureModalTradeRow();
-  paintModalLiveBtn();
+  // LIVE: por defecto OFF siempre
+  stopModalLive(""); // apaga si venía prendido
+  setModalLiveUI(false);
 
-  requestAnimationFrame(() => requestAnimationFrame(() => requestModalDraw()));
+  // dibuja snapshot inicial (si hay ticks)
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const ticks = getLiveTicksForItem(item);
+      drawDerivLikeChart(minuteCanvas, ticks);
+    })
+  );
+
+  // LIVE button
+  if (modalLiveBtn) {
+    // si ya cerró el minuto, no habilitamos live
+    modalLiveBtn.disabled = minuteIsClosedForItem(item);
+    modalLiveBtn.title = minuteIsClosedForItem(item)
+      ? "El minuto ya cerró (gráfico congelado)"
+      : "Activa/desactiva el gráfico en vivo durante el minuto";
+
+    modalLiveBtn.onclick = () => {
+      if (!modalCurrentItem) return;
+
+      // si cerró mientras estaba abierto
+      if (minuteIsClosedForItem(modalCurrentItem)) {
+        modalLiveBtn.disabled = true;
+        stopModalLive("⏸️ minuto cerrado");
+        return;
+      }
+
+      const next = !modalLiveOn;
+      setModalLiveUI(next);
+
+      // si encendemos, forzamos un draw inmediato
+      if (next) {
+        tickModalLiveLoop();
+      }
+    };
+  }
+
+  // trade buttons (modal)
+  if (modalBuyCallBtn) {
+    modalBuyCallBtn.onclick = async () => {
+      modalBuyCallBtn.disabled = true;
+      try {
+        if (statusEl) statusEl.textContent = "🟢 Enviando COMPRA…";
+        const r = await buyOneClick("CALL", item.symbol);
+        const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+        if (statusEl) statusEl.textContent = `🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `⚠️ Error COMPRA: ${e?.message || e}`;
+        alert(`⚠️ ${e?.message || e}`);
+      } finally {
+        modalBuyCallBtn.disabled = false;
+      }
+    };
+  }
+
+  if (modalBuyPutBtn) {
+    modalBuyPutBtn.onclick = async () => {
+      modalBuyPutBtn.disabled = true;
+      try {
+        if (statusEl) statusEl.textContent = "🔴 Enviando VENTA…";
+        const r = await buyOneClick("PUT", item.symbol);
+        const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+        if (statusEl) statusEl.textContent = `🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `⚠️ Error VENTA: ${e?.message || e}`;
+        alert(`⚠️ ${e?.message || e}`);
+      } finally {
+        modalBuyPutBtn.disabled = false;
+      }
+    };
+  }
 }
 
 function closeChartModal() {
   if (!chartModal) return;
+  stopModalLive("");
   chartModal.classList.add("hidden");
   chartModal.setAttribute("aria-hidden", "true");
-
   modalCurrentItem = null;
-  modalLiveSymbol = null;
-  modalLiveMinute = null;
-  modalLiveOn = false;
-  paintModalLiveBtn();
 }
 
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
@@ -857,8 +1014,11 @@ if (modalOpenDerivBtn)
   };
 
 window.addEventListener("resize", () => {
-  if (!isModalOpen()) return;
-  requestModalDraw();
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (modalCurrentItem) {
+    const ticks = getLiveTicksForItem(modalCurrentItem);
+    drawDerivLikeChart(minuteCanvas, ticks);
+  }
 });
 
 /* =========================
@@ -970,16 +1130,17 @@ function updateRowChartBtn(item) {
 
   const ready = !!item.minuteComplete;
 
-  // ✅ FIX: NO deshabilitar (si está disabled no se puede abrir LIVE)
+  // ✅ IMPORTANTE: nunca bloqueamos el botón (el candado es visual, no funcional)
   btn.disabled = false;
-  btn.classList.toggle("locked", !ready);
 
   if (ready) {
+    btn.classList.remove("locked");
     btn.innerHTML = CHART_ICON_SVG;
-    btn.title = "Ver gráfico del minuto (ticks 0–60)";
+    btn.title = "Ver gráfico del minuto (cerrado)";
   } else {
+    btn.classList.add("locked");
     btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "En vivo hasta que cierre el minuto…";
+    btn.title = "Ver gráfico LIVE (minuto en curso)";
   }
 }
 
@@ -1070,7 +1231,7 @@ function buildRow(item) {
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <button class="chartBtn" type="button" aria-label="Ver gráfico"></button>
+      <button class="chartBtn" type="button"></button>
       <span class="hitIcon hidden" aria-label="Acertó">✓</span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -1088,7 +1249,7 @@ function buildRow(item) {
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
-    openChartModal(item); // ✅ ahora abre siempre (candado no bloquea)
+    openChartModal(item); // ✅ siempre abre
   };
   updateRowChartBtn(item);
 
@@ -1168,7 +1329,8 @@ function updateTickHealthUI() {
 
 function updateCountdownUI() {
   if (!countdownEl) return;
-  const textEl = document.getElementById("countdownText") || countdownEl;
+
+  const textEl = $("countdownText") || countdownEl;
 
   if (!currentMinuteStartMs) {
     if (textEl) textEl.textContent = "⏱️ 60";
@@ -1192,190 +1354,6 @@ function updateCountdownUI() {
   countdownEl.classList.remove("tick");
   void countdownEl.offsetWidth;
   countdownEl.classList.add("tick");
-}
-
-/* =========================
-   WS requests (req_id)
-========================= */
-let reqSeq = 1;
-const pending = new Map();
-
-function wsRequest(payload) {
-  return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
-    const req_id = reqSeq++;
-    const t = setTimeout(() => {
-      pending.delete(req_id);
-      reject(new Error("timeout"));
-    }, HISTORY_TIMEOUT_MS);
-    pending.set(req_id, { resolve, reject, t });
-    ws.send(JSON.stringify({ ...payload, req_id }));
-  });
-}
-
-/* =========================
-   DEMO Token + stake (Settings UI)
-========================= */
-function getDerivToken() {
-  try {
-    return localStorage.getItem(DERIV_TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-function setDerivToken(t) {
-  try {
-    localStorage.setItem(DERIV_TOKEN_KEY, t || "");
-  } catch {}
-}
-function clearDerivToken() {
-  try {
-    localStorage.removeItem(DERIV_TOKEN_KEY);
-  } catch {}
-}
-
-function getTradeStake() {
-  const raw = localStorage.getItem(TRADE_STAKE_KEY);
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_STAKE;
-}
-function setTradeStake(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v) || v <= 0) return;
-  try {
-    localStorage.setItem(TRADE_STAKE_KEY, String(v));
-  } catch {}
-}
-
-function ensureTokenSettingsUI() {
-  const host = document.querySelector("#settingsModal .settingsBody") || null;
-  if (!host) return;
-  if (document.getElementById("tokenBox")) return;
-
-  const box = document.createElement("div");
-  box.id = "tokenBox";
-  box.style.marginTop = "10px";
-
-  box.innerHTML = `
-    <div style="display:flex; flex-direction:column; gap:8px;">
-      <div style="font-size:13px; color: var(--muted);">
-        Token DEMO (Deriv): guardado local. (Read + Trade)
-      </div>
-      <input id="tokenInput" class="row-comment" placeholder="Pegá tu TOKEN DEMO acá" style="width:100%;" />
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button id="tokenSaveBtn" class="btn btnPrimary" type="button">💾 Guardar token</button>
-        <button id="tokenClearBtn" class="btn btnDanger" type="button">🗑️ Borrar token</button>
-        <button id="stakeBtn" class="btn btnGhost" type="button">💵 Stake: —</button>
-      </div>
-    </div>
-  `;
-
-  host.appendChild(box);
-
-  const tokenInput = document.getElementById("tokenInput");
-  const saveBtn = document.getElementById("tokenSaveBtn");
-  const clearBtn = document.getElementById("tokenClearBtn");
-  const stakeBtn = document.getElementById("stakeBtn");
-
-  const paintStake = () => {
-    if (stakeBtn) stakeBtn.textContent = `💵 Stake: ${getTradeStake()} USD`;
-  };
-
-  if (tokenInput) tokenInput.value = getDerivToken();
-
-  if (saveBtn)
-    saveBtn.onclick = () => {
-      const v = (tokenInput?.value || "").trim();
-      if (!v) return alert("Pegá un token DEMO primero.");
-      setDerivToken(v);
-      resetAuthState();
-      alert("✅ Token DEMO guardado.");
-    };
-
-  if (clearBtn)
-    clearBtn.onclick = () => {
-      clearDerivToken();
-      resetAuthState();
-      if (tokenInput) tokenInput.value = "";
-      alert("🗑️ Token borrado.");
-    };
-
-  if (stakeBtn)
-    stakeBtn.onclick = () => {
-      const cur = getTradeStake();
-      const v = prompt(`Stake DEMO (USD). Actual: ${cur}`, String(cur));
-      if (v == null) return;
-      const n = Number(v);
-      if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido");
-      setTradeStake(n);
-      paintStake();
-    };
-
-  paintStake();
-}
-
-/* =========================
-   DEMO 1-click trade (WS)
-========================= */
-let isAuthorized = false;
-let authorizeInFlight = null;
-let tradeInFlight = false;
-
-function resetAuthState() {
-  isAuthorized = false;
-  authorizeInFlight = null;
-  tradeInFlight = false;
-}
-
-async function ensureAuthorized() {
-  const token = getDerivToken();
-  if (!token) throw new Error("Falta TOKEN DEMO (ponelo en Configuración)");
-
-  if (isAuthorized) return true;
-  if (authorizeInFlight) return authorizeInFlight;
-
-  authorizeInFlight = wsRequest({ authorize: token })
-    .then((res) => {
-      if (res?.error) throw new Error(res.error.message || "authorize error");
-      isAuthorized = true;
-      return true;
-    })
-    .finally(() => {
-      authorizeInFlight = null;
-    });
-
-  return authorizeInFlight;
-}
-
-async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
-  if (tradeInFlight) throw new Error("Operación en curso");
-  tradeInFlight = true;
-
-  try {
-    await ensureAuthorized();
-
-    const symbol = symbolOverride || "R_25";
-    const stake = getTradeStake();
-
-    const res = await wsRequest({
-      buy: 1,
-      price: stake,
-      parameters: {
-        amount: stake,
-        basis: "stake",
-        contract_type: side,
-        currency: DEFAULT_CURRENCY,
-        duration: DEFAULT_DURATION,
-        duration_unit: DEFAULT_DURATION_UNIT,
-        symbol,
-      },
-    });
-
-    if (res?.error) throw new Error(res.error.message || "buy error");
-    return res;
-  } finally {
-    tradeInFlight = false;
-  }
 }
 
 /* =========================
@@ -1631,15 +1609,23 @@ function finalizeMinute(minute) {
         it.minuteComplete = true;
         changed = true;
         updateRowChartBtn(it);
+
+        // ✅ si justo ese item está abierto en modal, y estaba LIVE, se corta
+        if (modalCurrentItem && modalCurrentItem.id === it.id) {
+          if (modalLiveOn) stopModalLive("⏸️ minuto cerrado");
+          if (modalLiveBtn) {
+            modalLiveBtn.disabled = true;
+            modalLiveBtn.title = "El minuto ya cerró (gráfico congelado)";
+          }
+        }
       }
     }
     if (changed) saveHistory(history);
 
-    // ✅ FIX: si el modal estaba LIVE mirando ESTE minuto, lo apagamos y congelamos
-    if (isModalOpen() && modalLiveOn && modalLiveMinute === minute) {
-      modalLiveOn = false;
-      paintModalLiveBtn();
-      requestModalDraw();
+    // si modal abierto y corresponde al minuto finalizado, redibujar snapshot final
+    if (modalCurrentItem && modalCurrentItem.minute === minute) {
+      const ticks = getLiveTicksForItem(modalCurrentItem);
+      drawDerivLikeChart(minuteCanvas, ticks);
     }
   })();
 
@@ -1657,21 +1643,14 @@ function onTick(tick) {
   serverOffsetMs = epochMs - lastTickLocalNowMs;
 
   const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
-
   const minute = Math.floor(epochMs / 60000);
+
   const msInMinute = epochMs - minuteStartMs;
   const sec = Math.floor(msInMinute / 1000);
   const symbol = tick.symbol;
 
   lastTickEpochMs = epochMs;
   currentMinuteStartMs = minuteStartMs;
-
-  // ✅ FIX: si estoy LIVE en minuto X y ya empezó minuto X+1 => cortar LIVE
-  if (isModalOpen() && modalLiveOn && modalLiveMinute != null && minute > modalLiveMinute) {
-    modalLiveOn = false;
-    paintModalLiveBtn();
-    requestModalDraw();
-  }
 
   const prevLast = lastQuoteBySymbol[symbol];
   lastQuoteBySymbol[symbol] = tick.quote;
@@ -1698,11 +1677,6 @@ function onTick(tick) {
   candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
-
-  // ✅ si el modal está LIVE mirando este símbolo/minuto, redibujá
-  if (isModalOpen() && modalLiveOn && modalLiveMinute === minute && modalLiveSymbol === symbol) {
-    requestModalDraw();
-  }
 
   if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
@@ -1946,6 +1920,28 @@ function addSignal(minute, symbol, direction, ticks) {
 }
 
 /* =========================
+   Wake lock
+========================= */
+let wakeLock = null;
+if (wakeBtn)
+  wakeBtn.onclick = async () => {
+    try {
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        wakeBtn.textContent = "🔓 Pantalla activa";
+        wakeBtn.classList.remove("active");
+      } else {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeBtn.textContent = "🔒 Pantalla activa";
+        wakeBtn.classList.add("active");
+      }
+    } catch {
+      alert("No se pudo mantener la pantalla activa");
+    }
+  };
+
+/* =========================
    WebSocket
 ========================= */
 function connect() {
@@ -1959,6 +1955,7 @@ function connect() {
 
   ws.onopen = () => {
     resetAuthState();
+
     if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
@@ -1982,10 +1979,16 @@ function connect() {
       }
 
       if (data?.error) {
+        // no frenamos ticks por errores ajenos
         if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
       }
 
-      if (data.tick) onTick(data.tick);
+      if (data.tick) {
+        if (statusEl && statusEl.textContent?.includes("Suscribiendo")) {
+          statusEl.textContent = "Conectado – Analizando";
+        }
+        onTick(data.tick);
+      }
     } catch (err) {
       if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
     }
@@ -2008,6 +2011,7 @@ function connect() {
     const reason = ev?.reason || "";
     if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`;
 
+    // en bajo consumo, si está hidden, no reconectamos hasta volver visible
     if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
     setTimeout(connect, 1500);
   };
@@ -2021,43 +2025,17 @@ document.addEventListener("visibilitychange", () => {
 
   if (document.visibilityState === "hidden") {
     if (lowPowerMode && ws && ws.readyState === 1) {
-      try {
-        ws.close();
-      } catch {}
+      try { ws.close(); } catch {}
     }
     return;
   }
 
   if (document.visibilityState === "visible") {
     if (!ws || ws.readyState === 3) {
-      try {
-        connect();
-      } catch {}
+      try { connect(); } catch {}
     }
   }
 });
-
-/* =========================
-   Wake lock
-========================= */
-let wakeLock = null;
-if (wakeBtn)
-  wakeBtn.onclick = async () => {
-    try {
-      if (wakeLock) {
-        await wakeLock.release();
-        wakeLock = null;
-        wakeBtn.textContent = "🔓 Pantalla activa";
-        wakeBtn.classList.remove("active");
-      } else {
-        wakeLock = await navigator.wakeLock.request("screen");
-        wakeBtn.textContent = "🔒 Pantalla activa";
-        wakeBtn.classList.add("active");
-      }
-    } catch {
-      alert("No se pudo mantener la pantalla activa");
-    }
-  };
 
 /* =========================
    Start
@@ -2067,10 +2045,9 @@ renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
 
+ensureExportButton();
 ensureLowPowerButton();
+ensureTokenStakeUI();
 applyLowPowerModeUI();
-
-ensureTokenSettingsUI();
-ensureResetCacheButton();
 
 connect();
