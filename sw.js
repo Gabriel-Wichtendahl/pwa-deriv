@@ -1,6 +1,6 @@
 /* sw.js — Deriv Signals (network-first core) */
 "use strict"; 
-
+ 
 const CACHE = "deriv-assets-v7-base-1";
 
 const ASSETS = [
