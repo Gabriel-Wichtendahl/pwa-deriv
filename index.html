@@ -28,6 +28,13 @@
       </div>
     </div>
 
+    <!-- ✅ Barra de acciones fija (trade) -->
+    <div class="topActions" aria-label="Acciones rápidas">
+      <button id="buyCallBtn" class="btn" type="button" title="CALL 1m (DEMO) — mantener apretado para stake">🟢 COMPRAR</button>
+      <button id="buyPutBtn" class="btn" type="button" title="PUT 1m (DEMO) — mantener apretado para stake">🔴 VENDER</button>
+      <button id="lowPowerBtn" class="btn btnGhost" type="button" title="Modo normal / bajo consumo">🔋 Bajo consumo OFF</button>
+    </div>
+
     <!-- ✅ Tabs + config -->
     <div class="tabsBar">
       <div class="tabs" role="tablist" aria-label="Secciones">
@@ -104,6 +111,11 @@
 
           <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
           <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+
+          <!-- app.js agrega acá:
+               - 📤 Exportar (solo con voto)
+               - 🧹 Reset Cache/SW
+          -->
         </div>
 
         <div class="modalFooter" style="margin-top:10px">
@@ -120,8 +132,17 @@
       navigator.serviceWorker.register("./sw.js");
     }
   </script>
+
+  <!-- ✅ (Opcional) estilos mínimos para que la barra de acciones se vea bien si tu CSS no lo tiene -->
+  <style>
+    .topActions{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      margin-top:10px;
+      flex-wrap:wrap;
+    }
+  </style>
 </body>
 </html>
-
-
-
+```0
