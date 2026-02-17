@@ -1,6 +1,8 @@
-// sw.js — V6.9 (network-first para core + cache-first assets)
+// sw.js — Deriv Signals (Neon Pro) V6.9.3
+// ✅ Network-first para HTML/CSS/JS (evita quedar clavado con versiones viejas)
+// ✅ Cache-first para assets estáticos
 
-const CACHE = "deriv-assets-v6-9-neonpro-1";
+const CACHE = "deriv-assets-v6-9-3";
 
 const ASSETS = [
   "./",
@@ -11,7 +13,7 @@ const ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
   "./alert.mp3",
-  "./bg-neon.png"
+  "./bg-neon.png",
 ];
 
 self.addEventListener("install", (e) => {
@@ -34,9 +36,12 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
   const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html");
-  const isCore = url.pathname.endsWith("/app.js") || url.pathname.endsWith("/style.css");
+  const isCore =
+    url.pathname.endsWith("/app.js") ||
+    url.pathname.endsWith("/style.css") ||
+    url.pathname.endsWith("/manifest.json");
 
-  // ✅ Network-first para no quedar clavado con versiones viejas
+  // ✅ Network-first para core
   if (isHTML || isCore) {
     e.respondWith((async () => {
       try {
@@ -54,7 +59,7 @@ self.addEventListener("fetch", (e) => {
 
   // ✅ Cache-first para el resto
   e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request))
+    caches.match(e.request).then((r) => r || fetch(e.request))
   );
 });
 
@@ -67,7 +72,7 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil((async () => {
     const allClients = await clients.matchAll({
       type: "window",
-      includeUncontrolled: true
+      includeUncontrolled: true,
     });
 
     for (const client of allClients) {
