@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
@@ -12,7 +12,6 @@
 </head>
 
 <body class="neon">
-  <!-- ✅ Fondo neon -->
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
@@ -21,14 +20,11 @@
     <div class="topStatus">
       <div id="tickHealth" class="pill">Último tick: —</div>
 
-      <!-- ✅ RELOJ PRO -->
       <div id="countdown" class="pill countdownPill" aria-label="Cuenta regresiva del minuto">
-        <span class="countRing" aria-hidden="true"></span>
         <span id="countdownText" class="countText">⏱️ 60</span>
       </div>
     </div>
 
-    <!-- ✅ Tabs + config -->
     <div class="tabsBar">
       <div class="tabs" role="tablist" aria-label="Secciones">
         <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true">Señales</button>
@@ -55,7 +51,7 @@
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- ✅ Modal gráfico -->
+  <!-- ✅ Modal gráfico (LIVE + trade row) -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
@@ -70,22 +66,23 @@
 
       <canvas id="minuteCanvas"></canvas>
 
-      <!-- ✅ Footer: LIVE + COMPRAR/VENDER + Abrir Deriv -->
       <div class="modalFooter">
         <div class="tradeRow">
-          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="false">📡 LIVE OFF</button>
           <button id="modalBuyCallBtn" class="btn" type="button">🟢 COMPRAR</button>
           <button id="modalBuyPutBtn" class="btn" type="button">🔴 VENDER</button>
+          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="false" title="LIVE del minuto actual">
+            🟦 LIVE OFF
+          </button>
         </div>
 
-        <div style="display:flex; justify-content:flex-end; gap:8px;">
+        <div class="tradeRow">
           <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ✅ Modal configuración -->
+  <!-- ✅ Modal configuración (token + moneda + stake) -->
   <div id="settingsModal" class="modal hidden" aria-hidden="true">
     <div id="settingsCloseBackdrop" class="modalBackdrop"></div>
 
@@ -93,7 +90,7 @@
       <div class="modalHeader">
         <div>
           <div class="modalTitle">Configuración</div>
-          <div class="modalSub">Preferencias y modo</div>
+          <div class="modalSub">Preferencias, token y modo</div>
         </div>
         <button id="settingsCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
       </div>
@@ -112,8 +109,40 @@
           </div>
 
           <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
+
+          <!-- ✅ Token + moneda + stake -->
+          <div class="configGrid" style="grid-column: 1 / -1;">
+            <label class="cfgLabel" for="tokenInput">Token DEMO (Read + Trade)</label>
+            <input id="tokenInput" class="cfgInput" type="password" placeholder="Pegá tu token acá…" autocomplete="off" />
+            <div class="cfgRow">
+              <button id="saveTokenBtn" class="btn btnGhost" type="button">💾 Guardar token</button>
+              <button id="clearTokenBtn" class="btn btnGhost" type="button">🗑️ Borrar token</button>
+            </div>
+
+            <div class="cfgRow">
+              <div class="cfgCol">
+                <label class="cfgLabel" for="currencySelect">Moneda DEMO</label>
+                <select id="currencySelect" class="cfgSelect">
+                  <option value="USD">USD</option>
+                  <option value="EUR">EUR</option>
+                  <option value="GBP">GBP</option>
+                  <option value="AUD">AUD</option>
+                </select>
+              </div>
+
+              <div class="cfgCol">
+                <label class="cfgLabel" for="stakeInput">Stake</label>
+                <input id="stakeInput" class="cfgInput" type="number" min="0.35" step="0.01" placeholder="1.00" />
+              </div>
+            </div>
+
+            <button id="checkBalanceBtn" class="btn btnGhost" type="button">💰 Ver saldo (API)</button>
+          </div>
+
           <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
-          <!-- export/reset/lowpower/token UI se agrega desde app.js -->
+          <button id="resetCacheBtn" class="btn btnGhost" type="button">🧹 Reset Cache/SW</button>
+          <button id="exportVotedBtn" class="btn btnGhost" type="button">📤 Exportar (solo con voto)</button>
+          <button id="lowPowerBtn" class="btn btnGhost" type="button">🔋 Bajo consumo OFF</button>
         </div>
 
         <div class="modalFooter" style="margin-top:10px">
