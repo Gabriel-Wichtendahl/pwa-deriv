@@ -1,4 +1,4 @@
-// app.js — V6.8 + Low Power Mode + DEMO 1-Click Trade + Minuto server-sync
+// app.js — V6.8 + Low Power Mode + DEMO 1-Click Trade + Minuto server-sync + Debug visible + Reset SW/Cache
 // ✅ FIX: Rehidrata historial al abrir (nextOutcome / hit icon / gráfico / minuto completo)
 // ✅ MEJORA: Loader "Rehidratando... x/y"
 // ✅ FIX: wsRequest resuelve por req_id (sin depender de msg_type)
@@ -8,6 +8,7 @@
 // ✅ NUEVO: 🪫 Modo Bajo Consumo (botón) — baja interval UI, baja count history, cierra WS en background
 // ✅ NUEVO (DEMO): Botones 🟢 COMPRAR (CALL) / 🔴 VENDER (PUT) desde la PWA (authorize + buy)
 // ✅ NUEVO: Minuto en vivo sincronizado a tiempo servidor (offset por tick.epoch)
+// ✅ NUEVO: Debug visible (errores JS en status) + botón 🧹 Reset Cache/SW (solo app.js)
 
 "use strict";
 
@@ -28,14 +29,13 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
-// ⚠️ ya no lo usamos directo en ticks_history; se usa getHistoryCountMax()
 const HISTORY_COUNT_MAX = 5000;
 
 /* =========================
    DEMO Trade config
 ========================= */
 const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
-const TRADE_STAKE_KEY = "tradeStake_v1"; // opcional (stake guardado)
+const TRADE_STAKE_KEY = "tradeStake_v1";
 
 const DEFAULT_STAKE = 1; // USD
 const DEFAULT_DURATION = 1; // 1 minuto
@@ -89,6 +89,68 @@ const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
 /* =========================
+   🧯 Debug visible + Reset SW/Cache (solo app.js)
+========================= */
+(function initVisibleDebug() {
+  const show = (msg) => {
+    try {
+      if (statusEl) statusEl.textContent = msg;
+    } catch {}
+  };
+
+  window.addEventListener("error", (e) => {
+    const m = e?.message || "Error";
+    const src = e?.filename ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}` : "";
+    show(`❌ JS: ${m}${src}`);
+  });
+
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e?.reason;
+    const m = (r && (r.message || String(r))) || "Promise rejection";
+    show(`❌ Promise: ${m}`);
+  });
+})();
+
+async function resetServiceWorkerAndCaches() {
+  try {
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map((r) => r.unregister().catch(() => {})));
+    }
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map((k) => caches.delete(k).catch(() => {})));
+    }
+    location.reload();
+  } catch {
+    location.reload();
+  }
+}
+
+function ensureResetCacheButton() {
+  let btn = document.getElementById("resetCacheBtn");
+  if (btn) return btn;
+
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+
+  if (!host) return null;
+
+  btn = document.createElement("button");
+  btn.id = "resetCacheBtn";
+  btn.type = "button";
+  btn.className = "btn btnGhost";
+  btn.textContent = "🧹 Reset Cache/SW";
+  btn.title = "Borra caches + desregistra Service Worker y recarga";
+  btn.onclick = resetServiceWorkerAndCaches;
+
+  host.appendChild(btn);
+  return btn;
+}
+
+/* =========================
    State
 ========================= */
 let ws;
@@ -106,10 +168,10 @@ let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
 // Tiempo/ticks
-let lastTickEpochMs = null; // epoch del tick (servidor)
-let lastTickLocalNowMs = null; // Date.now() al recibir tick
-let serverOffsetMs = 0; // epochMs - Date.now()
-let currentMinuteStartMs = null; // inicio de minuto (epoch)
+let lastTickEpochMs = null;
+let lastTickLocalNowMs = null;
+let serverOffsetMs = 0;
+let currentMinuteStartMs = null;
 
 // min/candles
 let lastSeenMinute = null;
@@ -661,6 +723,9 @@ window.addEventListener("resize", () => {
   if (modalCurrentItem) drawDerivLikeChart(minuteCanvas, modalCurrentItem.ticks || []);
 });
 
+/* =========================
+   Canvas chart
+========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -972,7 +1037,6 @@ function updateCountdownUI() {
     return;
   }
 
-  // ✅ Tiempo servidor estimado (ajustado por tick.epoch)
   const serverNow = Date.now() + (serverOffsetMs || 0);
   const msInMinute = (serverNow - currentMinuteStartMs) % 60000;
 
@@ -1094,7 +1158,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
       parameters: {
         amount: stake,
         basis: "stake",
-        contract_type: side, // CALL / PUT
+        contract_type: side,
         currency: DEFAULT_CURRENCY,
         duration: DEFAULT_DURATION,
         duration_unit: DEFAULT_DURATION_UNIT,
@@ -1488,7 +1552,6 @@ function finalizeMinute(minute) {
 function onTick(tick) {
   const epochMs = Math.round(Number(tick.epoch) * 1000);
 
-  // ✅ recalibramos offset servidor en cada tick
   lastTickLocalNowMs = Date.now();
   serverOffsetMs = epochMs - lastTickLocalNowMs;
 
@@ -1543,12 +1606,8 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Filtros técnicos
+   Technical rules
 ========================= */
-function clamp(n, a, b) {
-  return Math.max(a, Math.min(b, n));
-}
-
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
   const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
@@ -1774,32 +1833,11 @@ function addSignal(minute, symbol, direction, ticks) {
 }
 
 /* =========================
-   Wake lock
-========================= */
-let wakeLock = null;
-if (wakeBtn)
-  wakeBtn.onclick = async () => {
-    try {
-      if (wakeLock) {
-        await wakeLock.release();
-        wakeLock = null;
-        wakeBtn.textContent = "🔓 Pantalla activa";
-        wakeBtn.classList.remove("active");
-      } else {
-        wakeLock = await navigator.wakeLock.request("screen");
-        wakeBtn.textContent = "🔒 Pantalla activa";
-        wakeBtn.classList.add("active");
-      }
-    } catch {
-      alert("No se pudo mantener la pantalla activa");
-    }
-  };
-
-/* =========================
    WebSocket
 ========================= */
 function connect() {
   try {
+    if (statusEl) statusEl.textContent = "Conectando…";
     ws = new WebSocket(WS_URL);
   } catch {
     if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
@@ -1807,14 +1845,13 @@ function connect() {
   }
 
   ws.onopen = () => {
-    // ✅ blindado: si existe, resetea auth; si no, no rompe
     if (typeof resetAuthState === "function") {
       try {
         resetAuthState();
       } catch {}
     }
 
-    if (statusEl) statusEl.textContent = "Conectado – Analizando";
+    if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
     setTimeout(() => {
@@ -1836,15 +1873,21 @@ function connect() {
         return;
       }
 
+      if (data?.error) {
+        if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
+      }
+
       if (data.tick) onTick(data.tick);
-    } catch {}
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
+    }
   };
 
   ws.onerror = () => {
     if (statusEl) statusEl.textContent = "Error WS – reconectando…";
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     if (typeof resetAuthState === "function") {
       try {
         resetAuthState();
@@ -1857,11 +1900,11 @@ function connect() {
       p.reject(new Error("closed"));
     }
 
-    if (statusEl) statusEl.textContent = "Desconectado – reconectando…";
+    const code = ev?.code || 0;
+    const reason = ev?.reason || "";
+    if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`;
 
-    // en bajo consumo, si se cerró por background, no reconectamos hasta volver visible
     if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
-
     setTimeout(connect, 1500);
   };
 }
@@ -1901,6 +1944,8 @@ updateCountdownUI();
 ensureLowPowerButton();
 applyLowPowerModeUI();
 
-ensureTradeButtons(); // ✅ DEMO: agrega 🟢 COMPRAR / 🔴 VENDER
+ensureTradeButtons();
+ensureResetCacheButton();
+
 connect();
 ```0
