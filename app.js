@@ -1,7 +1,7 @@
 "use strict";
 
 /* =========================
-   Config
+   Config 
 ========================= */
 const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
 const SYMBOLS = ["R_10", "R_25", "R_50", "R_75"];
