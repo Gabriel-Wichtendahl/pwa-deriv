@@ -21,7 +21,7 @@
     <div class="topStatus">
       <div id="tickHealth" class="pill">Último tick: —</div>
 
-      <!-- ✅ RELOJ PRO: pill + aro -->
+      <!-- ✅ RELOJ PRO -->
       <div id="countdown" class="pill countdownPill" aria-label="Cuenta regresiva del minuto">
         <span class="countRing" aria-hidden="true"></span>
         <span id="countdownText" class="countText">⏱️ 60</span>
@@ -70,17 +70,17 @@
 
       <canvas id="minuteCanvas"></canvas>
 
-      <!-- ✅ Footer del modal: trade + live + abrir deriv -->
       <div class="modalFooter">
+        <!-- ✅ Trade row dentro del modal -->
         <div class="tradeRow">
-          <button id="modalBuyCallBtn" class="btn btnPrimary" type="button">🟢 COMPRAR</button>
-          <button id="modalBuyPutBtn" class="btn btnDanger" type="button">🔴 VENDER</button>
-          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="true" title="Activar/desactivar gráfico en vivo">
-            📡 LIVE
-          </button>
+          <button id="modalBuyCallBtn" class="btn" type="button">🟢 COMPRAR</button>
+          <button id="modalBuyPutBtn" class="btn" type="button">🔴 VENDER</button>
+          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="true">📡 LIVE ON</button>
         </div>
 
-        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
+        <div style="display:flex; justify-content:flex-end; gap:8px; width:100%;">
+          <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
+        </div>
       </div>
     </div>
   </div>
@@ -113,6 +113,29 @@
 
           <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
           <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+
+          <!-- 🔐 Token Deriv (DEMO) -->
+          <div class="tokenBox" id="tokenBox">
+            <div class="tokenTitle">🔐 Token Deriv (DEMO)</div>
+
+            <input
+              id="derivTokenInput"
+              class="tokenInput"
+              type="password"
+              inputmode="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Pegá tu API Token (Read + Trade)"
+            />
+
+            <div class="tokenActions">
+              <button id="saveTokenBtn" class="btn btnPrimary" type="button">💾 Guardar</button>
+              <button id="clearTokenBtn" class="btn btnDanger" type="button">🗑️ Borrar</button>
+              <button id="toggleTokenBtn" class="btn btnGhost" type="button">👁️ Mostrar</button>
+            </div>
+
+            <div id="tokenStatus" class="tokenStatus">Estado: —</div>
+          </div>
         </div>
 
         <div class="modalFooter" style="margin-top:10px">
