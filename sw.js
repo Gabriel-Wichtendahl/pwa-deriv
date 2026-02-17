@@ -1,4 +1,4 @@
-const CACHE = "deriv-assets-v6-8-lowpower-1";
+const CACHE = "deriv-assets-v6-9-lowpower-1";
 
 const ASSETS = [
   "./",
