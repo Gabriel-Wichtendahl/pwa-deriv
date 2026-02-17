@@ -6,7 +6,7 @@
 // ✅ NUEVO: Token DEMO en Config (input + guardar + borrar) y stake
 // ✅ NUEVO: Botones COMPRAR/VENDER + LIVE dentro del modal gráfico
 
-"use strict";
+"use strict"; 
 
 /* =========================
    Config
