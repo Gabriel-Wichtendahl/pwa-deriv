@@ -1,7 +1,7 @@
-// sw.js — v6.9 LIMPIO (network-first para core) + install tolerante
-const CACHE = "deriv-assets-v6-9-clean-1";
+// sw.js — v6.9 (network-first core, cache-first assets)
+const CACHE = "deriv-assets-v6-9-2";
 
-const CORE = [
+const ASSETS = [
   "./",
   "./index.html",
   "./style.css",
@@ -10,10 +10,6 @@ const CORE = [
   "./icon-192.png",
   "./icon-512.png",
   "./alert.mp3",
-];
-
-// Opcionales (si existen). Si no existen, NO rompe el install.
-const OPTIONAL = [
   "./bg-neon.png",
 ];
 
@@ -21,31 +17,10 @@ self.addEventListener("install", (e) => {
   e.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-
-      // Core: si falla, que se note (pero igual intentamos lo máximo posible)
-      await Promise.all(
-        CORE.map(async (u) => {
-          try {
-            await cache.add(u);
-          } catch (err) {
-            // si algo core falla, igual seguimos para no quedar “a medias”
-            // (en GitHub Pages a veces hay race con deploy)
-          }
-        })
-      );
-
-      // Optional: nunca rompe
-      await Promise.all(
-        OPTIONAL.map(async (u) => {
-          try {
-            await cache.add(u);
-          } catch {}
-        })
-      );
-
-      self.skipWaiting();
+      await cache.addAll(ASSETS);
     })()
   );
+  self.skipWaiting();
 });
 
 self.addEventListener("activate", (e) => {
@@ -61,10 +36,16 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html");
-  const isCore = url.pathname.endsWith("/app.js") || url.pathname.endsWith("/style.css");
+  // Solo manejamos same-origin
+  if (url.origin !== self.location.origin) return;
 
-  // ✅ Network-first para no quedar clavado con versiones viejas
+  const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html");
+  const isCore =
+    url.pathname.endsWith("/app.js") ||
+    url.pathname.endsWith("/style.css") ||
+    url.pathname.endsWith("/manifest.json");
+
+  // ✅ Network-first para core (evita quedar clavado con versiones viejas)
   if (isHTML || isCore) {
     e.respondWith(
       (async () => {
@@ -82,11 +63,11 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // ✅ Cache-first para assets
+  // ✅ Cache-first para el resto
   e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });
 
-/* ✅ Click en notificación: abre Deriv en DEMO */
+/* ✅ Click en notificación: abre Deriv en DEMO / Rise-Fall / símbolo */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
