@@ -53,8 +53,6 @@ body.light .bgNeon{display:none}
 .status{margin:0 0 8px;font-weight:650;letter-spacing:.4px}
 .h3{margin:14px 0 8px;color:var(--muted)}
 .topStatus{display:flex;gap:8px;margin-bottom:10px}
-
-/* ✅ estabilidad numérica */
 #countdownText,#tickHealth{font-variant-numeric: tabular-nums;}
 #countdown{min-width:112px;text-align:center;}
 
@@ -67,7 +65,7 @@ body.light .bgNeon{display:none}
   backdrop-filter:blur(12px);
 }
 
-/* ✅ Tabs */
+/* Tabs */
 .tabsBar{display:flex;gap:8px;align-items:center;margin-bottom:10px}
 .tabs{flex:1;display:flex;gap:6px}
 .tab{
@@ -149,7 +147,7 @@ body.light .bgNeon{display:none}
   backdrop-filter:blur(16px);
 }
 
-/* ✅ Glow MUY fuerte por dirección */
+/* Glow por dirección */
 .row.dir-call{
   border-color: rgba(34,197,94,.55);
   box-shadow:
@@ -184,7 +182,9 @@ body.light .bgNeon{display:none}
   display:grid;place-items:center;padding:0;
 }
 .chartBtn svg{width:20px;height:20px}
-.chartBtn:disabled{opacity:1;cursor:not-allowed;box-shadow:none}
+
+/* OJO: ya NO bloqueamos con disabled. El candado es visual. */
+.chartBtn.locked{opacity:1}
 .lockBadge{font-size:18px;line-height:1}
 
 .nextArrow{font-size:18px;width:28px;text-align:center}
@@ -193,7 +193,6 @@ body.light .bgNeon{display:none}
 .nextArrow.flat{color:var(--muted)}
 .nextArrow.pending{color:var(--muted)}
 
-/* ✅ animaciones: shake fail + pop hit */
 @keyframes arrowShake{
   0%{ transform:translateX(0); }
   25%{ transform:translateX(-2px); }
@@ -210,7 +209,6 @@ body.light .bgNeon{display:none}
 }
 .hitIcon.pop{animation: hitPop .24s ease-out}
 
-/* ✅ Tilde “acierto” */
 .hitIcon{
   width:26px;height:26px;
   display:inline-grid;
@@ -231,7 +229,6 @@ body.light .bgNeon{display:none}
 .row-actions{display:flex;gap:6px;margin-top:8px;align-items:center}
 .row-actions button{padding:6px 10px;border-radius:12px}
 
-/* ✅ Like/Dislike: seleccionado azul (cyan) */
 .voteBtn{min-width:44px;opacity:.95}
 .row.voted .voteBtn{opacity:.45;filter:saturate(.75)}
 .row.voted .voteBtn.selected{
@@ -259,7 +256,7 @@ textarea{
 }
 .hidden{display:none}
 
-/* ✅ Modal */
+/* Modal */
 .modal.hidden{display:none}
 .modalBackdrop{
   position:fixed;inset:0;z-index:20;
@@ -291,7 +288,7 @@ textarea{
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
 @media (max-width:480px){.modalCard{inset:6%}}
 
-/* ✅ Config modal prolijo */
+/* Config modal prolijo */
 .settingsBody .controls{
   display:grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -317,7 +314,7 @@ textarea{
   .settingsBody .controls .btnGroup{flex-wrap:wrap}
 }
 
-/* ✅ candado pulse suave */
+/* Candado pulse */
 @keyframes lockPulse{
   0%{ transform:scale(1); filter:drop-shadow(0 0 0 rgba(34,211,238,0)); opacity:.85; }
   50%{ transform:scale(1.08); filter:drop-shadow(0 0 10px rgba(34,211,238,.35)); opacity:1; }
@@ -329,7 +326,7 @@ textarea{
 }
 
 /* =========================
-   ⏱️ HUD en #countdown (REAL)
+   ⏱️ HUD en #countdown (tu bloque completo)
 ========================= */
 #countdown{
   position:relative;
@@ -337,15 +334,12 @@ textarea{
   align-items:center;
   justify-content:center;
   gap:10px;
-
   padding-left:44px;
   min-width:112px;
   text-align:center;
-
   font-variant-numeric: tabular-nums;
   letter-spacing:.4px;
 }
-
 #countdown::before{
   content:"";
   position:absolute;
@@ -356,7 +350,6 @@ textarea{
   border-radius:999px;
   transform: translate(-50%, -50%);
   pointer-events:none;
-
   background: rgba(34,211,238,1);
   box-shadow:
     0 0 6px rgba(34,211,238,.95),
@@ -364,7 +357,6 @@ textarea{
     0 0 26px rgba(34,211,238,.25);
   opacity:.95;
 }
-
 #countdown::after{
   content:"";
   position:absolute;
@@ -375,44 +367,33 @@ textarea{
   border-radius:999px;
   transform: translateY(-50%);
   pointer-events:none;
-
   background:
     conic-gradient(
       from 0deg,
       transparent 0deg,
-
       rgba(34,211,238,.00) 220deg,
       rgba(34,211,238,.06) 255deg,
       rgba(34,211,238,.12) 285deg,
       rgba(34,211,238,.22) 305deg,
       rgba(34,211,238,.38) 322deg,
-
       rgba(34,211,238,.98) 334deg,
       rgba(34,211,238,.70) 340deg,
       rgba(34,211,238,.18) 348deg,
-
       rgba(34,211,238,.00) 352deg,
       transparent 360deg
     );
-
   -webkit-mask: radial-gradient(circle at center, transparent 58%, #000 60%);
           mask: radial-gradient(circle at center, transparent 58%, #000 60%);
-
   filter: blur(.28px);
   opacity:1;
-
   box-shadow:
     0 0 18px rgba(34,211,238,.22),
     inset 0 0 10px rgba(34,211,238,.08);
-
   animation: scanSpinCountdown .92s linear infinite;
 }
-
 @keyframes scanSpinCountdown{
   to{ transform: translateY(-50%) rotate(360deg); }
 }
-
-/* Amarillo <=15s */
 #countdown.warn::before{
   background: rgba(251,191,36,1);
   box-shadow:
@@ -425,27 +406,21 @@ textarea{
     conic-gradient(
       from 0deg,
       transparent 0deg,
-
       rgba(251,191,36,.00) 220deg,
       rgba(251,191,36,.06) 255deg,
       rgba(251,191,36,.12) 285deg,
       rgba(251,191,36,.22) 305deg,
       rgba(251,191,36,.40) 322deg,
-
       rgba(251,191,36,.98) 334deg,
       rgba(251,191,36,.72) 340deg,
       rgba(251,191,36,.20) 348deg,
-
       rgba(251,191,36,.00) 352deg,
       transparent 360deg
     );
-
   box-shadow:
     0 0 18px rgba(251,191,36,.22),
     inset 0 0 10px rgba(251,191,36,.08);
 }
-
-/* Rojo <=5s + pulso */
 #countdown.urgent::before{
   background: rgba(239,68,68,1);
   box-shadow:
@@ -458,42 +433,33 @@ textarea{
     conic-gradient(
       from 0deg,
       transparent 0deg,
-
       rgba(239,68,68,.00) 220deg,
       rgba(239,68,68,.06) 255deg,
       rgba(239,68,68,.12) 285deg,
       rgba(239,68,68,.24) 305deg,
       rgba(239,68,68,.44) 322deg,
-
       rgba(239,68,68,.98) 334deg,
       rgba(239,68,68,.76) 340deg,
       rgba(239,68,68,.22) 348deg,
-
       rgba(239,68,68,.00) 352deg,
       transparent 360deg
     );
-
   box-shadow:
     0 0 22px rgba(239,68,68,.28),
     inset 0 0 12px rgba(239,68,68,.10);
-
   animation: scanSpinCountdown .78s linear infinite, countdownPulse .55s ease-in-out infinite;
 }
-
 @keyframes countdownPulse{
   0%{ filter: blur(.28px) drop-shadow(0 0 0 rgba(239,68,68,0)); }
   55%{ filter: blur(.28px) drop-shadow(0 0 10px rgba(239,68,68,.35)); }
   100%{ filter: blur(.28px) drop-shadow(0 0 0 rgba(239,68,68,0)); }
 }
-
-/* Micro tick (tu JS agrega .tick) */
 @keyframes secTick2{
   0%{ transform:translateY(0); }
   40%{ transform:translateY(-1px); }
   100%{ transform:translateY(0); }
 }
 #countdown.tick{ animation: secTick2 .16s ease-out; }
-
 @media (prefers-reduced-motion: reduce){
   #countdown::after{ animation:none; }
   #countdown.urgent::after{ animation:none; }
@@ -502,7 +468,6 @@ textarea{
 
 /* =========================
    Modal gráfico: Trade row (integración)
-   - Botones COMPRAR / VENDER + LIVE dentro del modal
 ========================= */
 .modalFooter{
   display:flex;
@@ -510,7 +475,6 @@ textarea{
   gap:10px;
   justify-content:flex-end;
 }
-
 .tradeRow{
   display:flex;
   gap:10px;
@@ -519,33 +483,55 @@ textarea{
   justify-content:space-between;
   align-items:center;
 }
-
-/* Que los 3 botones se repartan bien */
 .tradeRow .btn{
   flex:1 1 30%;
   min-width:120px;
 }
-
-/* LIVE ON/OFF (usa aria-pressed en el botón) */
-#modalLiveBtn{
-  opacity:0.95;
-}
-
+#modalLiveBtn{opacity:0.95;}
 #modalLiveBtn[aria-pressed="true"]{
   border-color: rgba(34,211,238,.70);
   box-shadow: 0 0 18px rgba(34,211,238, 0.22);
   opacity:1;
 }
-
 #modalLiveBtn[aria-pressed="false"]{
   opacity:0.6;
   filter:saturate(0.8);
 }
-
-/* Responsive: en pantallas chicas, uno abajo del otro */
 @media (max-width: 420px){
   .tradeRow .btn{
     flex:1 1 100%;
     min-width:0;
   }
 }
+
+/* =========================
+   Settings inputs/select
+========================= */
+.configGrid{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  padding:8px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background: rgba(255,255,255,0.02);
+}
+.cfgLabel{
+  font-size:12px;
+  color:var(--muted);
+}
+.cfgInput,.cfgSelect{
+  width:100%;
+  background:transparent;
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:8px 10px;
+  outline:none;
+}
+.cfgInput:focus,.cfgSelect:focus{
+  border-color: rgba(34,211,238,.55);
+  box-shadow: 0 0 14px rgba(34,211,238,.18);
+}
+.cfgRow{display:flex;gap:8px;flex-wrap:wrap}
+.cfgCol{flex:1;min-width:140px}
