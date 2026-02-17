@@ -288,7 +288,10 @@ textarea{
   margin:10px 0;border-radius:14px;border:1px solid var(--border);
 }
 .settingsBody{padding:8px 2px 2px}
+
+/* tu CSS ya lo define, lo dejamos */
 .modalFooter{display:flex;justify-content:flex-end;gap:8px}
+
 @media (max-width:480px){.modalCard{inset:6%}}
 
 /* ✅ Config modal prolijo */
@@ -330,12 +333,7 @@ textarea{
 
 /* =========================
    ⏱️ HUD en #countdown (REAL)
-   - Haz largo con cola (degradé hacia atrás)
-   - Cyan normal, Amarillo <=15s, Rojo <=5s
-   - Punto/LED en la cabeza del haz
 ========================= */
-
-/* Sobre-escribe el #countdown anterior (evita “saltos” de ancho) */
 #countdown{
   position:relative;
   display:flex;
@@ -350,8 +348,6 @@ textarea{
   font-variant-numeric: tabular-nums;
   letter-spacing:.4px;
 }
-
-/* Punto/LED */
 #countdown::before{
   content:"";
   position:absolute;
@@ -370,8 +366,6 @@ textarea{
     0 0 26px rgba(34,211,238,.25);
   opacity:.95;
 }
-
-/* Haz giratorio con cola */
 #countdown::after{
   content:"";
   position:absolute;
@@ -414,12 +408,9 @@ textarea{
 
   animation: scanSpinCountdown .92s linear infinite;
 }
-
 @keyframes scanSpinCountdown{
   to{ transform: translateY(-50%) rotate(360deg); }
 }
-
-/* Amarillo <=15s */
 #countdown.warn::before{
   background: rgba(251,191,36,1);
   box-shadow:
@@ -451,8 +442,6 @@ textarea{
     0 0 18px rgba(251,191,36,.22),
     inset 0 0 10px rgba(251,191,36,.08);
 }
-
-/* Rojo <=5s + pulso */
 #countdown.urgent::before{
   background: rgba(239,68,68,1);
   box-shadow:
@@ -486,21 +475,17 @@ textarea{
 
   animation: scanSpinCountdown .78s linear infinite, countdownPulse .55s ease-in-out infinite;
 }
-
 @keyframes countdownPulse{
   0%{ filter: blur(.28px) drop-shadow(0 0 0 rgba(239,68,68,0)); }
   55%{ filter: blur(.28px) drop-shadow(0 0 10px rgba(239,68,68,.35)); }
   100%{ filter: blur(.28px) drop-shadow(0 0 0 rgba(239,68,68,0)); }
 }
-
-/* Micro tick (tu JS agrega .tick) */
 @keyframes secTick2{
   0%{ transform:translateY(0); }
   40%{ transform:translateY(-1px); }
   100%{ transform:translateY(0); }
 }
 #countdown.tick{ animation: secTick2 .16s ease-out; }
-
 @media (prefers-reduced-motion: reduce){
   #countdown::after{ animation:none; }
   #countdown.urgent::after{ animation:none; }
@@ -508,8 +493,14 @@ textarea{
 }
 
 /* =========================
-   Modal gráfico: Trade row
+   Modal gráfico: Trade row (integración)
 ========================= */
+.modalFooter{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  justify-content:flex-end;
+}
 .tradeRow{
   display:flex;
   gap:10px;
@@ -517,34 +508,74 @@ textarea{
   width:100%;
   justify-content:space-between;
   align-items:center;
-  margin-bottom:10px;
 }
-
 .tradeRow .btn{
   flex:1 1 30%;
   min-width:120px;
 }
-
-/* Botón LIVE un poquito más “pill” */
 #modalLiveBtn{
   opacity:0.95;
 }
-
-/* Si usás aria-pressed para mostrar ON/OFF */
 #modalLiveBtn[aria-pressed="true"]{
-  box-shadow: 0 0 18px rgba(56, 189, 248, 0.22);
+  border-color: rgba(34,211,238,.70);
+  box-shadow: 0 0 18px rgba(34,211,238, 0.22);
+  opacity:1;
 }
-
 #modalLiveBtn[aria-pressed="false"]{
   opacity:0.6;
   filter:saturate(0.8);
 }
-
-/* Mejor en pantallas chicas */
 @media (max-width: 420px){
   .tradeRow .btn{
     flex:1 1 100%;
     min-width:0;
   }
 }
-```0
+
+/* =========================
+   🔐 Token box (Settings)
+========================= */
+.tokenBox{
+  grid-column: 1 / -1;
+  background: rgba(2,6,23,.35);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 10px;
+  backdrop-filter: blur(12px);
+}
+body.light .tokenBox{
+  background: rgba(226,232,240,.55);
+}
+.tokenTitle{
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.tokenInput{
+  width: 100%;
+  background: rgba(0,0,0,.12);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 14px;
+  outline: none;
+}
+body.light .tokenInput{
+  background: rgba(255,255,255,.75);
+}
+.tokenActions{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top: 8px;
+}
+.tokenActions .btn{
+  flex: 1 1 120px;
+}
+.tokenStatus{
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
