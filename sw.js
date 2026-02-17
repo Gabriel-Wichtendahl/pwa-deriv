@@ -1,4 +1,7 @@
-const CACHE = "deriv-assets-v7-live-trade-1";
+/* sw.js — Deriv Signals (network-first core) */
+"use strict";
+
+const CACHE = "deriv-assets-v7-base-1";
 
 const ASSETS = [
   "./",
@@ -23,7 +26,7 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.map(k => (k !== CACHE ? caches.delete(k) : null)));
+    await Promise.all(keys.map((k) => (k !== CACHE ? caches.delete(k) : null)));
     await self.clients.claim();
   })());
 });
@@ -31,10 +34,13 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
 
-  const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html");
-  const isCore = url.pathname.endsWith("/app.js") || url.pathname.endsWith("/style.css");
+  const isHTML = e.request.mode === "navigate" || url.pathname.endsWith("/index.html") || url.pathname.endsWith("/");
+  const isCore =
+    url.pathname.endsWith("/app.js") ||
+    url.pathname.endsWith("/style.css") ||
+    url.pathname.endsWith("/manifest.json");
 
-  // ✅ Network-first para core (evita quedar clavado)
+  // ✅ Network-first core (HTML/CSS/JS) para NO quedar clavado
   if (isHTML || isCore) {
     e.respondWith((async () => {
       try {
@@ -50,13 +56,13 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // ✅ Cache-first resto
+  // ✅ Cache-first para assets
   e.respondWith(
-    caches.match(e.request).then(r => r || fetch(e.request))
+    caches.match(e.request).then((r) => r || fetch(e.request))
   );
 });
 
-/* Click notificación */
+/* ✅ Click notificación: abre Deriv */
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
@@ -69,13 +75,12 @@ self.addEventListener("notificationclick", (event) => {
     });
 
     for (const client of allClients) {
-      if (client.url && client.url.includes("app.deriv.com")) {
+      if (client.url) {
         await client.focus();
         if ("navigate" in client) await client.navigate(url);
         return;
       }
     }
-
     await clients.openWindow(url);
   })());
 });
