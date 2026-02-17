@@ -506,4 +506,45 @@ textarea{
   #countdown.urgent::after{ animation:none; }
   #countdown.tick{ animation:none; }
 }
+
+/* =========================
+   Modal gráfico: Trade row
+========================= */
+.tradeRow{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  width:100%;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:10px;
+}
+
+.tradeRow .btn{
+  flex:1 1 30%;
+  min-width:120px;
+}
+
+/* Botón LIVE un poquito más “pill” */
+#modalLiveBtn{
+  opacity:0.95;
+}
+
+/* Si usás aria-pressed para mostrar ON/OFF */
+#modalLiveBtn[aria-pressed="true"]{
+  box-shadow: 0 0 18px rgba(56, 189, 248, 0.22);
+}
+
+#modalLiveBtn[aria-pressed="false"]{
+  opacity:0.6;
+  filter:saturate(0.8);
+}
+
+/* Mejor en pantallas chicas */
+@media (max-width: 420px){
+  .tradeRow .btn{
+    flex:1 1 100%;
+    min-width:0;
+  }
+}
 ```0
