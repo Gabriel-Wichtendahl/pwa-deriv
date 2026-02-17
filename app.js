@@ -35,10 +35,10 @@ const HISTORY_COUNT_MAX = 5000;
    DEMO Trade config
 ========================= */
 const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
-const TRADE_STAKE_KEY = "tradeStake_v1";     // opcional: permite cambiar sin tocar HTML
+const TRADE_STAKE_KEY = "tradeStake_v1"; // opcional (stake guardado)
 
-const DEFAULT_STAKE = 1;          // USD
-const DEFAULT_DURATION = 1;       // 1 minuto
+const DEFAULT_STAKE = 1; // USD
+const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
 const DEFAULT_CURRENCY = "USD";
 
@@ -106,10 +106,10 @@ let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
 // Tiempo/ticks
-let lastTickEpochMs = null;        // epoch del tick (servidor)
-let lastTickLocalNowMs = null;     // Date.now() cuando llegó el último tick
-let serverOffsetMs = 0;            // epochMs - Date.now() (se recalcula en cada tick)
-let currentMinuteStartMs = null;   // inicio del minuto (epoch ms)
+let lastTickEpochMs = null; // epoch del tick (servidor)
+let lastTickLocalNowMs = null; // Date.now() al recibir tick
+let serverOffsetMs = 0; // epochMs - Date.now()
+let currentMinuteStartMs = null; // inicio de minuto (epoch)
 
 // min/candles
 let lastSeenMinute = null;
@@ -143,7 +143,6 @@ const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
 /* =========================
    🪫 Low power mode
-   - sin perder símbolos
 ========================= */
 let lowPowerMode = false;
 const LOWPOWER_KEY = "lowPowerMode_v1";
@@ -205,7 +204,6 @@ function ensureLowPowerButton() {
     saveLowPowerMode();
     applyLowPowerModeUI();
 
-    // Si activás bajo consumo y estaba el wakeLock prendido, lo soltamos (ahorra MUCHO)
     if (lowPowerMode && wakeLock) {
       wakeLock.release().catch(() => {});
       wakeLock = null;
@@ -215,7 +213,6 @@ function ensureLowPowerButton() {
       }
     }
 
-    // si hay WS abierto, lo cerramos para que reconecte limpio
     try {
       if (ws && ws.readyState === 1) ws.close();
     } catch {}
@@ -234,7 +231,6 @@ function applyLowPowerModeUI() {
       ? "Ahorra batería: UI más lenta, histórico más liviano, WS se corta en background"
       : "Modo normal";
   }
-
   startUiTimers();
 }
 
@@ -300,7 +296,9 @@ function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
 }
 
-// helpers NEXT
+/* =========================
+   NEXT helpers
+========================= */
 function nextOutcomeToArrow(outcome) {
   if (outcome === "up") return "⬆️";
   if (outcome === "down") return "⬇️";
@@ -948,11 +946,18 @@ function renderHistory() {
 ========================= */
 function updateTickHealthUI() {
   if (!tickHealthEl) return;
-  if (!lastTickLocalNowMs) {
+
+  const base =
+    (typeof lastTickLocalNowMs === "number" && lastTickLocalNowMs) ||
+    (typeof lastTickEpochMs === "number" && lastTickEpochMs) ||
+    null;
+
+  if (!base) {
     tickHealthEl.textContent = "Último tick: —";
     return;
   }
-  const ageSec = Math.max(0, Math.floor((Date.now() - lastTickLocalNowMs) / 1000));
+
+  const ageSec = Math.max(0, Math.floor((Date.now() - base) / 1000));
   tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
 }
 
@@ -967,7 +972,7 @@ function updateCountdownUI() {
     return;
   }
 
-  // ✅ Tiempo servidor estimado (ajustado cada tick)
+  // ✅ Tiempo servidor estimado (ajustado por tick.epoch)
   const serverNow = Date.now() + (serverOffsetMs || 0);
   const msInMinute = (serverNow - currentMinuteStartMs) % 60000;
 
@@ -1069,7 +1074,6 @@ async function ensureAuthorized() {
 }
 
 function getDefaultTradeSymbol() {
-  // preferimos el último signal (más “contextual”)
   const last = history && history.length ? history[history.length - 1] : null;
   return (last && last.symbol) || "R_25";
 }
@@ -1115,7 +1119,6 @@ function ensureTradeButtons() {
 
   if (!host) return;
 
-  // stake quick-edit (opcional) en long press
   const askStake = () => {
     const cur = getTradeStake();
     const v = prompt(`Stake DEMO (USD). Actual: ${cur}`, String(cur));
@@ -1490,6 +1493,7 @@ function onTick(tick) {
   serverOffsetMs = epochMs - lastTickLocalNowMs;
 
   const minuteStartMs = Math.floor(epochMs / 60000) * 60000;
+
   const minute = Math.floor(epochMs / 60000);
   const msInMinute = epochMs - minuteStartMs;
   const sec = Math.floor(msInMinute / 1000);
@@ -1732,6 +1736,7 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
+
 function addSignal(minute, symbol, direction, ticks) {
   const modeLabel = strongMode ? "FUERTE" : "NORMAL";
   const item = {
@@ -1802,12 +1807,20 @@ function connect() {
   }
 
   ws.onopen = () => {
-    resetAuthState();
+    // ✅ blindado: si existe, resetea auth; si no, no rompe
+    if (typeof resetAuthState === "function") {
+      try {
+        resetAuthState();
+      } catch {}
+    }
+
     if (statusEl) statusEl.textContent = "Conectado – Analizando";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
     setTimeout(() => {
-      rehydrateHistoryOnBoot();
+      try {
+        rehydrateHistoryOnBoot();
+      } catch {}
     }, 350);
   };
 
@@ -1832,13 +1845,18 @@ function connect() {
   };
 
   ws.onclose = () => {
-    resetAuthState();
+    if (typeof resetAuthState === "function") {
+      try {
+        resetAuthState();
+      } catch {}
+    }
 
     for (const [id, p] of pending.entries()) {
       clearTimeout(p.t);
       pending.delete(id);
       p.reject(new Error("closed"));
     }
+
     if (statusEl) statusEl.textContent = "Desconectado – reconectando…";
 
     // en bajo consumo, si se cerró por background, no reconectamos hasta volver visible
@@ -1881,8 +1899,8 @@ updateTickHealthUI();
 updateCountdownUI();
 
 ensureLowPowerButton();
-applyLowPowerModeUI(); // pinta el botón + arranca timer con intervalo correcto
+applyLowPowerModeUI();
 
-ensureTradeButtons();  // ✅ DEMO: agrega 🟢 COMPRAR / 🔴 VENDER
+ensureTradeButtons(); // ✅ DEMO: agrega 🟢 COMPRAR / 🔴 VENDER
 connect();
 ```0
