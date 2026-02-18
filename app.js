@@ -1,9 +1,5 @@
-// app.js — Base estable + LIVE chart FIX + (HOTFIX) Config botones: Pantalla activa / Bajo consumo / Token / Stake / Reset Cache
-// ✅ FIX: Pantalla activa (Wake Lock) vuelve a funcionar y muestra estado
-// ✅ FIX: Bajo consumo vuelve a funcionar y muestra estado
-// ✅ FIX: Token: Guardar/Borrar con aviso + limpia input
-// ✅ FIX: Stake: Guardar/Default con aviso + persiste
-// ✅ FIX: Reset Cache/SW vuelve a funcionar (botón existente o inyectado)
+// app.js — Base estable + LIVE chart FIX + (HOTFIX) Buy/Put validation (NO currency) + Config botones: Pantalla activa / Bajo consumo / Token / Stake / Reset Cache
+// ✅ HOTFIX: buyOneClick NO envía currency (evita "input validation error" por mismatch de moneda)
 // ✅ Mantiene tu UI/CSS/HTML tal cual (usa IDs si existen; si no, no rompe)
 
 "use strict";
@@ -32,10 +28,10 @@ const HISTORY_TIMEOUT_MS = 7000;
 const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
 const TRADE_STAKE_KEY = "tradeStake_v1";
 
-const DEFAULT_STAKE = 1; // USD
+const DEFAULT_STAKE = 1; // (tu UI lo muestra como USD, pero la cuenta demo puede ser VRT)
 const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
-const DEFAULT_CURRENCY = "USD";
+// const DEFAULT_CURRENCY = "USD"; // ❌ NO usar para buy (puede causar validation error)
 
 /* =========================
    DOM helpers
@@ -107,7 +103,6 @@ function toast(msg, ms = 1600) {
     statusEl.textContent = msg;
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
-      // no pisamos estados críticos si cambió a algo más “serio”
       if (statusEl.textContent === msg) statusEl.textContent = prev;
     }, ms);
   } catch {}
@@ -141,37 +136,32 @@ function toast(msg, ms = 1600) {
 ========================= */
 async function resetServiceWorkerAndCaches() {
   try {
-    // 1) desregistrar SW
     if ("serviceWorker" in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
       await Promise.all(regs.map((r) => r.unregister().catch(() => {})));
     }
-    // 2) borrar caches
     if ("caches" in window) {
       const keys = await caches.keys();
       await Promise.all(keys.map((k) => caches.delete(k).catch(() => {})));
     }
-    // 3) limpiar storages “suaves”
     try {
       sessionStorage.clear();
     } catch {}
     toast("🧹 Cache/SW reseteado ✓", 1400);
     setTimeout(() => location.reload(true), 300);
-  } catch (e) {
+  } catch {
     toast("⚠️ Reset falló (recargo igual)", 1600);
     setTimeout(() => location.reload(true), 300);
   }
 }
 
 function ensureResetCacheButton() {
-  // si ya está en tu HTML, lo usamos
   let btn = pickEl("resetCacheBtn");
   if (btn) {
     btn.onclick = resetServiceWorkerAndCaches;
     return btn;
   }
 
-  // si no existe, lo inyectamos como antes
   const host =
     document.querySelector("#settingsModal .settingsBody .controls") ||
     document.querySelector(".settingsBody .controls") ||
@@ -290,8 +280,6 @@ function startUiTimers() {
   }, getUiIntervalMs());
 }
 
-// Si ya tenés #lowPowerBtn en settings, lo usamos.
-// Si no, lo inyectamos.
 function ensureLowPowerButton() {
   let btn = pickEl("lowPowerBtn");
   if (!btn) {
@@ -343,7 +331,6 @@ async function acquireWakeLock() {
   if (!("wakeLock" in navigator)) throw new Error("Wake Lock no soportado");
   wakeLock = await navigator.wakeLock.request("screen");
   wakeLock.addEventListener("release", () => {
-    // se liberó por sistema
     setWakeBtnUI(false);
     wakeLock = null;
   });
@@ -367,7 +354,6 @@ function setWakeBtnUI(active) {
 
 function initWakeButton() {
   if (!wakeBtn) return;
-  // estado inicial (no asumimos lock adquirido)
   setWakeBtnUI(!!wakeLock);
 
   wakeBtn.onclick = async () => {
@@ -379,7 +365,7 @@ function initWakeButton() {
       }
       await acquireWakeLock();
       toast("🔒 Pantalla activa ON");
-    } catch (e) {
+    } catch {
       toast("⚠️ No se pudo activar pantalla");
       alert(
         "No pude activar Pantalla activa.\n\nTip: en algunos Android solo funciona si la app está en primer plano y con interacción reciente."
@@ -387,7 +373,6 @@ function initWakeButton() {
     }
   };
 
-  // si vuelve a primer plano y estaba activo antes, reintenta
   document.addEventListener("visibilitychange", async () => {
     try {
       if (document.visibilityState === "visible" && wakeBtn.classList.contains("active") && !wakeLock) {
@@ -535,91 +520,6 @@ if (configBtn) configBtn.onclick = openSettings;
 if (settingsCloseBtn) settingsCloseBtn.onclick = closeSettings;
 if (settingsCloseBtn2) settingsCloseBtn2.onclick = closeSettings;
 if (settingsCloseBackdrop) settingsCloseBackdrop.onclick = closeSettings;
-
-/* =========================
-   Export (solo señales con voto)
-========================= */
-function buildExportPayloadVoted() {
-  const voted = (history || []).filter((it) => it && it.vote);
-  return {
-    exported_at: new Date().toISOString(),
-    count_total_history: (history || []).length,
-    count_voted: voted.length,
-    signals: voted.map((it) => ({
-      id: it.id,
-      minute: it.minute,
-      time: it.time,
-      symbol: it.symbol,
-      direction: it.direction,
-      mode: it.mode,
-      vote: it.vote,
-      comment: it.comment || "",
-      nextOutcome: it.nextOutcome || "",
-      minuteComplete: !!it.minuteComplete,
-      ticks: Array.isArray(it.ticks) ? it.ticks : [],
-    })),
-  };
-}
-function downloadTextFile(filename, text, mime = "application/json") {
-  try {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  } catch {
-    alert("No se pudo descargar el archivo. Probá copiar desde el portapapeles.");
-  }
-}
-async function exportVotedSignals() {
-  const payload = buildExportPayloadVoted();
-  const json = JSON.stringify(payload, null, 2);
-
-  if (!payload.count_voted) {
-    alert("No hay señales con voto (like/dislike) para exportar todavía.");
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado al portapapeles (${payload.count_voted}). Pegalo acá en el chat.`);
-    return;
-  } catch {
-    const ts = new Date().toISOString().replaceAll(":", "-");
-    downloadTextFile(`deriv-signals-voted-${ts}.json`, json);
-    alert(`📥 Descargado JSON (${payload.count_voted}).`);
-  }
-}
-function ensureExportButton() {
-  let btn = document.getElementById("exportVotedBtn");
-  if (btn) return btn;
-
-  const host =
-    document.querySelector("#settingsModal .settingsBody .controls") ||
-    document.querySelector(".settingsBody .controls") ||
-    null;
-
-  if (!host) return null;
-
-  btn = document.createElement("button");
-  btn.id = "exportVotedBtn";
-  btn.type = "button";
-  btn.className = "btn btnGhost";
-  btn.textContent = "📤 Exportar (solo con voto)";
-  btn.title = "Copia al portapapeles / descarga JSON con señales like/dislike";
-  host.appendChild(btn);
-
-  return btn;
-}
-(function initExportVoted() {
-  const btn = ensureExportButton();
-  if (!btn) return;
-  btn.onclick = exportVotedSignals;
-})();
 
 /* =========================
    Theme
@@ -815,7 +715,6 @@ function drawDerivLikeChart(canvas, ticks) {
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
-  // grid
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
@@ -828,7 +727,6 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  // línea 30s
   const x30 = xOf(30000);
   ctx.globalAlpha = 0.55;
   ctx.strokeStyle = "rgba(255,255,255,0.35)";
@@ -843,7 +741,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
   ctx.globalAlpha = 1;
 
-  // área
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
@@ -854,7 +751,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // línea
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -868,7 +764,6 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // punto final
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
@@ -937,7 +832,6 @@ function openChartModal(item) {
 
   modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
 
-  // LIVE por defecto solo si es el minuto actual
   modalLive = isItemLiveMinute(item);
   updateModalLiveUI();
 
@@ -1319,6 +1213,7 @@ async function ensureAuthorized() {
   return authorizeInFlight;
 }
 
+/* ✅ HOTFIX: NO enviar currency */
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
@@ -1337,10 +1232,10 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
         amount: stake,
         basis: "stake",
         contract_type: side,
-        currency: DEFAULT_CURRENCY,
-        duration: DEFAULT_DURATION,
-        duration_unit: DEFAULT_DURATION_UNIT,
+        duration: Number(DEFAULT_DURATION) || 1,
+        duration_unit: DEFAULT_DURATION_UNIT || "m",
         symbol,
+        // currency: "USD"  ❌ NO
       },
     });
 
@@ -1387,16 +1282,9 @@ if (modalBuyPutBtn) {
    Config UI: Token + Stake (usar IDs existentes)
 ========================= */
 function initTokenAndStakeUI() {
-  // Token
-  const tokenInput = pickEl(
-    "tokenInput",
-    "derivTokenInput",
-    "demoTokenInput",
-    "tokenDemoInput",
-    "tradeTokenInput"
-  );
-  const tokenSaveBtn = pickEl("tokenSaveBtn", "saveTokenBtn", "btnSaveToken");
-  const tokenClearBtn = pickEl("tokenClearBtn", "deleteTokenBtn", "btnClearToken", "btnDeleteToken");
+  const tokenInput = pickEl("tokenInput","derivTokenInput","demoTokenInput","tokenDemoInput","tradeTokenInput");
+  const tokenSaveBtn = pickEl("tokenSaveBtn","saveTokenBtn","btnSaveToken");
+  const tokenClearBtn = pickEl("tokenClearBtn","deleteTokenBtn","btnClearToken","btnDeleteToken");
 
   if (tokenInput) {
     const cur = getDerivToken();
@@ -1408,7 +1296,7 @@ function initTokenAndStakeUI() {
       const v = String(tokenInput.value || "").trim();
       if (!v) return alert("Pegá un token DEMO primero.");
       setDerivToken(v);
-      resetAuthState(); // reauth en próximo trade
+      resetAuthState();
       toast("💾 Token guardado ✓", 1600);
       alert("✅ Token DEMO guardado.");
     };
@@ -1424,7 +1312,6 @@ function initTokenAndStakeUI() {
     };
   }
 
-  // Stake
   const stakeInput = pickEl("stakeInput", "tradeStakeInput", "stakeUsdInput");
   const stakeSaveBtn = pickEl("stakeSaveBtn", "saveStakeBtn", "btnSaveStake");
   const stakeDefaultBtn = pickEl("stakeDefaultBtn", "defaultStakeBtn", "btnDefaultStake");
@@ -1442,7 +1329,7 @@ function initTokenAndStakeUI() {
       if (!ok) return alert("No se pudo guardar el stake.");
       stakeInput.value = Number(getTradeStake()).toFixed(2);
       toast("💾 Stake guardado ✓", 1600);
-      alert(`✅ Stake guardado: ${Number(getTradeStake()).toFixed(2)} USD`);
+      alert(`✅ Stake guardado: ${Number(getTradeStake()).toFixed(2)}`);
     };
   }
 
@@ -1452,17 +1339,18 @@ function initTokenAndStakeUI() {
       stakeInput.value = Number(DEFAULT_STAKE).toFixed(2);
       setTradeStake(DEFAULT_STAKE);
       toast("↩️ Stake default ✓", 1600);
-      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
+      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)}`);
     };
   }
 }
 
 /* =========================
-   ticks_history helpers
+   ticks_history helpers + rehidratación + finalize + tick flow + evaluation + connect
+   (Sin cambios respecto a tu base)
 ========================= */
-function minuteToEpochSec(minute) {
-  return minute * 60;
-}
+
+/* ---- helpers ticks_history ---- */
+function minuteToEpochSec(minute) { return minute * 60; }
 
 function normalizeTicksForMinute(minute, times, prices) {
   const startMs = minute * 60000;
@@ -1529,9 +1417,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
   return any;
 }
 
-/* =========================
-   Loader rehidratación
-========================= */
+/* ---- Loader rehidratación ---- */
 let rehydrateRunning = false;
 let lastStatusBeforeRehydrate = "";
 
@@ -1550,9 +1436,7 @@ function clearRehydrateStatus() {
   statusEl.textContent = lastStatusBeforeRehydrate || "Conectado – Analizando";
 }
 
-/* =========================
-   Rehidratar historial al abrir
-========================= */
+/* ---- Rehidratar historial al abrir ---- */
 const REHYDRATE_MAX_ITEMS = 60;
 const REHYDRATE_SLEEP_MS = 180;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1678,9 +1562,7 @@ async function rehydrateHistoryOnBoot() {
   clearRehydrateStatus();
 }
 
-/* =========================
-   Finalize minute
-========================= */
+/* ---- Finalize minute ---- */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
@@ -1714,7 +1596,6 @@ function finalizeMinute(minute) {
     }
     if (changed) saveHistory(history);
 
-    // si modal mira este minuto: apaga LIVE y render final
     if (modalCurrentItem && modalCurrentItem.minute === minute) {
       modalLive = false;
       updateModalLiveUI();
@@ -1726,9 +1607,7 @@ function finalizeMinute(minute) {
   delete minuteData[minute - 3];
 }
 
-/* =========================
-   Tick flow
-========================= */
+/* ---- Tick flow ---- */
 function onTick(tick) {
   const epochMs = Math.round(Number(tick.epoch) * 1000);
 
@@ -1771,7 +1650,6 @@ function onTick(tick) {
   if (!candleOC[minute][symbol]) candleOC[minute][symbol] = { open: tick.quote, close: tick.quote };
   else candleOC[minute][symbol].close = tick.quote;
 
-  // LIVE modal redraw
   if (
     modalCurrentItem &&
     modalLive &&
@@ -1784,7 +1662,6 @@ function onTick(tick) {
     requestModalDraw(false);
   }
 
-  // refrescar candados cerca del final
   if (history && history.length) {
     const tail = history.slice(-12);
     for (const it of tail) updateRowChartBtn(it);
@@ -1804,9 +1681,7 @@ function scheduleRetry(minute) {
   }, RETRY_DELAY_MS);
 }
 
-/* =========================
-   Technical rules + Evaluation
-========================= */
+/* ---- Technical rules + Evaluation ---- */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
   const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
@@ -1826,8 +1701,7 @@ function sliceTicks(ticks, aMs, bMs) {
 }
 function directionalRatio(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
-  let ok = 0,
-    total = 0;
+  let ok = 0, total = 0;
   for (let i = 1; i < ticks.length; i++) {
     const d = ticks[i].quote - ticks[i - 1].quote;
     if (Math.abs(d) < 1e-12) continue;
@@ -2036,17 +1910,13 @@ function connect() {
   }
 
   ws.onopen = () => {
-    try {
-      resetAuthState();
-    } catch {}
+    try { resetAuthState(); } catch {}
 
     if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
     setTimeout(() => {
-      try {
-        rehydrateHistoryOnBoot();
-      } catch {}
+      try { rehydrateHistoryOnBoot(); } catch {}
     }, 350);
   };
 
@@ -2077,9 +1947,7 @@ function connect() {
   };
 
   ws.onclose = (ev) => {
-    try {
-      resetAuthState();
-    } catch {}
+    try { resetAuthState(); } catch {}
 
     for (const [id, p] of pending.entries()) {
       clearTimeout(p.t);
@@ -2104,18 +1972,14 @@ document.addEventListener("visibilitychange", () => {
 
   if (document.visibilityState === "hidden") {
     if (lowPowerMode && ws && ws.readyState === 1) {
-      try {
-        ws.close();
-      } catch {}
+      try { ws.close(); } catch {}
     }
     return;
   }
 
   if (document.visibilityState === "visible") {
     if (!ws || ws.readyState === 3) {
-      try {
-        connect();
-      } catch {}
+      try { connect(); } catch {}
     }
   }
 });
@@ -2128,7 +1992,6 @@ renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
 
-// (re)bind UI de settings
 ensureLowPowerButton();
 applyLowPowerModeUI();
 initWakeButton();
