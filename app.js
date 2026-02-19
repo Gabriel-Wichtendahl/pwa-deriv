@@ -1,7 +1,9 @@
-// app.js — Base estable + LIVE chart FIX + (HOTFIX) Trades no quedan colgados (timeouts + race)
+// app.js — Base estable + LIVE chart FIX + (HOTFIX) Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ FIX: wsRequest con timeout configurable
 // ✅ FIX: authorize/buy con timeout más largo
 // ✅ FIX: botones COMPRAR/VENDER no quedan en “Enviando…” (Promise.race + cutoff duro)
+// ✅ NUEVO: Config “Auto abrir gráfico al salir señal” (ON/OFF persistente)
+// ✅ NUEVO: Si está ON y la app está visible, abre el modal automáticamente y activa LIVE si corresponde
 // ✅ Mantiene tu UI/CSS/HTML tal cual (usa IDs si existen; si no, no rompe)
 
 "use strict";
@@ -34,6 +36,12 @@ const DEFAULT_STAKE = 1; // USD
 const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
 const DEFAULT_CURRENCY = "USD";
+
+/* =========================
+   Auto-open chart config
+========================= */
+const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
+let autoOpenChartOnSignal = false;
 
 /* =========================
    DOM helpers
@@ -241,6 +249,74 @@ function makeDerivTraderUrl(symbol) {
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+
+/* =========================
+   Auto-open chart (persistente + UI)
+========================= */
+function loadAutoOpenChartSetting() {
+  try {
+    autoOpenChartOnSignal = localStorage.getItem(AUTOOPEN_CHART_KEY) === "1";
+  } catch {
+    autoOpenChartOnSignal = false;
+  }
+}
+function saveAutoOpenChartSetting() {
+  try {
+    localStorage.setItem(AUTOOPEN_CHART_KEY, autoOpenChartOnSignal ? "1" : "0");
+  } catch {}
+}
+function applyAutoOpenChartUI() {
+  const btn = pickEl("autoOpenChartBtn");
+  if (!btn) return;
+  btn.textContent = autoOpenChartOnSignal ? "📈 Auto-abrir gráfico ON" : "📈 Auto-abrir gráfico OFF";
+  btn.classList.toggle("active", autoOpenChartOnSignal);
+  btn.title = autoOpenChartOnSignal
+    ? "Al salir una señal, abre el gráfico automáticamente (solo si la app está en pantalla)"
+    : "No abre el gráfico automáticamente";
+}
+function ensureAutoOpenChartButton() {
+  let btn = pickEl("autoOpenChartBtn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+
+    btn = document.createElement("button");
+    btn.id = "autoOpenChartBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    host.appendChild(btn);
+  }
+
+  btn.onclick = () => {
+    autoOpenChartOnSignal = !autoOpenChartOnSignal;
+    saveAutoOpenChartSetting();
+    applyAutoOpenChartUI();
+    toast(autoOpenChartOnSignal ? "📈 Auto-abrir gráfico ON" : "📈 Auto-abrir gráfico OFF");
+  };
+
+  applyAutoOpenChartUI();
+  return btn;
+}
+
+function shouldAutoOpenChartNow() {
+  if (!autoOpenChartOnSignal) return false;
+  if (document.visibilityState !== "visible") return false;
+
+  // no abrir si ya está abierto el chart
+  if (chartModal && !chartModal.classList.contains("hidden")) return false;
+
+  // no abrir si estás en settings
+  if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
+
+  // opcional: si estás en Feedback, no te molesto
+  const activeView = localStorage.getItem("activeView") || "signals";
+  if (activeView === "feedback") return false;
+
+  return true;
+}
 
 /* =========================
    🪫 Low power mode (persistente)
@@ -2005,6 +2081,25 @@ function addSignal(minute, symbol, direction, ticks) {
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel);
+
+  // ✅ Auto-abrir gráfico (si está ON y la app está visible)
+  if (shouldAutoOpenChartNow()) {
+    requestAnimationFrame(() => {
+      try {
+        // Asegura que estés en Signals view (por si estabas en otra)
+        setActiveView("signals");
+
+        openChartModal(item);
+
+        // Fuerza LIVE ON si es el minuto actual
+        if (isItemLiveMinute(item)) {
+          modalLive = true;
+          updateModalLiveUI();
+          requestModalDraw(true);
+        }
+      } catch {}
+    });
+  }
 }
 
 /* =========================
@@ -2108,6 +2203,8 @@ document.addEventListener("visibilitychange", () => {
    Start
 ========================= */
 loadLowPowerMode();
+loadAutoOpenChartSetting();
+
 renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
@@ -2115,6 +2212,10 @@ updateCountdownUI();
 // (re)bind UI de settings
 ensureLowPowerButton();
 applyLowPowerModeUI();
+
+ensureAutoOpenChartButton();
+applyAutoOpenChartUI();
+
 initWakeButton();
 initTokenAndStakeUI();
 ensureResetCacheButton();
