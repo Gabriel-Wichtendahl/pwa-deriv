@@ -1,9 +1,9 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo FUERTE más “parecido” (patrón tipo ESCALERA + doble empuje) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
-// ✅ NUEVO: Disciplina de trading (DEMO): en una ventana, si llegás a 3 GANADAS o 2 PERDIDAS (lo que pase primero) -> bloquea operar 1 hora
-// ✅ Detecta win/loss por contract (proposal_open_contract) y actualiza lock UI
-// ✅ Mantiene tu UI/CSS/HTML tal cual (usa IDs si existen; si no, no rompe)
+// ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
+// ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
+// ✅ Nota: el bloqueo se activa cuando Deriv confirma el resultado del contrato (al expirar), no al apretar el botón
 
 "use strict";
 
@@ -43,15 +43,15 @@ const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
 
 /* =========================
-   Disciplina (3W o 2L) -> lock 1h
+   Disciplina (3 ITM o 2 OTM) -> lock 1h
 ========================= */
 const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_v1";
 const DISCIPLINE_WINS_KEY = "discipline_wins_v1";
 const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
 const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
 
-const DISCIPLINE_MAX_WINS = 3;
-const DISCIPLINE_MAX_LOSSES = 2;
+const DISCIPLINE_MAX_WINS = 3;   // ITM
+const DISCIPLINE_MAX_LOSSES = 2; // OTM
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 
 let disciplineWindowStartMs = 0;
@@ -366,7 +366,8 @@ function startUiTimers() {
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
-    updateDisciplineLockUI(); // refresca label si está bloqueado
+    // refresca desbloqueo/contador
+    updateDisciplineLockUI(false);
   }, getUiIntervalMs());
 }
 
@@ -993,14 +994,15 @@ function requestModalDraw(force = false) {
 
     if (modalSub) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
-      modalSub.textContent = `${it.time} | ticks: ${n}${modalLive && isItemLiveMinute(it) ? " | LIVE" : ""}`;
+      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
+      const dTag = disciplineTagText();
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}`;
     }
   });
 }
 
 /* =========================
    FIX: Layout de botones COMPRAR/VENDER (modal)
-   - los pone lado a lado, grandes, con colores, sin encimar
 ========================= */
 function applyModalTradeButtonsLayout() {
   const bCall = modalBuyCallBtn;
@@ -1033,9 +1035,9 @@ function applyModalTradeButtonsLayout() {
   const baseBtn = (b) => {
     b.style.flex = "1 1 0";
     b.style.minWidth = "0";
-    b.style.minHeight = "56px";
+    b.style.minHeight = "58px";
     b.style.padding = "14px 16px";
-    b.style.fontWeight = "800";
+    b.style.fontWeight = "850";
     b.style.letterSpacing = "0.4px";
     b.style.borderRadius = "16px";
     b.style.display = "flex";
@@ -1071,6 +1073,143 @@ function applyModalTradeButtonsLayout() {
 }
 
 /* =========================
+   Disciplina (lock) - persistencia + UI
+========================= */
+function loadDiscipline() {
+  try {
+    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
+    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
+    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
+    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
+  } catch {
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    disciplineLockUntilMs = 0;
+  }
+}
+function saveDiscipline() {
+  try {
+    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
+    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
+    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
+    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
+  } catch {}
+}
+function isTradeLockedNow() {
+  const now = Date.now();
+  return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
+}
+function fmtRemaining(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h > 0) return `${h}h ${mm}m`;
+  return `${mm}m`;
+}
+function disciplineTagText() {
+  // auto-unlock si venció
+  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+  }
+
+  if (isTradeLockedNow()) {
+    const remain = disciplineLockUntilMs - Date.now();
+    return `🔒 BLOQUEADO ${fmtRemaining(remain)} (${disciplineWins}W/${disciplineLosses}L)`;
+  }
+  return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`;
+}
+
+function paintTradeButtonLocked(btn, locked, remainMs = 0) {
+  if (!btn) return;
+
+  // guardamos el label original una vez
+  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
+
+  if (locked) {
+    btn.disabled = true;
+    btn.textContent = `🔒 ${btn.dataset.baseLabel.replace(/^🔒\s*/g, "")}`;
+    btn.style.filter = "grayscale(1) saturate(0.7)";
+    btn.style.opacity = "0.48";
+    btn.style.transform = "none";
+    btn.title = `Bloqueado por disciplina. Falta ${fmtRemaining(remainMs)}`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+    btn.style.filter = "";
+    btn.style.opacity = "";
+    btn.title = "Operar DEMO 1m";
+  }
+}
+
+function updateDisciplineLockUI(forceToast = false) {
+  // auto-unlock si venció
+  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    if (forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
+  }
+
+  const locked = isTradeLockedNow();
+  const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
+
+  paintTradeButtonLocked(modalBuyCallBtn, locked, remain);
+  paintTradeButtonLocked(modalBuyPutBtn, locked, remain);
+
+  // show “candado” también en modalSub cuando está abierto
+  if (chartModal && !chartModal.classList.contains("hidden")) {
+    requestModalDraw(true);
+  }
+
+  // si querés confirmación visible sin molestar, solo cuando forceToast
+  if (forceToast) {
+    toast(disciplineTagText(), 2200);
+  }
+}
+
+function startNewDisciplineWindowIfNeeded() {
+  // si estaba bloqueado y ya pasó, auto-unlock lo hace updateDisciplineLockUI()
+  updateDisciplineLockUI(false);
+
+  const now = Date.now();
+  if (!disciplineWindowStartMs) {
+    disciplineWindowStartMs = now;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+  }
+}
+
+function applyDisciplineOutcome(isWin) {
+  updateDisciplineLockUI(false);
+  if (isTradeLockedNow()) return;
+
+  if (isWin) disciplineWins += 1;
+  else disciplineLosses += 1;
+
+  saveDiscipline();
+
+  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
+    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
+    saveDiscipline();
+    updateDisciplineLockUI(true);
+    return;
+  }
+
+  // feedback de que “funciona”
+  toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
+  updateDisciplineLockUI(false);
+}
+
+/* =========================
    Chart modal
 ========================= */
 function openChartModal(item) {
@@ -1085,10 +1224,8 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  // ✅ arregla layout botones
   applyModalTradeButtonsLayout();
-  // ✅ aplica bloqueo si corresponde
-  updateDisciplineLockUI(true);
+  updateDisciplineLockUI(false);
 
   requestModalDraw(true);
 }
@@ -1136,117 +1273,6 @@ if (modalLiveBtn) {
     updateModalLiveUI();
     requestModalDraw(true);
   };
-}
-
-/* =========================
-   Disciplina (lock) - persistencia + UI
-========================= */
-function loadDiscipline() {
-  try {
-    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
-    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
-    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
-    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
-  } catch {
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    disciplineLockUntilMs = 0;
-  }
-}
-function saveDiscipline() {
-  try {
-    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
-    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
-    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
-    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
-  } catch {}
-}
-function isTradeLockedNow() {
-  const now = Date.now();
-  return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
-}
-function fmtRemaining(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  if (h > 0) return `${h}h ${mm}m`;
-  return `${mm}m`;
-}
-function updateDisciplineLockUI(force = false) {
-  const locked = isTradeLockedNow();
-  const now = Date.now();
-  const remain = locked ? disciplineLockUntilMs - now : 0;
-
-  const label =
-    locked
-      ? `⛔ Bloqueado (${fmtRemaining(remain)}) — ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`
-      : `✅ Operar: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`;
-
-  // no spamear status salvo force
-  if (force) {
-    toast(label, 1800);
-  }
-
-  const disable = (btn) => {
-    if (!btn) return;
-    btn.disabled = locked;
-    btn.style.opacity = locked ? "0.55" : "";
-    btn.title = locked
-      ? `Bloqueado por disciplina. Falta ${fmtRemaining(remain)}`
-      : "Operar DEMO 1m";
-  };
-
-  disable(modalBuyCallBtn);
-  disable(modalBuyPutBtn);
-}
-
-function startNewDisciplineWindowIfNeeded() {
-  const now = Date.now();
-
-  // si estaba bloqueado y ya pasó, resetea ventana al desbloquear
-  if (disciplineLockUntilMs && now >= disciplineLockUntilMs) {
-    disciplineLockUntilMs = 0;
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-    return;
-  }
-
-  // si no hay ventana, la armamos al primer trade
-  if (!disciplineWindowStartMs) {
-    disciplineWindowStartMs = now;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-    return;
-  }
-}
-
-function applyDisciplineOutcome(isWin) {
-  // si está bloqueado, ignoramos
-  if (isTradeLockedNow()) return;
-
-  if (isWin) disciplineWins += 1;
-  else disciplineLosses += 1;
-
-  saveDiscipline();
-
-  // ¿se alcanzó el límite?
-  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
-    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
-    saveDiscipline();
-    toast(
-      `⛔ Límite alcanzado (${disciplineWins}W / ${disciplineLosses}L). Bloqueado 1h.`,
-      2600
-    );
-    updateDisciplineLockUI(true);
-  } else {
-    toast(`📌 Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`, 1700);
-    updateDisciplineLockUI(false);
-  }
 }
 
 /* =========================
@@ -1560,24 +1586,23 @@ function resetAuthState() {
 }
 
 /** Subscriptions de contratos abiertos */
-const contractSubs = new Map(); // contract_id -> subscription_id (string)
+const contractSubs = new Map(); // contract_id -> subscription_id
 
 function subscribeContractOutcome(contractId) {
   try {
     if (!ws || ws.readyState !== 1) return;
     if (!contractId) return;
-    // evita duplicados
-    if (contractSubs.has(String(contractId))) return;
+    const cid = String(contractId);
+    if (contractSubs.has(cid)) return;
 
     ws.send(
       JSON.stringify({
         proposal_open_contract: 1,
-        contract_id: contractId,
+        contract_id: cid,
         subscribe: 1,
       })
     );
-    // guardamos "pendiente": cuando llegue el msg, tomamos subscription.id
-    contractSubs.set(String(contractId), "__pending__");
+    contractSubs.set(cid, "__pending__");
   } catch {}
 }
 
@@ -1610,7 +1635,7 @@ async function ensureAuthorized() {
 }
 
 function assertCanTrade() {
-  // si está bloqueado
+  updateDisciplineLockUI(false);
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
     throw new Error(`Bloqueado por disciplina (${fmtRemaining(remain)})`);
@@ -1626,9 +1651,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   try {
     await ensureAuthorized();
 
-    // abre ventana de disciplina al primer trade del ciclo
     startNewDisciplineWindowIfNeeded();
-    saveDiscipline();
 
     const symbol =
       symbolOverride || (modalCurrentItem && modalCurrentItem.symbol) || (history.at(-1)?.symbol || "R_25");
@@ -1655,18 +1678,20 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
 
     const cid = res.buy.contract_id || res.buy.transaction_id;
-    if (cid) subscribeContractOutcome(cid);
+    if (cid) {
+      subscribeContractOutcome(cid);
+      // feedback de que el tracking está enganchado
+      toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
+    }
 
-    // refresca UI de disciplina
     updateDisciplineLockUI(false);
-
     return res;
   } finally {
     tradeInFlight = false;
   }
 }
 
-// Conectar botones del modal si existen (con cutoff duro)
+// Conectar botones del modal (con cutoff duro)
 if (modalBuyCallBtn) {
   modalBuyCallBtn.onclick = async () => {
     modalBuyCallBtn.disabled = true;
@@ -1713,7 +1738,7 @@ if (modalBuyPutBtn) {
 }
 
 /* =========================
-   Config UI: Token + Stake (usar IDs existentes)
+   Config UI: Token + Stake
 ========================= */
 function initTokenAndStakeUI() {
   const tokenInput = pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
@@ -2123,7 +2148,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation
+   Technical rules + Evaluation (FUERTE)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -2188,9 +2213,6 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   }
 }
 
-/* =========================
-   FUERTE: patrón “ESCALERA”
-========================= */
 const STRONG_PATTERN = {
   accelMin: 1.12,
   maxAgainstFracOfMaxFavor: 0.55,
@@ -2371,7 +2393,6 @@ function evaluateMinute(minute) {
   if (!best) return false;
 
   const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
-
   if (best.score < rules.scoreMin) return true;
 
   const ok = passesTechnicalFilters(best, best.vol, rules);
@@ -2464,6 +2485,9 @@ function connect() {
         rehydrateHistoryOnBoot();
       } catch {}
     }, 350);
+
+    // refresca UI disciplina al conectar
+    updateDisciplineLockUI(false);
   };
 
   ws.onmessage = (e) => {
@@ -2486,12 +2510,10 @@ function connect() {
         const subId = data?.subscription?.id;
 
         if (cid) {
-          // guardamos subscription id si llegó
           if (subId) contractSubs.set(cid, subId);
 
-          // cuando se vende -> determinamos win/loss
           if (poc?.is_sold) {
-            // Deriv suele traer status: "won"/"lost"
+            // ITM/OTM: usamos status/profit como backup
             const status = String(poc.status || "").toLowerCase();
             const profit = Number(poc.profit);
 
@@ -2500,9 +2522,10 @@ function connect() {
             else if (status === "lost") isWin = false;
             else if (Number.isFinite(profit)) isWin = profit > 0;
 
+            // feedback explícito
+            toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
             applyDisciplineOutcome(isWin);
 
-            // forget
             const sid = contractSubs.get(cid);
             forgetSubscription(sid);
             contractSubs.delete(cid);
@@ -2536,7 +2559,6 @@ function connect() {
       p.reject(new Error("closed"));
     }
 
-    // limpiar subs locales (servidor las corta igual al cerrar)
     contractSubs.clear();
 
     const code = ev?.code || 0;
@@ -2583,7 +2605,6 @@ renderHistory();
 updateTickHealthUI();
 updateCountdownUI();
 
-// (re)bind UI de settings
 ensureLowPowerButton();
 applyLowPowerModeUI();
 
@@ -2594,7 +2615,7 @@ initWakeButton();
 initTokenAndStakeUI();
 ensureResetCacheButton();
 
-// lock UI inicial
+applyModalTradeButtonsLayout();
 updateDisciplineLockUI(false);
 
 connect();
