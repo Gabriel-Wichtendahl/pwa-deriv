@@ -4,6 +4,7 @@
 // ✅ FIX: botones COMPRAR/VENDER no quedan en “Enviando…” (Promise.race + cutoff duro)
 // ✅ NUEVO: Config “Auto abrir gráfico al salir señal” (ON/OFF persistente)
 // ✅ NUEVO: Si está ON y la app está visible, abre el modal automáticamente y activa LIVE si corresponde
+// ✅ NUEVO: Modo FUERTE más “parecido” (patrón tipo ESCALERA + doble empuje) — NORMAL queda igual
 // ✅ Mantiene tu UI/CSS/HTML tal cual (usa IDs si existen; si no, no rompe)
 
 "use strict";
@@ -1365,7 +1366,6 @@ async function ensureAuthorized() {
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
 
-  // ✅ timeout más largo para authorize
   authorizeInFlight = wsRequest({ authorize: token }, 15000)
     .then((res) => {
       if (res?.error) throw new Error(res.error.message || "authorize error");
@@ -1390,7 +1390,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
       symbolOverride || (modalCurrentItem && modalCurrentItem.symbol) || (history.at(-1)?.symbol || "R_25");
     const stake = getTradeStake();
 
-    // ✅ timeout más largo para buy
     const res = await wsRequest(
       {
         buy: 1,
@@ -1930,6 +1929,95 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   }
 }
 
+/* =========================
+   FUERTE: patrón “ESCALERA” (solo strong)
+   - Busca 2 empujes a favor en 0–30s y contra-movimientos débiles
+   - Mantiene salida de señales (no mata todo): si score es MUY alto, permite saltar escalera
+========================= */
+const STRONG_PATTERN = {
+  // Aceleración: 2do empuje >= 1.12x el 1ro (en 0–30)
+  accelMin: 1.12,
+  // Contra más grande <= 0.55 del empuje más grande (en 0–30)
+  maxAgainstFracOfMaxFavor: 0.55,
+  // Dominancia global: total favor >= 1.25x total contra (en 0–30)
+  totalFavorOverAgainst: 1.25,
+  // “Bypass” para no matar señales: si score >= este valor, no exige escalera
+  bypassScore: 0.060,
+};
+
+function runsMagnitudeBySign(ticksWindow, dirSign) {
+  // devuelve: favorRuns (magnitudes por racha a favor), againstRuns (magnitudes por racha en contra)
+  if (!ticksWindow || ticksWindow.length < 2) return { favorRuns: [], againstRuns: [] };
+
+  const pts = ticksWindow.slice().sort((a, b) => a.ms - b.ms);
+  let curSign = 0;
+  let curMag = 0;
+
+  const favorRuns = [];
+  const againstRuns = [];
+
+  const flush = () => {
+    if (!curSign || curMag <= 0) return;
+    if (curSign === Math.sign(dirSign)) favorRuns.push(curMag);
+    else againstRuns.push(curMag);
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i].quote - pts[i - 1].quote;
+    if (Math.abs(d) < 1e-12) continue;
+
+    const s = Math.sign(d);
+    if (curSign === 0) {
+      curSign = s;
+      curMag = Math.abs(d);
+      continue;
+    }
+
+    if (s === curSign) {
+      curMag += Math.abs(d);
+    } else {
+      flush();
+      curSign = s;
+      curMag = Math.abs(d);
+    }
+  }
+  flush();
+
+  return { favorRuns, againstRuns };
+}
+
+function passesStrongStaircasePattern(ticks, dirSign, score) {
+  // bypass si score es muy alto (para mantener señales)
+  if (typeof score === "number" && score >= STRONG_PATTERN.bypassScore) return true;
+
+  const t0_30 = sliceTicks(ticks, 0, 30000);
+  if (t0_30.length < 6) return false;
+
+  const { favorRuns, againstRuns } = runsMagnitudeBySign(t0_30, dirSign);
+
+  // Necesito al menos 2 empujes “a favor”
+  if (favorRuns.length < 2) return false;
+
+  // Tomo los dos más grandes (no necesariamente consecutivos; esto mantiene señales)
+  const favorSorted = favorRuns.slice().sort((a, b) => b - a);
+  const f1 = favorSorted[0] || 0;
+  const f2 = favorSorted[1] || 0;
+
+  if (!(f1 > 0 && f2 > 0)) return false;
+
+  // Aceleración: segundo empuje importante (f2) no muy chico vs f1
+  if (f2 < f1 / STRONG_PATTERN.accelMin) return false;
+
+  const aMax = (againstRuns.length ? Math.max(...againstRuns) : 0) || 0;
+  if (aMax > f1 * STRONG_PATTERN.maxAgainstFracOfMaxFavor) return false;
+
+  const aSum = againstRuns.reduce((s, x) => s + x, 0);
+  const fSum = favorRuns.reduce((s, x) => s + x, 0);
+  if (aSum > 0 && fSum / aSum < STRONG_PATTERN.totalFavorOverAgainst) return false;
+
+  return true;
+}
+
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
@@ -1940,15 +2028,17 @@ const RULES_NORMAL = {
   rest_minFracTotal: 0.06,
   rest_maxFracTotal: 0.68,
 };
+
+// ✅ FUERTE más “parecido”: domina 0–30, segundo empuje 30–45, ataque contrario chico
 const RULES_STRONG = {
-  scoreMin: 0.02,
-  dirRatioMin_0_30: 0.58,
-  dirRatioMin_30_45: 0.56,
-  move30_fracOfTotal: 0.38,
-  move45_fracOfTotal: 0.2,
-  oppAttack_maxFracMove30: 0.48,
+  scoreMin: 0.03,
+  dirRatioMin_0_30: 0.62,
+  dirRatioMin_30_45: 0.6,
+  move30_fracOfTotal: 0.45,
+  move45_fracOfTotal: 0.25,
+  oppAttack_maxFracMove30: 0.38,
   rest_minFracTotal: 0.1,
-  rest_maxFracTotal: 0.56,
+  rest_maxFracTotal: 0.5,
 };
 
 function passesTechnicalFilters(best, vol, rules) {
@@ -1996,6 +2086,11 @@ function passesTechnicalFilters(best, vol, rules) {
   const totalScore = Math.abs(best.move) / (vol || 1e-9);
   if (totalScore < rules.scoreMin) return false;
 
+  // ✅ Extra: patrón solo en FUERTE (NORMAL queda igual)
+  if (rules === RULES_STRONG) {
+    if (!passesStrongStaircasePattern(ticks, dirSign, totalScore)) return false;
+  }
+
   return true;
 }
 
@@ -2031,6 +2126,7 @@ function evaluateMinute(minute) {
 
   const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
 
+  // Mantenemos tu lógica: si score bajo, “no señal” pero no falla el minuto
   if (best.score < rules.scoreMin) return true;
 
   const ok = passesTechnicalFilters(best, best.vol, rules);
@@ -2086,9 +2182,7 @@ function addSignal(minute, symbol, direction, ticks) {
   if (shouldAutoOpenChartNow()) {
     requestAnimationFrame(() => {
       try {
-        // Asegura que estés en Signals view (por si estabas en otra)
         setActiveView("signals");
-
         openChartModal(item);
 
         // Fuerza LIVE ON si es el minuto actual
