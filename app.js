@@ -5,7 +5,8 @@
 // ✅ NUEVO: Config “Auto abrir gráfico al salir señal” (ON/OFF persistente)
 // ✅ NUEVO: Si está ON y la app está visible, abre el modal automáticamente y activa LIVE si corresponde
 // ✅ NUEVO: Modo FUERTE más “parecido” (patrón tipo ESCALERA + doble empuje) — NORMAL queda igual
-// ✅ Mantiene tu UI/CSS/HTML tal cual (usa IDs si existen; si no, no rompe)
+// ✅ NUEVO: Disciplina: en ventana móvil 1h → si 3 ITM o 2 OTM (lo que pase primero) → bloquea 1h (botones deshabilitados)
+// ✅ NUEVO: Botones COMPRAR/VENDER en el modal más “grandes”, separados y con color (sin tocar CSS/HTML)
 
 "use strict";
 
@@ -43,6 +44,21 @@ const DEFAULT_CURRENCY = "USD";
 ========================= */
 const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
+
+/* =========================
+   Disciplina (rolling 1h: 3 ITM o 2 OTM)
+========================= */
+const TRADE_WINDOW_MS = 60 * 60 * 1000; // ventana móvil 1h
+const LOCK_DURATION_MS = 60 * 60 * 1000; // lock 1h
+const LIMIT_ITM_PER_WINDOW = 3;
+const LIMIT_OTM_PER_WINDOW = 2;
+
+const TRADE_LOCK_UNTIL_KEY = "tradeLockUntil_v2";
+const TRADE_OUTCOMES_KEY = "tradeOutcomes_v2"; // [{ts, result:"ITM"|"OTM", contract_id}]
+
+let tradeLockUntil = 0;
+let tradeOutcomes = [];
+const openContracts = new Map(); // contract_id -> {ts}
 
 /* =========================
    DOM helpers
@@ -305,18 +321,149 @@ function ensureAutoOpenChartButton() {
 function shouldAutoOpenChartNow() {
   if (!autoOpenChartOnSignal) return false;
   if (document.visibilityState !== "visible") return false;
-
-  // no abrir si ya está abierto el chart
   if (chartModal && !chartModal.classList.contains("hidden")) return false;
-
-  // no abrir si estás en settings
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
 
-  // opcional: si estás en Feedback, no te molesto
   const activeView = localStorage.getItem("activeView") || "signals";
   if (activeView === "feedback") return false;
 
   return true;
+}
+
+/* =========================
+   Disciplina (helpers)
+========================= */
+function loadDisciplineState() {
+  try {
+    tradeLockUntil = Number(localStorage.getItem(TRADE_LOCK_UNTIL_KEY) || "0") || 0;
+  } catch {
+    tradeLockUntil = 0;
+  }
+  try {
+    const raw = localStorage.getItem(TRADE_OUTCOMES_KEY);
+    tradeOutcomes = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(tradeOutcomes)) tradeOutcomes = [];
+  } catch {
+    tradeOutcomes = [];
+  }
+  pruneOutcomes();
+}
+
+function saveDisciplineState() {
+  try {
+    localStorage.setItem(TRADE_LOCK_UNTIL_KEY, String(tradeLockUntil || 0));
+  } catch {}
+  try {
+    localStorage.setItem(TRADE_OUTCOMES_KEY, JSON.stringify(tradeOutcomes || []));
+  } catch {}
+}
+
+function pruneOutcomes(now = Date.now()) {
+  const cut = now - TRADE_WINDOW_MS;
+  tradeOutcomes = (tradeOutcomes || []).filter((x) => x && typeof x.ts === "number" && x.ts >= cut);
+}
+
+function windowCounts(now = Date.now()) {
+  pruneOutcomes(now);
+  let itm = 0;
+  let otm = 0;
+  for (const x of tradeOutcomes) {
+    if (x.result === "ITM") itm++;
+    else if (x.result === "OTM") otm++;
+  }
+  return { itm, otm };
+}
+
+function formatMMSS(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}m ${String(r).padStart(2, "0")}s`;
+}
+
+function lockForOneHour(now = Date.now(), reason = "") {
+  tradeLockUntil = Math.max(tradeLockUntil || 0, now + LOCK_DURATION_MS);
+  saveDisciplineState();
+  updateTradeButtonsUI(reason || "⛔ Bloqueado 1h");
+}
+
+function canTradeNow() {
+  const now = Date.now();
+
+  if (tradeLockUntil && now < tradeLockUntil) {
+    return { ok: false, msg: `⛔ Bloqueado (${formatMMSS(tradeLockUntil - now)})` };
+  }
+
+  const { itm, otm } = windowCounts(now);
+
+  if (itm >= LIMIT_ITM_PER_WINDOW) {
+    lockForOneHour(now, "✅ 3 ITM en 1h → pausa 1h");
+    return { ok: false, msg: "✅ 3 ITM en 1h → pausa 1h" };
+  }
+  if (otm >= LIMIT_OTM_PER_WINDOW) {
+    lockForOneHour(now, "⚠️ 2 OTM en 1h → pausa 1h");
+    return { ok: false, msg: "⚠️ 2 OTM en 1h → pausa 1h" };
+  }
+
+  return { ok: true, msg: "" };
+}
+
+function updateTradeButtonsUI(extraMsg = "") {
+  const b1 = modalBuyCallBtn;
+  const b2 = modalBuyPutBtn;
+  if (!b1 && !b2) return;
+
+  const chk = canTradeNow();
+  const disabled = !chk.ok;
+
+  if (b1) b1.disabled = disabled;
+  if (b2) b2.disabled = disabled;
+
+  if (disabled) {
+    const msg = extraMsg || chk.msg || "⛔ Bloqueado";
+    if (msg) toast(msg, 1800);
+  }
+}
+
+/* =========================
+   Botones del modal: “grandes” + separados + color (sin tocar CSS)
+========================= */
+function applyModalTradeButtonsLayout() {
+  const bCall = modalBuyCallBtn;
+  const bPut = modalBuyPutBtn;
+  if (!bCall || !bPut) return;
+
+  // Aseguramos que estén uno al lado del otro (si el HTML ya los pone así, no molesta)
+  const parent = bCall.parentElement;
+  if (parent && parent === bPut.parentElement) {
+    parent.style.display = "flex";
+    parent.style.gap = "12px";
+    parent.style.flexWrap = "nowrap";
+    parent.style.alignItems = "stretch";
+  }
+
+  const baseBtn = (b) => {
+    b.style.flex = "1 1 0";
+    b.style.minHeight = "52px";
+    b.style.padding = "12px 14px";
+    b.style.fontWeight = "800";
+    b.style.letterSpacing = "0.4px";
+    b.style.borderRadius = "14px";
+  };
+
+  baseBtn(bCall);
+  baseBtn(bPut);
+
+  // Colores (usa variables si existen)
+  bCall.style.borderColor = "rgba(34,197,94,.75)";
+  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.22)";
+  bCall.style.background = "rgba(34,197,94,.16)";
+  bCall.style.color = "var(--text, #e5e7eb)";
+
+  bPut.style.borderColor = "rgba(239,68,68,.75)";
+  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.20)";
+  bPut.style.background = "rgba(239,68,68,.14)";
+  bPut.style.color = "var(--text, #e5e7eb)";
 }
 
 /* =========================
@@ -356,6 +503,8 @@ function startUiTimers() {
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
+    // si estás bloqueado, refresca deshabilitado/contador
+    if (modalBuyCallBtn || modalBuyPutBtn) updateTradeButtonsUI("");
   }, getUiIntervalMs());
 }
 
@@ -1002,6 +1151,10 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
+  // ✅ layout + estado de bloqueo
+  applyModalTradeButtonsLayout();
+  updateTradeButtonsUI();
+
   requestModalDraw(true);
 }
 
@@ -1380,6 +1533,10 @@ async function ensureAuthorized() {
 }
 
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
+  // gate disciplina
+  const gate = canTradeNow();
+  if (!gate.ok) throw new Error(gate.msg || "Bloqueado por disciplina");
+
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
 
@@ -1409,17 +1566,77 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
 
     if (res?.error) throw new Error(res.error.message || "buy error");
     if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
+
+    // ✅ suscribirse al resultado del contrato para contar ITM/OTM
+    const cid = res?.buy?.contract_id || res?.buy?.transaction_id;
+    if (cid && ws && ws.readyState === 1) {
+      const idStr = String(cid);
+      openContracts.set(idStr, { ts: Date.now() });
+      try {
+        ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: idStr, subscribe: 1 }));
+      } catch {}
+    }
+
     return res;
   } finally {
     tradeInFlight = false;
+    // refresca UI (por si se lockeó en el medio)
+    updateTradeButtonsUI("");
   }
+}
+
+/* =========================
+   Contract updates → ITM/OTM → lock 1h
+========================= */
+function onContractUpdate(poc) {
+  try {
+    const cid = String(poc?.contract_id || "");
+    if (!cid) return;
+
+    const done =
+      poc.is_sold === 1 ||
+      poc.status === "sold" ||
+      poc.status === "expired" ||
+      poc.status === "won" ||
+      poc.status === "lost";
+
+    if (!done) return;
+
+    const profit = Number(poc.profit || 0);
+    const result = profit > 0 ? "ITM" : "OTM";
+
+    pruneOutcomes();
+    tradeOutcomes.push({ ts: Date.now(), result, contract_id: cid });
+    saveDisciplineState();
+
+    const { itm, otm } = windowCounts();
+
+    if (itm >= LIMIT_ITM_PER_WINDOW) {
+      lockForOneHour(Date.now(), "✅ Llegaste a 3 ITM → pausa 1h");
+    } else if (otm >= LIMIT_OTM_PER_WINDOW) {
+      lockForOneHour(Date.now(), "⚠️ Llegaste a 2 OTM → pausa 1h");
+    } else {
+      updateTradeButtonsUI(result === "ITM" ? "✅ ITM" : "❌ OTM");
+    }
+
+    openContracts.delete(cid);
+  } catch {}
 }
 
 // Conectar botones del modal si existen (con cutoff duro)
 if (modalBuyCallBtn) {
   modalBuyCallBtn.onclick = async () => {
+    applyModalTradeButtonsLayout();
+
     modalBuyCallBtn.disabled = true;
     try {
+      const gate = canTradeNow();
+      if (!gate.ok) {
+        toast(gate.msg || "⛔ No podés operar ahora", 2400);
+        updateTradeButtonsUI("");
+        return;
+      }
+
       toast("🟢 Enviando COMPRA…", 1200);
       const r = await Promise.race([
         buyOneClick("CALL"),
@@ -1430,14 +1647,25 @@ if (modalBuyCallBtn) {
     } catch (e) {
       toast(`⚠️ Error COMPRA: ${e?.message || e}`, 2400);
     } finally {
-      modalBuyCallBtn.disabled = false;
+      updateTradeButtonsUI("");
+      // si no está bloqueado, se re-habilita; si está bloqueado, queda disabled
+      if (canTradeNow().ok) modalBuyCallBtn.disabled = false;
     }
   };
 }
 if (modalBuyPutBtn) {
   modalBuyPutBtn.onclick = async () => {
+    applyModalTradeButtonsLayout();
+
     modalBuyPutBtn.disabled = true;
     try {
+      const gate = canTradeNow();
+      if (!gate.ok) {
+        toast(gate.msg || "⛔ No podés operar ahora", 2400);
+        updateTradeButtonsUI("");
+        return;
+      }
+
       toast("🔴 Enviando VENTA…", 1200);
       const r = await Promise.race([
         buyOneClick("PUT"),
@@ -1448,7 +1676,8 @@ if (modalBuyPutBtn) {
     } catch (e) {
       toast(`⚠️ Error VENTA: ${e?.message || e}`, 2400);
     } finally {
-      modalBuyPutBtn.disabled = false;
+      updateTradeButtonsUI("");
+      if (canTradeNow().ok) modalBuyPutBtn.disabled = false;
     }
   };
 }
@@ -1931,22 +2160,15 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
 
 /* =========================
    FUERTE: patrón “ESCALERA” (solo strong)
-   - Busca 2 empujes a favor en 0–30s y contra-movimientos débiles
-   - Mantiene salida de señales (no mata todo): si score es MUY alto, permite saltar escalera
 ========================= */
 const STRONG_PATTERN = {
-  // Aceleración: 2do empuje >= 1.12x el 1ro (en 0–30)
   accelMin: 1.12,
-  // Contra más grande <= 0.55 del empuje más grande (en 0–30)
   maxAgainstFracOfMaxFavor: 0.55,
-  // Dominancia global: total favor >= 1.25x total contra (en 0–30)
   totalFavorOverAgainst: 1.25,
-  // “Bypass” para no matar señales: si score >= este valor, no exige escalera
   bypassScore: 0.060,
 };
 
 function runsMagnitudeBySign(ticksWindow, dirSign) {
-  // devuelve: favorRuns (magnitudes por racha a favor), againstRuns (magnitudes por racha en contra)
   if (!ticksWindow || ticksWindow.length < 2) return { favorRuns: [], againstRuns: [] };
 
   const pts = ticksWindow.slice().sort((a, b) => a.ms - b.ms);
@@ -1987,25 +2209,19 @@ function runsMagnitudeBySign(ticksWindow, dirSign) {
 }
 
 function passesStrongStaircasePattern(ticks, dirSign, score) {
-  // bypass si score es muy alto (para mantener señales)
   if (typeof score === "number" && score >= STRONG_PATTERN.bypassScore) return true;
 
   const t0_30 = sliceTicks(ticks, 0, 30000);
   if (t0_30.length < 6) return false;
 
   const { favorRuns, againstRuns } = runsMagnitudeBySign(t0_30, dirSign);
-
-  // Necesito al menos 2 empujes “a favor”
   if (favorRuns.length < 2) return false;
 
-  // Tomo los dos más grandes (no necesariamente consecutivos; esto mantiene señales)
   const favorSorted = favorRuns.slice().sort((a, b) => b - a);
   const f1 = favorSorted[0] || 0;
   const f2 = favorSorted[1] || 0;
 
   if (!(f1 > 0 && f2 > 0)) return false;
-
-  // Aceleración: segundo empuje importante (f2) no muy chico vs f1
   if (f2 < f1 / STRONG_PATTERN.accelMin) return false;
 
   const aMax = (againstRuns.length ? Math.max(...againstRuns) : 0) || 0;
@@ -2029,7 +2245,6 @@ const RULES_NORMAL = {
   rest_maxFracTotal: 0.68,
 };
 
-// ✅ FUERTE más “parecido”: domina 0–30, segundo empuje 30–45, ataque contrario chico
 const RULES_STRONG = {
   scoreMin: 0.03,
   dirRatioMin_0_30: 0.62,
@@ -2086,7 +2301,6 @@ function passesTechnicalFilters(best, vol, rules) {
   const totalScore = Math.abs(best.move) / (vol || 1e-9);
   if (totalScore < rules.scoreMin) return false;
 
-  // ✅ Extra: patrón solo en FUERTE (NORMAL queda igual)
   if (rules === RULES_STRONG) {
     if (!passesStrongStaircasePattern(ticks, dirSign, totalScore)) return false;
   }
@@ -2126,7 +2340,6 @@ function evaluateMinute(minute) {
 
   const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
 
-  // Mantenemos tu lógica: si score bajo, “no señal” pero no falla el minuto
   if (best.score < rules.scoreMin) return true;
 
   const ok = passesTechnicalFilters(best, best.vol, rules);
@@ -2185,7 +2398,6 @@ function addSignal(minute, symbol, direction, ticks) {
         setActiveView("signals");
         openChartModal(item);
 
-        // Fuerza LIVE ON si es el minuto actual
         if (isItemLiveMinute(item)) {
           modalLive = true;
           updateModalLiveUI();
@@ -2221,6 +2433,9 @@ function connect() {
         rehydrateHistoryOnBoot();
       } catch {}
     }, 350);
+
+    // refresca UI disciplina
+    updateTradeButtonsUI("");
   };
 
   ws.onmessage = (e) => {
@@ -2239,6 +2454,7 @@ function connect() {
         if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
       }
 
+      if (data.proposal_open_contract) onContractUpdate(data.proposal_open_contract);
       if (data.tick) onTick(data.tick);
     } catch (err) {
       if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
@@ -2290,6 +2506,8 @@ document.addEventListener("visibilitychange", () => {
         connect();
       } catch {}
     }
+    // al volver, refresca bloqueo
+    updateTradeButtonsUI("");
   }
 });
 
@@ -2298,6 +2516,7 @@ document.addEventListener("visibilitychange", () => {
 ========================= */
 loadLowPowerMode();
 loadAutoOpenChartSetting();
+loadDisciplineState();
 
 renderHistory();
 updateTickHealthUI();
@@ -2313,5 +2532,9 @@ applyAutoOpenChartUI();
 initWakeButton();
 initTokenAndStakeUI();
 ensureResetCacheButton();
+
+// aplica layout “grande” si el modal existe
+applyModalTradeButtonsLayout();
+updateTradeButtonsUI("");
 
 connect();
