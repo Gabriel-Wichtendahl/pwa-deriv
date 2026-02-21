@@ -1,12 +1,9 @@
-// app.js — Base estable + LIVE chart FIX + (HOTFIX) Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ FIX: wsRequest con timeout configurable
-// ✅ FIX: authorize/buy con timeout más largo
-// ✅ FIX: botones COMPRAR/VENDER no quedan en “Enviando…” (Promise.race + cutoff duro)
-// ✅ NUEVO: Config “Auto abrir gráfico al salir señal” (ON/OFF persistente)
-// ✅ NUEVO: Si está ON y la app está visible, abre el modal automáticamente y activa LIVE si corresponde
-// ✅ NUEVO: Modo FUERTE más “parecido” (patrón tipo ESCALERA + doble empuje) — NORMAL queda igual
-// ✅ NUEVO: Disciplina: en ventana móvil 1h → si 3 ITM o 2 OTM (lo que pase primero) → bloquea 1h (botones deshabilitados)
-// ✅ NUEVO: Botones COMPRAR/VENDER en el modal más “grandes”, separados y con color (sin tocar CSS/HTML)
+// app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
+// ✅ Modo FUERTE más “parecido” (patrón tipo ESCALERA + doble empuje) — NORMAL queda igual
+// ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
+// ✅ NUEVO: Disciplina de trading (DEMO): en una ventana, si llegás a 3 GANADAS o 2 PERDIDAS (lo que pase primero) -> bloquea operar 1 hora
+// ✅ Detecta win/loss por contract (proposal_open_contract) y actualiza lock UI
+// ✅ Mantiene tu UI/CSS/HTML tal cual (usa IDs si existen; si no, no rompe)
 
 "use strict";
 
@@ -46,19 +43,21 @@ const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
 
 /* =========================
-   Disciplina (rolling 1h: 3 ITM o 2 OTM)
+   Disciplina (3W o 2L) -> lock 1h
 ========================= */
-const TRADE_WINDOW_MS = 60 * 60 * 1000; // ventana móvil 1h
-const LOCK_DURATION_MS = 60 * 60 * 1000; // lock 1h
-const LIMIT_ITM_PER_WINDOW = 3;
-const LIMIT_OTM_PER_WINDOW = 2;
+const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_v1";
+const DISCIPLINE_WINS_KEY = "discipline_wins_v1";
+const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
+const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
 
-const TRADE_LOCK_UNTIL_KEY = "tradeLockUntil_v2";
-const TRADE_OUTCOMES_KEY = "tradeOutcomes_v2"; // [{ts, result:"ITM"|"OTM", contract_id}]
+const DISCIPLINE_MAX_WINS = 3;
+const DISCIPLINE_MAX_LOSSES = 2;
+const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 
-let tradeLockUntil = 0;
-let tradeOutcomes = [];
-const openContracts = new Map(); // contract_id -> {ts}
+let disciplineWindowStartMs = 0;
+let disciplineWins = 0;
+let disciplineLosses = 0;
+let disciplineLockUntilMs = 0;
 
 /* =========================
    DOM helpers
@@ -120,7 +119,7 @@ const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 
 /* =========================
-   Toast / feedback corto (sin romper tu status)
+   Toast / feedback corto
 ========================= */
 let toastTimer = null;
 function toast(msg, ms = 1600) {
@@ -331,142 +330,6 @@ function shouldAutoOpenChartNow() {
 }
 
 /* =========================
-   Disciplina (helpers)
-========================= */
-function loadDisciplineState() {
-  try {
-    tradeLockUntil = Number(localStorage.getItem(TRADE_LOCK_UNTIL_KEY) || "0") || 0;
-  } catch {
-    tradeLockUntil = 0;
-  }
-  try {
-    const raw = localStorage.getItem(TRADE_OUTCOMES_KEY);
-    tradeOutcomes = raw ? JSON.parse(raw) : [];
-    if (!Array.isArray(tradeOutcomes)) tradeOutcomes = [];
-  } catch {
-    tradeOutcomes = [];
-  }
-  pruneOutcomes();
-}
-
-function saveDisciplineState() {
-  try {
-    localStorage.setItem(TRADE_LOCK_UNTIL_KEY, String(tradeLockUntil || 0));
-  } catch {}
-  try {
-    localStorage.setItem(TRADE_OUTCOMES_KEY, JSON.stringify(tradeOutcomes || []));
-  } catch {}
-}
-
-function pruneOutcomes(now = Date.now()) {
-  const cut = now - TRADE_WINDOW_MS;
-  tradeOutcomes = (tradeOutcomes || []).filter((x) => x && typeof x.ts === "number" && x.ts >= cut);
-}
-
-function windowCounts(now = Date.now()) {
-  pruneOutcomes(now);
-  let itm = 0;
-  let otm = 0;
-  for (const x of tradeOutcomes) {
-    if (x.result === "ITM") itm++;
-    else if (x.result === "OTM") otm++;
-  }
-  return { itm, otm };
-}
-
-function formatMMSS(ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}m ${String(r).padStart(2, "0")}s`;
-}
-
-function lockForOneHour(now = Date.now(), reason = "") {
-  tradeLockUntil = Math.max(tradeLockUntil || 0, now + LOCK_DURATION_MS);
-  saveDisciplineState();
-  updateTradeButtonsUI(reason || "⛔ Bloqueado 1h");
-}
-
-function canTradeNow() {
-  const now = Date.now();
-
-  if (tradeLockUntil && now < tradeLockUntil) {
-    return { ok: false, msg: `⛔ Bloqueado (${formatMMSS(tradeLockUntil - now)})` };
-  }
-
-  const { itm, otm } = windowCounts(now);
-
-  if (itm >= LIMIT_ITM_PER_WINDOW) {
-    lockForOneHour(now, "✅ 3 ITM en 1h → pausa 1h");
-    return { ok: false, msg: "✅ 3 ITM en 1h → pausa 1h" };
-  }
-  if (otm >= LIMIT_OTM_PER_WINDOW) {
-    lockForOneHour(now, "⚠️ 2 OTM en 1h → pausa 1h");
-    return { ok: false, msg: "⚠️ 2 OTM en 1h → pausa 1h" };
-  }
-
-  return { ok: true, msg: "" };
-}
-
-function updateTradeButtonsUI(extraMsg = "") {
-  const b1 = modalBuyCallBtn;
-  const b2 = modalBuyPutBtn;
-  if (!b1 && !b2) return;
-
-  const chk = canTradeNow();
-  const disabled = !chk.ok;
-
-  if (b1) b1.disabled = disabled;
-  if (b2) b2.disabled = disabled;
-
-  if (disabled) {
-    const msg = extraMsg || chk.msg || "⛔ Bloqueado";
-    if (msg) toast(msg, 1800);
-  }
-}
-
-/* =========================
-   Botones del modal: “grandes” + separados + color (sin tocar CSS)
-========================= */
-function applyModalTradeButtonsLayout() {
-  const bCall = modalBuyCallBtn;
-  const bPut = modalBuyPutBtn;
-  if (!bCall || !bPut) return;
-
-  // Aseguramos que estén uno al lado del otro (si el HTML ya los pone así, no molesta)
-  const parent = bCall.parentElement;
-  if (parent && parent === bPut.parentElement) {
-    parent.style.display = "flex";
-    parent.style.gap = "12px";
-    parent.style.flexWrap = "nowrap";
-    parent.style.alignItems = "stretch";
-  }
-
-  const baseBtn = (b) => {
-    b.style.flex = "1 1 0";
-    b.style.minHeight = "52px";
-    b.style.padding = "12px 14px";
-    b.style.fontWeight = "800";
-    b.style.letterSpacing = "0.4px";
-    b.style.borderRadius = "14px";
-  };
-
-  baseBtn(bCall);
-  baseBtn(bPut);
-
-  // Colores (usa variables si existen)
-  bCall.style.borderColor = "rgba(34,197,94,.75)";
-  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.22)";
-  bCall.style.background = "rgba(34,197,94,.16)";
-  bCall.style.color = "var(--text, #e5e7eb)";
-
-  bPut.style.borderColor = "rgba(239,68,68,.75)";
-  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.20)";
-  bPut.style.background = "rgba(239,68,68,.14)";
-  bPut.style.color = "var(--text, #e5e7eb)";
-}
-
-/* =========================
    🪫 Low power mode (persistente)
 ========================= */
 let lowPowerMode = false;
@@ -503,8 +366,7 @@ function startUiTimers() {
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
-    // si estás bloqueado, refresca deshabilitado/contador
-    if (modalBuyCallBtn || modalBuyPutBtn) updateTradeButtonsUI("");
+    updateDisciplineLockUI(); // refresca label si está bloqueado
   }, getUiIntervalMs());
 }
 
@@ -1137,6 +999,78 @@ function requestModalDraw(force = false) {
 }
 
 /* =========================
+   FIX: Layout de botones COMPRAR/VENDER (modal)
+   - los pone lado a lado, grandes, con colores, sin encimar
+========================= */
+function applyModalTradeButtonsLayout() {
+  const bCall = modalBuyCallBtn;
+  const bPut = modalBuyPutBtn;
+  if (!bCall || !bPut) return;
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return;
+
+  let row = footer.querySelector(".tradeRow");
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "tradeRow";
+    footer.prepend(row);
+  }
+
+  row.style.display = "flex";
+  row.style.gap = "14px";
+  row.style.alignItems = "stretch";
+  row.style.justifyContent = "space-between";
+  row.style.width = "100%";
+  row.style.flexWrap = "nowrap";
+
+  if (bCall.parentElement !== row) row.appendChild(bCall);
+  if (bPut.parentElement !== row) row.appendChild(bPut);
+
+  const baseBtn = (b) => {
+    b.style.flex = "1 1 0";
+    b.style.minWidth = "0";
+    b.style.minHeight = "56px";
+    b.style.padding = "14px 16px";
+    b.style.fontWeight = "800";
+    b.style.letterSpacing = "0.4px";
+    b.style.borderRadius = "16px";
+    b.style.display = "flex";
+    b.style.alignItems = "center";
+    b.style.justifyContent = "center";
+    b.style.gap = "10px";
+  };
+  baseBtn(bCall);
+  baseBtn(bPut);
+
+  bCall.style.borderColor = "rgba(34,197,94,.85)";
+  bCall.style.boxShadow = "0 0 20px rgba(34,197,94,.22)";
+  bCall.style.background = "rgba(34,197,94,.18)";
+  bCall.style.color = "var(--text, #e5e7eb)";
+
+  bPut.style.borderColor = "rgba(239,68,68,.85)";
+  bPut.style.boxShadow = "0 0 20px rgba(239,68,68,.20)";
+  bPut.style.background = "rgba(239,68,68,.16)";
+  bPut.style.color = "var(--text, #e5e7eb)";
+
+  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  if (w < 380) {
+    row.style.flexWrap = "wrap";
+    bCall.style.flex = "1 1 100%";
+    bPut.style.flex = "1 1 100%";
+  }
+
+  if (modalLiveBtn) {
+    modalLiveBtn.style.minHeight = "52px";
+    modalLiveBtn.style.width = "100%";
+    modalLiveBtn.style.marginTop = "10px";
+  }
+}
+
+/* =========================
    Chart modal
 ========================= */
 function openChartModal(item) {
@@ -1151,9 +1085,10 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  // ✅ layout + estado de bloqueo
+  // ✅ arregla layout botones
   applyModalTradeButtonsLayout();
-  updateTradeButtonsUI();
+  // ✅ aplica bloqueo si corresponde
+  updateDisciplineLockUI(true);
 
   requestModalDraw(true);
 }
@@ -1184,6 +1119,7 @@ if (modalOpenDerivBtn)
 
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
+  applyModalTradeButtonsLayout();
   requestModalDraw(true);
 });
 
@@ -1200,6 +1136,117 @@ if (modalLiveBtn) {
     updateModalLiveUI();
     requestModalDraw(true);
   };
+}
+
+/* =========================
+   Disciplina (lock) - persistencia + UI
+========================= */
+function loadDiscipline() {
+  try {
+    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
+    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
+    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
+    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
+  } catch {
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    disciplineLockUntilMs = 0;
+  }
+}
+function saveDiscipline() {
+  try {
+    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
+    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
+    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
+    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
+  } catch {}
+}
+function isTradeLockedNow() {
+  const now = Date.now();
+  return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
+}
+function fmtRemaining(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h > 0) return `${h}h ${mm}m`;
+  return `${mm}m`;
+}
+function updateDisciplineLockUI(force = false) {
+  const locked = isTradeLockedNow();
+  const now = Date.now();
+  const remain = locked ? disciplineLockUntilMs - now : 0;
+
+  const label =
+    locked
+      ? `⛔ Bloqueado (${fmtRemaining(remain)}) — ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`
+      : `✅ Operar: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`;
+
+  // no spamear status salvo force
+  if (force) {
+    toast(label, 1800);
+  }
+
+  const disable = (btn) => {
+    if (!btn) return;
+    btn.disabled = locked;
+    btn.style.opacity = locked ? "0.55" : "";
+    btn.title = locked
+      ? `Bloqueado por disciplina. Falta ${fmtRemaining(remain)}`
+      : "Operar DEMO 1m";
+  };
+
+  disable(modalBuyCallBtn);
+  disable(modalBuyPutBtn);
+}
+
+function startNewDisciplineWindowIfNeeded() {
+  const now = Date.now();
+
+  // si estaba bloqueado y ya pasó, resetea ventana al desbloquear
+  if (disciplineLockUntilMs && now >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    return;
+  }
+
+  // si no hay ventana, la armamos al primer trade
+  if (!disciplineWindowStartMs) {
+    disciplineWindowStartMs = now;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    return;
+  }
+}
+
+function applyDisciplineOutcome(isWin) {
+  // si está bloqueado, ignoramos
+  if (isTradeLockedNow()) return;
+
+  if (isWin) disciplineWins += 1;
+  else disciplineLosses += 1;
+
+  saveDiscipline();
+
+  // ¿se alcanzó el límite?
+  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
+    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
+    saveDiscipline();
+    toast(
+      `⛔ Límite alcanzado (${disciplineWins}W / ${disciplineLosses}L). Bloqueado 1h.`,
+      2600
+    );
+    updateDisciplineLockUI(true);
+  } else {
+    toast(`📌 Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L`, 1700);
+    updateDisciplineLockUI(false);
+  }
 }
 
 /* =========================
@@ -1461,7 +1508,7 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
 }
 
 /* =========================
-   DEMO 1-click trade
+   DEMO 1-click trade + tracking outcome
 ========================= */
 function getDerivToken() {
   try {
@@ -1512,6 +1559,36 @@ function resetAuthState() {
   tradeInFlight = false;
 }
 
+/** Subscriptions de contratos abiertos */
+const contractSubs = new Map(); // contract_id -> subscription_id (string)
+
+function subscribeContractOutcome(contractId) {
+  try {
+    if (!ws || ws.readyState !== 1) return;
+    if (!contractId) return;
+    // evita duplicados
+    if (contractSubs.has(String(contractId))) return;
+
+    ws.send(
+      JSON.stringify({
+        proposal_open_contract: 1,
+        contract_id: contractId,
+        subscribe: 1,
+      })
+    );
+    // guardamos "pendiente": cuando llegue el msg, tomamos subscription.id
+    contractSubs.set(String(contractId), "__pending__");
+  } catch {}
+}
+
+function forgetSubscription(subId) {
+  try {
+    if (!ws || ws.readyState !== 1) return;
+    if (!subId || subId === "__pending__") return;
+    ws.send(JSON.stringify({ forget: subId }));
+  } catch {}
+}
+
 async function ensureAuthorized() {
   const token = getDerivToken();
   if (!token) throw new Error("Sin token DEMO (cargalo en Configuración)");
@@ -1532,16 +1609,26 @@ async function ensureAuthorized() {
   return authorizeInFlight;
 }
 
+function assertCanTrade() {
+  // si está bloqueado
+  if (isTradeLockedNow()) {
+    const remain = disciplineLockUntilMs - Date.now();
+    throw new Error(`Bloqueado por disciplina (${fmtRemaining(remain)})`);
+  }
+}
+
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
-  // gate disciplina
-  const gate = canTradeNow();
-  if (!gate.ok) throw new Error(gate.msg || "Bloqueado por disciplina");
+  assertCanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
 
   try {
     await ensureAuthorized();
+
+    // abre ventana de disciplina al primer trade del ciclo
+    startNewDisciplineWindowIfNeeded();
+    saveDiscipline();
 
     const symbol =
       symbolOverride || (modalCurrentItem && modalCurrentItem.symbol) || (history.at(-1)?.symbol || "R_25");
@@ -1567,117 +1654,60 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     if (res?.error) throw new Error(res.error.message || "buy error");
     if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
 
-    // ✅ suscribirse al resultado del contrato para contar ITM/OTM
-    const cid = res?.buy?.contract_id || res?.buy?.transaction_id;
-    if (cid && ws && ws.readyState === 1) {
-      const idStr = String(cid);
-      openContracts.set(idStr, { ts: Date.now() });
-      try {
-        ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: idStr, subscribe: 1 }));
-      } catch {}
-    }
+    const cid = res.buy.contract_id || res.buy.transaction_id;
+    if (cid) subscribeContractOutcome(cid);
+
+    // refresca UI de disciplina
+    updateDisciplineLockUI(false);
 
     return res;
   } finally {
     tradeInFlight = false;
-    // refresca UI (por si se lockeó en el medio)
-    updateTradeButtonsUI("");
   }
-}
-
-/* =========================
-   Contract updates → ITM/OTM → lock 1h
-========================= */
-function onContractUpdate(poc) {
-  try {
-    const cid = String(poc?.contract_id || "");
-    if (!cid) return;
-
-    const done =
-      poc.is_sold === 1 ||
-      poc.status === "sold" ||
-      poc.status === "expired" ||
-      poc.status === "won" ||
-      poc.status === "lost";
-
-    if (!done) return;
-
-    const profit = Number(poc.profit || 0);
-    const result = profit > 0 ? "ITM" : "OTM";
-
-    pruneOutcomes();
-    tradeOutcomes.push({ ts: Date.now(), result, contract_id: cid });
-    saveDisciplineState();
-
-    const { itm, otm } = windowCounts();
-
-    if (itm >= LIMIT_ITM_PER_WINDOW) {
-      lockForOneHour(Date.now(), "✅ Llegaste a 3 ITM → pausa 1h");
-    } else if (otm >= LIMIT_OTM_PER_WINDOW) {
-      lockForOneHour(Date.now(), "⚠️ Llegaste a 2 OTM → pausa 1h");
-    } else {
-      updateTradeButtonsUI(result === "ITM" ? "✅ ITM" : "❌ OTM");
-    }
-
-    openContracts.delete(cid);
-  } catch {}
 }
 
 // Conectar botones del modal si existen (con cutoff duro)
 if (modalBuyCallBtn) {
   modalBuyCallBtn.onclick = async () => {
-    applyModalTradeButtonsLayout();
-
     modalBuyCallBtn.disabled = true;
     try {
-      const gate = canTradeNow();
-      if (!gate.ok) {
-        toast(gate.msg || "⛔ No podés operar ahora", 2400);
-        updateTradeButtonsUI("");
-        return;
-      }
-
+      updateDisciplineLockUI(false);
       toast("🟢 Enviando COMPRA…", 1200);
+
       const r = await Promise.race([
         buyOneClick("CALL"),
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade")), 22000)),
       ]);
+
       const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
       toast(`🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
       toast(`⚠️ Error COMPRA: ${e?.message || e}`, 2400);
     } finally {
-      updateTradeButtonsUI("");
-      // si no está bloqueado, se re-habilita; si está bloqueado, queda disabled
-      if (canTradeNow().ok) modalBuyCallBtn.disabled = false;
+      modalBuyCallBtn.disabled = false;
+      updateDisciplineLockUI(false);
     }
   };
 }
 if (modalBuyPutBtn) {
   modalBuyPutBtn.onclick = async () => {
-    applyModalTradeButtonsLayout();
-
     modalBuyPutBtn.disabled = true;
     try {
-      const gate = canTradeNow();
-      if (!gate.ok) {
-        toast(gate.msg || "⛔ No podés operar ahora", 2400);
-        updateTradeButtonsUI("");
-        return;
-      }
-
+      updateDisciplineLockUI(false);
       toast("🔴 Enviando VENTA…", 1200);
+
       const r = await Promise.race([
         buyOneClick("PUT"),
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade")), 22000)),
       ]);
+
       const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
       toast(`🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
       toast(`⚠️ Error VENTA: ${e?.message || e}`, 2400);
     } finally {
-      updateTradeButtonsUI("");
-      if (canTradeNow().ok) modalBuyPutBtn.disabled = false;
+      modalBuyPutBtn.disabled = false;
+      updateDisciplineLockUI(false);
     }
   };
 }
@@ -2159,7 +2189,7 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
 }
 
 /* =========================
-   FUERTE: patrón “ESCALERA” (solo strong)
+   FUERTE: patrón “ESCALERA”
 ========================= */
 const STRONG_PATTERN = {
   accelMin: 1.12,
@@ -2215,6 +2245,7 @@ function passesStrongStaircasePattern(ticks, dirSign, score) {
   if (t0_30.length < 6) return false;
 
   const { favorRuns, againstRuns } = runsMagnitudeBySign(t0_30, dirSign);
+
   if (favorRuns.length < 2) return false;
 
   const favorSorted = favorRuns.slice().sort((a, b) => b - a);
@@ -2222,6 +2253,7 @@ function passesStrongStaircasePattern(ticks, dirSign, score) {
   const f2 = favorSorted[1] || 0;
 
   if (!(f1 > 0 && f2 > 0)) return false;
+
   if (f2 < f1 / STRONG_PATTERN.accelMin) return false;
 
   const aMax = (againstRuns.length ? Math.max(...againstRuns) : 0) || 0;
@@ -2391,7 +2423,6 @@ function addSignal(minute, symbol, direction, ticks) {
 
   showNotification(symbol, direction, modeLabel);
 
-  // ✅ Auto-abrir gráfico (si está ON y la app está visible)
   if (shouldAutoOpenChartNow()) {
     requestAnimationFrame(() => {
       try {
@@ -2433,15 +2464,13 @@ function connect() {
         rehydrateHistoryOnBoot();
       } catch {}
     }, 350);
-
-    // refresca UI disciplina
-    updateTradeButtonsUI("");
   };
 
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
 
+      // req_id resolver
       if (data && data.req_id && pending.has(data.req_id)) {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
@@ -2450,11 +2479,42 @@ function connect() {
         return;
       }
 
+      // contratos (disciplina)
+      if (data?.proposal_open_contract) {
+        const poc = data.proposal_open_contract;
+        const cid = String(poc?.contract_id || "");
+        const subId = data?.subscription?.id;
+
+        if (cid) {
+          // guardamos subscription id si llegó
+          if (subId) contractSubs.set(cid, subId);
+
+          // cuando se vende -> determinamos win/loss
+          if (poc?.is_sold) {
+            // Deriv suele traer status: "won"/"lost"
+            const status = String(poc.status || "").toLowerCase();
+            const profit = Number(poc.profit);
+
+            let isWin = false;
+            if (status === "won") isWin = true;
+            else if (status === "lost") isWin = false;
+            else if (Number.isFinite(profit)) isWin = profit > 0;
+
+            applyDisciplineOutcome(isWin);
+
+            // forget
+            const sid = contractSubs.get(cid);
+            forgetSubscription(sid);
+            contractSubs.delete(cid);
+          }
+        }
+        return;
+      }
+
       if (data?.error) {
         if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
       }
 
-      if (data.proposal_open_contract) onContractUpdate(data.proposal_open_contract);
       if (data.tick) onTick(data.tick);
     } catch (err) {
       if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
@@ -2475,6 +2535,9 @@ function connect() {
       pending.delete(id);
       p.reject(new Error("closed"));
     }
+
+    // limpiar subs locales (servidor las corta igual al cerrar)
+    contractSubs.clear();
 
     const code = ev?.code || 0;
     const reason = ev?.reason || "";
@@ -2506,8 +2569,6 @@ document.addEventListener("visibilitychange", () => {
         connect();
       } catch {}
     }
-    // al volver, refresca bloqueo
-    updateTradeButtonsUI("");
   }
 });
 
@@ -2516,7 +2577,7 @@ document.addEventListener("visibilitychange", () => {
 ========================= */
 loadLowPowerMode();
 loadAutoOpenChartSetting();
-loadDisciplineState();
+loadDiscipline();
 
 renderHistory();
 updateTickHealthUI();
@@ -2533,8 +2594,7 @@ initWakeButton();
 initTokenAndStakeUI();
 ensureResetCacheButton();
 
-// aplica layout “grande” si el modal existe
-applyModalTradeButtonsLayout();
-updateTradeButtonsUI("");
+// lock UI inicial
+updateDisciplineLockUI(false);
 
 connect();
