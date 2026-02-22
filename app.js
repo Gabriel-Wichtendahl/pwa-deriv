@@ -3,7 +3,7 @@
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
-// ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
+// ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual 
 // ✅ Nota: el bloqueo se activa cuando Deriv confirma el resultado del contrato (al expirar), no al apretar el botón
 
 "use strict";
