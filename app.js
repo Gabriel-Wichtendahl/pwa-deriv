@@ -3,7 +3,8 @@
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
-// ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual 
+// ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
+// ✅ FIX NUEVO (este update): si el stream proposal_open_contract no manda is_sold, hacemos fallback poll y contamos igual
 // ✅ Nota: el bloqueo se activa cuando Deriv confirma el resultado del contrato (al expirar), no al apretar el botón
 
 "use strict";
@@ -54,7 +55,7 @@ const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
 // ✅ NUEVO: pendientes persistentes (para cortes de internet)
 const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
 
-const DISCIPLINE_MAX_WINS = 3;   // ITM
+const DISCIPLINE_MAX_WINS = 3; // ITM
 const DISCIPLINE_MAX_LOSSES = 2; // OTM
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 
@@ -1249,6 +1250,8 @@ function resubscribePendingContracts() {
     // reengancha cada pendiente (sin spamear demasiado)
     for (const cid of list) {
       subscribeContractOutcome(cid, true /*silent*/);
+      // ✅ fallback rápido al reconectar por si ya cerró offline
+      scheduleOutcomeFallbackPoll(cid, 20000);
     }
 
     toast(`🔁 Reenganche pendientes: ${list.length}`, 1400);
@@ -1666,6 +1669,57 @@ function forgetSubscription(subId) {
   } catch {}
 }
 
+/* =========================
+   ✅ FIX NUEVO: Fallback poll (si se pierde is_sold del stream)
+========================= */
+function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
+  try {
+    if (!contractId) return;
+    const cid = String(contractId);
+
+    setTimeout(async () => {
+      try {
+        // Si ya no está pendiente, ya fue contabilizado por el stream normal.
+        if (!(disciplinePendingContracts || []).includes(cid)) return;
+
+        // Si no hay WS, al reconectar lo reintentará resubscribePendingContracts()
+        if (!ws || ws.readyState !== 1) return;
+
+        // Poll puntual (sin subscribe) para obtener estado final
+        const r = await wsRequest({ proposal_open_contract: 1, contract_id: cid }, 12000);
+
+        const poc = r?.proposal_open_contract;
+        if (!poc) return;
+
+        if (poc.is_sold) {
+          const status = String(poc.status || "").toLowerCase();
+          const profit = Number(poc.profit);
+
+          let isWin = false;
+          if (status === "won") isWin = true;
+          else if (status === "lost") isWin = false;
+          else if (Number.isFinite(profit)) isWin = profit > 0;
+
+          toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
+
+          // Aplica contador/bloqueo
+          applyDisciplineOutcome(isWin);
+
+          // Ya no está pendiente
+          removePendingContract(cid);
+
+          // Limpia subs si existía
+          const sid = contractSubs.get(cid);
+          forgetSubscription(sid);
+          contractSubs.delete(cid);
+
+          updateDisciplineLockUI(false);
+        }
+      } catch {}
+    }, delayMs);
+  } catch {}
+}
+
 async function ensureAuthorized() {
   const token = getDerivToken();
   if (!token) throw new Error("Sin token DEMO (cargalo en Configuración)");
@@ -1729,11 +1783,16 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     if (res?.error) throw new Error(res.error.message || "buy error");
     if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
 
-    const cid = res.buy.contract_id || res.buy.transaction_id;
-    if (cid) {
-      subscribeContractOutcome(cid, true);
-      toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
-    }
+    // ✅ FIX: SOLO contract_id sirve para trackear outcome
+    const cid = res?.buy?.contract_id;
+    if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
+
+    subscribeContractOutcome(cid, true);
+
+    // ✅ FIX NUEVO: fallback poll por si el stream no manda is_sold
+    scheduleOutcomeFallbackPoll(cid, 85000); // 1m + margen
+
+    toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
 
     updateDisciplineLockUI(false);
     return res;
@@ -1755,7 +1814,7 @@ if (modalBuyCallBtn) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade")), 22000)),
       ]);
 
-      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+      const cid = r?.buy?.contract_id || "";
       toast(`🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
       toast(`⚠️ Error COMPRA: ${e?.message || e}`, 2400);
@@ -1777,7 +1836,7 @@ if (modalBuyPutBtn) {
         new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade")), 22000)),
       ]);
 
-      const cid = r?.buy?.contract_id || r?.buy?.transaction_id || "";
+      const cid = r?.buy?.contract_id || "";
       toast(`🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
       toast(`⚠️ Error VENTA: ${e?.message || e}`, 2400);
