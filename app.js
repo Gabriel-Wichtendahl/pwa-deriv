@@ -5,6 +5,7 @@
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
 // ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
 // ✅ FIX NUEVO (este update): si el stream proposal_open_contract no manda is_sold, hacemos fallback poll y contamos igual
+// ✅ FIX CRÍTICO (este fix): al reconectar, se AUTORIZA antes de reenganchar pendientes (evita "please login" y pendientes eternos)
 // ✅ Nota: el bloqueo se activa cuando Deriv confirma el resultado del contrato (al expirar), no al apretar el botón
 
 "use strict";
@@ -1239,13 +1240,21 @@ function applyDisciplineOutcome(isWin) {
 }
 
 /* =========================
-   Rescate pendientes: re-suscribir al reconectar
+   Rescate pendientes: re-suscribir al reconectar (FIX: autoriza antes)
 ========================= */
-function resubscribePendingContracts() {
+async function resubscribePendingContracts() {
   try {
     if (!ws || ws.readyState !== 1) return;
     const list = (disciplinePendingContracts || []).slice();
     if (!list.length) return;
+
+    // ✅ FIX CRÍTICO: autorizar ANTES de reenganchar / poll
+    try {
+      await ensureAuthorized();
+    } catch {
+      toast("⚠️ No autorizado (token/login). No puedo rescatar pendientes.", 2200);
+      return;
+    }
 
     // reengancha cada pendiente (sin spamear demasiado)
     for (const cid of list) {
@@ -1671,6 +1680,7 @@ function forgetSubscription(subId) {
 
 /* =========================
    ✅ FIX NUEVO: Fallback poll (si se pierde is_sold del stream)
+   ✅ FIX CRÍTICO: el poll requiere authorize (evita "please login")
 ========================= */
 function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
   try {
@@ -1684,6 +1694,14 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
         // Si no hay WS, al reconectar lo reintentará resubscribePendingContracts()
         if (!ws || ws.readyState !== 1) return;
+
+        // ✅ FIX: autorizar antes del poll (si no: please login)
+        try {
+          await ensureAuthorized();
+        } catch {
+          // queda pendiente; se intentará en el próximo reconnect / reenganche
+          return;
+        }
 
         // Poll puntual (sin subscribe) para obtener estado final
         const r = await wsRequest({ proposal_open_contract: 1, contract_id: cid }, 12000);
@@ -1789,7 +1807,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
 
     subscribeContractOutcome(cid, true);
 
-    // ✅ FIX NUEVO: fallback poll por si el stream no manda is_sold
+    // ✅ fallback poll por si el stream no manda is_sold
     scheduleOutcomeFallbackPoll(cid, 85000); // 1m + margen
 
     toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
@@ -2579,7 +2597,8 @@ function connect() {
     return;
   }
 
-  ws.onopen = () => {
+  // ✅ FIX: onopen async para poder await resubscribePendingContracts()
+  ws.onopen = async () => {
     try {
       resetAuthState();
     } catch {}
@@ -2593,9 +2612,9 @@ function connect() {
       } catch {}
     }, 350);
 
-    // ✅ refresca UI disciplina y reengancha pendientes
+    // ✅ refresca UI disciplina y reengancha pendientes (con authorize adentro)
     updateDisciplineLockUI(false);
-    resubscribePendingContracts();
+    await resubscribePendingContracts();
   };
 
   ws.onmessage = (e) => {
