@@ -6,6 +6,7 @@
 // ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
 // ✅ FIX NUEVO (este update): si el stream proposal_open_contract no manda is_sold, hacemos fallback poll y contamos igual
 // ✅ FIX CRÍTICO (este fix): al reconectar, se AUTORIZA antes de reenganchar pendientes (evita "please login" y pendientes eternos)
+// ✅ NUEVO: cada señal muestra badge del trade operado desde el modal: ⏳ TRADE / 🎯 ITM / 💥 OTM
 // ✅ Nota: el bloqueo se activa cuando Deriv confirma el resultado del contrato (al expirar), no al apretar el botón
 
 "use strict";
@@ -46,27 +47,61 @@ const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
 
 /* =========================
-   Disciplina (3 ITM o 2 OTM) -> lock 1h
+   Disciplina
 ========================= */
 const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_v1";
 const DISCIPLINE_WINS_KEY = "discipline_wins_v1";
 const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
 const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
-
-// ✅ NUEVO: pendientes persistentes (para cortes de internet)
 const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
 
-const DISCIPLINE_MAX_WINS = 3; // ITM
-const DISCIPLINE_MAX_LOSSES = 2; // OTM
+const DISCIPLINE_MAX_WINS = 3;
+const DISCIPLINE_MAX_LOSSES = 2;
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 
 let disciplineWindowStartMs = 0;
 let disciplineWins = 0;
 let disciplineLosses = 0;
 let disciplineLockUntilMs = 0;
-
-// ✅ contratos pendientes (persistente)
 let disciplinePendingContracts = []; // array de string contract_id
+
+/* =========================
+   NUEVO: Link contract_id -> signalId (para pintar ITM/OTM en la señal)
+========================= */
+const TRADE_LINKS_KEY = "trade_links_v1"; // contract_id -> signalId
+let tradeLinks = new Map(); // in-memory
+
+function loadTradeLinks() {
+  try {
+    const raw = localStorage.getItem(TRADE_LINKS_KEY) || "{}";
+    const obj = JSON.parse(raw);
+    tradeLinks = new Map(Object.entries(obj || {}).map(([k, v]) => [String(k), String(v)]));
+  } catch {
+    tradeLinks = new Map();
+  }
+}
+function saveTradeLinks() {
+  try {
+    const obj = Object.fromEntries(tradeLinks.entries());
+    localStorage.setItem(TRADE_LINKS_KEY, JSON.stringify(obj));
+  } catch {}
+}
+function linkContractToSignal(contractId, signalId) {
+  if (!contractId || !signalId) return;
+  tradeLinks.set(String(contractId), String(signalId));
+  saveTradeLinks();
+}
+function findHistoryItemById(id) {
+  return (history || []).find((x) => x && x.id === id) || null;
+}
+function setTradeBadge(item, badge /* 'PENDING'|'ITM'|'OTM'|'' */, extra = {}) {
+  if (!item) return;
+  item.trade ||= {};
+  item.trade.badge = badge || "";
+  if (extra && typeof extra === "object") Object.assign(item.trade, extra);
+  saveHistory(history);
+  updateRowTradeBadge(item);
+}
 
 /* =========================
    DOM helpers
@@ -101,19 +136,16 @@ const copyBtn = $("copyFeedback");
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
 
-// Tabs
 const tabs = qsAll(".tab[data-view]");
 const signalsView = $("signalsView");
 const feedbackView = $("feedbackView");
 
-// Settings modal
 const configBtn = $("configBtn");
 const settingsModal = $("settingsModal");
 const settingsCloseBackdrop = $("settingsCloseBackdrop");
 const settingsCloseBtn = $("settingsCloseBtn");
 const settingsCloseBtn2 = $("settingsCloseBtn2");
 
-// Chart modal
 const chartModal = $("chartModal");
 const modalCloseBtn = $("modalCloseBtn");
 const modalCloseBackdrop = $("modalCloseBackdrop");
@@ -122,13 +154,12 @@ const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
-// Si existen en tu build:
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 
 /* =========================
-   Toast / feedback corto
+   Toast
 ========================= */
 let toastTimer = null;
 function toast(msg, ms = 1600) {
@@ -233,23 +264,19 @@ let minuteData = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
-// Tiempo/ticks
 let lastTickEpochMs = null;
 let lastTickLocalNowMs = null;
-let serverOffsetMs = 0; // epochMs - localNowMs
+let serverOffsetMs = 0;
 let currentMinuteStartMs = null;
 
-// min/candles
 let lastSeenMinute = null;
 let candleOC = {};
 
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
-// modal chart
 let modalCurrentItem = null;
 
-// LIVE modal draw
 let modalLive = false;
 let modalDrawRaf = null;
 let modalLastDrawAt = 0;
@@ -276,7 +303,7 @@ function makeDerivTraderUrl(symbol) {
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
 /* =========================
-   Auto-open chart (persistente + UI)
+   Auto-open chart
 ========================= */
 function loadAutoOpenChartSetting() {
   try {
@@ -325,21 +352,18 @@ function ensureAutoOpenChartButton() {
   applyAutoOpenChartUI();
   return btn;
 }
-
 function shouldAutoOpenChartNow() {
   if (!autoOpenChartOnSignal) return false;
   if (document.visibilityState !== "visible") return false;
   if (chartModal && !chartModal.classList.contains("hidden")) return false;
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
-
   const activeView = localStorage.getItem("activeView") || "signals";
   if (activeView === "feedback") return false;
-
   return true;
 }
 
 /* =========================
-   🪫 Low power mode (persistente)
+   🪫 Low power mode
 ========================= */
 let lowPowerMode = false;
 const LOWPOWER_KEY = "lowPowerMode_v1";
@@ -378,7 +402,6 @@ function startUiTimers() {
     updateDisciplineLockUI(false);
   }, getUiIntervalMs());
 }
-
 function ensureLowPowerButton() {
   let btn = pickEl("lowPowerBtn");
   if (!btn) {
@@ -408,7 +431,6 @@ function ensureLowPowerButton() {
 
   return btn;
 }
-
 function applyLowPowerModeUI() {
   const btn = pickEl("lowPowerBtn");
   if (btn) {
@@ -436,7 +458,6 @@ async function acquireWakeLock() {
   setWakeBtnUI(true);
   return true;
 }
-
 async function releaseWakeLock() {
   try {
     if (wakeLock) await wakeLock.release();
@@ -444,13 +465,11 @@ async function releaseWakeLock() {
   wakeLock = null;
   setWakeBtnUI(false);
 }
-
 function setWakeBtnUI(active) {
   if (!wakeBtn) return;
   wakeBtn.classList.toggle("active", !!active);
   wakeBtn.textContent = active ? "🔒 Pantalla activa ON" : "🔓 Pantalla activa";
 }
-
 function initWakeButton() {
   if (!wakeBtn) return;
   setWakeBtnUI(!!wakeLock);
@@ -571,7 +590,8 @@ function rebuildFeedbackFromHistory() {
     const outArrow = nextOutcomeToArrow(out);
     const outText = nextOutcomeToText(out);
 
-    text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | NEXT: ${outArrow} ${outText} | ${comment}\n`;
+    const tradeBadge = it?.trade?.badge ? ` | TRADE: ${it.trade.badge}` : "";
+    text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | NEXT: ${outArrow} ${outText}${tradeBadge} | ${comment}\n`;
   }
   feedbackEl.value = text;
 }
@@ -639,6 +659,7 @@ function buildExportPayloadVoted() {
       vote: it.vote,
       comment: it.comment || "",
       nextOutcome: it.nextOutcome || "",
+      trade: it.trade || null, // ✅ NUEVO
       minuteComplete: !!it.minuteComplete,
       ticks: Array.isArray(it.ticks) ? it.ticks : [],
     })),
@@ -980,7 +1001,6 @@ function updateModalLiveUI() {
   modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
   modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
 }
-
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   if (!modalCurrentItem) return;
@@ -1004,13 +1024,14 @@ function requestModalDraw(force = false) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
       const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}`;
+      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
     }
   });
 }
 
 /* =========================
-   FIX: Layout de botones COMPRAR/VENDER (modal)
+   Layout botones modal
 ========================= */
 function applyModalTradeButtonsLayout() {
   const bCall = modalBuyCallBtn;
@@ -1083,7 +1104,7 @@ function applyModalTradeButtonsLayout() {
 }
 
 /* =========================
-   Disciplina (lock) - persistencia + UI
+   Disciplina (persistencia + UI)
 ========================= */
 function loadDiscipline() {
   try {
@@ -1112,7 +1133,6 @@ function saveDiscipline() {
     localStorage.setItem(DISCIPLINE_PENDING_CONTRACTS_KEY, JSON.stringify(disciplinePendingContracts || []));
   } catch {}
 }
-
 function addPendingContract(cid) {
   if (!cid) return;
   const s = String(cid);
@@ -1128,7 +1148,6 @@ function removePendingContract(cid) {
   disciplinePendingContracts = next;
   saveDiscipline();
 }
-
 function isTradeLockedNow() {
   const now = Date.now();
   return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
@@ -1159,7 +1178,6 @@ function disciplineTagText() {
   const pTxt = pend ? ` • Pendientes:${pend}` : "";
   return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
 }
-
 function paintTradeButtonLocked(btn, locked, remainMs = 0) {
   if (!btn) return;
 
@@ -1180,7 +1198,6 @@ function paintTradeButtonLocked(btn, locked, remainMs = 0) {
     btn.title = "Operar DEMO 1m";
   }
 }
-
 function updateDisciplineLockUI(forceToast = false) {
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
     disciplineLockUntilMs = 0;
@@ -1197,13 +1214,9 @@ function updateDisciplineLockUI(forceToast = false) {
   paintTradeButtonLocked(modalBuyCallBtn, locked, remain);
   paintTradeButtonLocked(modalBuyPutBtn, locked, remain);
 
-  if (chartModal && !chartModal.classList.contains("hidden")) {
-    requestModalDraw(true);
-  }
-
+  if (chartModal && !chartModal.classList.contains("hidden")) requestModalDraw(true);
   if (forceToast) toast(disciplineTagText(), 2200);
 }
-
 function startNewDisciplineWindowIfNeeded() {
   updateDisciplineLockUI(false);
 
@@ -1215,7 +1228,6 @@ function startNewDisciplineWindowIfNeeded() {
     saveDiscipline();
   }
 }
-
 function applyDisciplineOutcome(isWin) {
   updateDisciplineLockUI(false);
   if (isTradeLockedNow()) return;
@@ -1232,15 +1244,12 @@ function applyDisciplineOutcome(isWin) {
     return;
   }
 
-  toast(
-    `✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`,
-    1700
-  );
+  toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
   updateDisciplineLockUI(false);
 }
 
 /* =========================
-   Rescate pendientes: re-suscribir al reconectar (FIX: autoriza antes)
+   Rescate pendientes: re-suscribir al reconectar (autoriza antes)
 ========================= */
 async function resubscribePendingContracts() {
   try {
@@ -1248,7 +1257,6 @@ async function resubscribePendingContracts() {
     const list = (disciplinePendingContracts || []).slice();
     if (!list.length) return;
 
-    // ✅ FIX CRÍTICO: autorizar ANTES de reenganchar / poll
     try {
       await ensureAuthorized();
     } catch {
@@ -1256,10 +1264,8 @@ async function resubscribePendingContracts() {
       return;
     }
 
-    // reengancha cada pendiente (sin spamear demasiado)
     for (const cid of list) {
-      subscribeContractOutcome(cid, true /*silent*/);
-      // ✅ fallback rápido al reconectar por si ya cerró offline
+      subscribeContractOutcome(cid, true);
       scheduleOutcomeFallbackPoll(cid, 20000);
     }
 
@@ -1287,7 +1293,6 @@ function openChartModal(item) {
 
   requestModalDraw(true);
 }
-
 function closeChartModal() {
   if (!chartModal) return;
   chartModal.classList.add("hidden");
@@ -1296,7 +1301,6 @@ function closeChartModal() {
   modalLive = false;
   updateModalLiveUI();
 }
-
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
 
@@ -1306,7 +1310,6 @@ document.addEventListener("keydown", (e) => {
     closeSettings();
   }
 });
-
 if (modalOpenDerivBtn)
   modalOpenDerivBtn.onclick = () => {
     if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
@@ -1317,7 +1320,6 @@ window.addEventListener("resize", () => {
   applyModalTradeButtonsLayout();
   requestModalDraw(true);
 });
-
 if (modalLiveBtn) {
   modalLiveBtn.onclick = () => {
     if (!modalCurrentItem) return;
@@ -1357,6 +1359,45 @@ function updateRowChartBtn(item) {
   }
 }
 
+function updateRowTradeBadge(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const el = row.querySelector(".tradeBadge");
+  if (!el) return;
+
+  const badge = item?.trade?.badge || "";
+  if (!badge) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    el.title = "";
+    return;
+  }
+
+  el.classList.remove("hidden");
+  if (badge === "ITM") {
+    el.textContent = "🎯 ITM";
+    el.title = "Trade ganada (ITM)";
+    el.style.opacity = "1";
+  } else if (badge === "OTM") {
+    el.textContent = "💥 OTM";
+    el.title = "Trade perdida (OTM)";
+    el.style.opacity = "1";
+  } else {
+    el.textContent = "⏳ TRADE";
+    el.title = "Trade pendiente";
+    el.style.opacity = "0.85";
+  }
+
+  // mini estilo inline (si preferís CSS, lo pasamos al style.css)
+  el.style.marginLeft = "8px";
+  el.style.fontWeight = "900";
+  el.style.fontSize = "12px";
+  el.style.padding = "6px 10px";
+  el.style.borderRadius = "999px";
+  el.style.border = "1px solid rgba(255,255,255,.18)";
+  el.style.background = "rgba(255,255,255,.06)";
+}
+
 function updateRowHitIcon(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return false;
@@ -1367,7 +1408,6 @@ function updateRowHitIcon(item) {
   hit.title = show ? "Acertó" : "";
   return show;
 }
-
 function animateHitPop(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -1378,7 +1418,6 @@ function animateHitPop(item) {
   hit.classList.add("pop");
   setTimeout(() => hit.classList.remove("pop"), 260);
 }
-
 function animateFailShake(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -1389,7 +1428,6 @@ function animateFailShake(item) {
   arrow.classList.add("failShake");
   setTimeout(() => arrow.classList.remove("failShake"), 260);
 }
-
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -1414,7 +1452,6 @@ function updateRowNextArrow(item) {
     el.title = "Próxima vela: esperando…";
   }
 }
-
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   saveHistory(history);
@@ -1422,7 +1459,6 @@ function setNextOutcome(item, outcome) {
   updateRowNextArrow(item);
   const ok = updateRowHitIcon(item);
   updateCounter();
-
   rebuildFeedbackFromHistory();
 
   if (ok) animateHitPop(item);
@@ -1446,6 +1482,7 @@ function buildRow(item) {
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
       <span class="hitIcon hidden" aria-label="Acertó">✓</span>
+      <span class="tradeBadge hidden" title=""></span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
     <div class="row-actions">
@@ -1465,9 +1502,10 @@ function buildRow(item) {
     const canOpen = item.minuteComplete || isItemLiveMinute(item);
     if (canOpen) openChartModal(item);
   };
-  updateRowChartBtn(item);
 
+  updateRowChartBtn(item);
   updateRowHitIcon(item);
+  updateRowTradeBadge(item); // ✅ NUEVO
 
   if (item.vote) {
     const likeBtn = row.querySelector('button[data-v="like"]');
@@ -1571,7 +1609,7 @@ function updateCountdownUI() {
 }
 
 /* =========================
-   WS requests (req_id) + timeout configurable
+   WS requests (req_id)
 ========================= */
 let reqSeq = 1;
 const pending = new Map();
@@ -1643,7 +1681,6 @@ function resetAuthState() {
   tradeInFlight = false;
 }
 
-/** Subscriptions de contratos abiertos */
 const contractSubs = new Map(); // contract_id -> subscription_id
 
 function subscribeContractOutcome(contractId, silent = false) {
@@ -1652,24 +1689,14 @@ function subscribeContractOutcome(contractId, silent = false) {
     if (!contractId) return;
     const cid = String(contractId);
 
-    // ✅ siempre mantenerlo como pendiente hasta que cierre
     addPendingContract(cid);
-
     if (contractSubs.has(cid)) return;
 
-    ws.send(
-      JSON.stringify({
-        proposal_open_contract: 1,
-        contract_id: cid,
-        subscribe: 1,
-      })
-    );
+    ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
     contractSubs.set(cid, "__pending__");
-
     if (!silent) toast(`📡 Subscript contrato ${cid}`, 900);
   } catch {}
 }
-
 function forgetSubscription(subId) {
   try {
     if (!ws || ws.readyState !== 1) return;
@@ -1679,8 +1706,7 @@ function forgetSubscription(subId) {
 }
 
 /* =========================
-   ✅ FIX NUEVO: Fallback poll (si se pierde is_sold del stream)
-   ✅ FIX CRÍTICO: el poll requiere authorize (evita "please login")
+   Fallback poll (requiere authorize)
 ========================= */
 function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
   try {
@@ -1689,23 +1715,16 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
     setTimeout(async () => {
       try {
-        // Si ya no está pendiente, ya fue contabilizado por el stream normal.
         if (!(disciplinePendingContracts || []).includes(cid)) return;
-
-        // Si no hay WS, al reconectar lo reintentará resubscribePendingContracts()
         if (!ws || ws.readyState !== 1) return;
 
-        // ✅ FIX: autorizar antes del poll (si no: please login)
         try {
           await ensureAuthorized();
         } catch {
-          // queda pendiente; se intentará en el próximo reconnect / reenganche
           return;
         }
 
-        // Poll puntual (sin subscribe) para obtener estado final
         const r = await wsRequest({ proposal_open_contract: 1, contract_id: cid }, 12000);
-
         const poc = r?.proposal_open_contract;
         if (!poc) return;
 
@@ -1720,13 +1739,22 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
           toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
 
-          // Aplica contador/bloqueo
-          applyDisciplineOutcome(isWin);
+          // ✅ NUEVO: pintar badge en señal asociada
+          try {
+            const signalId = tradeLinks.get(String(cid)) || "";
+            const it = signalId ? findHistoryItemById(signalId) : null;
+            if (it) {
+              setTradeBadge(it, isWin ? "ITM" : "OTM", {
+                profit: Number(poc.profit),
+                status: String(poc.status || ""),
+                sold_time: Number(poc.sell_time || 0),
+              });
+            }
+          } catch {}
 
-          // Ya no está pendiente
+          applyDisciplineOutcome(isWin);
           removePendingContract(cid);
 
-          // Limpia subs si existía
           const sid = contractSubs.get(cid);
           forgetSubscription(sid);
           contractSubs.delete(cid);
@@ -1774,7 +1802,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
 
   try {
     await ensureAuthorized();
-
     startNewDisciplineWindowIfNeeded();
 
     const symbol =
@@ -1801,14 +1828,17 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     if (res?.error) throw new Error(res.error.message || "buy error");
     if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
 
-    // ✅ FIX: SOLO contract_id sirve para trackear outcome
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
 
-    subscribeContractOutcome(cid, true);
+    // ✅ NUEVO: linkear el contrato con la señal del modal y marcar PENDING
+    if (modalCurrentItem && modalCurrentItem.id) {
+      setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), side, symbol });
+      linkContractToSignal(cid, modalCurrentItem.id);
+    }
 
-    // ✅ fallback poll por si el stream no manda is_sold
-    scheduleOutcomeFallbackPoll(cid, 85000); // 1m + margen
+    subscribeContractOutcome(cid, true);
+    scheduleOutcomeFallbackPoll(cid, 85000);
 
     toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
 
@@ -1819,7 +1849,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   }
 }
 
-// Conectar botones del modal (con cutoff duro)
+/* conectar botones modal */
 if (modalBuyCallBtn) {
   modalBuyCallBtn.onclick = async () => {
     modalBuyCallBtn.disabled = true;
@@ -2109,6 +2139,7 @@ async function rehydrateHistoryOnBoot() {
             anyMark = true;
           }
           updateRowChartBtn(it);
+          updateRowTradeBadge(it);
         }
       }
       if (changed || anyMark) saveHistory(history);
@@ -2139,6 +2170,7 @@ async function rehydrateHistoryOnBoot() {
       updateRowNextArrow(it);
       updateRowHitIcon(it);
       updateRowChartBtn(it);
+      updateRowTradeBadge(it);
     }
   } catch {}
 
@@ -2264,7 +2296,6 @@ function onTick(tick) {
     if (!ok) scheduleRetry(minute);
   }
 }
-
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
@@ -2275,17 +2306,15 @@ function scheduleRetry(minute) {
 /* =========================
    Technical rules + Evaluation (FUERTE)
 ========================= */
+// (⬇️ ESTA SECCIÓN ES IDÉNTICA A TU ARCHIVO, NO CAMBIÉ REGLAS)
+// Para ahorrar espacio acá, la mantengo tal cual tu versión de referencia:
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
   const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
-
   if (ms <= pts[0].ms) return pts[0].quote;
   const last = pts[pts.length - 1];
   if (ms >= last.ms) return last.quote;
-
-  for (let i = pts.length - 1; i >= 0; i--) {
-    if (pts[i].ms <= ms) return pts[i].quote;
-  }
+  for (let i = pts.length - 1; i >= 0; i--) if (pts[i].ms <= ms) return pts[i].quote;
   return pts[0].quote;
 }
 function sliceTicks(ticks, aMs, bMs) {
@@ -2294,8 +2323,7 @@ function sliceTicks(ticks, aMs, bMs) {
 }
 function directionalRatio(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
-  let ok = 0,
-    total = 0;
+  let ok = 0, total = 0;
   for (let i = 1; i < ticks.length; i++) {
     const d = ticks[i].quote - ticks[i - 1].quote;
     if (Math.abs(d) < 1e-12) continue;
@@ -2306,187 +2334,91 @@ function directionalRatio(ticks, dirSign) {
 }
 function maxRetraceAgainst(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
-
   if (dirSign > 0) {
-    let runMax = ticks[0].quote;
-    let maxRet = 0;
-    for (const t of ticks) {
-      runMax = Math.max(runMax, t.quote);
-      maxRet = Math.max(maxRet, runMax - t.quote);
-    }
+    let runMax = ticks[0].quote, maxRet = 0;
+    for (const t of ticks) { runMax = Math.max(runMax, t.quote); maxRet = Math.max(maxRet, runMax - t.quote); }
     return maxRet;
   } else {
-    let runMin = ticks[0].quote;
-    let maxRet = 0;
-    for (const t of ticks) {
-      runMin = Math.min(runMin, t.quote);
-      maxRet = Math.max(maxRet, t.quote - runMin);
-    }
+    let runMin = ticks[0].quote, maxRet = 0;
+    for (const t of ticks) { runMin = Math.min(runMin, t.quote); maxRet = Math.max(maxRet, t.quote - runMin); }
     return maxRet;
   }
 }
 function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   if (!ticks30_45 || ticks30_45.length === 0 || p30 == null) return 0;
-  if (dirSign > 0) {
-    let minP = p30;
-    for (const t of ticks30_45) minP = Math.min(minP, t.quote);
-    return Math.max(0, p30 - minP);
-  } else {
-    let maxP = p30;
-    for (const t of ticks30_45) maxP = Math.max(maxP, t.quote);
-    return Math.max(0, maxP - p30);
-  }
+  if (dirSign > 0) { let minP = p30; for (const t of ticks30_45) minP = Math.min(minP, t.quote); return Math.max(0, p30 - minP); }
+  else { let maxP = p30; for (const t of ticks30_45) maxP = Math.max(maxP, t.quote); return Math.max(0, maxP - p30); }
 }
-
-const STRONG_PATTERN = {
-  accelMin: 1.12,
-  maxAgainstFracOfMaxFavor: 0.55,
-  totalFavorOverAgainst: 1.25,
-  bypassScore: 0.060,
-};
-
+const STRONG_PATTERN = { accelMin: 1.12, maxAgainstFracOfMaxFavor: 0.55, totalFavorOverAgainst: 1.25, bypassScore: 0.060 };
 function runsMagnitudeBySign(ticksWindow, dirSign) {
   if (!ticksWindow || ticksWindow.length < 2) return { favorRuns: [], againstRuns: [] };
-
   const pts = ticksWindow.slice().sort((a, b) => a.ms - b.ms);
-  let curSign = 0;
-  let curMag = 0;
-
-  const favorRuns = [];
-  const againstRuns = [];
-
-  const flush = () => {
-    if (!curSign || curMag <= 0) return;
-    if (curSign === Math.sign(dirSign)) favorRuns.push(curMag);
-    else againstRuns.push(curMag);
-  };
-
+  let curSign = 0, curMag = 0;
+  const favorRuns = [], againstRuns = [];
+  const flush = () => { if (!curSign || curMag <= 0) return; if (curSign === Math.sign(dirSign)) favorRuns.push(curMag); else againstRuns.push(curMag); };
   for (let i = 1; i < pts.length; i++) {
     const d = pts[i].quote - pts[i - 1].quote;
     if (Math.abs(d) < 1e-12) continue;
-
     const s = Math.sign(d);
-    if (curSign === 0) {
-      curSign = s;
-      curMag = Math.abs(d);
-      continue;
-    }
-
-    if (s === curSign) {
-      curMag += Math.abs(d);
-    } else {
-      flush();
-      curSign = s;
-      curMag = Math.abs(d);
-    }
+    if (curSign === 0) { curSign = s; curMag = Math.abs(d); continue; }
+    if (s === curSign) curMag += Math.abs(d);
+    else { flush(); curSign = s; curMag = Math.abs(d); }
   }
   flush();
-
   return { favorRuns, againstRuns };
 }
-
 function passesStrongStaircasePattern(ticks, dirSign, score) {
   if (typeof score === "number" && score >= STRONG_PATTERN.bypassScore) return true;
-
   const t0_30 = sliceTicks(ticks, 0, 30000);
   if (t0_30.length < 6) return false;
-
   const { favorRuns, againstRuns } = runsMagnitudeBySign(t0_30, dirSign);
-
   if (favorRuns.length < 2) return false;
-
   const favorSorted = favorRuns.slice().sort((a, b) => b - a);
-  const f1 = favorSorted[0] || 0;
-  const f2 = favorSorted[1] || 0;
-
+  const f1 = favorSorted[0] || 0, f2 = favorSorted[1] || 0;
   if (!(f1 > 0 && f2 > 0)) return false;
-
   if (f2 < f1 / STRONG_PATTERN.accelMin) return false;
-
   const aMax = (againstRuns.length ? Math.max(...againstRuns) : 0) || 0;
   if (aMax > f1 * STRONG_PATTERN.maxAgainstFracOfMaxFavor) return false;
-
   const aSum = againstRuns.reduce((s, x) => s + x, 0);
   const fSum = favorRuns.reduce((s, x) => s + x, 0);
   if (aSum > 0 && fSum / aSum < STRONG_PATTERN.totalFavorOverAgainst) return false;
-
   return true;
 }
-
-const RULES_NORMAL = {
-  scoreMin: 0.015,
-  dirRatioMin_0_30: 0.52,
-  dirRatioMin_30_45: 0.5,
-  move30_fracOfTotal: 0.3,
-  move45_fracOfTotal: 0.12,
-  oppAttack_maxFracMove30: 0.62,
-  rest_minFracTotal: 0.06,
-  rest_maxFracTotal: 0.68,
-};
-
-const RULES_STRONG = {
-  scoreMin: 0.03,
-  dirRatioMin_0_30: 0.62,
-  dirRatioMin_30_45: 0.6,
-  move30_fracOfTotal: 0.45,
-  move45_fracOfTotal: 0.25,
-  oppAttack_maxFracMove30: 0.38,
-  rest_minFracTotal: 0.1,
-  rest_maxFracTotal: 0.5,
-};
-
+const RULES_NORMAL = { scoreMin: 0.015, dirRatioMin_0_30: 0.52, dirRatioMin_30_45: 0.5, move30_fracOfTotal: 0.3, move45_fracOfTotal: 0.12, oppAttack_maxFracMove30: 0.62, rest_minFracTotal: 0.06, rest_maxFracTotal: 0.68 };
+const RULES_STRONG = { scoreMin: 0.03, dirRatioMin_0_30: 0.62, dirRatioMin_30_45: 0.6, move30_fracOfTotal: 0.45, move45_fracOfTotal: 0.25, oppAttack_maxFracMove30: 0.38, rest_minFracTotal: 0.1, rest_maxFracTotal: 0.5 };
 function passesTechnicalFilters(best, vol, rules) {
   const ticks = best.ticks || [];
   if (ticks.length < 3) return false;
-
   const p0 = getPriceAtMs(ticks, 0);
   const p30 = getPriceAtMs(ticks, 30000);
   const p45 = getPriceAtMs(ticks, EVAL_SEC * 1000);
-
   if (p0 == null || p30 == null || p45 == null) return false;
-
   const dirSign = best.move > 0 ? 1 : -1;
-
   const move0_30 = (p30 - p0) * dirSign;
   const move30_45 = (p45 - p30) * dirSign;
-
   const absTotal = Math.abs(p45 - p0) + 1e-12;
-
   if (move0_30 <= absTotal * rules.move30_fracOfTotal) return false;
   if (move30_45 <= absTotal * rules.move45_fracOfTotal) return false;
-
   const t0_30 = sliceTicks(ticks, 0, 30000);
   const t30_45 = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
-
   const r0_30 = directionalRatio(t0_30, dirSign);
   const r30_45 = directionalRatio(t30_45, dirSign);
-
   if (r0_30 < rules.dirRatioMin_0_30) return false;
   if (r30_45 < rules.dirRatioMin_30_45) return false;
-
   const oppAttack = oppositeAttackDepth(t30_45, dirSign, p30);
   const move30Abs = Math.abs(p30 - p0) + 1e-12;
   if (oppAttack > move30Abs * rules.oppAttack_maxFracMove30) return false;
-
   const t0_45 = sliceTicks(ticks, 0, EVAL_SEC * 1000);
   const maxRet = maxRetraceAgainst(t0_45, dirSign);
-
   const minRest = absTotal * rules.rest_minFracTotal;
   const maxRest = absTotal * rules.rest_maxFracTotal;
-
   if (maxRet < minRest) return false;
   if (maxRet > maxRest) return false;
-
   const totalScore = Math.abs(best.move) / (vol || 1e-9);
   if (totalScore < rules.scoreMin) return false;
-
-  if (rules === RULES_STRONG) {
-    if (!passesStrongStaircasePattern(ticks, dirSign, totalScore)) return false;
-  }
-
+  if (rules === RULES_STRONG) if (!passesStrongStaircasePattern(ticks, dirSign, totalScore)) return false;
   return true;
 }
-
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return false;
@@ -2533,7 +2465,6 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
-
 function addSignal(minute, symbol, direction, ticks) {
   const modeLabel = strongMode ? "FUERTE" : "NORMAL";
   const item = {
@@ -2548,6 +2479,7 @@ function addSignal(minute, symbol, direction, ticks) {
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
     minuteComplete: false,
+    trade: null, // ✅ NUEVO (se llena solo si operás esa señal)
   };
 
   if (history.some((x) => x.id === item.id)) return;
@@ -2597,7 +2529,6 @@ function connect() {
     return;
   }
 
-  // ✅ FIX: onopen async para poder await resubscribePendingContracts()
   ws.onopen = async () => {
     try {
       resetAuthState();
@@ -2612,7 +2543,6 @@ function connect() {
       } catch {}
     }, 350);
 
-    // ✅ refresca UI disciplina y reengancha pendientes (con authorize adentro)
     updateDisciplineLockUI(false);
     await resubscribePendingContracts();
   };
@@ -2621,7 +2551,6 @@ function connect() {
     try {
       const data = JSON.parse(e.data);
 
-      // req_id resolver
       if (data && data.req_id && pending.has(data.req_id)) {
         const p = pending.get(data.req_id);
         clearTimeout(p.t);
@@ -2630,7 +2559,6 @@ function connect() {
         return;
       }
 
-      // contratos (disciplina)
       if (data?.proposal_open_contract) {
         const poc = data.proposal_open_contract;
         const cid = String(poc?.contract_id || "");
@@ -2650,13 +2578,22 @@ function connect() {
 
             toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
 
-            // ✅ aplicar disciplina
-            applyDisciplineOutcome(isWin);
+            // ✅ NUEVO: pintar badge en señal asociada
+            try {
+              const signalId = tradeLinks.get(String(cid)) || "";
+              const it = signalId ? findHistoryItemById(signalId) : null;
+              if (it) {
+                setTradeBadge(it, isWin ? "ITM" : "OTM", {
+                  profit: Number(poc.profit),
+                  status: String(poc.status || ""),
+                  sold_time: Number(poc.sell_time || 0),
+                });
+              }
+            } catch {}
 
-            // ✅ ya no está pendiente
+            applyDisciplineOutcome(isWin);
             removePendingContract(cid);
 
-            // ✅ cerrar suscripción
             const sid = contractSubs.get(cid);
             forgetSubscription(sid);
             contractSubs.delete(cid);
@@ -2692,7 +2629,6 @@ function connect() {
       p.reject(new Error("closed"));
     }
 
-    // ✅ IMPORTANTE: NO borramos disciplinePendingContracts, se rescatan al reconectar
     contractSubs.clear();
 
     const code = ev?.code || 0;
@@ -2734,6 +2670,7 @@ document.addEventListener("visibilitychange", () => {
 loadLowPowerMode();
 loadAutoOpenChartSetting();
 loadDiscipline();
+loadTradeLinks(); // ✅ NUEVO
 
 renderHistory();
 updateTickHealthUI();
