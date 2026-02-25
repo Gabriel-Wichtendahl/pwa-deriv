@@ -7,6 +7,9 @@
 // ✅ FIX NUEVO (este update): si el stream proposal_open_contract no manda is_sold, hacemos fallback poll y contamos igual
 // ✅ FIX CRÍTICO (este fix): al reconectar, se AUTORIZA antes de reenganchar pendientes (evita "please login" y pendientes eternos)
 // ✅ NUEVO: cada señal muestra badge del trade operado desde el modal: ⏳ TRADE / 🎯 ITM / 💥 OTM
+// ✅ NUEVO (este cambio): pestañas arriba: Señales | Trades | Feedback | Configuración
+//    - Trades: mismo diseño que Señales, pero SOLO trades operados y SOLO ITM/OTM
+//    - Configuración: panel en pantalla (sin depender del modal; el modal puede seguir existiendo)
 // ✅ Nota: el bloqueo se activa cuando Deriv confirma el resultado del contrato (al expirar), no al apretar el botón
 
 "use strict";
@@ -136,7 +139,8 @@ const copyBtn = $("copyFeedback");
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
 
-const tabs = qsAll(".tab[data-view]");
+// (viejas tabs del HTML, si existieran)
+const legacyTabs = qsAll(".tab[data-view]");
 const signalsView = $("signalsView");
 const feedbackView = $("feedbackView");
 
@@ -157,6 +161,368 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
+
+/* =========================
+   NUEVO: Tabs (Señales / Trades / Feedback / Config)
+========================= */
+const VIEW_IDS = ["signals", "trades", "feedback", "settings"];
+let activeView = "signals";
+
+function injectTopTabsBar() {
+  if (document.getElementById("topTabsBar")) return;
+
+  // Oculta tabs viejas (si están en el HTML)
+  try {
+    legacyTabs.forEach((t) => (t.style.display = "none"));
+  } catch {}
+
+  const host = document.body;
+
+  const bar = document.createElement("div");
+  bar.id = "topTabsBar";
+  bar.className = "topTabsBar";
+  bar.innerHTML = `
+    <button class="topTabBtn" data-view="signals" aria-selected="true">Señales</button>
+    <button class="topTabBtn" data-view="trades" aria-selected="false">Trades</button>
+    <button class="topTabBtn" data-view="feedback" aria-selected="false">Feedback</button>
+    <button class="topTabBtn" data-view="settings" aria-selected="false">Configuración</button>
+  `;
+
+  // Insertar arriba de todo, antes del contenido principal si existe
+  const appHost = document.querySelector("#app") || document.body;
+  appHost.prepend(bar);
+
+  // CSS inline mínimo (no rompe tu theme)
+  const styleId = "topTabsBarStyle";
+  if (!document.getElementById(styleId)) {
+    const st = document.createElement("style");
+    st.id = styleId;
+    st.textContent = `
+      .topTabsBar{
+        display:flex; gap:10px; padding:10px 12px;
+        position: sticky; top: 0; z-index: 50;
+        backdrop-filter: blur(10px);
+        background: rgba(0,0,0,.35);
+        border-bottom: 1px solid rgba(255,255,255,.08);
+      }
+      .topTabBtn{
+        flex:1; padding:10px 8px;
+        border-radius: 14px;
+        border:1px solid rgba(255,255,255,.10);
+        background: rgba(255,255,255,.05);
+        color: rgba(255,255,255,.86);
+        font-weight: 900;
+        letter-spacing:.2px;
+        user-select:none;
+        touch-action: manipulation;
+      }
+      .topTabBtn.isActive{
+        background: rgba(255,255,255,.12);
+        border-color: rgba(255,255,255,.18);
+        color: rgba(255,255,255,1);
+        box-shadow: 0 0 18px rgba(255,255,255,.06);
+      }
+      .viewPanel{ display:none; }
+      .viewPanel.isActive{ display:block; }
+      .settingsPanel{
+        padding: 12px;
+      }
+      .settingsPanel .box{
+        border: 1px solid rgba(255,255,255,.10);
+        border-radius: 16px;
+        background: rgba(255,255,255,.04);
+        padding: 12px;
+        margin: 10px 0;
+      }
+      .settingsPanel .box h3{
+        margin: 0 0 10px 0;
+        font-size: 14px;
+        opacity: .9;
+      }
+      .settingsPanel .rowLine{
+        display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+      }
+      .settingsPanel input{
+        flex: 1 1 220px;
+        padding: 12px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(0,0,0,.25);
+        color: rgba(255,255,255,.92);
+        outline: none;
+      }
+      .settingsPanel .btn{
+        padding: 12px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(255,255,255,.06);
+        color: rgba(255,255,255,.9);
+        font-weight: 900;
+      }
+      .settingsPanel .btn.btnPrimary{
+        background: rgba(34,197,94,.18);
+        border-color: rgba(34,197,94,.45);
+      }
+      .settingsPanel .btn.btnDanger{
+        background: rgba(239,68,68,.16);
+        border-color: rgba(239,68,68,.40);
+      }
+      .settingsPanel .btn.btnGhost{
+        background: rgba(255,255,255,.05);
+      }
+      .emptyState{
+        padding: 14px;
+        border-radius: 16px;
+        border: 1px dashed rgba(255,255,255,.16);
+        background: rgba(255,255,255,.03);
+        opacity: .9;
+        margin: 12px;
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
+  bar.addEventListener("click", (e) => {
+    const btn = e.target.closest(".topTabBtn");
+    if (!btn) return;
+    setActiveView(btn.dataset.view);
+  });
+}
+
+function ensureViewPanels() {
+  const appHost = document.querySelector("#app") || document.body;
+
+  // Señales/Feedback: si ya existen en HTML, los usamos; si no, creamos wrappers.
+  const ensurePanel = (id, existingEl = null) => {
+    let el = document.getElementById(`view-${id}`);
+    if (el) return el;
+
+    el = document.createElement("div");
+    el.id = `view-${id}`;
+    el.className = "viewPanel";
+    if (existingEl) {
+      // Meter el existing dentro del panel
+      el.appendChild(existingEl);
+    }
+    appHost.appendChild(el);
+    return el;
+  };
+
+  // Si en tu HTML ya tenés signalsView/feedbackView, los reusamos
+  if (signalsView && signalsView.parentElement && !signalsView.closest(`#view-signals`)) {
+    ensurePanel("signals", signalsView);
+  } else {
+    ensurePanel("signals", null);
+  }
+
+  if (feedbackView && feedbackView.parentElement && !feedbackView.closest(`#view-feedback`)) {
+    ensurePanel("feedback", feedbackView);
+  } else {
+    ensurePanel("feedback", null);
+  }
+
+  // Trades y Settings (nuevos)
+  ensurePanel("trades", null);
+  ensurePanel("settings", null);
+
+  // Si no existía signalsView, intentamos meter #signals directamente en view-signals
+  try {
+    const vSignals = document.getElementById("view-signals");
+    if (vSignals && signalsEl && !signalsEl.closest("#view-signals")) vSignals.appendChild(signalsEl.parentElement || signalsEl);
+  } catch {}
+
+  // Si no existía feedbackView, intentamos meter #feedback en view-feedback
+  try {
+    const vFeed = document.getElementById("view-feedback");
+    if (vFeed && feedbackEl && !feedbackEl.closest("#view-feedback")) vFeed.appendChild(feedbackEl.parentElement || feedbackEl);
+  } catch {}
+}
+
+function setActiveView(name) {
+  const v = VIEW_IDS.includes(name) ? name : "signals";
+  activeView = v;
+
+  VIEW_IDS.forEach((id) => {
+    const panel = document.getElementById(`view-${id}`);
+    if (panel) panel.classList.toggle("isActive", id === v);
+  });
+
+  const buttons = qsAll("#topTabsBar .topTabBtn");
+  buttons.forEach((b) => {
+    const on = b.dataset.view === v;
+    b.classList.toggle("isActive", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+
+  localStorage.setItem("activeView", v);
+
+  // Render on switch
+  if (v === "signals") {
+    // ya existe renderHistory en boot; acá solo refrescamos contadores/rows si hace falta
+    updateCounter();
+  } else if (v === "trades") {
+    renderTradesView();
+  } else if (v === "feedback") {
+    rebuildFeedbackFromHistory();
+  } else if (v === "settings") {
+    ensureSettingsPanel();
+  }
+}
+
+function initNewTabsSystem() {
+  injectTopTabsBar();
+  ensureViewPanels();
+
+  const saved = localStorage.getItem("activeView") || "signals";
+  setActiveView(VIEW_IDS.includes(saved) ? saved : "signals");
+}
+
+/* =========================
+   NUEVO: Trades view
+   - mismo row render que Señales
+   - solo operados y solo ITM/OTM
+========================= */
+function isOperatedTradeITMOTM(it) {
+  const b = it?.trade?.badge || "";
+  return b === "ITM" || b === "OTM";
+}
+function renderTradesView() {
+  const root = document.getElementById("view-trades");
+  if (!root) return;
+
+  const trades = (history || []).filter(isOperatedTradeITMOTM).slice().reverse();
+
+  if (!trades.length) {
+    root.innerHTML = `<div class="emptyState">Todavía no hay Trades cerrados (🎯 ITM / 💥 OTM).</div>`;
+    return;
+  }
+
+  // Misma UI que señales: reusamos buildRow, pero dentro de un contenedor propio
+  root.innerHTML = "";
+  for (const it of trades) root.appendChild(buildRow(it));
+}
+
+/* =========================
+   NUEVO: Configuración como panel (en pantalla)
+   - Token DEMO
+   - Stake
+   - Toggles (si tus botones existen, los reusamos)
+   - Export / Clear / Reset cache / Bajo consumo / Auto-abrir gráfico
+========================= */
+let settingsPanelBuilt = false;
+function ensureSettingsPanel() {
+  const root = document.getElementById("view-settings");
+  if (!root) return;
+
+  if (!settingsPanelBuilt) {
+    settingsPanelBuilt = true;
+
+    root.innerHTML = `
+      <div class="settingsPanel">
+        <div class="box">
+          <h3>DEMO Token</h3>
+          <div class="rowLine">
+            <input id="tokenInputTab" placeholder="Pegá token DEMO (Deriv API)" autocomplete="off" />
+            <button class="btn btnPrimary" id="tokenSaveBtnTab" type="button">💾 Guardar</button>
+            <button class="btn btnDanger" id="tokenClearBtnTab" type="button">🗑️ Borrar</button>
+          </div>
+        </div>
+
+        <div class="box">
+          <h3>Stake (USD)</h3>
+          <div class="rowLine">
+            <input id="stakeInputTab" inputmode="decimal" placeholder="1.00" />
+            <button class="btn btnPrimary" id="stakeSaveBtnTab" type="button">💾 Guardar</button>
+            <button class="btn btnGhost" id="stakeDefaultBtnTab" type="button">↩️ Default</button>
+          </div>
+        </div>
+
+        <div class="box">
+          <h3>Controles</h3>
+          <div class="rowLine" id="settingsControlsRow"></div>
+        </div>
+
+        <div class="box">
+          <h3>Datos</h3>
+          <div class="rowLine" id="settingsDataRow"></div>
+        </div>
+      </div>
+    `;
+
+    // Reusar botones existentes si están en tu UI
+    const controlsRow = document.getElementById("settingsControlsRow");
+    const dataRow = document.getElementById("settingsDataRow");
+
+    // Helpers: clonar botón conservando estilo/clase (sin moverlo de su lugar original)
+    const cloneBtn = (btn) => {
+      if (!btn) return null;
+      const c = btn.cloneNode(true);
+      // Copiar estado active
+      try {
+        if (btn.classList.contains("active")) c.classList.add("active");
+        if (btn.classList.contains("active-strong")) c.classList.add("active-strong");
+      } catch {}
+      return c;
+    };
+
+    // Clones (y luego les re-asignamos onclick abajo)
+    const btnSoundC = cloneBtn(soundBtn);
+    const btnVibC = cloneBtn(vibrateBtn);
+    const btnWakeC = cloneBtn(wakeBtn);
+    const btnThemeC = cloneBtn(themeBtn);
+    const btnLowPowerC = cloneBtn(pickEl("lowPowerBtn"));
+    const btnAutoOpenC = cloneBtn(pickEl("autoOpenChartBtn"));
+
+    const btnExportC = cloneBtn(pickEl("exportVotedBtn"));
+    const btnResetCacheC = cloneBtn(pickEl("resetCacheBtn"));
+    const btnClearHistoryC = cloneBtn(clearHistoryBtn);
+
+    // Insert
+    [btnSoundC, btnVibC, btnWakeC, btnThemeC, btnLowPowerC, btnAutoOpenC].forEach((b) => b && controlsRow && controlsRow.appendChild(b));
+    [btnExportC, btnResetCacheC, btnClearHistoryC].forEach((b) => b && dataRow && dataRow.appendChild(b));
+
+    // Reasignar handlers (usamos los originales)
+    if (btnSoundC && soundBtn) btnSoundC.onclick = soundBtn.onclick;
+    if (btnVibC && vibrateBtn) btnVibC.onclick = vibrateBtn.onclick;
+    if (btnWakeC && wakeBtn) btnWakeC.onclick = wakeBtn.onclick;
+    if (btnThemeC && themeBtn) btnThemeC.onclick = themeBtn.onclick;
+
+    const lowPowerBtn = pickEl("lowPowerBtn");
+    if (btnLowPowerC && lowPowerBtn) btnLowPowerC.onclick = lowPowerBtn.onclick;
+
+    const autoOpenBtn = pickEl("autoOpenChartBtn");
+    if (btnAutoOpenC && autoOpenBtn) btnAutoOpenC.onclick = autoOpenBtn.onclick;
+
+    const exportBtn = pickEl("exportVotedBtn");
+    if (btnExportC && exportBtn) btnExportC.onclick = exportBtn.onclick;
+
+    const resetCacheBtn = pickEl("resetCacheBtn");
+    if (btnResetCacheC && resetCacheBtn) btnResetCacheC.onclick = resetCacheBtn.onclick;
+
+    if (btnClearHistoryC && clearHistoryBtn) btnClearHistoryC.onclick = clearHistoryBtn.onclick;
+
+    // Inicializar UI token/stake para los nuevos inputs/botones
+    initTokenAndStakeUI();
+
+    // Sincronizar textos activos (por si cambian)
+    try {
+      if (btnLowPowerC) applyLowPowerModeUI();
+      if (btnAutoOpenC) applyAutoOpenChartUI();
+    } catch {}
+  }
+
+  // refrescar valores actuales
+  try {
+    const t = getDerivToken();
+    const ti = pickEl("tokenInputTab");
+    if (ti && !ti.value) ti.value = t || "";
+  } catch {}
+  try {
+    const s = getTradeStake();
+    const si = pickEl("stakeInputTab");
+    if (si && (!si.value || String(si.value).trim() === "")) si.value = Number(s).toFixed(2);
+  } catch {}
+}
 
 /* =========================
    Toast
@@ -357,8 +723,11 @@ function shouldAutoOpenChartNow() {
   if (document.visibilityState !== "visible") return false;
   if (chartModal && !chartModal.classList.contains("hidden")) return false;
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
-  const activeView = localStorage.getItem("activeView") || "signals";
-  if (activeView === "feedback") return false;
+
+  // NUEVO: respeta la nueva pestaña
+  const av = localStorage.getItem("activeView") || "signals";
+  if (av === "feedback" || av === "settings") return false;
+
   return true;
 }
 
@@ -597,29 +966,7 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Tabs
-========================= */
-function setActiveView(name) {
-  const isSignals = name === "signals";
-  if (signalsView) signalsView.classList.toggle("hidden", !isSignals);
-  if (feedbackView) feedbackView.classList.toggle("hidden", isSignals);
-
-  tabs.forEach((t) => {
-    const active = t.dataset.view === name;
-    t.classList.toggle("active", active);
-    t.setAttribute("aria-selected", active ? "true" : "false");
-  });
-
-  localStorage.setItem("activeView", name);
-}
-(function initTabs() {
-  const saved = localStorage.getItem("activeView") || "signals";
-  setActiveView(saved === "feedback" ? "feedback" : "signals");
-  tabs.forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
-})();
-
-/* =========================
-   Settings modal
+   (Legacy) Settings modal
 ========================= */
 function openSettings() {
   if (!settingsModal) return;
@@ -849,6 +1196,8 @@ function clearHistory() {
   updateCounter();
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
+  // refresh trades view
+  try { if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView(); } catch {}
 }
 if (clearHistoryBtn)
   clearHistoryBtn.onclick = () => {
@@ -1388,7 +1737,6 @@ function updateRowTradeBadge(item) {
     el.style.opacity = "0.85";
   }
 
-  // mini estilo inline (si preferís CSS, lo pasamos al style.css)
   el.style.marginLeft = "8px";
   el.style.fontWeight = "900";
   el.style.fontSize = "12px";
@@ -1505,7 +1853,7 @@ function buildRow(item) {
 
   updateRowChartBtn(item);
   updateRowHitIcon(item);
-  updateRowTradeBadge(item); // ✅ NUEVO
+  updateRowTradeBadge(item);
 
   if (item.vote) {
     const likeBtn = row.querySelector('button[data-v="like"]');
@@ -1739,7 +2087,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
           toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
 
-          // ✅ NUEVO: pintar badge en señal asociada
+          // ✅ pintar badge en señal asociada
           try {
             const signalId = tradeLinks.get(String(cid)) || "";
             const it = signalId ? findHistoryItemById(signalId) : null;
@@ -1749,6 +2097,8 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
                 status: String(poc.status || ""),
                 sold_time: Number(poc.sell_time || 0),
               });
+              // NUEVO: refrescar Trades si estás mirando Trades
+              if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView();
             }
           } catch {}
 
@@ -1831,10 +2181,11 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
 
-    // ✅ NUEVO: linkear el contrato con la señal del modal y marcar PENDING
+    // linkear el contrato con la señal del modal y marcar PENDING
     if (modalCurrentItem && modalCurrentItem.id) {
       setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), side, symbol });
       linkContractToSignal(cid, modalCurrentItem.id);
+      // NUEVO: si estás en Trades, no aparece hasta ITM/OTM (ok)
     }
 
     subscribeContractOutcome(cid, true);
@@ -1899,9 +2250,17 @@ if (modalBuyPutBtn) {
    Config UI: Token + Stake
 ========================= */
 function initTokenAndStakeUI() {
-  const tokenInput = pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
-  const tokenSaveBtn = pickEl("tokenSaveBtn", "saveTokenBtn", "btnSaveToken");
-  const tokenClearBtn = pickEl("tokenClearBtn", "deleteTokenBtn", "btnClearToken", "btnDeleteToken");
+  // (sumé ids del panel de configuración nuevo)
+  const tokenInput = pickEl(
+    "tokenInputTab",
+    "tokenInput",
+    "derivTokenInput",
+    "demoTokenInput",
+    "tokenDemoInput",
+    "tradeTokenInput"
+  );
+  const tokenSaveBtn = pickEl("tokenSaveBtnTab", "tokenSaveBtn", "saveTokenBtn", "btnSaveToken");
+  const tokenClearBtn = pickEl("tokenClearBtnTab", "tokenClearBtn", "deleteTokenBtn", "btnClearToken", "btnDeleteToken");
 
   if (tokenInput) {
     const cur = getDerivToken();
@@ -1929,9 +2288,9 @@ function initTokenAndStakeUI() {
     };
   }
 
-  const stakeInput = pickEl("stakeInput", "tradeStakeInput", "stakeUsdInput");
-  const stakeSaveBtn = pickEl("stakeSaveBtn", "saveStakeBtn", "btnSaveStake");
-  const stakeDefaultBtn = pickEl("stakeDefaultBtn", "defaultStakeBtn", "btnDefaultStake");
+  const stakeInput = pickEl("stakeInputTab", "stakeInput", "tradeStakeInput", "stakeUsdInput");
+  const stakeSaveBtn = pickEl("stakeSaveBtnTab", "stakeSaveBtn", "saveStakeBtn", "btnSaveStake");
+  const stakeDefaultBtn = pickEl("stakeDefaultBtnTab", "stakeDefaultBtn", "defaultStakeBtn", "btnDefaultStake");
 
   if (stakeInput) {
     const cur = getTradeStake();
@@ -2178,6 +2537,9 @@ async function rehydrateHistoryOnBoot() {
   updateCounter();
   rebuildFeedbackFromHistory();
 
+  // NUEVO: si estás en Trades, refrescá
+  try { if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView(); } catch {}
+
   clearRehydrateStatus();
 }
 
@@ -2307,7 +2669,6 @@ function scheduleRetry(minute) {
    Technical rules + Evaluation (FUERTE)
 ========================= */
 // (⬇️ ESTA SECCIÓN ES IDÉNTICA A TU ARCHIVO, NO CAMBIÉ REGLAS)
-// Para ahorrar espacio acá, la mantengo tal cual tu versión de referencia:
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
   const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
@@ -2479,7 +2840,7 @@ function addSignal(minute, symbol, direction, ticks) {
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
     nextOutcome: "",
     minuteComplete: false,
-    trade: null, // ✅ NUEVO (se llena solo si operás esa señal)
+    trade: null,
   };
 
   if (history.some((x) => x.id === item.id)) return;
@@ -2578,7 +2939,7 @@ function connect() {
 
             toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
 
-            // ✅ NUEVO: pintar badge en señal asociada
+            // ✅ pintar badge en señal asociada
             try {
               const signalId = tradeLinks.get(String(cid)) || "";
               const it = signalId ? findHistoryItemById(signalId) : null;
@@ -2588,6 +2949,7 @@ function connect() {
                   status: String(poc.status || ""),
                   sold_time: Number(poc.sell_time || 0),
                 });
+                if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView();
               }
             } catch {}
 
@@ -2670,7 +3032,7 @@ document.addEventListener("visibilitychange", () => {
 loadLowPowerMode();
 loadAutoOpenChartSetting();
 loadDiscipline();
-loadTradeLinks(); // ✅ NUEVO
+loadTradeLinks();
 
 renderHistory();
 updateTickHealthUI();
@@ -2688,5 +3050,8 @@ ensureResetCacheButton();
 
 applyModalTradeButtonsLayout();
 updateDisciplineLockUI(false);
+
+// ✅ NUEVO: inicializa pestañas 4 vistas
+initNewTabsSystem();
 
 connect();
