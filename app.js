@@ -7,9 +7,10 @@
 // ✅ FIX NUEVO (este update): si el stream proposal_open_contract no manda is_sold, hacemos fallback poll y contamos igual
 // ✅ FIX CRÍTICO (este fix): al reconectar, se AUTORIZA antes de reenganchar pendientes (evita "please login" y pendientes eternos)
 // ✅ NUEVO: cada señal muestra badge del trade operado desde el modal: ⏳ TRADE / 🎯 ITM / 💥 OTM
-// ✅ NUEVO (este cambio): pestañas: Señales | Trades | Feedback | Configuración
-//    - NO duplica Configuración: Configuración abre el MISMO modal de siempre (engrane igual, botones en su lugar)
-//    - Trades: mismo diseño que Señales, pero SOLO señales operadas con resultado 🎯ITM / 💥OTM (cerradas)
+// ✅ NUEVO (este cambio): pestañas: Señales | Trades | Feedback
+//    - NO hay pestaña Configuración (se elimina).
+//    - Se mantiene SOLO el engranaje (configBtn) para abrir el modal de configuración.
+//    - Trades: mismo diseño que Señales, pero SOLO trades cerrados 🎯ITM / 💥OTM
 
 "use strict";
 
@@ -370,8 +371,7 @@ function shouldAutoOpenChartNow() {
 
   const activeView = localStorage.getItem("activeView") || "signals";
   if (activeView === "feedback") return false;
-  // "settings" nunca queda guardada (abre modal), pero por seguridad:
-  if (activeView === "settings") return false;
+  if (activeView === "trades") return false; // si estás en Trades, no auto abre
 
   return true;
 }
@@ -611,20 +611,17 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   NUEVO: Trades view (mismo diseño que señales, filtrado)
+   Trades view (mismo diseño que señales, filtrado)
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
   if (el) return el;
 
-  // lo ponemos junto a signalsView/feedbackView sin mover header ni botones
   const host = (signalsView && signalsView.parentElement) || (feedbackView && feedbackView.parentElement) || document.body;
   el = document.createElement("div");
   el.id = "tradesView";
 
-  // si signalsView tiene la clase que maneja layout, la copiamos (solo por compat visual)
   if (signalsView && signalsView.className) el.className = signalsView.className;
-  // usamos el mismo mecanismo "hidden"
   el.classList.add("hidden");
 
   host.appendChild(el);
@@ -644,7 +641,6 @@ function renderTradesView() {
 
   const trades = (history || []).filter(isTradeClosedITMOTM).slice().reverse();
   if (!trades.length) {
-    // sin tocar CSS global: simple y seguro
     tv.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades cerrados (🎯 ITM / 💥 OTM).</div>`;
     return;
   }
@@ -653,54 +649,36 @@ function renderTradesView() {
 }
 
 /* =========================
-   Tabs: Señales | Trades | Feedback | Configuración (modal)
-   - NO cambia posición de botones
-   - Configuración abre modal (no es vista)
+   Tabs: Señales | Trades | Feedback
+   - NO existe pestaña Configuración (se elimina)
+   - Se mantiene SOLO el engranaje para abrir modal
 ========================= */
-let lastNonConfigView = "signals";
+function removeSettingsTabIfExists() {
+  try {
+    const host = (configBtn && configBtn.parentElement) || document.body;
+    const sTab = host.querySelector('.tab[data-view="settings"]');
+    if (sTab) sTab.remove();
+  } catch {}
+}
 
-function ensureHeaderTabs() {
-  // Insertar tabs nuevos en la MISMA fila del engrane (sin mover otros elementos):
-  // usamos el parent del configBtn.
+function ensureTradesTab() {
+  // Insertar Trades en la MISMA fila del engrane (sin mover engrane ni otros botones)
   const host = (configBtn && configBtn.parentElement) || null;
   if (!host) return;
 
   const hasTrades = host.querySelector('.tab[data-view="trades"]');
-  const hasSettings = host.querySelector('.tab[data-view="settings"]');
+  if (hasTrades) return;
 
-  // Insertamos ANTES del engrane (así el engrane queda donde estaba)
   const beforeNode = configBtn || null;
-
-  if (!hasTrades) {
-    const t = document.createElement("button");
-    t.type = "button";
-    t.className = "tab";
-    t.dataset.view = "trades";
-    t.textContent = "Trades";
-    host.insertBefore(t, beforeNode);
-  }
-
-  if (!hasSettings) {
-    const t = document.createElement("button");
-    t.type = "button";
-    t.className = "tab";
-    t.dataset.view = "settings";
-    t.textContent = "Configuración";
-    host.insertBefore(t, beforeNode);
-  }
+  const t = document.createElement("button");
+  t.type = "button";
+  t.className = "tab";
+  t.dataset.view = "trades";
+  t.textContent = "Trades";
+  host.insertBefore(t, beforeNode);
 }
 
 function setActiveView(name) {
-  // Configuración: abre modal de siempre, sin cambiar layout
-  if (name === "settings") {
-    openSettings();
-    // no guardamos settings como activeView
-    setTimeout(() => setActiveView(lastNonConfigView || "signals"), 0);
-    return;
-  }
-
-  lastNonConfigView = name;
-
   const isSignals = name === "signals";
   const isTrades = name === "trades";
   const isFeedback = name === "feedback";
@@ -711,7 +689,6 @@ function setActiveView(name) {
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (feedbackView) feedbackView.classList.toggle("hidden", !isFeedback);
 
-  // activar tabs visualmente (incluye las creadas recién)
   qsAll('.tab[data-view]').forEach((t) => {
     const active = t.dataset.view === name;
     t.classList.toggle("active", active);
@@ -726,21 +703,20 @@ function setActiveView(name) {
 }
 
 (function initTabs() {
-  ensureHeaderTabs();
+  removeSettingsTabIfExists(); // ✅ elimina la pestaña Configuración si quedó
+  ensureTradesTab(); // ✅ agrega Trades si no existe
   ensureTradesView();
 
-  const saved = localStorage.getItem("activeView") || "signals";
-  const safe = saved === "settings" ? "signals" : saved;
-  const initial = ["signals", "trades", "feedback"].includes(safe) ? safe : "signals";
-
-  // bind clicks
+  // bind clicks a TODOS los tabs (incluye el nuevo Trades)
   qsAll('.tab[data-view]').forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 
+  const saved = localStorage.getItem("activeView") || "signals";
+  const initial = ["signals", "trades", "feedback"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 })();
 
 /* =========================
-   Settings modal
+   Settings modal (solo engranaje)
 ========================= */
 function openSettings() {
   if (!settingsModal) return;
@@ -1512,7 +1488,6 @@ function updateRowTradeBadge(item) {
     el.style.opacity = "0.85";
   }
 
-  // mini estilo inline (como tu base)
   el.style.marginLeft = "8px";
   el.style.fontWeight = "900";
   el.style.fontSize = "12px";
