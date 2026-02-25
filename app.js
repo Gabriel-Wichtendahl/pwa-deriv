@@ -4,13 +4,14 @@
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
 // ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
-// ✅ FIX NUEVO (este update): si el stream proposal_open_contract no manda is_sold, hacemos fallback poll y contamos igual
-// ✅ FIX CRÍTICO (este fix): al reconectar, se AUTORIZA antes de reenganchar pendientes (evita "please login" y pendientes eternos)
-// ✅ NUEVO: cada señal muestra badge del trade operado desde el modal: ⏳ TRADE / 🎯 ITM / 💥 OTM
-// ✅ NUEVO (este cambio): pestañas: Señales | Trades | Feedback
-//    - NO hay pestaña Configuración (se elimina).
-//    - Se mantiene SOLO el engranaje (configBtn) para abrir el modal de configuración.
-//    - Trades: mismo diseño que Señales, pero SOLO trades cerrados 🎯ITM / 💥OTM
+// ✅ FIX NUEVO: si proposal_open_contract no manda is_sold, fallback poll y cuenta igual
+// ✅ FIX CRÍTICO: al reconectar, autoriza antes de reenganchar pendientes
+// ✅ NUEVO: cada señal muestra badge del trade: ⏳ TRADE / 🎯 ITM / 💥 OTM
+// ✅ NUEVO: pestañas: Señales | Trades | Feedback (sin pestaña Configuración; queda SOLO el engranaje)
+// ✅ NUEVO: separar historial:
+//    - Señales: STORE_KEY (se puede borrar solo señales)
+//    - Trades (journal estudio): TRADES_STORE_KEY (se puede borrar solo trades)
+// ✅ NUEVO: Exportar Trades (journal) desde Configuración
 
 "use strict";
 
@@ -31,6 +32,12 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
+
+/* =========================
+   Trades Journal (estudio)
+========================= */
+const TRADES_STORE_KEY = "derivTradesJournal_v1";
+const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
    DEMO Trade config
@@ -94,6 +101,87 @@ function linkContractToSignal(contractId, signalId) {
   tradeLinks.set(String(contractId), String(signalId));
   saveTradeLinks();
 }
+
+/* =========================
+   Trades Journal persistence
+========================= */
+function loadTradesJournal() {
+  try {
+    const raw = localStorage.getItem(TRADES_STORE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function saveTradesJournal(arr) {
+  try {
+    localStorage.setItem(TRADES_STORE_KEY, JSON.stringify(arr));
+  } catch {}
+}
+let tradesJournal = loadTradesJournal();
+
+function makeJournalIdFromSignal(it) {
+  const cid = it?.trade?.contract_id ? String(it.trade.contract_id) : "";
+  return `${String(it.id || "")}::${cid}`.slice(0, 220);
+}
+
+// guarda/actualiza snapshot (solo ITM/OTM)
+function upsertTradeJournalFromSignal(it) {
+  if (!it?.trade?.badge) return;
+  const b = String(it.trade.badge || "");
+  if (b !== "ITM" && b !== "OTM") return;
+
+  const entry = {
+    journal_id: makeJournalIdFromSignal(it),
+    saved_at: Date.now(),
+
+    // snapshot señal
+    id: it.id,
+    minute: it.minute,
+    time: it.time,
+    symbol: it.symbol,
+    direction: it.direction,
+    mode: it.mode,
+
+    nextOutcome: it.nextOutcome || "",
+    minuteComplete: !!it.minuteComplete,
+
+    // snapshot trade
+    trade: { ...(it.trade || {}) },
+
+    // para estudio (si te interesa tenerlo)
+    ticks: Array.isArray(it.ticks) ? it.ticks : [],
+  };
+
+  const idx = tradesJournal.findIndex((x) => x && x.journal_id === entry.journal_id);
+  if (idx >= 0) tradesJournal[idx] = entry;
+  else tradesJournal.unshift(entry);
+
+  if (tradesJournal.length > TRADES_JOURNAL_MAX) tradesJournal = tradesJournal.slice(0, TRADES_JOURNAL_MAX);
+
+  saveTradesJournal(tradesJournal);
+}
+
+// (opcional útil) si tenías trades ya guardados en history, los “siembra” en el journal una vez
+function seedTradesJournalFromHistory() {
+  try {
+    let changed = false;
+    for (const it of history || []) {
+      const b = it?.trade?.badge || "";
+      if (b === "ITM" || b === "OTM") {
+        const id = makeJournalIdFromSignal(it);
+        if (!tradesJournal.some((x) => x && x.journal_id === id)) {
+          upsertTradeJournalFromSignal(it);
+          changed = true;
+        }
+      }
+    }
+    if (changed) saveTradesJournal(tradesJournal);
+  } catch {}
+}
+
 function findHistoryItemById(id) {
   return (history || []).find((x) => x && x.id === id) || null;
 }
@@ -104,6 +192,11 @@ function setTradeBadge(item, badge /* 'PENDING'|'ITM'|'OTM'|'' */, extra = {}) {
   if (extra && typeof extra === "object") Object.assign(item.trade, extra);
   saveHistory(history);
   updateRowTradeBadge(item);
+
+  // si cerró ITM/OTM, guardar en journal
+  try {
+    upsertTradeJournalFromSignal(item);
+  } catch {}
 
   // si estás mirando Trades, refrescar
   try {
@@ -139,7 +232,7 @@ const soundBtn = $("soundBtn");
 const vibrateBtn = $("vibrateBtn");
 const wakeBtn = $("wakeBtn");
 const themeBtn = $("themeBtn");
-const clearHistoryBtn = $("clearHistoryBtn");
+const clearHistoryBtn = $("clearHistoryBtn"); // lo ocultamos y reemplazamos por dos botones
 const copyBtn = $("copyFeedback");
 
 const evalBtns = qsAll(".evalBtn");
@@ -371,7 +464,7 @@ function shouldAutoOpenChartNow() {
 
   const activeView = localStorage.getItem("activeView") || "signals";
   if (activeView === "feedback") return false;
-  if (activeView === "trades") return false; // si estás en Trades, no auto abre
+  if (activeView === "trades") return false;
 
   return true;
 }
@@ -515,7 +608,7 @@ function initWakeButton() {
 }
 
 /* =========================
-   Persistencia (history)
+   Persistencia (history señales)
 ========================= */
 function loadHistory() {
   try {
@@ -611,7 +704,7 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Trades view (mismo diseño que señales, filtrado)
+   Trades view (journal)
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
@@ -628,30 +721,39 @@ function ensureTradesView() {
   return el;
 }
 
-function isTradeClosedITMOTM(it) {
-  const b = it?.trade?.badge || "";
-  return b === "ITM" || b === "OTM";
-}
-
 function renderTradesView() {
   const tv = ensureTradesView();
   if (!tv) return;
 
   tv.innerHTML = "";
 
-  const trades = (history || []).filter(isTradeClosedITMOTM).slice().reverse();
-  if (!trades.length) {
-    tv.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades cerrados (🎯 ITM / 💥 OTM).</div>`;
+  if (!tradesJournal.length) {
+    tv.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
     return;
   }
 
-  for (const it of trades) tv.appendChild(buildRow(it));
+  // reutiliza el mismo diseño (buildRow) usando un item compatible
+  for (const entry of tradesJournal) {
+    const item = {
+      id: entry.id,
+      minute: entry.minute,
+      time: entry.time,
+      symbol: entry.symbol,
+      direction: entry.direction,
+      mode: entry.mode || "NORMAL",
+      vote: "",
+      comment: "",
+      ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
+      nextOutcome: entry.nextOutcome || "",
+      minuteComplete: true,
+      trade: entry.trade || null,
+    };
+    tv.appendChild(buildRow(item));
+  }
 }
 
 /* =========================
    Tabs: Señales | Trades | Feedback
-   - NO existe pestaña Configuración (se elimina)
-   - Se mantiene SOLO el engranaje para abrir modal
 ========================= */
 function removeSettingsTabIfExists() {
   try {
@@ -660,9 +762,7 @@ function removeSettingsTabIfExists() {
     if (sTab) sTab.remove();
   } catch {}
 }
-
 function ensureTradesTab() {
-  // Insertar Trades en la MISMA fila del engrane (sin mover engrane ni otros botones)
   const host = (configBtn && configBtn.parentElement) || null;
   if (!host) return;
 
@@ -703,11 +803,10 @@ function setActiveView(name) {
 }
 
 (function initTabs() {
-  removeSettingsTabIfExists(); // ✅ elimina la pestaña Configuración si quedó
-  ensureTradesTab(); // ✅ agrega Trades si no existe
+  removeSettingsTabIfExists();
+  ensureTradesTab();
   ensureTradesView();
 
-  // bind clicks a TODOS los tabs (incluye el nuevo Trades)
   qsAll('.tab[data-view]').forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 
   const saved = localStorage.getItem("activeView") || "signals";
@@ -738,6 +837,25 @@ if (settingsCloseBtn2) settingsCloseBtn2.onclick = closeSettings;
 if (settingsCloseBackdrop) settingsCloseBackdrop.onclick = closeSettings;
 
 /* =========================
+   Export helpers
+========================= */
+function downloadTextFile(filename, text, mime = "application/json") {
+  try {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  } catch {
+    alert("No se pudo descargar el archivo. Probá copiar desde el portapapeles.");
+  }
+}
+
+/* =========================
    Export (solo señales con voto)
 ========================= */
 function buildExportPayloadVoted() {
@@ -761,21 +879,6 @@ function buildExportPayloadVoted() {
       ticks: Array.isArray(it.ticks) ? it.ticks : [],
     })),
   };
-}
-function downloadTextFile(filename, text, mime = "application/json") {
-  try {
-    const blob = new Blob([text], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  } catch {
-    alert("No se pudo descargar el archivo. Probá copiar desde el portapapeles.");
-  }
 }
 async function exportVotedSignals() {
   const payload = buildExportPayloadVoted();
@@ -822,6 +925,129 @@ function ensureExportButton() {
   if (!btn) return;
   btn.onclick = exportVotedSignals;
 })();
+
+/* =========================
+   Export Trades (journal)
+========================= */
+function buildExportPayloadTrades() {
+  return {
+    exported_at: new Date().toISOString(),
+    count_trades: (tradesJournal || []).length,
+    trades: (tradesJournal || []).map((t) => ({
+      journal_id: t.journal_id,
+      saved_at: t.saved_at,
+      id: t.id,
+      minute: t.minute,
+      time: t.time,
+      symbol: t.symbol,
+      direction: t.direction,
+      mode: t.mode,
+      nextOutcome: t.nextOutcome || "",
+      trade: t.trade || null,
+      ticks: Array.isArray(t.ticks) ? t.ticks : [],
+    })),
+  };
+}
+async function exportTradesJournal() {
+  const payload = buildExportPayloadTrades();
+  const json = JSON.stringify(payload, null, 2);
+
+  if (!payload.count_trades) {
+    alert("No hay trades guardados todavía.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(json);
+    alert(`✅ Trades exportados al portapapeles (${payload.count_trades}). Pegalo acá en el chat.`);
+    return;
+  } catch {
+    const ts = new Date().toISOString().replaceAll(":", "-");
+    downloadTextFile(`deriv-trades-journal-${ts}.json`, json);
+    alert(`📥 Descargado JSON (${payload.count_trades}).`);
+  }
+}
+function ensureExportTradesButton() {
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+  if (!host) return null;
+
+  let btn = document.getElementById("exportTradesBtn");
+  if (btn) return btn;
+
+  btn = document.createElement("button");
+  btn.id = "exportTradesBtn";
+  btn.type = "button";
+  btn.className = "btn btnGhost";
+  btn.textContent = "📤 Exportar Trades (estudio)";
+  btn.title = "Copia al portapapeles / descarga JSON del journal de trades";
+  host.appendChild(btn);
+  return btn;
+}
+
+/* =========================
+   Clear: separar Señales vs Trades
+========================= */
+function clearSignalsOnly() {
+  history = [];
+  saveHistory(history);
+  updateCounter();
+  if (signalsEl) signalsEl.innerHTML = "";
+  if (feedbackEl) feedbackEl.value = "";
+  toast("🧹 Señales borradas (Trades intactos)", 1800);
+}
+function clearTradesOnly() {
+  tradesJournal = [];
+  saveTradesJournal(tradesJournal);
+  try {
+    const av = localStorage.getItem("activeView") || "signals";
+    if (av === "trades") renderTradesView();
+  } catch {}
+  toast("🗑️ Trades borrados (Señales intactas)", 1800);
+}
+function ensureSplitClearButtons() {
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+  if (!host) return;
+
+  // ocultar el botón viejo si existe
+  if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
+
+  if (!document.getElementById("clearSignalsBtn")) {
+    const b = document.createElement("button");
+    b.id = "clearSignalsBtn";
+    b.type = "button";
+    b.className = "btn btnGhost";
+    b.textContent = "🧹 Borrar Señales";
+    b.title = "Borra solo el historial de Señales";
+    b.onclick = () => {
+      if (!confirm("¿Borrar SOLO el historial de señales? (Trades se conserva)")) return;
+      clearSignalsOnly();
+    };
+    host.appendChild(b);
+  }
+
+  if (!document.getElementById("clearTradesBtn")) {
+    const b = document.createElement("button");
+    b.id = "clearTradesBtn";
+    b.type = "button";
+    b.className = "btn btnGhost";
+    b.textContent = "🗑️ Borrar Trades";
+    b.title = "Borra solo el journal de Trades (estudio)";
+    b.onclick = () => {
+      if (!confirm("¿Borrar SOLO el historial de trades guardados para estudio?")) return;
+      clearTradesOnly();
+    };
+    host.appendChild(b);
+  }
+
+  const expT = ensureExportTradesButton();
+  if (expT) expT.onclick = exportTradesJournal;
+}
 
 /* =========================
    Theme
@@ -936,24 +1162,6 @@ function applyTheme(theme) {
    Copy feedback
 ========================= */
 if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
-
-/* =========================
-   Clear history
-========================= */
-function clearHistory() {
-  history = [];
-  saveHistory(history);
-  updateCounter();
-  if (signalsEl) signalsEl.innerHTML = "";
-  if (feedbackEl) feedbackEl.value = "";
-  try {
-    if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView();
-  } catch {}
-}
-if (clearHistoryBtn)
-  clearHistoryBtn.onclick = () => {
-    if (confirm("¿Seguro que querés borrar todas las señales guardadas?")) clearHistory();
-  };
 
 /* =========================
    Notifications
@@ -1349,7 +1557,7 @@ function applyDisciplineOutcome(isWin) {
 }
 
 /* =========================
-   Rescate pendientes: re-suscribir al reconectar (autoriza antes)
+   Rescate pendientes
 ========================= */
 async function resubscribePendingContracts() {
   try {
@@ -1643,7 +1851,7 @@ function buildRow(item) {
 }
 
 /* =========================
-   Render
+   Render señales
 ========================= */
 function renderHistory() {
   if (!signalsEl) return;
@@ -1838,7 +2046,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
           toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
 
-          // ✅ pintar badge en señal asociada
+          // pintar badge + journal
           try {
             const signalId = tradeLinks.get(String(cid)) || "";
             const it = signalId ? findHistoryItemById(signalId) : null;
@@ -1847,6 +2055,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
                 profit: Number(poc.profit),
                 status: String(poc.status || ""),
                 sold_time: Number(poc.sell_time || 0),
+                contract_id: String(cid),
               });
             }
           } catch {}
@@ -1930,7 +2139,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
 
-    // ✅ linkear contrato con señal del modal + marcar pending
+    // linkear contrato con señal del modal y marcar pending
     if (modalCurrentItem && modalCurrentItem.id) {
       setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), side, symbol });
       linkContractToSignal(cid, modalCurrentItem.id);
@@ -2277,6 +2486,9 @@ async function rehydrateHistoryOnBoot() {
   updateCounter();
   rebuildFeedbackFromHistory();
 
+  // sembrar journal desde history (por si había trades ya cerrados)
+  seedTradesJournalFromHistory();
+
   try {
     if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView();
   } catch {}
@@ -2408,8 +2620,8 @@ function scheduleRetry(minute) {
 
 /* =========================
    Technical rules + Evaluation (FUERTE)
+   (idéntico a tu base)
 ========================= */
-// (⬇️ ESTA SECCIÓN ES IDÉNTICA A TU ARCHIVO, NO CAMBIÉ REGLAS)
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
   const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
@@ -2729,7 +2941,7 @@ function connect() {
 
             toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
 
-            // ✅ pintar badge en señal asociada
+            // pintar badge + journal
             try {
               const signalId = tradeLinks.get(String(cid)) || "";
               const it = signalId ? findHistoryItemById(signalId) : null;
@@ -2738,6 +2950,7 @@ function connect() {
                   profit: Number(poc.profit),
                   status: String(poc.status || ""),
                   sold_time: Number(poc.sell_time || 0),
+                  contract_id: String(cid),
                 });
               }
             } catch {}
@@ -2835,9 +3048,14 @@ applyAutoOpenChartUI();
 
 initWakeButton();
 initTokenAndStakeUI();
+
 ensureResetCacheButton();
+ensureSplitClearButtons();
 
 applyModalTradeButtonsLayout();
 updateDisciplineLockUI(false);
+
+// Sembrar journal con trades ya guardados en history (si existían)
+seedTradesJournalFromHistory();
 
 connect();
