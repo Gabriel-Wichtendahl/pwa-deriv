@@ -12,6 +12,7 @@
 //    - Señales: STORE_KEY (se puede borrar solo señales)
 //    - Trades (journal estudio): TRADES_STORE_KEY (se puede borrar solo trades)
 // ✅ NUEVO: Exportar Trades (journal) desde Configuración
+// ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close del minuto siguiente
 
 "use strict";
 
@@ -76,7 +77,7 @@ let disciplineLockUntilMs = 0;
 let disciplinePendingContracts = []; // array de string contract_id
 
 /* =========================
-   NUEVO: Link contract_id -> signalId (para pintar ITM/OTM en la señal)
+   Link contract_id -> signalId
 ========================= */
 const TRADE_LINKS_KEY = "trade_links_v1"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
@@ -151,7 +152,7 @@ function upsertTradeJournalFromSignal(it) {
     // snapshot trade
     trade: { ...(it.trade || {}) },
 
-    // para estudio (si te interesa tenerlo)
+    // para estudio
     ticks: Array.isArray(it.ticks) ? it.ticks : [],
   };
 
@@ -164,7 +165,7 @@ function upsertTradeJournalFromSignal(it) {
   saveTradesJournal(tradesJournal);
 }
 
-// (opcional útil) si tenías trades ya guardados en history, los “siembra” en el journal una vez
+// siembra (una vez) desde history por si existían ITM/OTM ya guardados
 function seedTradesJournalFromHistory() {
   try {
     let changed = false;
@@ -232,7 +233,7 @@ const soundBtn = $("soundBtn");
 const vibrateBtn = $("vibrateBtn");
 const wakeBtn = $("wakeBtn");
 const themeBtn = $("themeBtn");
-const clearHistoryBtn = $("clearHistoryBtn"); // lo ocultamos y reemplazamos por dos botones
+const clearHistoryBtn = $("clearHistoryBtn"); // lo ocultamos y reemplazamos por 2 botones
 const copyBtn = $("copyFeedback");
 
 const evalBtns = qsAll(".evalBtn");
@@ -374,7 +375,7 @@ let serverOffsetMs = 0;
 let currentMinuteStartMs = null;
 
 let lastSeenMinute = null;
-let candleOC = {};
+let candleOC = {}; // candleOC[minute][symbol] = { open, close }
 
 let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
@@ -732,7 +733,6 @@ function renderTradesView() {
     return;
   }
 
-  // reutiliza el mismo diseño (buildRow) usando un item compatible
   for (const entry of tradesJournal) {
     const item = {
       id: entry.id,
@@ -1014,7 +1014,6 @@ function ensureSplitClearButtons() {
     null;
   if (!host) return;
 
-  // ocultar el botón viejo si existe
   if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
 
   if (!document.getElementById("clearSignalsBtn")) {
@@ -1768,6 +1767,11 @@ function setNextOutcome(item, outcome) {
   updateCounter();
   rebuildFeedbackFromHistory();
 
+  // actualizar journal si ese trade ya estaba guardado (para que refleje el NEXT)
+  try {
+    upsertTradeJournalFromSignal(item);
+  } catch {}
+
   if (ok) animateHitPop(item);
   else animateFailShake(item);
 }
@@ -2339,6 +2343,42 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
+   FIX NEXT (rehidratación): close vs close
+========================= */
+async function fetchMinuteClose(symbol, minute) {
+  try {
+    const start = minuteToEpochSec(minute);
+    const end = minuteToEpochSec(minute + 1);
+
+    const res = await wsRequest({
+      ticks_history: symbol,
+      start,
+      end,
+      style: "ticks",
+      count: getHistoryCountMax(),
+      adjust_start_time: 1,
+    });
+
+    const prices = res?.history?.prices;
+    if (Array.isArray(prices) && prices.length) {
+      const close = Number(prices[prices.length - 1]);
+      return Number.isFinite(close) ? close : null;
+    }
+  } catch {}
+  return null;
+}
+
+async function computeNextOutcomeByCloses(symbol, minuteCur /* minuto de la señal */) {
+  const closeCur = await fetchMinuteClose(symbol, minuteCur);
+  const closeNext = await fetchMinuteClose(symbol, minuteCur + 1);
+  if (closeCur == null || closeNext == null) return null;
+
+  if (closeNext > closeCur) return "up";
+  if (closeNext < closeCur) return "down";
+  return "flat";
+}
+
+/* =========================
    Loader rehidratación
 ========================= */
 let rehydrateRunning = false;
@@ -2365,59 +2405,6 @@ function clearRehydrateStatus() {
 const REHYDRATE_MAX_ITEMS = 60;
 const REHYDRATE_SLEEP_MS = 180;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchMinuteOC(symbol, minute) {
-  try {
-    const start = minuteToEpochSec(minute);
-    const end = minuteToEpochSec(minute + 1);
-
-    const res = await wsRequest({
-      ticks_history: symbol,
-      start,
-      end,
-      style: "ticks",
-      count: getHistoryCountMax(),
-      adjust_start_time: 1,
-    });
-
-    const h = res?.history;
-    if (h && Array.isArray(h.prices) && h.prices.length >= 2) {
-      const open = Number(h.prices[0]);
-      const close = Number(h.prices[h.prices.length - 1]);
-      if (isFinite(open) && isFinite(close)) return { open, close };
-    }
-  } catch {}
-
-  try {
-    const start = minuteToEpochSec(minute);
-    const end = minuteToEpochSec(minute + 1);
-
-    const res2 = await wsRequest({
-      ticks_history: symbol,
-      start,
-      end,
-      style: "candles",
-      granularity: 60,
-      count: 1,
-    });
-
-    const c = res2?.candles?.[0];
-    if (c) {
-      const open = Number(c.open);
-      const close = Number(c.close);
-      if (isFinite(open) && isFinite(close)) return { open, close };
-    }
-  } catch {}
-
-  return null;
-}
-
-function ocToOutcome(oc) {
-  if (!oc) return null;
-  if (oc.close > oc.open) return "up";
-  if (oc.close < oc.open) return "down";
-  return "flat";
-}
 
 async function rehydrateHistoryOnBoot() {
   if (!ws || ws.readyState !== 1) return;
@@ -2456,6 +2443,7 @@ async function rehydrateHistoryOnBoot() {
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
+  // ✅ FIX NEXT: close_next vs close_current
   const pendingOutcomes = slice.filter((it) => !it.nextOutcome && it.minute + 1 < nowMin);
   const totalB = pendingOutcomes.length || 1;
   let doneB = 0;
@@ -2465,8 +2453,7 @@ async function rehydrateHistoryOnBoot() {
     setRehydrateStatus(`♻️ Rehidratando resultados… ${doneB}/${totalB}`);
 
     try {
-      const oc = await fetchMinuteOC(it.symbol, it.minute + 1);
-      const outcome = ocToOutcome(oc);
+      const outcome = await computeNextOutcomeByCloses(it.symbol, it.minute);
       if (outcome) setNextOutcome(it, outcome);
     } catch {}
 
@@ -2486,7 +2473,6 @@ async function rehydrateHistoryOnBoot() {
   updateCounter();
   rebuildFeedbackFromHistory();
 
-  // sembrar journal desde history (por si había trades ya cerrados)
   seedTradesJournalFromHistory();
 
   try {
@@ -2497,21 +2483,26 @@ async function rehydrateHistoryOnBoot() {
 }
 
 /* =========================
-   Finalize minute
+   FIX NEXT (en vivo): close vs close
 ========================= */
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
   for (const symbol of Object.keys(oc)) {
-    const { open, close } = oc[symbol];
-    if (open == null || close == null) continue;
-
-    let outcome = "flat";
-    if (close > open) outcome = "up";
-    else if (close < open) outcome = "down";
+    const closeNext = oc[symbol]?.close;
+    if (closeNext == null) continue;
 
     const prevMinute = minute - 1;
+    const closeCur = candleOC?.[prevMinute]?.[symbol]?.close;
+
+    // si no tenemos close del minuto anterior, lo dejamos para rehidratación
+    if (closeCur == null) continue;
+
+    let outcome = "flat";
+    if (closeNext > closeCur) outcome = "up";
+    else if (closeNext < closeCur) outcome = "down";
+
     for (const it of history) {
       if (it.minute === prevMinute && it.symbol === symbol && !it.nextOutcome) {
         setNextOutcome(it, outcome);
