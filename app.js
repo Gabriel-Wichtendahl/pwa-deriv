@@ -13,7 +13,8 @@
 //    - Trades (journal estudio): TRADES_STORE_KEY (borrado independiente)
 // ✅ NUEVO: Exportar Trades (journal) desde Configuración
 // ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close
-// ✅ FIX UI Trades: ahora se ve igual que Señales (iconos OK) y SIN voto/comentario en Trades
+// ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
+// ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
 
 "use strict";
 
@@ -234,7 +235,7 @@ const soundBtn = $("soundBtn");
 const vibrateBtn = $("vibrateBtn");
 const wakeBtn = $("wakeBtn");
 const themeBtn = $("themeBtn");
-const clearHistoryBtn = $("clearHistoryBtn"); // lo ocultamos y reemplazamos por 2 botones
+const clearHistoryBtn = $("clearHistoryBtn"); // si existe, lo ocultamos
 const copyBtn = $("copyFeedback");
 
 const evalBtns = qsAll(".evalBtn");
@@ -781,6 +782,124 @@ function ensureTradesTab() {
   host.insertBefore(t, beforeNode);
 }
 
+/* =========================
+   ✅ Clear por pestaña (inline)
+========================= */
+function clearSignalsOnly() {
+  history = [];
+  saveHistory(history);
+  updateCounter();
+  if (signalsEl) signalsEl.innerHTML = "";
+  if (feedbackEl) feedbackEl.value = "";
+  toast("🧹 Señales borradas", 1600);
+}
+function clearTradesOnly() {
+  tradesJournal = [];
+  saveTradesJournal(tradesJournal);
+  try {
+    const av = localStorage.getItem("activeView") || "signals";
+    if (av === "trades") renderTradesView();
+  } catch {}
+  toast("🗑️ Trades borrados", 1600);
+}
+
+function ensureViewActionButton(viewName, opts) {
+  const { id, text, title, onClick } = opts;
+
+  let host = null;
+  if (viewName === "signals") {
+    host = (counterEl && counterEl.parentElement) || signalsView || document.body;
+  } else if (viewName === "trades") {
+    const tv = ensureTradesView();
+    host = tv || document.body;
+  } else {
+    host = document.body;
+  }
+
+  let wrap = document.getElementById(`${id}Wrap`);
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.id = `${id}Wrap`;
+    wrap.style.display = "flex";
+    wrap.style.justifyContent = "flex-end";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "10px";
+    wrap.style.margin = "10px 0 0 0";
+    wrap.style.width = "100%";
+  }
+
+  let btn = document.getElementById(id);
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = id;
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.textContent = text;
+    btn.title = title || "";
+
+    // mini look inline (sin tocar CSS global)
+    btn.style.padding = "8px 10px";
+    btn.style.borderRadius = "12px";
+    btn.style.fontWeight = "900";
+    btn.style.minHeight = "36px";
+    btn.style.lineHeight = "1";
+    btn.style.display = "inline-flex";
+    btn.style.alignItems = "center";
+    btn.style.justifyContent = "center";
+    btn.style.gap = "8px";
+    btn.style.opacity = "0.95";
+
+    wrap.appendChild(btn);
+
+    // Inserción:
+    // - Señales: lo ponemos arriba del listado si existe
+    // - Trades: lo ponemos arriba del listado en tradesView
+    if (viewName === "signals" && signalsEl && signalsEl.parentElement) {
+      signalsEl.parentElement.insertBefore(wrap, signalsEl);
+    } else if (viewName === "trades") {
+      host.insertBefore(wrap, host.firstChild);
+    } else {
+      host.appendChild(wrap);
+    }
+  }
+
+  btn.onclick = onClick;
+  return btn;
+}
+
+function updatePerViewClearButtonsVisibility(activeView) {
+  const wSignals = document.getElementById("clearSignalsInlineBtnWrap");
+  const wTrades = document.getElementById("clearTradesInlineBtnWrap");
+
+  if (wSignals) wSignals.style.display = activeView === "signals" ? "flex" : "none";
+  if (wTrades) wTrades.style.display = activeView === "trades" ? "flex" : "none";
+}
+
+function ensureInlineClearButtons() {
+  ensureViewActionButton("signals", {
+    id: "clearSignalsInlineBtn",
+    text: "🧹 Borrar Señales",
+    title: "Borra solo el historial de señales",
+    onClick: () => {
+      if (!confirm("¿Borrar SOLO el historial de señales? (Trades se conserva)")) return;
+      clearSignalsOnly();
+    },
+  });
+
+  ensureViewActionButton("trades", {
+    id: "clearTradesInlineBtn",
+    text: "🗑️ Borrar Trades",
+    title: "Borra solo el historial de trades (estudio)",
+    onClick: () => {
+      if (!confirm("¿Borrar SOLO el historial de trades guardados para estudio?")) return;
+      clearTradesOnly();
+    },
+  });
+
+  const av = localStorage.getItem("activeView") || "signals";
+  updatePerViewClearButtonsVisibility(av);
+}
+
 function setActiveView(name) {
   const isSignals = name === "signals";
   const isTrades = name === "trades";
@@ -792,7 +911,7 @@ function setActiveView(name) {
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (feedbackView) feedbackView.classList.toggle("hidden", !isFeedback);
 
-  qsAll('.tab[data-view]').forEach((t) => {
+  qsAll(".tab[data-view]").forEach((t) => {
     const active = t.dataset.view === name;
     t.classList.toggle("active", active);
     t.setAttribute("aria-selected", active ? "true" : "false");
@@ -803,6 +922,9 @@ function setActiveView(name) {
   if (isTrades) renderTradesView();
   if (isFeedback) rebuildFeedbackFromHistory();
   if (isSignals) updateCounter();
+
+  // ✅ mostrar/ocultar botones según pestaña
+  updatePerViewClearButtonsVisibility(name);
 }
 
 (function initTabs() {
@@ -810,7 +932,7 @@ function setActiveView(name) {
   ensureTradesTab();
   ensureTradesView();
 
-  qsAll('.tab[data-view]').forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
+  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 
   const saved = localStorage.getItem("activeView") || "signals";
   const initial = ["signals", "trades", "feedback"].includes(saved) ? saved : "signals";
@@ -991,25 +1113,8 @@ function ensureExportTradesButton() {
 }
 
 /* =========================
-   Clear: separar Señales vs Trades
+   ✅ Modal Config: sacar botones borrar y dejar solo export/reset/etc
 ========================= */
-function clearSignalsOnly() {
-  history = [];
-  saveHistory(history);
-  updateCounter();
-  if (signalsEl) signalsEl.innerHTML = "";
-  if (feedbackEl) feedbackEl.value = "";
-  toast("🧹 Señales borradas (Trades intactos)", 1800);
-}
-function clearTradesOnly() {
-  tradesJournal = [];
-  saveTradesJournal(tradesJournal);
-  try {
-    const av = localStorage.getItem("activeView") || "signals";
-    if (av === "trades") renderTradesView();
-  } catch {}
-  toast("🗑️ Trades borrados (Señales intactas)", 1800);
-}
 function ensureSplitClearButtons() {
   const host =
     document.querySelector("#settingsModal .settingsBody .controls") ||
@@ -1017,36 +1122,10 @@ function ensureSplitClearButtons() {
     null;
   if (!host) return;
 
+  // ocultar el botón viejo si existe
   if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
 
-  if (!document.getElementById("clearSignalsBtn")) {
-    const b = document.createElement("button");
-    b.id = "clearSignalsBtn";
-    b.type = "button";
-    b.className = "btn btnGhost";
-    b.textContent = "🧹 Borrar Señales";
-    b.title = "Borra solo el historial de Señales";
-    b.onclick = () => {
-      if (!confirm("¿Borrar SOLO el historial de señales? (Trades se conserva)")) return;
-      clearSignalsOnly();
-    };
-    host.appendChild(b);
-  }
-
-  if (!document.getElementById("clearTradesBtn")) {
-    const b = document.createElement("button");
-    b.id = "clearTradesBtn";
-    b.type = "button";
-    b.className = "btn btnGhost";
-    b.textContent = "🗑️ Borrar Trades";
-    b.title = "Borra solo el journal de Trades (estudio)";
-    b.onclick = () => {
-      if (!confirm("¿Borrar SOLO el historial de trades guardados para estudio?")) return;
-      clearTradesOnly();
-    };
-    host.appendChild(b);
-  }
-
+  // ✅ ya NO agregamos botones de borrar acá
   const expT = ensureExportTradesButton();
   if (expT) expT.onclick = exportTradesJournal;
 }
@@ -1805,7 +1884,7 @@ function setNextOutcome(item, outcome) {
 /* =========================
    Build row
    - opts.hideActions: no renderiza voto/comentario (Trades)
-   - opts.source === "trades": abre el modal usando el item real del history (evita operar sobre snapshot)
+   - opts.source === "trades": abre el modal usando el item real del history
 ========================= */
 function buildRow(item, opts = {}) {
   const row = document.createElement("div");
@@ -1837,17 +1916,14 @@ function buildRow(item, opts = {}) {
     ${actionsHtml}
   `;
 
-  // click texto -> abrir Deriv
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
-  // abrir chart modal
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
 
-    // si viene de Trades, usar item real del history (si existe)
     let target = item;
     if (opts.source === "trades" && opts.signalId) {
       const real = findHistoryItemById(String(opts.signalId));
@@ -2191,9 +2267,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
 
-    // linkear contrato con señal del modal y marcar pending
     if (modalCurrentItem && modalCurrentItem.id) {
-      // OJO: modalCurrentItem SIEMPRE debería ser item real del history (ver buildRow trades)
       setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), side, symbol });
       linkContractToSignal(cid, modalCurrentItem.id);
     }
@@ -3090,12 +3164,15 @@ initWakeButton();
 initTokenAndStakeUI();
 
 ensureResetCacheButton();
-ensureSplitClearButtons();
+ensureSplitClearButtons(); // ahora NO agrega botones de borrar en el modal
 
 applyModalTradeButtonsLayout();
 updateDisciplineLockUI(false);
 
 // Sembrar journal con trades ya guardados en history (si existían)
 seedTradesJournalFromHistory();
+
+// ✅ Botones borrar por pestaña
+ensureInlineClearButtons();
 
 connect();
