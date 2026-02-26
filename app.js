@@ -15,7 +15,7 @@
 // ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
-// ✅ FIX (este update): el botón "Borrar Trades" ya NO desaparece (renderTradesView limpia solo la lista, no el header)
+// ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 
 "use strict";
 
@@ -708,7 +708,7 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Trades view (journal)  ✅ FIX: actions + list
+   Trades view (journal) — ✅ FIX: actions + list
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
@@ -727,7 +727,7 @@ function ensureTradesView() {
     host.appendChild(el);
   }
 
-  // ✅ barra fija (NO se borra cuando se re-renderiza la lista)
+  // ✅ Barra fija (NO se borra al renderizar trades)
   let actions = $("tradesActions");
   if (!actions) {
     actions = document.createElement("div");
@@ -741,7 +741,7 @@ function ensureTradesView() {
     el.appendChild(actions);
   }
 
-  // ✅ lista (esta sí se limpia)
+  // ✅ Lista (esta SÍ se limpia)
   let list = $("tradesList");
   if (!list) {
     list = document.createElement("div");
@@ -761,28 +761,33 @@ function renderTradesView() {
 
   if (!tradesJournal.length) {
     list.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
-    return;
+  } else {
+    for (const entry of tradesJournal) {
+      const item = {
+        id: entry.id, // mantenemos el id original
+        minute: entry.minute,
+        time: entry.time,
+        symbol: entry.symbol,
+        direction: entry.direction,
+        mode: entry.mode || "NORMAL",
+        vote: "",
+        comment: "",
+        ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
+        nextOutcome: entry.nextOutcome || "",
+        minuteComplete: true,
+        trade: entry.trade || null,
+      };
+
+      // ✅ SIN voto/comentario en Trades
+      list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
+    }
   }
 
-  for (const entry of tradesJournal) {
-    const item = {
-      id: entry.id, // mantenemos el id original
-      minute: entry.minute,
-      time: entry.time,
-      symbol: entry.symbol,
-      direction: entry.direction,
-      mode: entry.mode || "NORMAL",
-      vote: "",
-      comment: "",
-      ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
-      nextOutcome: entry.nextOutcome || "",
-      minuteComplete: true,
-      trade: entry.trade || null,
-    };
-
-    // ✅ SIN voto/comentario en Trades
-    list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
-  }
+  // ✅ extra robusto: re-asegura el botón al final del render
+  try {
+    ensureInlineClearButtons();
+    updatePerViewClearButtonsVisibility("trades");
+  } catch {}
 }
 
 /* =========================
@@ -840,7 +845,7 @@ function ensureViewActionButton(viewName, opts) {
     host = (counterEl && counterEl.parentElement) || signalsView || document.body;
   } else if (viewName === "trades") {
     ensureTradesView();
-    host = $("tradesActions") || document.body; // ✅ FIX: queda fijo
+    host = $("tradesActions") || document.body; // ✅ FIX: host fijo
   } else {
     host = document.body;
   }
@@ -853,7 +858,7 @@ function ensureViewActionButton(viewName, opts) {
     wrap.style.justifyContent = "flex-end";
     wrap.style.alignItems = "center";
     wrap.style.gap = "10px";
-    wrap.style.margin = "0";
+    wrap.style.margin = "10px 0 0 0";
     wrap.style.width = "100%";
   }
 
@@ -882,12 +887,9 @@ function ensureViewActionButton(viewName, opts) {
 
     // Inserción:
     if (viewName === "signals" && signalsEl && signalsEl.parentElement) {
-      // arriba del listado
-      wrap.style.margin = "10px 0 0 0";
       signalsEl.parentElement.insertBefore(wrap, signalsEl);
     } else if (viewName === "trades") {
-      // ✅ FIX: se cuelga de tradesActions, no se borra
-      wrap.style.margin = "0";
+      // ✅ FIX: append en tradesActions (no se borra nunca)
       host.appendChild(wrap);
     } else {
       host.appendChild(wrap);
@@ -954,7 +956,6 @@ function setActiveView(name) {
   if (isFeedback) rebuildFeedbackFromHistory();
   if (isSignals) updateCounter();
 
-  // ✅ mostrar/ocultar botones según pestaña
   updatePerViewClearButtonsVisibility(name);
 }
 
@@ -3206,4 +3207,4 @@ seedTradesJournalFromHistory();
 // ✅ Botones borrar por pestaña
 ensureInlineClearButtons();
 
-connect(); 
+connect();
