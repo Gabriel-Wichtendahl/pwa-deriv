@@ -3206,4 +3206,4 @@ seedTradesJournalFromHistory();
 // ✅ Botones borrar por pestaña
 ensureInlineClearButtons();
 
-connect();
+connect(); 
