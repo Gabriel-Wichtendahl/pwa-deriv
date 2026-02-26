@@ -15,6 +15,7 @@
 // ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
+// ✅ FIX (este update): el botón "Borrar Trades" ya NO desaparece (renderTradesView limpia solo la lista, no el header)
 
 "use strict";
 
@@ -707,31 +708,59 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Trades view (journal)
+   Trades view (journal)  ✅ FIX: actions + list
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
-  if (el) return el;
+  if (!el) {
+    const host =
+      (signalsView && signalsView.parentElement) ||
+      (feedbackView && feedbackView.parentElement) ||
+      document.body;
 
-  const host = (signalsView && signalsView.parentElement) || (feedbackView && feedbackView.parentElement) || document.body;
-  el = document.createElement("div");
-  el.id = "tradesView";
+    el = document.createElement("div");
+    el.id = "tradesView";
 
-  if (signalsView && signalsView.className) el.className = signalsView.className;
-  el.classList.add("hidden");
+    if (signalsView && signalsView.className) el.className = signalsView.className;
+    el.classList.add("hidden");
 
-  host.appendChild(el);
+    host.appendChild(el);
+  }
+
+  // ✅ barra fija (NO se borra cuando se re-renderiza la lista)
+  let actions = $("tradesActions");
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.id = "tradesActions";
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.alignItems = "center";
+    actions.style.gap = "10px";
+    actions.style.margin = "10px 0 0 0";
+    actions.style.width = "100%";
+    el.appendChild(actions);
+  }
+
+  // ✅ lista (esta sí se limpia)
+  let list = $("tradesList");
+  if (!list) {
+    list = document.createElement("div");
+    list.id = "tradesList";
+    el.appendChild(list);
+  }
+
   return el;
 }
 
 function renderTradesView() {
-  const tv = ensureTradesView();
-  if (!tv) return;
+  ensureTradesView();
+  const list = $("tradesList");
+  if (!list) return;
 
-  tv.innerHTML = "";
+  list.innerHTML = "";
 
   if (!tradesJournal.length) {
-    tv.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
+    list.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
     return;
   }
 
@@ -752,7 +781,7 @@ function renderTradesView() {
     };
 
     // ✅ SIN voto/comentario en Trades
-    tv.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
+    list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
   }
 }
 
@@ -810,8 +839,8 @@ function ensureViewActionButton(viewName, opts) {
   if (viewName === "signals") {
     host = (counterEl && counterEl.parentElement) || signalsView || document.body;
   } else if (viewName === "trades") {
-    const tv = ensureTradesView();
-    host = tv || document.body;
+    ensureTradesView();
+    host = $("tradesActions") || document.body; // ✅ FIX: queda fijo
   } else {
     host = document.body;
   }
@@ -824,7 +853,7 @@ function ensureViewActionButton(viewName, opts) {
     wrap.style.justifyContent = "flex-end";
     wrap.style.alignItems = "center";
     wrap.style.gap = "10px";
-    wrap.style.margin = "10px 0 0 0";
+    wrap.style.margin = "0";
     wrap.style.width = "100%";
   }
 
@@ -852,12 +881,14 @@ function ensureViewActionButton(viewName, opts) {
     wrap.appendChild(btn);
 
     // Inserción:
-    // - Señales: lo ponemos arriba del listado si existe
-    // - Trades: lo ponemos arriba del listado en tradesView
     if (viewName === "signals" && signalsEl && signalsEl.parentElement) {
+      // arriba del listado
+      wrap.style.margin = "10px 0 0 0";
       signalsEl.parentElement.insertBefore(wrap, signalsEl);
     } else if (viewName === "trades") {
-      host.insertBefore(wrap, host.firstChild);
+      // ✅ FIX: se cuelga de tradesActions, no se borra
+      wrap.style.margin = "0";
+      host.appendChild(wrap);
     } else {
       host.appendChild(wrap);
     }
