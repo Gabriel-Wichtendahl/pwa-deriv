@@ -9,10 +9,11 @@
 // ✅ NUEVO: cada señal muestra badge del trade: ⏳ TRADE / 🎯 ITM / 💥 OTM
 // ✅ NUEVO: pestañas: Señales | Trades | Feedback (sin pestaña Configuración; queda SOLO el engranaje)
 // ✅ NUEVO: separar historial:
-//    - Señales: STORE_KEY (se puede borrar solo señales)
-//    - Trades (journal estudio): TRADES_STORE_KEY (se puede borrar solo trades)
+//    - Señales: STORE_KEY (borrado independiente)
+//    - Trades (journal estudio): TRADES_STORE_KEY (borrado independiente)
 // ✅ NUEVO: Exportar Trades (journal) desde Configuración
-// ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close del minuto siguiente
+// ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close
+// ✅ FIX UI Trades: ahora se ve igual que Señales (iconos OK) y SIN voto/comentario en Trades
 
 "use strict";
 
@@ -735,7 +736,7 @@ function renderTradesView() {
 
   for (const entry of tradesJournal) {
     const item = {
-      id: entry.id,
+      id: entry.id, // mantenemos el id original
       minute: entry.minute,
       time: entry.time,
       symbol: entry.symbol,
@@ -748,7 +749,9 @@ function renderTradesView() {
       minuteComplete: true,
       trade: entry.trade || null,
     };
-    tv.appendChild(buildRow(item));
+
+    // ✅ SIN voto/comentario en Trades
+    tv.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
   }
 }
 
@@ -1643,10 +1646,38 @@ if (modalLiveBtn) {
 }
 
 /* =========================
-   Row helpers
+   Row helpers (global, para Señales)
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  updateRowChartBtnOnRow(row, item);
+}
+function updateRowTradeBadge(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  updateRowTradeBadgeOnRow(row, item);
+}
+function updateRowHitIcon(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return false;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return false;
+  const show = isHit(item);
+  hit.classList.toggle("hidden", !show);
+  hit.title = show ? "Acertó" : "";
+  return show;
+}
+function updateRowNextArrow(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  updateRowNextArrowOnRow(row, item);
+}
+
+/* =========================
+   Row helpers (LOCAL onRow) — FIX para Trades (evita colisión de data-id)
+========================= */
+function updateRowChartBtnOnRow(row, item) {
   if (!row) return;
   const btn = row.querySelector(".chartBtn");
   if (!btn) return;
@@ -1665,9 +1696,7 @@ function updateRowChartBtn(item) {
     btn.title = "Esperando cierre del minuto…";
   }
 }
-
-function updateRowTradeBadge(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+function updateRowTradeBadgeOnRow(row, item) {
   if (!row) return;
   const el = row.querySelector(".tradeBadge");
   if (!el) return;
@@ -1703,39 +1732,7 @@ function updateRowTradeBadge(item) {
   el.style.border = "1px solid rgba(255,255,255,.18)";
   el.style.background = "rgba(255,255,255,.06)";
 }
-
-function updateRowHitIcon(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return false;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return false;
-  const show = isHit(item);
-  hit.classList.toggle("hidden", !show);
-  hit.title = show ? "Acertó" : "";
-  return show;
-}
-function animateHitPop(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return;
-  hit.classList.remove("pop");
-  void hit.offsetWidth;
-  hit.classList.add("pop");
-  setTimeout(() => hit.classList.remove("pop"), 260);
-}
-function animateFailShake(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const arrow = row.querySelector(".nextArrow");
-  if (!arrow) return;
-  arrow.classList.remove("failShake");
-  void arrow.offsetWidth;
-  arrow.classList.add("failShake");
-  setTimeout(() => arrow.classList.remove("failShake"), 260);
-}
-function updateRowNextArrow(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+function updateRowNextArrowOnRow(row, item) {
   if (!row) return;
   const el = row.querySelector(".nextArrow");
   if (!el) return;
@@ -1758,6 +1755,35 @@ function updateRowNextArrow(item) {
     el.title = "Próxima vela: esperando…";
   }
 }
+function updateRowHitIconOnRow(row, item) {
+  if (!row) return;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return;
+  const show = isHit(item);
+  hit.classList.toggle("hidden", !show);
+  hit.title = show ? "Acertó" : "";
+}
+
+function animateHitPop(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const hit = row.querySelector(".hitIcon");
+  if (!hit) return;
+  hit.classList.remove("pop");
+  void hit.offsetWidth;
+  hit.classList.add("pop");
+  setTimeout(() => hit.classList.remove("pop"), 260);
+}
+function animateFailShake(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  const arrow = row.querySelector(".nextArrow");
+  if (!arrow) return;
+  arrow.classList.remove("failShake");
+  void arrow.offsetWidth;
+  arrow.classList.add("failShake");
+  setTimeout(() => arrow.classList.remove("failShake"), 260);
+}
 function setNextOutcome(item, outcome) {
   item.nextOutcome = outcome;
   saveHistory(history);
@@ -1778,8 +1804,10 @@ function setNextOutcome(item, outcome) {
 
 /* =========================
    Build row
+   - opts.hideActions: no renderiza voto/comentario (Trades)
+   - opts.source === "trades": abre el modal usando el item real del history (evita operar sobre snapshot)
 ========================= */
-function buildRow(item) {
+function buildRow(item, opts = {}) {
   const row = document.createElement("div");
   row.className = "row " + (item.direction === "CALL" ? "dir-call" : "dir-put");
   if (item.vote) row.classList.add("voted");
@@ -1787,6 +1815,16 @@ function buildRow(item) {
 
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
+
+  const actionsHtml = opts.hideActions
+    ? ""
+    : `
+    <div class="row-actions">
+      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
+      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
+      <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
+    </div>
+  `;
 
   row.innerHTML = `
     <div class="row-main">
@@ -1796,61 +1834,71 @@ function buildRow(item) {
       <span class="tradeBadge hidden" title=""></span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
-    <div class="row-actions">
-      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
-      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
-      <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
-    </div>
+    ${actionsHtml}
   `;
 
+  // click texto -> abrir Deriv
   row.querySelector(".row-text").onclick = () => {
     window.location.href = derivUrl;
   };
 
+  // abrir chart modal
   const chartBtn = row.querySelector(".chartBtn");
   chartBtn.onclick = (e) => {
     e.stopPropagation();
-    const canOpen = item.minuteComplete || isItemLiveMinute(item);
-    if (canOpen) openChartModal(item);
+
+    // si viene de Trades, usar item real del history (si existe)
+    let target = item;
+    if (opts.source === "trades" && opts.signalId) {
+      const real = findHistoryItemById(String(opts.signalId));
+      if (real) target = real;
+    }
+
+    const canOpen = target.minuteComplete || isItemLiveMinute(target);
+    if (canOpen) openChartModal(target);
   };
 
-  updateRowChartBtn(item);
-  updateRowHitIcon(item);
-  updateRowTradeBadge(item);
+  // ✅ inicializar estados SOBRE ESTA MISMA FILA (evita colisión)
+  updateRowChartBtnOnRow(row, item);
+  updateRowHitIconOnRow(row, item);
+  updateRowTradeBadgeOnRow(row, item);
+  updateRowNextArrowOnRow(row, item);
 
-  if (item.vote) {
-    const likeBtn = row.querySelector('button[data-v="like"]');
-    const disBtn = row.querySelector('button[data-v="dislike"]');
-    if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
-    if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
-  }
+  // acciones (solo señales)
+  if (!opts.hideActions) {
+    if (item.vote) {
+      const likeBtn = row.querySelector('button[data-v="like"]');
+      const disBtn = row.querySelector('button[data-v="dislike"]');
+      if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
+      if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
+    }
 
-  row.querySelectorAll("button[data-v]").forEach((btn) => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (item.vote) return;
+    row.querySelectorAll("button[data-v]").forEach((btn) => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        if (item.vote) return;
 
-      item.vote = btn.dataset.v;
-      item.comment = row.querySelector(".row-comment").value || "";
+        item.vote = btn.dataset.v;
+        item.comment = row.querySelector(".row-comment").value || "";
 
-      row.classList.add("voted");
-      btn.classList.add("selected");
+        row.classList.add("voted");
+        btn.classList.add("selected");
 
+        saveHistory(history);
+        rebuildFeedbackFromHistory();
+
+        row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
+      };
+    });
+
+    const input = row.querySelector(".row-comment");
+    input.addEventListener("blur", () => {
+      item.comment = input.value || "";
       saveHistory(history);
       rebuildFeedbackFromHistory();
+    });
+  }
 
-      row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
-    };
-  });
-
-  const input = row.querySelector(".row-comment");
-  input.addEventListener("blur", () => {
-    item.comment = input.value || "";
-    saveHistory(history);
-    rebuildFeedbackFromHistory();
-  });
-
-  updateRowNextArrow(item);
   return row;
 }
 
@@ -2145,6 +2193,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
 
     // linkear contrato con señal del modal y marcar pending
     if (modalCurrentItem && modalCurrentItem.id) {
+      // OJO: modalCurrentItem SIEMPRE debería ser item real del history (ver buildRow trades)
       setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), side, symbol });
       linkContractToSignal(cid, modalCurrentItem.id);
     }
