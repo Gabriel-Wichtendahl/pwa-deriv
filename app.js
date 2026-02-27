@@ -1,5 +1,18 @@
+Acá tenés el app.js completo integrado con:
+
+✅ NORMAL + GIRO
+
+✅ GIRO ESTRICTO: si elegís 45/50/55, la señal solo puede salir en ese segundo (en realidad: en el primer tick que llegue con sec >= EVAL_SEC). No hay retry en GIRO.
+
+✅ GIRO usa un tramo final relativo a tu EVAL_SEC (últimos 12s antes del 45/50/55), para que “hable tu idioma”.
+
+
+> Reemplazá tu app.js por este.
+
+
+
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo GIRO (v2): “dirección fuerte hasta el seg 45 + agotamiento tardío + retrace” — NORMAL queda igual
+// ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
@@ -15,7 +28,7 @@
 // ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
-// ✅ FIX: el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
+// ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 
 "use strict";
 
@@ -725,7 +738,7 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Trades view (journal)
+   Trades view (journal) — ✅ FIX: actions + list
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
@@ -744,7 +757,7 @@ function ensureTradesView() {
     host.appendChild(el);
   }
 
-  // Barra fija
+  // ✅ Barra fija (NO se borra al renderizar trades)
   let actions = $("tradesActions");
   if (!actions) {
     actions = document.createElement("div");
@@ -758,7 +771,7 @@ function ensureTradesView() {
     el.appendChild(actions);
   }
 
-  // Lista (se limpia)
+  // ✅ Lista (esta SÍ se limpia)
   let list = $("tradesList");
   if (!list) {
     list = document.createElement("div");
@@ -795,10 +808,12 @@ function renderTradesView() {
         trade: entry.trade || null,
       };
 
+      // ✅ SIN voto/comentario en Trades
       list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
     }
   }
 
+  // ✅ extra robusto: re-asegura el botón al final del render
   try {
     ensureInlineClearButtons();
     updatePerViewClearButtonsVisibility("trades");
@@ -832,7 +847,7 @@ function ensureTradesTab() {
 }
 
 /* =========================
-   Clear por pestaña (inline)
+   ✅ Clear por pestaña (inline)
 ========================= */
 function clearSignalsOnly() {
   history = [];
@@ -1157,7 +1172,7 @@ function ensureExportTradesButton() {
 }
 
 /* =========================
-   Modal Config: sacar botones borrar y dejar solo export/reset/etc
+   ✅ Modal Config: sacar botones borrar y dejar solo export/reset/etc
 ========================= */
 function ensureSplitClearButtons() {
   const host =
@@ -1166,8 +1181,10 @@ function ensureSplitClearButtons() {
     null;
   if (!host) return;
 
+  // ocultar el botón viejo si existe
   if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
 
+  // ✅ ya NO agregamos botones de borrar acá
   const expT = ensureExportTradesButton();
   if (expT) expT.onclick = exportTradesJournal;
 }
@@ -1191,7 +1208,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Eval sec + MODO (NORMAL vs GIRO)
+   Eval sec + GIRO mode
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
@@ -1214,7 +1231,7 @@ function applyTheme(theme) {
       })
   );
 
-  // MODO: NORMAL vs GIRO (compat con key vieja strongMode)
+  // ✅ GIRO mode (compat: si no existe, hereda strongMode viejo)
   const hasGiroKey = localStorage.getItem("giroMode") !== null;
   giroMode = loadBool("giroMode", false);
   if (!hasGiroKey) {
@@ -1233,7 +1250,8 @@ function applyTheme(theme) {
     modeBtn.onclick = () => {
       giroMode = !giroMode;
       saveBool("giroMode", giroMode);
-      saveBool("strongMode", giroMode); // compat
+      // compat vieja
+      saveBool("strongMode", giroMode);
       paintMode();
     };
 })();
@@ -1986,6 +2004,7 @@ function buildRow(item, opts = {}) {
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
 
+  // acciones (solo señales)
   if (!opts.hideActions) {
     if (item.vote) {
       const likeBtn = row.querySelector('button[data-v="like"]');
@@ -2185,6 +2204,9 @@ function forgetSubscription(subId) {
   } catch {}
 }
 
+/* =========================
+   Fallback poll (requiere authorize)
+========================= */
 function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
   try {
     if (!contractId) return;
@@ -2216,6 +2238,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
           toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
 
+          // pintar badge + journal
           try {
             const signalId = tradeLinks.get(String(cid)) || "";
             const it = signalId ? findHistoryItemById(signalId) : null;
@@ -2325,6 +2348,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   }
 }
 
+/* conectar botones modal */
 if (modalBuyCallBtn) {
   modalBuyCallBtn.onclick = async () => {
     modalBuyCallBtn.disabled = true;
@@ -2657,6 +2681,7 @@ function finalizeMinute(minute) {
 
     const prevMinute = minute - 1;
     const closeCur = candleOC?.[prevMinute]?.[symbol]?.close;
+
     if (closeCur == null) continue;
 
     let outcome = "flat";
@@ -2759,7 +2784,9 @@ function onTick(tick) {
   if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
-    if (!ok) scheduleRetry(minute);
+
+    // ✅ ESTRICTO: en GIRO NO hay retry (solo eval en el segundo elegido)
+    if (!ok && !giroMode) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -2770,7 +2797,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + GIRO v2)
+   Technical rules + Evaluation (NORMAL + GIRO)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -2830,7 +2857,7 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   }
 }
 
-/* --- NORMAL (igual que antes) --- */
+/* --- NORMAL --- */
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
@@ -2851,7 +2878,6 @@ function passesTechnicalFilters(best, vol, rules) {
   if (p0 == null || p30 == null || p45 == null) return false;
 
   const dirSign = best.move > 0 ? 1 : -1;
-
   const move0_30 = (p30 - p0) * dirSign;
   const move30_45 = (p45 - p30) * dirSign;
 
@@ -2887,20 +2913,21 @@ function passesTechnicalFilters(best, vol, rules) {
   return true;
 }
 
-/* --- GIRO v2 (dirección hasta el 45 + agotamiento tardío + retrace) --- */
+/* --- GIRO (ESTRICTO + relativo al EVAL) --- */
+const GIRO_LATE_WINDOW_MS = 12000; // últimos 12s antes del EVAL
 const RULES_GIRO = {
-  rangeScoreMin: 0.060,            // rango/vol mínimo -> “estirado”
-  impulseMinFracOfRange_0_35: 0.60, // empuje 0-35 explica parte del rango
-  dirRatioMin_0_35: 0.62,          // 0-35 direccional fuerte
-  dirRatioMax_35_eval_favor: 0.55, // 35-eval pierde continuidad
-  dirRatioMin_35_eval_opp: 0.52,   // 35-eval aparece oposición
-  minSignChanges_35_eval: 2,       // irregularidad mínima
-  p35NearExtremeFrac: 0.25,        // a los 35s aún cerca del extremo
-  lateMoveAgainstMinFracRange: 0.12,// movimiento contra en 35-eval (tardío)
-  retraceMinFracOfRange: 0.22,     // retrace desde el extremo hasta eval
-  extremeMinMs: 20000,             // extremo no muy temprano (evita V)
-  extremeNotAtEndMs: 2500,         // extremo no pegado al final (evita continuidad)
-  net0_evalMinFracRange: 0.40,     // todavía “en dirección” al eval (no giro interno temprano)
+  rangeScoreMin: 0.050,
+  dirRatioMin_0_L: 0.58,
+
+  dirRatioMax_L_E_favor: 0.62,
+  dirRatioMin_L_E_opp: 0.46,
+  minSignChanges_L_E: 1,
+
+  lateMoveAgainstMinFracRange: 0.08,
+  retraceMinFracRange: 0.16,
+
+  extremeMinMs: 16000,
+  extremeNotAtEndMs: 1200,
 };
 
 function rangeScoreCalc(ticks, vol) {
@@ -2909,7 +2936,6 @@ function rangeScoreCalc(ticks, vol) {
   const r = (Math.max(...qs) - Math.min(...qs)) || 0;
   return r / (vol || 1e-9);
 }
-
 function signChangesCount(ticks) {
   if (!ticks || ticks.length < 3) return 0;
   const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
@@ -2930,20 +2956,21 @@ function passesGiroFilters(best) {
   const ticks = best.ticks || [];
   if (ticks.length < 8) return null;
 
-  const p0 = getPriceAtMs(ticks, 0);
-  const p35 = getPriceAtMs(ticks, 35000);
-  const pE = getPriceAtMs(ticks, EVAL_SEC * 1000);
-  if (p0 == null || p35 == null || pE == null) return null;
+  const evalMs = EVAL_SEC * 1000;
+  const lateStartMs = Math.max(16000, evalMs - GIRO_LATE_WINDOW_MS);
 
-  // dirección del “impulso hasta el 35”
-  const dirSign = Math.sign(p35 - p0);
+  const p0 = getPriceAtMs(ticks, 0);
+  const pL = getPriceAtMs(ticks, lateStartMs);
+  const pE = getPriceAtMs(ticks, evalMs);
+  if (p0 == null || pL == null || pE == null) return null;
+
+  const dirSign = Math.sign(pL - p0);
   if (!dirSign) return null;
 
-  const t0_35 = sliceTicks(ticks, 0, 35000);
-  const t35_E = sliceTicks(ticks, 35000, EVAL_SEC * 1000);
-  if (t0_35.length < 4 || t35_E.length < 3) return null;
+  const t0_L = sliceTicks(ticks, 0, lateStartMs);
+  const tL_E = sliceTicks(ticks, lateStartMs, evalMs);
+  if (t0_L.length < 4 || tL_E.length < 3) return null;
 
-  // expansión / rango
   const qs = ticks.map((t) => t.quote);
   const minP = Math.min(...qs);
   const maxP = Math.max(...qs);
@@ -2953,20 +2980,10 @@ function passesGiroFilters(best) {
   const rScore = rangeScoreCalc(ticks, best.vol);
   if (rScore < RULES_GIRO.rangeScoreMin) return null;
 
-  // 0-35 direccional fuerte
-  const r0_35 = directionalRatio(t0_35, dirSign);
-  if (r0_35 < RULES_GIRO.dirRatioMin_0_35) return null;
+  const r0_L = directionalRatio(t0_L, dirSign);
+  if (r0_L < RULES_GIRO.dirRatioMin_0_L) return null;
 
-  // empuje 0-35 grande vs rango total
-  const impulse0_35 = Math.abs(p35 - p0);
-  if (impulse0_35 < range * RULES_GIRO.impulseMinFracOfRange_0_35) return null;
-
-  // al eval (45/50/55) todavía en dirección (evita giros internos tempranos)
-  const net0_E = pE - p0;
-  if (Math.sign(net0_E) !== dirSign) return null;
-  if (Math.abs(net0_E) < range * RULES_GIRO.net0_evalMinFracRange) return null;
-
-  // extremo tardío pero no pegado al final
+  // extremo: no muy temprano y no pegado al final
   let extremeMs = 0;
   if (dirSign > 0) {
     let maxIdx = 0;
@@ -2978,39 +2995,31 @@ function passesGiroFilters(best) {
     extremeMs = ticks[minIdx].ms;
   }
   if (extremeMs < RULES_GIRO.extremeMinMs) return null;
-  if (extremeMs > EVAL_SEC * 1000 - RULES_GIRO.extremeNotAtEndMs) return null;
+  if (extremeMs > evalMs - RULES_GIRO.extremeNotAtEndMs) return null;
 
-  // a los 35s aún cerca del extremo (dirección “hasta el 45”)
-  if (dirSign > 0) {
-    if ((maxP - p35) > range * RULES_GIRO.p35NearExtremeFrac) return null;
-  } else {
-    if ((p35 - minP) > range * RULES_GIRO.p35NearExtremeFrac) return null;
-  }
+  // tramo final: agotamiento (pierde favor, aparece oposición, serrucha)
+  const rL_E_favor = directionalRatio(tL_E, dirSign);
+  const rL_E_opp = directionalRatio(tL_E, -dirSign);
+  const changes = signChangesCount(tL_E);
 
-  // en 35-eval aparece agotamiento: pierde favor, aparece oposición, irregularidad
-  const r35_E_favor = directionalRatio(t35_E, dirSign);
-  const r35_E_opp = directionalRatio(t35_E, -dirSign);
-  const changes = signChangesCount(t35_E);
+  if (rL_E_favor > RULES_GIRO.dirRatioMax_L_E_favor) return null;
+  if (rL_E_opp < RULES_GIRO.dirRatioMin_L_E_opp) return null;
+  if (changes < RULES_GIRO.minSignChanges_L_E) return null;
 
-  if (r35_E_favor > RULES_GIRO.dirRatioMax_35_eval_favor) return null;
-  if (r35_E_opp < RULES_GIRO.dirRatioMin_35_eval_opp) return null;
-  if (changes < RULES_GIRO.minSignChanges_35_eval) return null;
-
-  // movimiento contra en el tramo final (tardío)
-  const lateMoveAgainst = (pE - p35) * (-dirSign); // positivo si fue contra
+  // empuje contra en el tramo final
+  const lateMoveAgainst = (pE - pL) * (-dirSign);
   if (lateMoveAgainst < range * RULES_GIRO.lateMoveAgainstMinFracRange) return null;
 
-  // retrace desde extremo hacia el final (confirmación mínima)
+  // retrace desde el extremo hacia el EVAL
   const retrace = dirSign > 0 ? (maxP - pE) : (pE - minP);
-  if (retrace < range * RULES_GIRO.retraceMinFracOfRange) return null;
+  if (retrace < range * RULES_GIRO.retraceMinFracRange) return null;
 
-  // señal CONTRA el impulso
   return dirSign > 0 ? "PUT" : "CALL";
 }
 
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return false;
+  if (!data) return giroMode ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -3033,16 +3042,15 @@ function evaluateMinute(minute) {
     candidates.push({ symbol: sym, move, score, rangeScore: rScore, ticks, vol });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
 
-  // Ranking:
-  // - NORMAL: score (movimiento neto / vol)
-  // - GIRO: rangeScore (rango / vol) para capturar estiramiento (aunque haya retrace)
+  // - NORMAL: score (movimiento neto/vol)
+  // - GIRO: rangeScore (rango/vol)
   candidates.sort((a, b) => (giroMode ? b.rangeScore - a.rangeScore : b.score - a.score));
   const best = candidates[0];
-  if (!best) return false;
+  if (!best) return giroMode ? true : false;
 
-  // ---- GIRO ----
+  // ---- GIRO (ESTRICTO: si no se dio, se pierde el minuto) ----
   if (giroMode) {
     if (best.rangeScore < RULES_GIRO.rangeScoreMin) return true;
     const giroDir = passesGiroFilters(best);
@@ -3181,6 +3189,7 @@ function connect() {
 
             toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
 
+            // pintar badge + journal
             try {
               const signalId = tradeLinks.get(String(cid)) || "";
               const it = signalId ? findHistoryItemById(signalId) : null;
@@ -3299,3 +3308,4 @@ seedTradesJournalFromHistory();
 ensureInlineClearButtons();
 
 connect();
+
