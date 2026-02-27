@@ -1,4 +1,3 @@
-
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
@@ -2902,20 +2901,22 @@ function passesTechnicalFilters(best, vol, rules) {
 }
 
 /* --- GIRO (ESTRICTO + relativo al EVAL) --- */
-const GIRO_LATE_WINDOW_MS = 12000; // últimos 12s antes del EVAL
-const RULES_GIRO = {
-  rangeScoreMin: 0.050,
-  dirRatioMin_0_L: 0.58,
+/* ✅ REEMPLAZO 1: reglas GIRO más operables */
+const GIRO_LATE_WINDOW_MS = 9000; // ✅ últimos 9s antes del EVAL (45/50/55)
 
-  dirRatioMax_L_E_favor: 0.62,
-  dirRatioMin_L_E_opp: 0.46,
+const RULES_GIRO = {
+  rangeScoreMin: 0.045,        // ✅ más setups
+  dirRatioMin_0_L: 0.55,
+
+  dirRatioMax_L_E_favor: 0.75, // ✅ permite que todavía “siga algo”
+  dirRatioMin_L_E_opp: 0.38,
   minSignChanges_L_E: 1,
 
-  lateMoveAgainstMinFracRange: 0.08,
-  retraceMinFracRange: 0.16,
+  lateMoveAgainstMinFracRange: 0.05,
+  retraceMinFracRange: 0.10,   // ✅ era lo más duro
 
-  extremeMinMs: 16000,
-  extremeNotAtEndMs: 1200,
+  extremeMinMs: 12000,
+  extremeNotAtEndMs: 600,
 };
 
 function rangeScoreCalc(ticks, vol) {
@@ -2939,25 +2940,31 @@ function signChangesCount(ticks) {
   return changes;
 }
 
-// Devuelve "CALL"/"PUT" si hay GIRO, o null si no hay setup
+/* ✅ REEMPLAZO 2: passesGiroFilters actualizado (lateStart relativo + tL_E >= 2) */
 function passesGiroFilters(best) {
   const ticks = best.ticks || [];
   if (ticks.length < 8) return null;
 
   const evalMs = EVAL_SEC * 1000;
-  const lateStartMs = Math.max(16000, evalMs - GIRO_LATE_WINDOW_MS);
+
+  // ✅ tramo final relativo al EVAL y respetando extremeMinMs
+  const lateStartMs = Math.max(RULES_GIRO.extremeMinMs, evalMs - GIRO_LATE_WINDOW_MS);
 
   const p0 = getPriceAtMs(ticks, 0);
   const pL = getPriceAtMs(ticks, lateStartMs);
   const pE = getPriceAtMs(ticks, evalMs);
   if (p0 == null || pL == null || pE == null) return null;
 
+  // impulso hasta lateStart
   const dirSign = Math.sign(pL - p0);
   if (!dirSign) return null;
 
   const t0_L = sliceTicks(ticks, 0, lateStartMs);
   const tL_E = sliceTicks(ticks, lateStartMs, evalMs);
-  if (t0_L.length < 4 || tL_E.length < 3) return null;
+
+  if (t0_L.length < 4) return null;
+  // ✅ en estricto a veces llegan pocos ticks; bajamos a 2
+  if (tL_E.length < 2) return null;
 
   const qs = ticks.map((t) => t.quote);
   const minP = Math.min(...qs);
@@ -3032,22 +3039,28 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
 
-  // - NORMAL: score (movimiento neto/vol)
-  // - GIRO: rangeScore (rango/vol)
-  candidates.sort((a, b) => (giroMode ? b.rangeScore - a.rangeScore : b.score - a.score));
-  const best = candidates[0];
-  if (!best) return giroMode ? true : false;
-
-  // ---- GIRO (ESTRICTO: si no se dio, se pierde el minuto) ----
+  /* ✅ REEMPLAZO 3: GIRO prueba TODOS los símbolos (no solo best) */
   if (giroMode) {
-    if (best.rangeScore < RULES_GIRO.rangeScoreMin) return true;
-    const giroDir = passesGiroFilters(best);
-    if (!giroDir) return true;
-    addSignal(minute, best.symbol, giroDir, best.ticks);
-    return true;
+    candidates.sort((a, b) => b.rangeScore - a.rangeScore);
+
+    for (const c of candidates) {
+      if (c.rangeScore < RULES_GIRO.rangeScoreMin) break;
+
+      const giroDir = passesGiroFilters(c);
+      if (giroDir) {
+        addSignal(minute, c.symbol, giroDir, c.ticks);
+        return true;
+      }
+    }
+
+    return true; // no hubo GIRO este minuto
   }
 
   // ---- NORMAL (igual que antes) ----
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  if (!best) return true;
+
   const rules = RULES_NORMAL;
   if (best.score < rules.scoreMin) return true;
 
@@ -3296,4 +3309,3 @@ seedTradesJournalFromHistory();
 ensureInlineClearButtons();
 
 connect();
-
