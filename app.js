@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo FUERTE más “parecido” (patrón tipo ESCALERA + doble empuje) — NORMAL queda igual
+// ✅ Modo GIRO (agotamiento estructurado: expansión + pérdida de pendiente + retrace) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
@@ -364,9 +364,12 @@ let soundEnabled = false;
 let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
-let strongMode = false;
+
+// ✅ NORMAL vs GIRO (reemplaza FUERTE)
+let giroMode = false;
 
 let history = loadHistory();
+migrateHistoryModesToGiro();
 
 let minuteData = {};
 let lastEvaluatedMinute = null;
@@ -389,6 +392,20 @@ let modalLive = false;
 let modalDrawRaf = null;
 let modalLastDrawAt = 0;
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
+
+// Migración: FUERTE -> GIRO en history viejo
+function migrateHistoryModesToGiro() {
+  try {
+    let changed = false;
+    for (const it of history || []) {
+      if (it && it.mode === "FUERTE") {
+        it.mode = "GIRO";
+        changed = true;
+      }
+    }
+    if (changed) saveHistory(history);
+  } catch {}
+}
 
 /* =========================
    Assets
@@ -1181,7 +1198,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Eval sec + strong mode
+   Eval sec + MODO (NORMAL vs GIRO)
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
@@ -1204,18 +1221,28 @@ function applyTheme(theme) {
       })
   );
 
-  strongMode = loadBool("strongMode", false);
+  // --- MODO: NORMAL vs GIRO (compat con key vieja strongMode) ---
+  const hasGiroKey = localStorage.getItem("giroMode") !== null;
+  giroMode = loadBool("giroMode", false);
+  if (!hasGiroKey) {
+    giroMode = loadBool("strongMode", false);
+    saveBool("giroMode", giroMode);
+  }
+
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.textContent = strongMode ? "🟧 Modo FUERTE" : "🟦 Modo NORMAL";
-    modeBtn.classList.toggle("active-strong", strongMode);
+    modeBtn.textContent = giroMode ? "🟪 Modo GIRO" : "🟦 Modo NORMAL";
+    // reutilizamos la clase existente para highlight (no tocamos CSS global)
+    modeBtn.classList.toggle("active-strong", giroMode);
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      strongMode = !strongMode;
-      saveBool("strongMode", strongMode);
+      giroMode = !giroMode;
+      saveBool("giroMode", giroMode);
+      // compat: mantenemos la key vieja por si algo externo la usa
+      saveBool("strongMode", giroMode);
       paintMode();
     };
 })();
@@ -2423,7 +2450,7 @@ function initTokenAndStakeUI() {
       stakeInput.value = Number(DEFAULT_STAKE).toFixed(2);
       setTradeStake(DEFAULT_STAKE);
       toast("↩️ Stake default ✓", 1600);
-      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
+      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE()).toFixed(2)} USD`);
     };
   }
 }
@@ -2765,8 +2792,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (FUERTE)
-   (idéntico a tu base)
+   Technical rules + Evaluation (NORMAL + GIRO)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -2825,56 +2851,8 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
     return Math.max(0, maxP - p30);
   }
 }
-const STRONG_PATTERN = { accelMin: 1.12, maxAgainstFracOfMaxFavor: 0.55, totalFavorOverAgainst: 1.25, bypassScore: 0.060 };
-function runsMagnitudeBySign(ticksWindow, dirSign) {
-  if (!ticksWindow || ticksWindow.length < 2) return { favorRuns: [], againstRuns: [] };
-  const pts = ticksWindow.slice().sort((a, b) => a.ms - b.ms);
-  let curSign = 0,
-    curMag = 0;
-  const favorRuns = [],
-    againstRuns = [];
-  const flush = () => {
-    if (!curSign || curMag <= 0) return;
-    if (curSign === Math.sign(dirSign)) favorRuns.push(curMag);
-    else againstRuns.push(curMag);
-  };
-  for (let i = 1; i < pts.length; i++) {
-    const d = pts[i].quote - pts[i - 1].quote;
-    if (Math.abs(d) < 1e-12) continue;
-    const s = Math.sign(d);
-    if (curSign === 0) {
-      curSign = s;
-      curMag = Math.abs(d);
-      continue;
-    }
-    if (s === curSign) curMag += Math.abs(d);
-    else {
-      flush();
-      curSign = s;
-      curMag = Math.abs(d);
-    }
-  }
-  flush();
-  return { favorRuns, againstRuns };
-}
-function passesStrongStaircasePattern(ticks, dirSign, score) {
-  if (typeof score === "number" && score >= STRONG_PATTERN.bypassScore) return true;
-  const t0_30 = sliceTicks(ticks, 0, 30000);
-  if (t0_30.length < 6) return false;
-  const { favorRuns, againstRuns } = runsMagnitudeBySign(t0_30, dirSign);
-  if (favorRuns.length < 2) return false;
-  const favorSorted = favorRuns.slice().sort((a, b) => b - a);
-  const f1 = favorSorted[0] || 0,
-    f2 = favorSorted[1] || 0;
-  if (!(f1 > 0 && f2 > 0)) return false;
-  if (f2 < f1 / STRONG_PATTERN.accelMin) return false;
-  const aMax = (againstRuns.length ? Math.max(...againstRuns) : 0) || 0;
-  if (aMax > f1 * STRONG_PATTERN.maxAgainstFracOfMaxFavor) return false;
-  const aSum = againstRuns.reduce((s, x) => s + x, 0);
-  const fSum = favorRuns.reduce((s, x) => s + x, 0);
-  if (aSum > 0 && fSum / aSum < STRONG_PATTERN.totalFavorOverAgainst) return false;
-  return true;
-}
+
+/* --- NORMAL (igual que antes) --- */
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
@@ -2885,16 +2863,7 @@ const RULES_NORMAL = {
   rest_minFracTotal: 0.06,
   rest_maxFracTotal: 0.68,
 };
-const RULES_STRONG = {
-  scoreMin: 0.03,
-  dirRatioMin_0_30: 0.62,
-  dirRatioMin_30_45: 0.6,
-  move30_fracOfTotal: 0.45,
-  move45_fracOfTotal: 0.25,
-  oppAttack_maxFracMove30: 0.38,
-  rest_minFracTotal: 0.1,
-  rest_maxFracTotal: 0.5,
-};
+
 function passesTechnicalFilters(best, vol, rules) {
   const ticks = best.ticks || [];
   if (ticks.length < 3) return false;
@@ -2902,32 +2871,118 @@ function passesTechnicalFilters(best, vol, rules) {
   const p30 = getPriceAtMs(ticks, 30000);
   const p45 = getPriceAtMs(ticks, EVAL_SEC * 1000);
   if (p0 == null || p30 == null || p45 == null) return false;
+
   const dirSign = best.move > 0 ? 1 : -1;
+
   const move0_30 = (p30 - p0) * dirSign;
   const move30_45 = (p45 - p30) * dirSign;
+
   const absTotal = Math.abs(p45 - p0) + 1e-12;
+
   if (move0_30 <= absTotal * rules.move30_fracOfTotal) return false;
   if (move30_45 <= absTotal * rules.move45_fracOfTotal) return false;
+
   const t0_30 = sliceTicks(ticks, 0, 30000);
   const t30_45 = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
+
   const r0_30 = directionalRatio(t0_30, dirSign);
   const r30_45 = directionalRatio(t30_45, dirSign);
+
   if (r0_30 < rules.dirRatioMin_0_30) return false;
   if (r30_45 < rules.dirRatioMin_30_45) return false;
+
   const oppAttack = oppositeAttackDepth(t30_45, dirSign, p30);
   const move30Abs = Math.abs(p30 - p0) + 1e-12;
   if (oppAttack > move30Abs * rules.oppAttack_maxFracMove30) return false;
+
   const t0_45 = sliceTicks(ticks, 0, EVAL_SEC * 1000);
   const maxRet = maxRetraceAgainst(t0_45, dirSign);
+
   const minRest = absTotal * rules.rest_minFracTotal;
   const maxRest = absTotal * rules.rest_maxFracTotal;
   if (maxRet < minRest) return false;
   if (maxRet > maxRest) return false;
+
   const totalScore = Math.abs(best.move) / (vol || 1e-9);
   if (totalScore < rules.scoreMin) return false;
-  if (rules === RULES_STRONG) if (!passesStrongStaircasePattern(ticks, dirSign, totalScore)) return false;
+
   return true;
 }
+
+/* --- GIRO (nuevo) --- */
+const RULES_GIRO = {
+  rangeScoreMin: 0.055,          // rango/vol mínimo -> “estirado”
+  impulseMinFracOfRange: 0.55,   // empuje 0-30 explica parte del rango
+  dirRatioMin_0_30: 0.60,        // impulso temprano direccional
+  dirRatioMax_30_eval: 0.55,     // pierde dirección (serrucho/debilidad)
+  retraceMinFracOfRange: 0.22,   // retrace desde extremo al final
+  extremeNotAtEndMs: 4000,       // extremo no puede estar pegado al eval (si no, suele continuar)
+};
+
+function rangeScoreCalc(ticks, vol) {
+  if (!ticks || ticks.length < 3) return 0;
+  const qs = ticks.map((t) => t.quote);
+  const r = (Math.max(...qs) - Math.min(...qs)) || 0;
+  return r / (vol || 1e-9);
+}
+
+// Devuelve "CALL"/"PUT" si hay GIRO, o null si no hay setup
+function passesGiroFilters(best) {
+  const ticks = best.ticks || [];
+  if (ticks.length < 6) return null;
+
+  const p0 = getPriceAtMs(ticks, 0);
+  const p30 = getPriceAtMs(ticks, 30000);
+  const pE = getPriceAtMs(ticks, EVAL_SEC * 1000);
+  if (p0 == null || p30 == null || pE == null) return null;
+
+  const dirSign = Math.sign(p30 - p0); // dirección del impulso temprano
+  if (!dirSign) return null;
+
+  const t0_30 = sliceTicks(ticks, 0, 30000);
+  const t30_E = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
+
+  const r0_30 = directionalRatio(t0_30, dirSign);
+  const r30_E = directionalRatio(t30_E, dirSign);
+
+  if (r0_30 < RULES_GIRO.dirRatioMin_0_30) return null;
+  if (r30_E > RULES_GIRO.dirRatioMax_30_eval) return null; // no perdió fuerza => no giro
+
+  // rango / expansión
+  const qs = ticks.map((t) => t.quote);
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = (maxP - minP) || 0;
+  if (range <= 1e-12) return null;
+
+  const rScore = rangeScoreCalc(ticks, best.vol);
+  if (rScore < RULES_GIRO.rangeScoreMin) return null;
+
+  // impulso 0-30 suficiente vs rango total
+  const impulse = Math.abs(p30 - p0);
+  if (impulse < range * RULES_GIRO.impulseMinFracOfRange) return null;
+
+  // extremo no al final (si el extremo está pegado al eval => suele seguir)
+  let extremeMs = 0;
+  if (dirSign > 0) {
+    let maxIdx = 0;
+    for (let i = 1; i < ticks.length; i++) if (ticks[i].quote >= ticks[maxIdx].quote) maxIdx = i;
+    extremeMs = ticks[maxIdx].ms;
+  } else {
+    let minIdx = 0;
+    for (let i = 1; i < ticks.length; i++) if (ticks[i].quote <= ticks[minIdx].quote) minIdx = i;
+    extremeMs = ticks[minIdx].ms;
+  }
+  if (extremeMs > EVAL_SEC * 1000 - RULES_GIRO.extremeNotAtEndMs) return null;
+
+  // retrace desde extremo hacia el final
+  const retrace = dirSign > 0 ? (maxP - pE) : (pE - minP);
+  if (retrace < range * RULES_GIRO.retraceMinFracOfRange) return null;
+
+  // señal CONTRA el impulso
+  return dirSign > 0 ? "PUT" : "CALL";
+}
+
 function evaluateMinute(minute) {
   const data = minuteData[minute];
   if (!data) return false;
@@ -2949,16 +3004,33 @@ function evaluateMinute(minute) {
     vol = vol / Math.max(1, prices.length - 1);
 
     const score = rawMove / (vol || 1e-9);
-    candidates.push({ symbol: sym, move, score, ticks, vol });
+    const rScore = rangeScoreCalc(ticks, vol);
+    candidates.push({ symbol: sym, move, score, rangeScore: rScore, ticks, vol });
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
 
-  candidates.sort((a, b) => b.score - a.score);
+  // Ranking:
+  // - NORMAL: score (movimiento neto / vol)
+  // - GIRO: rangeScore (rango / vol) para capturar estiramiento aunque retrace
+  candidates.sort((a, b) => (giroMode ? b.rangeScore - a.rangeScore : b.score - a.score));
   const best = candidates[0];
   if (!best) return false;
 
-  const rules = strongMode ? RULES_STRONG : RULES_NORMAL;
+  // ---- GIRO ----
+  if (giroMode) {
+    // si no hay expansión suficiente, no vale la pena seguir esperando (no reintentar)
+    if (best.rangeScore < RULES_GIRO.rangeScoreMin) return true;
+
+    const giroDir = passesGiroFilters(best);
+    if (!giroDir) return true;
+
+    addSignal(minute, best.symbol, giroDir, best.ticks);
+    return true;
+  }
+
+  // ---- NORMAL (igual que antes) ----
+  const rules = RULES_NORMAL;
   if (best.score < rules.scoreMin) return true;
 
   const ok = passesTechnicalFilters(best, best.vol, rules);
@@ -2975,7 +3047,7 @@ function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 function addSignal(minute, symbol, direction, ticks) {
-  const modeLabel = strongMode ? "FUERTE" : "NORMAL";
+  const modeLabel = giroMode ? "GIRO" : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
@@ -3208,3 +3280,4 @@ seedTradesJournalFromHistory();
 ensureInlineClearButtons();
 
 connect();
+
