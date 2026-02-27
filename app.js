@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo GIRO (agotamiento estructurado: expansión + pérdida de pendiente + retrace) — NORMAL queda igual
+// ✅ Modo GIRO (v2): “dirección fuerte hasta el seg 45 + agotamiento tardío + retrace” — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
@@ -15,7 +15,7 @@
 // ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE vs CIERRE (close_next vs close_current), no por open/close
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
-// ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
+// ✅ FIX: el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 
 "use strict";
 
@@ -365,7 +365,7 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 
-// ✅ NORMAL vs GIRO (reemplaza FUERTE)
+// ✅ NORMAL vs GIRO
 let giroMode = false;
 
 let history = loadHistory();
@@ -725,7 +725,7 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Trades view (journal) — ✅ FIX: actions + list
+   Trades view (journal)
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
@@ -744,7 +744,7 @@ function ensureTradesView() {
     host.appendChild(el);
   }
 
-  // ✅ Barra fija (NO se borra al renderizar trades)
+  // Barra fija
   let actions = $("tradesActions");
   if (!actions) {
     actions = document.createElement("div");
@@ -758,7 +758,7 @@ function ensureTradesView() {
     el.appendChild(actions);
   }
 
-  // ✅ Lista (esta SÍ se limpia)
+  // Lista (se limpia)
   let list = $("tradesList");
   if (!list) {
     list = document.createElement("div");
@@ -781,7 +781,7 @@ function renderTradesView() {
   } else {
     for (const entry of tradesJournal) {
       const item = {
-        id: entry.id, // mantenemos el id original
+        id: entry.id,
         minute: entry.minute,
         time: entry.time,
         symbol: entry.symbol,
@@ -795,12 +795,10 @@ function renderTradesView() {
         trade: entry.trade || null,
       };
 
-      // ✅ SIN voto/comentario en Trades
       list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
     }
   }
 
-  // ✅ extra robusto: re-asegura el botón al final del render
   try {
     ensureInlineClearButtons();
     updatePerViewClearButtonsVisibility("trades");
@@ -834,7 +832,7 @@ function ensureTradesTab() {
 }
 
 /* =========================
-   ✅ Clear por pestaña (inline)
+   Clear por pestaña (inline)
 ========================= */
 function clearSignalsOnly() {
   history = [];
@@ -862,7 +860,7 @@ function ensureViewActionButton(viewName, opts) {
     host = (counterEl && counterEl.parentElement) || signalsView || document.body;
   } else if (viewName === "trades") {
     ensureTradesView();
-    host = $("tradesActions") || document.body; // ✅ FIX: host fijo
+    host = $("tradesActions") || document.body;
   } else {
     host = document.body;
   }
@@ -888,7 +886,6 @@ function ensureViewActionButton(viewName, opts) {
     btn.textContent = text;
     btn.title = title || "";
 
-    // mini look inline (sin tocar CSS global)
     btn.style.padding = "8px 10px";
     btn.style.borderRadius = "12px";
     btn.style.fontWeight = "900";
@@ -902,11 +899,9 @@ function ensureViewActionButton(viewName, opts) {
 
     wrap.appendChild(btn);
 
-    // Inserción:
     if (viewName === "signals" && signalsEl && signalsEl.parentElement) {
       signalsEl.parentElement.insertBefore(wrap, signalsEl);
     } else if (viewName === "trades") {
-      // ✅ FIX: append en tradesActions (no se borra nunca)
       host.appendChild(wrap);
     } else {
       host.appendChild(wrap);
@@ -1162,7 +1157,7 @@ function ensureExportTradesButton() {
 }
 
 /* =========================
-   ✅ Modal Config: sacar botones borrar y dejar solo export/reset/etc
+   Modal Config: sacar botones borrar y dejar solo export/reset/etc
 ========================= */
 function ensureSplitClearButtons() {
   const host =
@@ -1171,10 +1166,8 @@ function ensureSplitClearButtons() {
     null;
   if (!host) return;
 
-  // ocultar el botón viejo si existe
   if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
 
-  // ✅ ya NO agregamos botones de borrar acá
   const expT = ensureExportTradesButton();
   if (expT) expT.onclick = exportTradesJournal;
 }
@@ -1221,7 +1214,7 @@ function applyTheme(theme) {
       })
   );
 
-  // --- MODO: NORMAL vs GIRO (compat con key vieja strongMode) ---
+  // MODO: NORMAL vs GIRO (compat con key vieja strongMode)
   const hasGiroKey = localStorage.getItem("giroMode") !== null;
   giroMode = loadBool("giroMode", false);
   if (!hasGiroKey) {
@@ -1232,7 +1225,6 @@ function applyTheme(theme) {
   const paintMode = () => {
     if (!modeBtn) return;
     modeBtn.textContent = giroMode ? "🟪 Modo GIRO" : "🟦 Modo NORMAL";
-    // reutilizamos la clase existente para highlight (no tocamos CSS global)
     modeBtn.classList.toggle("active-strong", giroMode);
   };
   paintMode();
@@ -1241,8 +1233,7 @@ function applyTheme(theme) {
     modeBtn.onclick = () => {
       giroMode = !giroMode;
       saveBool("giroMode", giroMode);
-      // compat: mantenemos la key vieja por si algo externo la usa
-      saveBool("strongMode", giroMode);
+      saveBool("strongMode", giroMode); // compat
       paintMode();
     };
 })();
@@ -1813,7 +1804,7 @@ function updateRowNextArrow(item) {
 }
 
 /* =========================
-   Row helpers (LOCAL onRow) — FIX para Trades (evita colisión de data-id)
+   Row helpers (LOCAL onRow)
 ========================= */
 function updateRowChartBtnOnRow(row, item) {
   if (!row) return;
@@ -1931,7 +1922,6 @@ function setNextOutcome(item, outcome) {
   updateCounter();
   rebuildFeedbackFromHistory();
 
-  // actualizar journal si ese trade ya estaba guardado (para que refleje el NEXT)
   try {
     upsertTradeJournalFromSignal(item);
   } catch {}
@@ -1942,8 +1932,6 @@ function setNextOutcome(item, outcome) {
 
 /* =========================
    Build row
-   - opts.hideActions: no renderiza voto/comentario (Trades)
-   - opts.source === "trades": abre el modal usando el item real del history
 ========================= */
 function buildRow(item, opts = {}) {
   const row = document.createElement("div");
@@ -1993,13 +1981,11 @@ function buildRow(item, opts = {}) {
     if (canOpen) openChartModal(target);
   };
 
-  // ✅ inicializar estados SOBRE ESTA MISMA FILA (evita colisión)
   updateRowChartBtnOnRow(row, item);
   updateRowHitIconOnRow(row, item);
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
 
-  // acciones (solo señales)
   if (!opts.hideActions) {
     if (item.vote) {
       const likeBtn = row.querySelector('button[data-v="like"]');
@@ -2199,9 +2185,6 @@ function forgetSubscription(subId) {
   } catch {}
 }
 
-/* =========================
-   Fallback poll (requiere authorize)
-========================= */
 function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
   try {
     if (!contractId) return;
@@ -2233,7 +2216,6 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
           toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
 
-          // pintar badge + journal
           try {
             const signalId = tradeLinks.get(String(cid)) || "";
             const it = signalId ? findHistoryItemById(signalId) : null;
@@ -2343,7 +2325,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   }
 }
 
-/* conectar botones modal */
 if (modalBuyCallBtn) {
   modalBuyCallBtn.onclick = async () => {
     modalBuyCallBtn.disabled = true;
@@ -2450,7 +2431,7 @@ function initTokenAndStakeUI() {
       stakeInput.value = Number(DEFAULT_STAKE).toFixed(2);
       setTradeStake(DEFAULT_STAKE);
       toast("↩️ Stake default ✓", 1600);
-      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE()).toFixed(2)} USD`);
+      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
     };
   }
 }
@@ -2550,7 +2531,7 @@ async function fetchMinuteClose(symbol, minute) {
   return null;
 }
 
-async function computeNextOutcomeByCloses(symbol, minuteCur /* minuto de la señal */) {
+async function computeNextOutcomeByCloses(symbol, minuteCur) {
   const closeCur = await fetchMinuteClose(symbol, minuteCur);
   const closeNext = await fetchMinuteClose(symbol, minuteCur + 1);
   if (closeCur == null || closeNext == null) return null;
@@ -2625,7 +2606,6 @@ async function rehydrateHistoryOnBoot() {
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  // ✅ FIX NEXT: close_next vs close_current
   const pendingOutcomes = slice.filter((it) => !it.nextOutcome && it.minute + 1 < nowMin);
   const totalB = pendingOutcomes.length || 1;
   let doneB = 0;
@@ -2677,8 +2657,6 @@ function finalizeMinute(minute) {
 
     const prevMinute = minute - 1;
     const closeCur = candleOC?.[prevMinute]?.[symbol]?.close;
-
-    // si no tenemos close del minuto anterior, lo dejamos para rehidratación
     if (closeCur == null) continue;
 
     let outcome = "flat";
@@ -2792,7 +2770,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + GIRO)
+   Technical rules + Evaluation (NORMAL + GIRO v2)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -2909,14 +2887,20 @@ function passesTechnicalFilters(best, vol, rules) {
   return true;
 }
 
-/* --- GIRO (nuevo) --- */
+/* --- GIRO v2 (dirección hasta el 45 + agotamiento tardío + retrace) --- */
 const RULES_GIRO = {
-  rangeScoreMin: 0.055,          // rango/vol mínimo -> “estirado”
-  impulseMinFracOfRange: 0.55,   // empuje 0-30 explica parte del rango
-  dirRatioMin_0_30: 0.60,        // impulso temprano direccional
-  dirRatioMax_30_eval: 0.55,     // pierde dirección (serrucho/debilidad)
-  retraceMinFracOfRange: 0.22,   // retrace desde extremo al final
-  extremeNotAtEndMs: 4000,       // extremo no puede estar pegado al eval (si no, suele continuar)
+  rangeScoreMin: 0.060,            // rango/vol mínimo -> “estirado”
+  impulseMinFracOfRange_0_35: 0.60, // empuje 0-35 explica parte del rango
+  dirRatioMin_0_35: 0.62,          // 0-35 direccional fuerte
+  dirRatioMax_35_eval_favor: 0.55, // 35-eval pierde continuidad
+  dirRatioMin_35_eval_opp: 0.52,   // 35-eval aparece oposición
+  minSignChanges_35_eval: 2,       // irregularidad mínima
+  p35NearExtremeFrac: 0.25,        // a los 35s aún cerca del extremo
+  lateMoveAgainstMinFracRange: 0.12,// movimiento contra en 35-eval (tardío)
+  retraceMinFracOfRange: 0.22,     // retrace desde el extremo hasta eval
+  extremeMinMs: 20000,             // extremo no muy temprano (evita V)
+  extremeNotAtEndMs: 2500,         // extremo no pegado al final (evita continuidad)
+  net0_evalMinFracRange: 0.40,     // todavía “en dirección” al eval (no giro interno temprano)
 };
 
 function rangeScoreCalc(ticks, vol) {
@@ -2926,29 +2910,40 @@ function rangeScoreCalc(ticks, vol) {
   return r / (vol || 1e-9);
 }
 
+function signChangesCount(ticks) {
+  if (!ticks || ticks.length < 3) return 0;
+  const pts = ticks.slice().sort((a, b) => a.ms - b.ms);
+  let last = 0;
+  let changes = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = pts[i].quote - pts[i - 1].quote;
+    if (Math.abs(d) < 1e-12) continue;
+    const s = Math.sign(d);
+    if (last && s !== last) changes++;
+    last = s;
+  }
+  return changes;
+}
+
 // Devuelve "CALL"/"PUT" si hay GIRO, o null si no hay setup
 function passesGiroFilters(best) {
   const ticks = best.ticks || [];
-  if (ticks.length < 6) return null;
+  if (ticks.length < 8) return null;
 
   const p0 = getPriceAtMs(ticks, 0);
-  const p30 = getPriceAtMs(ticks, 30000);
+  const p35 = getPriceAtMs(ticks, 35000);
   const pE = getPriceAtMs(ticks, EVAL_SEC * 1000);
-  if (p0 == null || p30 == null || pE == null) return null;
+  if (p0 == null || p35 == null || pE == null) return null;
 
-  const dirSign = Math.sign(p30 - p0); // dirección del impulso temprano
+  // dirección del “impulso hasta el 35”
+  const dirSign = Math.sign(p35 - p0);
   if (!dirSign) return null;
 
-  const t0_30 = sliceTicks(ticks, 0, 30000);
-  const t30_E = sliceTicks(ticks, 30000, EVAL_SEC * 1000);
+  const t0_35 = sliceTicks(ticks, 0, 35000);
+  const t35_E = sliceTicks(ticks, 35000, EVAL_SEC * 1000);
+  if (t0_35.length < 4 || t35_E.length < 3) return null;
 
-  const r0_30 = directionalRatio(t0_30, dirSign);
-  const r30_E = directionalRatio(t30_E, dirSign);
-
-  if (r0_30 < RULES_GIRO.dirRatioMin_0_30) return null;
-  if (r30_E > RULES_GIRO.dirRatioMax_30_eval) return null; // no perdió fuerza => no giro
-
-  // rango / expansión
+  // expansión / rango
   const qs = ticks.map((t) => t.quote);
   const minP = Math.min(...qs);
   const maxP = Math.max(...qs);
@@ -2958,11 +2953,20 @@ function passesGiroFilters(best) {
   const rScore = rangeScoreCalc(ticks, best.vol);
   if (rScore < RULES_GIRO.rangeScoreMin) return null;
 
-  // impulso 0-30 suficiente vs rango total
-  const impulse = Math.abs(p30 - p0);
-  if (impulse < range * RULES_GIRO.impulseMinFracOfRange) return null;
+  // 0-35 direccional fuerte
+  const r0_35 = directionalRatio(t0_35, dirSign);
+  if (r0_35 < RULES_GIRO.dirRatioMin_0_35) return null;
 
-  // extremo no al final (si el extremo está pegado al eval => suele seguir)
+  // empuje 0-35 grande vs rango total
+  const impulse0_35 = Math.abs(p35 - p0);
+  if (impulse0_35 < range * RULES_GIRO.impulseMinFracOfRange_0_35) return null;
+
+  // al eval (45/50/55) todavía en dirección (evita giros internos tempranos)
+  const net0_E = pE - p0;
+  if (Math.sign(net0_E) !== dirSign) return null;
+  if (Math.abs(net0_E) < range * RULES_GIRO.net0_evalMinFracRange) return null;
+
+  // extremo tardío pero no pegado al final
   let extremeMs = 0;
   if (dirSign > 0) {
     let maxIdx = 0;
@@ -2973,9 +2977,30 @@ function passesGiroFilters(best) {
     for (let i = 1; i < ticks.length; i++) if (ticks[i].quote <= ticks[minIdx].quote) minIdx = i;
     extremeMs = ticks[minIdx].ms;
   }
+  if (extremeMs < RULES_GIRO.extremeMinMs) return null;
   if (extremeMs > EVAL_SEC * 1000 - RULES_GIRO.extremeNotAtEndMs) return null;
 
-  // retrace desde extremo hacia el final
+  // a los 35s aún cerca del extremo (dirección “hasta el 45”)
+  if (dirSign > 0) {
+    if ((maxP - p35) > range * RULES_GIRO.p35NearExtremeFrac) return null;
+  } else {
+    if ((p35 - minP) > range * RULES_GIRO.p35NearExtremeFrac) return null;
+  }
+
+  // en 35-eval aparece agotamiento: pierde favor, aparece oposición, irregularidad
+  const r35_E_favor = directionalRatio(t35_E, dirSign);
+  const r35_E_opp = directionalRatio(t35_E, -dirSign);
+  const changes = signChangesCount(t35_E);
+
+  if (r35_E_favor > RULES_GIRO.dirRatioMax_35_eval_favor) return null;
+  if (r35_E_opp < RULES_GIRO.dirRatioMin_35_eval_opp) return null;
+  if (changes < RULES_GIRO.minSignChanges_35_eval) return null;
+
+  // movimiento contra en el tramo final (tardío)
+  const lateMoveAgainst = (pE - p35) * (-dirSign); // positivo si fue contra
+  if (lateMoveAgainst < range * RULES_GIRO.lateMoveAgainstMinFracRange) return null;
+
+  // retrace desde extremo hacia el final (confirmación mínima)
   const retrace = dirSign > 0 ? (maxP - pE) : (pE - minP);
   if (retrace < range * RULES_GIRO.retraceMinFracOfRange) return null;
 
@@ -3012,19 +3037,16 @@ function evaluateMinute(minute) {
 
   // Ranking:
   // - NORMAL: score (movimiento neto / vol)
-  // - GIRO: rangeScore (rango / vol) para capturar estiramiento aunque retrace
+  // - GIRO: rangeScore (rango / vol) para capturar estiramiento (aunque haya retrace)
   candidates.sort((a, b) => (giroMode ? b.rangeScore - a.rangeScore : b.score - a.score));
   const best = candidates[0];
   if (!best) return false;
 
   // ---- GIRO ----
   if (giroMode) {
-    // si no hay expansión suficiente, no vale la pena seguir esperando (no reintentar)
     if (best.rangeScore < RULES_GIRO.rangeScoreMin) return true;
-
     const giroDir = passesGiroFilters(best);
     if (!giroDir) return true;
-
     addSignal(minute, best.symbol, giroDir, best.ticks);
     return true;
   }
@@ -3159,7 +3181,6 @@ function connect() {
 
             toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
 
-            // pintar badge + journal
             try {
               const signalId = tradeLinks.get(String(cid)) || "";
               const it = signalId ? findHistoryItemById(signalId) : null;
@@ -3268,16 +3289,13 @@ initWakeButton();
 initTokenAndStakeUI();
 
 ensureResetCacheButton();
-ensureSplitClearButtons(); // ahora NO agrega botones de borrar en el modal
+ensureSplitClearButtons();
 
 applyModalTradeButtonsLayout();
 updateDisciplineLockUI(false);
 
-// Sembrar journal con trades ya guardados en history (si existían)
 seedTradesJournalFromHistory();
 
-// ✅ Botones borrar por pestaña
 ensureInlineClearButtons();
 
 connect();
-
