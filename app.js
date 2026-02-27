@@ -1,15 +1,3 @@
-Acá tenés el app.js completo integrado con:
-
-✅ NORMAL + GIRO
-
-✅ GIRO ESTRICTO: si elegís 45/50/55, la señal solo puede salir en ese segundo (en realidad: en el primer tick que llegue con sec >= EVAL_SEC). No hay retry en GIRO.
-
-✅ GIRO usa un tramo final relativo a tu EVAL_SEC (últimos 12s antes del 45/50/55), para que “hable tu idioma”.
-
-
-> Reemplazá tu app.js por este.
-
-
 
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
