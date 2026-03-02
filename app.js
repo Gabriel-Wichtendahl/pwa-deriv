@@ -1,5 +1,3 @@
-Acá tenés el app.js completo con los 3 reemplazos integrados (GIRO: prueba todos los símbolos + reglas más operables + passesGiroFilters ajustado y tolerante a pocos ticks en tramo final). Copiá y reemplazá tu app.js por este:
-
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
@@ -18,6 +16,7 @@ Acá tenés el app.js completo con los 3 reemplazos integrados (GIRO: prueba tod
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
+// ✅ FIX (este update): GIRO ya no calcula NEXT con close “parcial” de candleOC: confirma con cierres reales via ticks_history
 
 "use strict";
 
@@ -516,7 +515,9 @@ function loadLowPowerMode() {
 function saveLowPowerMode() {
   try {
     localStorage.setItem(LOWPOWER_KEY, lowPowerMode ? "1" : "0");
-  } catch {}
+  } catch {
+    lowPowerMode = false;
+  }
 }
 function getUiIntervalMs() {
   return lowPowerMode ? UI_INTERVAL_LOW_MS : UI_INTERVAL_NORMAL_MS;
@@ -2658,32 +2659,74 @@ async function rehydrateHistoryOnBoot() {
 }
 
 /* =========================
-   FIX NEXT (en vivo): close vs close
+   FIX NEXT (en vivo): close vs close (GIRO usa cierres reales)
 ========================= */
+function isGiroItem(it) {
+  return String(it?.mode || "NORMAL").toUpperCase() === "GIRO";
+}
+
 function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+  const prevMinute = minute - 1;
+
+  // 1) Resultado rápido con datos en vivo (candleOC) — lo usamos para NORMAL
+  const liveOutcomeBySymbol = Object.create(null);
+
   for (const symbol of Object.keys(oc)) {
     const closeNext = oc[symbol]?.close;
-    if (closeNext == null) continue;
-
-    const prevMinute = minute - 1;
     const closeCur = candleOC?.[prevMinute]?.[symbol]?.close;
+    if (closeNext == null || closeCur == null) continue;
 
-    if (closeCur == null) continue;
+    if (closeNext > closeCur) liveOutcomeBySymbol[symbol] = "up";
+    else if (closeNext < closeCur) liveOutcomeBySymbol[symbol] = "down";
+    else liveOutcomeBySymbol[symbol] = "flat";
+  }
 
-    let outcome = "flat";
-    if (closeNext > closeCur) outcome = "up";
-    else if (closeNext < closeCur) outcome = "down";
+  // Aplica a NORMAL (si todavía no tiene nextOutcome)
+  for (const it of history) {
+    if (!it || it.nextOutcome) continue;
+    if (it.minute !== prevMinute) continue;
 
-    for (const it of history) {
-      if (it.minute === prevMinute && it.symbol === symbol && !it.nextOutcome) {
-        setNextOutcome(it, outcome);
-      }
+    const sym = it.symbol;
+    if (!sym) continue;
+
+    // NORMAL -> usa live si existe
+    if (!isGiroItem(it) && liveOutcomeBySymbol[sym]) {
+      setNextOutcome(it, liveOutcomeBySymbol[sym]);
     }
   }
 
+  // 2) GIRO (y/o si falta live): confirmar con cierres reales (ticks_history)
+  (async () => {
+    try {
+      const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
+
+      for (const it of history) {
+        if (!it || it.nextOutcome) continue;
+        if (it.minute !== prevMinute) continue;
+
+        const sym = it.symbol;
+        if (!sym) continue;
+
+        const needsCanonical = isGiroItem(it) || !liveOutcomeBySymbol[sym];
+        if (!needsCanonical) continue;
+
+        const key = `${sym}:${prevMinute}`;
+        let out = cache.get(key);
+
+        if (out === undefined) {
+          out = (await computeNextOutcomeByCloses(sym, prevMinute)) || null;
+          cache.set(key, out);
+        }
+
+        if (out) setNextOutcome(it, out);
+      }
+    } catch {}
+  })();
+
+  // --- resto: igual que antes ---
   (async () => {
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
@@ -2907,7 +2950,7 @@ function passesTechnicalFilters(best, vol, rules) {
 const GIRO_LATE_WINDOW_MS = 9000; // ✅ últimos 9s antes del EVAL (45/50/55)
 
 const RULES_GIRO = {
-  rangeScoreMin: 0.045,        // ✅ más setups
+  rangeScoreMin: 0.045, // ✅ más setups
   dirRatioMin_0_L: 0.55,
 
   dirRatioMax_L_E_favor: 0.75, // ✅ permite que todavía “siga algo”
@@ -2915,7 +2958,7 @@ const RULES_GIRO = {
   minSignChanges_L_E: 1,
 
   lateMoveAgainstMinFracRange: 0.05,
-  retraceMinFracRange: 0.10,   // ✅ era lo más duro
+  retraceMinFracRange: 0.10, // ✅ era lo más duro
 
   extremeMinMs: 12000,
   extremeNotAtEndMs: 600,
