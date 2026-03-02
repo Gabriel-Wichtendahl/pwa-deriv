@@ -1,3 +1,5 @@
+Acá tenés el app.js completo con los 3 reemplazos integrados (GIRO: prueba todos los símbolos + reglas más operables + passesGiroFilters ajustado y tolerante a pocos ticks en tramo final). Copiá y reemplazá tu app.js por este:
+
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
