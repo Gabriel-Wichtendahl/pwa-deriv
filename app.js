@@ -18,6 +18,7 @@
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 // ✅ FIX (este update): GIRO ya no calcula NEXT con close “parcial” de candleOC: confirma con cierres reales via ticks_history
 // ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
+// ✅ NUEVO (este update): GIRO v2 (filtro ITM): solo muestra señales GIRO cuando hay “V temprano + recuperación sostenida + sin retesteo tardío”
 
 "use strict";
 
@@ -369,6 +370,60 @@ let EVAL_SEC = 45;
 
 // ✅ NORMAL vs GIRO
 let giroMode = false;
+
+/* =========================
+   ✅ GIRO v2 (filtro ITM)
+========================= */
+const GIRO_V2_ENABLED_KEY = "giroV2_enabled_v1";
+let giroV2Enabled = false; // se carga luego (init)
+
+const GIRO_V2 = {
+  extremeMinSec: 12,          // evita ruido muy temprano
+  earlyExtremeMaxSec: 36,     // el extremo contrario debe aparecer antes de este segundo
+  recoveryMin: 0.65,          // recuperación mínima dentro del rango
+  slopeSec: 8,                // pendiente final a favor (últimos N segundos)
+  lateWindowSec: 8,           // ventana final para chequear retesteo
+  retestEps: 0.12,            // cercanía al extremo = retesteo (0..1 del rango)
+  minPoints: 12,              // mínimo de ticks para confiar
+  onlySymbols: null,          // ej: ["R_75"] o null para todos
+};
+
+function applyGiroV2UI() {
+  const btn = pickEl("giroV2Btn");
+  if (!btn) return;
+  btn.textContent = giroV2Enabled ? "🟪 GIRO v2 ON" : "🟪 GIRO v2 OFF";
+  btn.classList.toggle("active", giroV2Enabled);
+  btn.title = giroV2Enabled
+    ? "Filtra GIRO: solo deja pasar giros tipo V temprano (tu patrón ITM)"
+    : "GIRO sin filtro v2";
+}
+
+function ensureGiroV2Button() {
+  let btn = pickEl("giroV2Btn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+
+    btn = document.createElement("button");
+    btn.id = "giroV2Btn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    host.appendChild(btn);
+  }
+
+  btn.onclick = () => {
+    giroV2Enabled = !giroV2Enabled;
+    saveBool(GIRO_V2_ENABLED_KEY, giroV2Enabled);
+    applyGiroV2UI();
+    toast(giroV2Enabled ? "🟪 GIRO v2 ON (filtrado)" : "🟪 GIRO v2 OFF (normal)", 1600);
+  };
+
+  applyGiroV2UI();
+  return btn;
+}
 
 let history = loadHistory();
 migrateHistoryModesToGiro();
@@ -1229,6 +1284,9 @@ function applyTheme(theme) {
     giroMode = loadBool("strongMode", false);
     saveBool("giroMode", giroMode);
   }
+
+  // ✅ GIRO v2 enabled (persist)
+  giroV2Enabled = loadBool(GIRO_V2_ENABLED_KEY, true);
 
   const paintMode = () => {
     if (!modeBtn) return;
@@ -2665,7 +2723,8 @@ async function rehydrateHistoryOnBoot() {
    FIX NEXT (en vivo): close vs close (GIRO usa cierres reales)
 ========================= */
 function isGiroItem(it) {
-  return String(it?.mode || "NORMAL").toUpperCase() === "GIRO";
+  const m = String(it?.mode || "NORMAL").toUpperCase();
+  return m === "GIRO" || m === "GIRO2";
 }
 
 function finalizeMinute(minute) {
@@ -2847,6 +2906,73 @@ function sliceTicks(ticks, aMs, bMs) {
   if (!ticks || ticks.length === 0) return [];
   return ticks.filter((t) => t.ms >= aMs && t.ms <= bMs).sort((x, y) => x.ms - y.ms);
 }
+
+/* =========================
+   ✅ GIRO v2 filter: V temprano + recuperación sostenida
+========================= */
+function giroV2Passes(direction /* CALL|PUT */, ticks) {
+  if (!giroV2Enabled) return true;
+
+  const evalMs = EVAL_SEC * 1000;
+  const pts = (ticks || [])
+    .slice()
+    .sort((a, b) => a.ms - b.ms)
+    .filter((t) => t.ms <= evalMs && Number.isFinite(t.quote));
+
+  if (pts.length < GIRO_V2.minPoints) return false;
+
+  const quotes = pts.map((p) => p.quote);
+  const minP = Math.min(...quotes);
+  const maxP = Math.max(...quotes);
+  const range = maxP - minP;
+  if (range <= 1e-12) return false;
+
+  const last = getPriceAtMs(pts, evalMs);
+  if (last == null) return false;
+
+  const idxMin = quotes.indexOf(minP);
+  const idxMax = quotes.indexOf(maxP);
+  const extremeMs = direction === "CALL" ? pts[idxMin].ms : pts[idxMax].ms;
+
+  // extremo no demasiado temprano (ruido)
+  if (extremeMs < GIRO_V2.extremeMinSec * 1000) return false;
+
+  // extremo temprano (edge)
+  const earlyMaxMs = Math.min(
+    GIRO_V2.earlyExtremeMaxSec * 1000,
+    Math.max(0, evalMs - (GIRO_V2.lateWindowSec + 2) * 1000)
+  );
+  if (extremeMs > earlyMaxMs) return false;
+
+  // recuperación fuerte al evaluar
+  const endPos = direction === "CALL" ? (last - minP) / range : (maxP - last) / range;
+  if (endPos < GIRO_V2.recoveryMin) return false;
+
+  // evitar retesteo tardío del extremo (giro falso)
+  const lateStart = Math.max(0, evalMs - GIRO_V2.lateWindowSec * 1000);
+  const recent = sliceTicks(pts, lateStart, evalMs);
+  if (recent.length >= 2) {
+    const rMin = Math.min(...recent.map((p) => p.quote));
+    const rMax = Math.max(...recent.map((p) => p.quote));
+    if (direction === "CALL") {
+      if (rMin <= minP + range * GIRO_V2.retestEps) return false;
+    } else {
+      if (rMax >= maxP - range * GIRO_V2.retestEps) return false;
+    }
+  }
+
+  // pendiente final a favor
+  const slopeStart = Math.max(0, evalMs - GIRO_V2.slopeSec * 1000);
+  const firstQ = getPriceAtMs(pts, slopeStart);
+  if (firstQ == null) return false;
+
+  const slope = last - firstQ;
+  if (direction === "CALL" && slope <= 0) return false;
+  if (direction === "PUT" && slope >= 0) return false;
+
+  return true;
+}
+
 function directionalRatio(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
   let ok = 0,
@@ -2949,19 +3075,18 @@ function passesTechnicalFilters(best, vol, rules) {
 }
 
 /* --- GIRO (ESTRICTO + relativo al EVAL) --- */
-/* ✅ REEMPLAZO 1: reglas GIRO más operables */
-const GIRO_LATE_WINDOW_MS = 9000; // ✅ últimos 9s antes del EVAL (45/50/55)
+const GIRO_LATE_WINDOW_MS = 9000; // últimos 9s antes del EVAL (45/50/55)
 
 const RULES_GIRO = {
-  rangeScoreMin: 0.045, // ✅ más setups
+  rangeScoreMin: 0.045,
   dirRatioMin_0_L: 0.55,
 
-  dirRatioMax_L_E_favor: 0.75, // ✅ permite que todavía “siga algo”
+  dirRatioMax_L_E_favor: 0.75,
   dirRatioMin_L_E_opp: 0.38,
   minSignChanges_L_E: 1,
 
   lateMoveAgainstMinFracRange: 0.05,
-  retraceMinFracRange: 0.10, // ✅ era lo más duro
+  retraceMinFracRange: 0.10,
 
   extremeMinMs: 12000,
   extremeNotAtEndMs: 600,
@@ -2988,14 +3113,12 @@ function signChangesCount(ticks) {
   return changes;
 }
 
-/* ✅ REEMPLAZO 2: passesGiroFilters actualizado (lateStart relativo + tL_E >= 2) */
 function passesGiroFilters(best) {
   const ticks = best.ticks || [];
   if (ticks.length < 8) return null;
 
   const evalMs = EVAL_SEC * 1000;
 
-  // ✅ tramo final relativo al EVAL y respetando extremeMinMs
   const lateStartMs = Math.max(RULES_GIRO.extremeMinMs, evalMs - GIRO_LATE_WINDOW_MS);
 
   const p0 = getPriceAtMs(ticks, 0);
@@ -3011,7 +3134,6 @@ function passesGiroFilters(best) {
   const tL_E = sliceTicks(ticks, lateStartMs, evalMs);
 
   if (t0_L.length < 4) return null;
-  // ✅ en estricto a veces llegan pocos ticks; bajamos a 2
   if (tL_E.length < 2) return null;
 
   const qs = ticks.map((t) => t.quote);
@@ -3087,7 +3209,6 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
 
-  /* ✅ REEMPLAZO 3: GIRO prueba TODOS los símbolos (no solo best) */
   if (giroMode) {
     candidates.sort((a, b) => b.rangeScore - a.rangeScore);
 
@@ -3096,6 +3217,14 @@ function evaluateMinute(minute) {
 
       const giroDir = passesGiroFilters(c);
       if (giroDir) {
+        // opcional: limitar por símbolo
+        if (giroV2Enabled && Array.isArray(GIRO_V2.onlySymbols) && GIRO_V2.onlySymbols.length) {
+          if (!GIRO_V2.onlySymbols.includes(c.symbol)) continue;
+        }
+
+        // ✅ filtro GIRO v2
+        if (giroV2Enabled && !giroV2Passes(giroDir, c.ticks)) continue;
+
         addSignal(minute, c.symbol, giroDir, c.ticks);
         return true;
       }
@@ -3126,7 +3255,7 @@ function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 function addSignal(minute, symbol, direction, ticks) {
-  const modeLabel = giroMode ? "GIRO" : "NORMAL";
+  const modeLabel = giroMode ? (giroV2Enabled ? "GIRO2" : "GIRO") : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
@@ -3342,6 +3471,10 @@ applyLowPowerModeUI();
 
 ensureAutoOpenChartButton();
 applyAutoOpenChartUI();
+
+// ✅ GIRO v2 button
+ensureGiroV2Button();
+applyGiroV2UI();
 
 initWakeButton();
 initTokenAndStakeUI();
