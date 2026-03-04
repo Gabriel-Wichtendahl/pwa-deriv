@@ -17,6 +17,7 @@
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 // ✅ FIX (este update): GIRO ya no calcula NEXT con close “parcial” de candleOC: confirma con cierres reales via ticks_history
+// ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
 
 "use strict";
 
@@ -1459,6 +1460,8 @@ function requestModalDraw(force = false) {
   if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
   modalDrawRaf = requestAnimationFrame(() => {
     const it = modalCurrentItem;
+    if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
+
     let ticks = it.ticks || [];
     if (modalLive && isItemLiveMinute(it)) {
       const liveTicks = minuteData?.[it.minute]?.[it.symbol];
