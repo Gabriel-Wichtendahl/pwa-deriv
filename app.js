@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
+// ✅ Modo GIRO y GIRO ESTRICTO: evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
@@ -18,7 +18,7 @@
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 // ✅ FIX (este update): GIRO ya no calcula NEXT con close “parcial” de candleOC: confirma con OPEN/CLOSE reales via ticks_history
 // ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
-// ✅ NUEVO (este update): GIRO usa filtro exacto de forma para priorizar “latigazo en contra + rechazo antes del cierre”
+// ✅ NUEVO (este update): tercer modo "GIRO ESTRICTO" con filtro de forma más duro
 
 "use strict";
 
@@ -75,6 +75,14 @@ const GIRO_PATTERN_FILTER = {
   // en el tramo final no puede re-testear demasiado cerca del extremo
   minLastWindowFloorPct: 0.18,
 };
+
+const GIRO_PATTERN_FILTER_STRICT = {
+  ...GIRO_PATTERN_FILTER,
+  minRecoveryPct: 0.52,
+  minClosePosInRange: 0.48,
+};
+
+const SIGNAL_MODE_KEY = "signalMode_v1";
 
 /* =========================
    Trades Journal (estudio)
@@ -404,8 +412,8 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 
-// ✅ NORMAL vs GIRO
-let giroMode = false;
+// ✅ NORMAL vs GIRO vs GIRO ESTRICTO
+let signalMode = "NORMAL";
 
 let history = loadHistory();
 migrateHistoryModesToGiro();
@@ -431,6 +439,21 @@ let modalLive = false;
 let modalDrawRaf = null;
 let modalLastDrawAt = 0;
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
+
+function isGiroMode() {
+  return signalMode === "GIRO";
+}
+function isGiroStrictMode() {
+  return signalMode === "GIRO_ESTRICTO";
+}
+function isGiroLikeMode() {
+  return signalMode === "GIRO" || signalMode === "GIRO_ESTRICTO";
+}
+function getCurrentModeLabel() {
+  if (signalMode === "GIRO_ESTRICTO") return "GIRO ESTRICTO";
+  if (signalMode === "GIRO") return "GIRO";
+  return "NORMAL";
+}
 
 // Migración: FUERTE -> GIRO en history viejo
 function migrateHistoryModesToGiro() {
@@ -1236,7 +1259,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Eval sec + GIRO mode
+   Eval sec + modos
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
@@ -1259,27 +1282,57 @@ function applyTheme(theme) {
       })
   );
 
-  // ✅ GIRO mode (compat: si no existe, hereda strongMode viejo)
-  const hasGiroKey = localStorage.getItem("giroMode") !== null;
-  giroMode = loadBool("giroMode", false);
-  if (!hasGiroKey) {
-    giroMode = loadBool("strongMode", false);
-    saveBool("giroMode", giroMode);
+  const savedMode = localStorage.getItem(SIGNAL_MODE_KEY);
+  if (savedMode === "NORMAL" || savedMode === "GIRO" || savedMode === "GIRO_ESTRICTO") {
+    signalMode = savedMode;
+  } else {
+    // compat vieja: si existía giroMode/strongMode, se migra a GIRO
+    const hasGiroKey = localStorage.getItem("giroMode") !== null;
+    let legacyGiro = loadBool("giroMode", false);
+    if (!hasGiroKey) legacyGiro = loadBool("strongMode", false);
+
+    signalMode = legacyGiro ? "GIRO" : "NORMAL";
+    localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
+
+    // compat vieja
+    saveBool("giroMode", legacyGiro);
+    saveBool("strongMode", legacyGiro);
   }
 
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.textContent = giroMode ? "🟪 Modo GIRO" : "🟦 Modo NORMAL";
-    modeBtn.classList.toggle("active-strong", giroMode);
+
+    modeBtn.classList.remove("active-strong");
+
+    if (signalMode === "GIRO_ESTRICTO") {
+      modeBtn.textContent = "🟥 Modo GIRO ESTRICTO";
+      modeBtn.classList.add("active-strong");
+      return;
+    }
+
+    if (signalMode === "GIRO") {
+      modeBtn.textContent = "🟪 Modo GIRO";
+      modeBtn.classList.add("active-strong");
+      return;
+    }
+
+    modeBtn.textContent = "🟦 Modo NORMAL";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      giroMode = !giroMode;
-      saveBool("giroMode", giroMode);
-      // compat vieja
-      saveBool("strongMode", giroMode);
+      if (signalMode === "NORMAL") signalMode = "GIRO";
+      else if (signalMode === "GIRO") signalMode = "GIRO_ESTRICTO";
+      else signalMode = "NORMAL";
+
+      localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
+
+      // compat vieja: cualquier modo GIRO-like = true
+      const giroLike = signalMode !== "NORMAL";
+      saveBool("giroMode", giroLike);
+      saveBool("strongMode", giroLike);
+
       paintMode();
     };
 })();
@@ -2705,7 +2758,8 @@ async function rehydrateHistoryOnBoot() {
    FIX NEXT (en vivo): COLOR vela siguiente (live + confirm)
 ========================= */
 function isGiroItem(it) {
-  return String(it?.mode || "NORMAL").toUpperCase() === "GIRO";
+  const m = String(it?.mode || "NORMAL").toUpperCase();
+  return m === "GIRO" || m === "GIRO ESTRICTO" || m === "GIRO_ESTRICTO";
 }
 
 function finalizeMinute(minute) {
@@ -2863,8 +2917,8 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    // ✅ ESTRICTO: en GIRO NO hay retry (solo eval en el segundo elegido)
-    if (!ok && !giroMode) scheduleRetry(minute);
+    // ✅ ESTRICTO: en GIRO / GIRO ESTRICTO NO hay retry (solo eval en el segundo elegido)
+    if (!ok && !isGiroLikeMode()) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -2923,25 +2977,25 @@ function alignSeriesForDirection(quotes, direction) {
   - el precio actual ya no queda pegado al extremo
   - y en el tramo final no vuelve a acelerar en contra
 */
-function analyzeStrictGiroShape(ticks, direction) {
-  if (!GIRO_PATTERN_FILTER.enabled) {
+function analyzeStrictGiroShape(ticks, direction, profile = GIRO_PATTERN_FILTER) {
+  if (!profile?.enabled) {
     return { ok: true, reason: "disabled" };
   }
 
   const evalMs = Math.max(1, EVAL_SEC * 1000);
   const visibleTicks = sliceTicks(ticks, 0, evalMs);
 
-  if (visibleTicks.length < GIRO_PATTERN_FILTER.minSamples) {
+  if (visibleTicks.length < profile.minSamples) {
     return { ok: false, reason: "few_samples" };
   }
 
   const quotes = getQuotesFromTicks(visibleTicks);
-  if (quotes.length < GIRO_PATTERN_FILTER.minSamples) {
+  if (quotes.length < profile.minSamples) {
     return { ok: false, reason: "few_quotes" };
   }
 
   const aligned = alignSeriesForDirection(quotes, direction);
-  if (aligned.length < GIRO_PATTERN_FILTER.minSamples) {
+  if (aligned.length < profile.minSamples) {
     return { ok: false, reason: "few_aligned_samples" };
   }
 
@@ -2974,7 +3028,7 @@ function analyzeStrictGiroShape(ticks, direction) {
   }
 
   const adversePctOfRange = adverseDepth / totalRange;
-  if (adversePctOfRange < GIRO_PATTERN_FILTER.minAdverseMovePctOfRange) {
+  if (adversePctOfRange < profile.minAdverseMovePctOfRange) {
     return {
       ok: false,
       reason: "weak_adverse_push",
@@ -2986,10 +3040,7 @@ function analyzeStrictGiroShape(ticks, direction) {
   const extremeMs = Number(visibleTicks[minIdx]?.ms || 0);
   const extremePos = extremeMs / evalMs;
 
-  if (
-    extremePos < GIRO_PATTERN_FILTER.extremeMinPos ||
-    extremePos > GIRO_PATTERN_FILTER.extremeMaxPos
-  ) {
+  if (extremePos < profile.extremeMinPos || extremePos > profile.extremeMaxPos) {
     return {
       ok: false,
       reason: "bad_extreme_timing",
@@ -3001,7 +3052,7 @@ function analyzeStrictGiroShape(ticks, direction) {
   const rebound = currentVal - minVal;
   const recoveryPct = rebound / Math.max(adverseDepth, 1e-9);
 
-  if (recoveryPct < GIRO_PATTERN_FILTER.minRecoveryPct) {
+  if (recoveryPct < profile.minRecoveryPct) {
     return {
       ok: false,
       reason: "weak_recovery",
@@ -3011,7 +3062,7 @@ function analyzeStrictGiroShape(ticks, direction) {
 
   // el punto actual no puede quedar pegado al extremo
   const closePosInRange = (currentVal - minVal) / totalRange;
-  if (closePosInRange < GIRO_PATTERN_FILTER.minClosePosInRange) {
+  if (closePosInRange < profile.minClosePosInRange) {
     return {
       ok: false,
       reason: "still_pinned_near_extreme",
@@ -3026,7 +3077,7 @@ function analyzeStrictGiroShape(ticks, direction) {
     if (aligned[i] > preExtremeBest) preExtremeBest = aligned[i];
   }
 
-  if (preExtremeBest > adverseDepth * GIRO_PATTERN_FILTER.maxPreExtremeFakeoutPct) {
+  if (preExtremeBest > adverseDepth * profile.maxPreExtremeFakeoutPct) {
     return {
       ok: false,
       reason: "fakeout_then_dump",
@@ -3035,10 +3086,7 @@ function analyzeStrictGiroShape(ticks, direction) {
   }
 
   // tramo final: no debe volver a acercarse demasiado al extremo
-  const targetLateStartMs = Math.max(
-    extremeMs + 1,
-    Math.floor(evalMs * (1 - GIRO_PATTERN_FILTER.lateWindowPct))
-  );
+  const targetLateStartMs = Math.max(extremeMs + 1, Math.floor(evalMs * (1 - profile.lateWindowPct)));
 
   let lateStartIdx = visibleTicks.findIndex((t, idx) => idx > minIdx && t.ms >= targetLateStartMs);
   if (lateStartIdx < 0) lateStartIdx = Math.min(aligned.length - 1, minIdx + 1);
@@ -3057,7 +3105,7 @@ function analyzeStrictGiroShape(ticks, direction) {
     if (v < lateMin) lateMin = v;
   }
 
-  if (lateMin <= minVal + adverseDepth * GIRO_PATTERN_FILTER.minLastWindowFloorPct) {
+  if (lateMin <= minVal + adverseDepth * profile.minLastWindowFloorPct) {
     return {
       ok: false,
       reason: "late_retest_of_extreme",
@@ -3069,7 +3117,7 @@ function analyzeStrictGiroShape(ticks, direction) {
   const lateStartVal = aligned[lateStartIdx];
   const lateDelta = currentVal - lateStartVal;
 
-  if (lateDelta < -adverseDepth * GIRO_PATTERN_FILTER.maxLateDropPct) {
+  if (lateDelta < -adverseDepth * profile.maxLateDropPct) {
     return {
       ok: false,
       reason: "late_acceleration_against",
@@ -3193,19 +3241,18 @@ function passesTechnicalFilters(best, vol, rules) {
 }
 
 /* --- GIRO (ESTRICTO + relativo al EVAL) --- */
-/* ✅ REEMPLAZO 1: reglas GIRO más operables */
-const GIRO_LATE_WINDOW_MS = 9000; // ✅ últimos 9s antes del EVAL (45/50/55)
+const GIRO_LATE_WINDOW_MS = 9000; // últimos 9s antes del EVAL (45/50/55)
 
 const RULES_GIRO = {
-  rangeScoreMin: 0.045, // ✅ más setups
+  rangeScoreMin: 0.045,
   dirRatioMin_0_L: 0.55,
 
-  dirRatioMax_L_E_favor: 0.75, // ✅ permite que todavía “siga algo”
+  dirRatioMax_L_E_favor: 0.75,
   dirRatioMin_L_E_opp: 0.38,
   minSignChanges_L_E: 1,
 
   lateMoveAgainstMinFracRange: 0.05,
-  retraceMinFracRange: 0.10, // ✅ era lo más duro
+  retraceMinFracRange: 0.10,
 
   extremeMinMs: 12000,
   extremeNotAtEndMs: 600,
@@ -3232,7 +3279,6 @@ function signChangesCount(ticks) {
   return changes;
 }
 
-/* ✅ REEMPLAZO 2: passesGiroFilters actualizado + filtro exacto de forma */
 function passesGiroFilters(best) {
   const ticks = best.ticks || [];
   if (ticks.length < 8) return null;
@@ -3302,15 +3348,15 @@ function passesGiroFilters(best) {
   if (lateMoveAgainst < range * RULES_GIRO.lateMoveAgainstMinFracRange) return null;
 
   // retrace desde el extremo hacia el EVAL
-  const retrace = dirSign > 0 ? (maxP - pE) : (pE - minP);
+  const retrace = dirSign > 0 ? maxP - pE : pE - minP;
   if (retrace < range * RULES_GIRO.retraceMinFracRange) return null;
 
-  // ✅ filtro exacto de forma
   // Si el impulso principal fue alcista, la señal GIRO sería PUT.
   // Si el impulso principal fue bajista, la señal GIRO sería CALL.
   const signalDirection = dirSign > 0 ? "PUT" : "CALL";
 
-  const strictShape = analyzeStrictGiroShape(ticks, signalDirection);
+  const shapeProfile = isGiroStrictMode() ? GIRO_PATTERN_FILTER_STRICT : GIRO_PATTERN_FILTER;
+  const strictShape = analyzeStrictGiroShape(ticks, signalDirection, shapeProfile);
   if (!strictShape.ok) return null;
 
   return signalDirection;
@@ -3318,7 +3364,7 @@ function passesGiroFilters(best) {
 
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return giroMode ? true : false;
+  if (!data) return isGiroLikeMode() ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -3341,10 +3387,10 @@ function evaluateMinute(minute) {
     candidates.push({ symbol: sym, move, score, rangeScore: rScore, ticks, vol });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return isGiroLikeMode() ? true : false;
 
-  /* ✅ REEMPLAZO 3: GIRO prueba TODOS los símbolos (no solo best) */
-  if (giroMode) {
+  // GIRO y GIRO ESTRICTO prueban todos los símbolos (por rangeScore)
+  if (isGiroLikeMode()) {
     candidates.sort((a, b) => b.rangeScore - a.rangeScore);
 
     for (const c of candidates) {
@@ -3360,7 +3406,7 @@ function evaluateMinute(minute) {
     return true; // no hubo GIRO este minuto
   }
 
-  // ---- NORMAL (igual que antes) ----
+  // ---- NORMAL ----
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) return true;
@@ -3382,9 +3428,10 @@ function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 function addSignal(minute, symbol, direction, ticks) {
-  const modeLabel = giroMode ? "GIRO" : "NORMAL";
+  const modeLabel = getCurrentModeLabel();
+  const modeId = signalMode === "GIRO_ESTRICTO" ? "GIRO-ESTRICTO" : modeLabel;
   const item = {
-    id: `${minute}-${symbol}-${direction}-${modeLabel}`,
+    id: `${minute}-${symbol}-${direction}-${modeId}`,
     minute,
     time: fmtTimeUTC(minute),
     symbol,
