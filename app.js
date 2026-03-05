@@ -18,6 +18,7 @@
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 // ✅ FIX (este update): GIRO ya no calcula NEXT con close “parcial” de candleOC: confirma con OPEN/CLOSE reales via ticks_history
 // ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
+// ✅ NUEVO (este update): GIRO usa filtro exacto de forma para priorizar “latigazo en contra + rechazo antes del cierre”
 
 "use strict";
 
@@ -38,6 +39,42 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
+
+/* =========================
+   GIRO Pattern Filter (forma)
+========================= */
+const GIRO_PATTERN_FILTER = {
+  enabled: true,
+
+  // mínimo de muestras visibles hasta el segundo de evaluación
+  minSamples: 8,
+
+  // el empuje en contra debe ocupar una porción real del rango visible
+  minAdverseMovePctOfRange: 0.38,
+
+  // el extremo en contra debe ocurrir en la “zona sana” del tramo visible
+  // (ni demasiado temprano ni demasiado tarde)
+  extremeMinPos: 0.18,
+  extremeMaxPos: 0.72,
+
+  // desde el extremo hasta el tick actual debe haber recuperación clara
+  minRecoveryPct: 0.45,
+
+  // el precio actual no puede quedar pegado al extremo
+  minClosePosInRange: 0.42,
+
+  // evita el patrón malo: pequeño amague a favor y después movimiento feo en contra
+  maxPreExtremeFakeoutPct: 0.22,
+
+  // tramo final visible
+  lateWindowPct: 0.20,
+
+  // en el tramo final no puede volver fuerte en contra
+  maxLateDropPct: 0.12,
+
+  // en el tramo final no puede re-testear demasiado cerca del extremo
+  minLastWindowFloorPct: 0.18,
+};
 
 /* =========================
    Trades Journal (estudio)
@@ -2853,6 +2890,207 @@ function sliceTicks(ticks, aMs, bMs) {
   if (!ticks || ticks.length === 0) return [];
   return ticks.filter((t) => t.ms >= aMs && t.ms <= bMs).sort((x, y) => x.ms - y.ms);
 }
+
+function getQuotesFromTicks(ticks) {
+  if (!Array.isArray(ticks)) return [];
+  return ticks.map((t) => Number(t?.quote)).filter(Number.isFinite);
+}
+
+// Normaliza la serie según la dirección futura de la señal.
+// CALL: positivo = el precio va a favor del CALL
+// PUT : positivo = el precio va a favor del PUT
+function alignSeriesForDirection(quotes, direction) {
+  if (!Array.isArray(quotes) || !quotes.length) return [];
+
+  const open = quotes[0];
+
+  if (direction === "CALL") {
+    return quotes.map((q) => q - open);
+  }
+
+  if (direction === "PUT") {
+    return quotes.map((q) => open - q);
+  }
+
+  return [];
+}
+
+/*
+  Filtro exacto de forma para GIRO:
+  - primero hay empuje EN CONTRA de la futura entrada
+  - el extremo aparece antes del final
+  - luego hay recuperación/rechazo visible
+  - el precio actual ya no queda pegado al extremo
+  - y en el tramo final no vuelve a acelerar en contra
+*/
+function analyzeStrictGiroShape(ticks, direction) {
+  if (!GIRO_PATTERN_FILTER.enabled) {
+    return { ok: true, reason: "disabled" };
+  }
+
+  const evalMs = Math.max(1, EVAL_SEC * 1000);
+  const visibleTicks = sliceTicks(ticks, 0, evalMs);
+
+  if (visibleTicks.length < GIRO_PATTERN_FILTER.minSamples) {
+    return { ok: false, reason: "few_samples" };
+  }
+
+  const quotes = getQuotesFromTicks(visibleTicks);
+  if (quotes.length < GIRO_PATTERN_FILTER.minSamples) {
+    return { ok: false, reason: "few_quotes" };
+  }
+
+  const aligned = alignSeriesForDirection(quotes, direction);
+  if (aligned.length < GIRO_PATTERN_FILTER.minSamples) {
+    return { ok: false, reason: "few_aligned_samples" };
+  }
+
+  let minVal = Infinity;
+  let minIdx = -1;
+  let maxVal = -Infinity;
+
+  for (let i = 0; i < aligned.length; i++) {
+    const v = aligned[i];
+    if (v < minVal) {
+      minVal = v;
+      minIdx = i;
+    }
+    if (v > maxVal) {
+      maxVal = v;
+    }
+  }
+
+  if (minIdx < 0) {
+    return { ok: false, reason: "no_extreme" };
+  }
+
+  const currentVal = aligned[aligned.length - 1];
+  const totalRange = Math.max(1e-9, maxVal - minVal);
+
+  // cuánto se estiró EN CONTRA de la futura entrada
+  const adverseDepth = Math.abs(Math.min(0, minVal));
+  if (adverseDepth <= 1e-12) {
+    return { ok: false, reason: "no_adverse_push" };
+  }
+
+  const adversePctOfRange = adverseDepth / totalRange;
+  if (adversePctOfRange < GIRO_PATTERN_FILTER.minAdverseMovePctOfRange) {
+    return {
+      ok: false,
+      reason: "weak_adverse_push",
+      metrics: { adversePctOfRange },
+    };
+  }
+
+  // el extremo en contra no debe ocurrir demasiado temprano ni demasiado tarde
+  const extremeMs = Number(visibleTicks[minIdx]?.ms || 0);
+  const extremePos = extremeMs / evalMs;
+
+  if (
+    extremePos < GIRO_PATTERN_FILTER.extremeMinPos ||
+    extremePos > GIRO_PATTERN_FILTER.extremeMaxPos
+  ) {
+    return {
+      ok: false,
+      reason: "bad_extreme_timing",
+      metrics: { extremePos },
+    };
+  }
+
+  // recuperación desde el extremo hasta el punto actual
+  const rebound = currentVal - minVal;
+  const recoveryPct = rebound / Math.max(adverseDepth, 1e-9);
+
+  if (recoveryPct < GIRO_PATTERN_FILTER.minRecoveryPct) {
+    return {
+      ok: false,
+      reason: "weak_recovery",
+      metrics: { recoveryPct },
+    };
+  }
+
+  // el punto actual no puede quedar pegado al extremo
+  const closePosInRange = (currentVal - minVal) / totalRange;
+  if (closePosInRange < GIRO_PATTERN_FILTER.minClosePosInRange) {
+    return {
+      ok: false,
+      reason: "still_pinned_near_extreme",
+      metrics: { closePosInRange },
+    };
+  }
+
+  // evita el patrón malo:
+  // pequeño amague a favor antes de hacer el tramo feo en contra
+  let preExtremeBest = 0;
+  for (let i = 0; i < minIdx; i++) {
+    if (aligned[i] > preExtremeBest) preExtremeBest = aligned[i];
+  }
+
+  if (preExtremeBest > adverseDepth * GIRO_PATTERN_FILTER.maxPreExtremeFakeoutPct) {
+    return {
+      ok: false,
+      reason: "fakeout_then_dump",
+      metrics: { preExtremeBest, adverseDepth },
+    };
+  }
+
+  // tramo final: no debe volver a acercarse demasiado al extremo
+  const targetLateStartMs = Math.max(
+    extremeMs + 1,
+    Math.floor(evalMs * (1 - GIRO_PATTERN_FILTER.lateWindowPct))
+  );
+
+  let lateStartIdx = visibleTicks.findIndex((t, idx) => idx > minIdx && t.ms >= targetLateStartMs);
+  if (lateStartIdx < 0) lateStartIdx = Math.min(aligned.length - 1, minIdx + 1);
+
+  if (lateStartIdx <= minIdx || lateStartIdx >= aligned.length) {
+    return { ok: false, reason: "late_chunk_empty" };
+  }
+
+  const lateChunk = aligned.slice(lateStartIdx);
+  if (!lateChunk.length) {
+    return { ok: false, reason: "late_chunk_empty" };
+  }
+
+  let lateMin = Infinity;
+  for (const v of lateChunk) {
+    if (v < lateMin) lateMin = v;
+  }
+
+  if (lateMin <= minVal + adverseDepth * GIRO_PATTERN_FILTER.minLastWindowFloorPct) {
+    return {
+      ok: false,
+      reason: "late_retest_of_extreme",
+      metrics: { lateMin, minVal, adverseDepth },
+    };
+  }
+
+  // tramo final: no puede volver fuerte en contra
+  const lateStartVal = aligned[lateStartIdx];
+  const lateDelta = currentVal - lateStartVal;
+
+  if (lateDelta < -adverseDepth * GIRO_PATTERN_FILTER.maxLateDropPct) {
+    return {
+      ok: false,
+      reason: "late_acceleration_against",
+      metrics: { lateDelta, adverseDepth },
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "strict_giro_ok",
+    metrics: {
+      adversePctOfRange,
+      extremePos,
+      recoveryPct,
+      closePosInRange,
+      preExtremeBest,
+      lateDelta,
+    },
+  };
+}
+
 function directionalRatio(ticks, dirSign) {
   if (!ticks || ticks.length < 2) return 0;
   let ok = 0,
@@ -2994,14 +3232,14 @@ function signChangesCount(ticks) {
   return changes;
 }
 
-/* ✅ REEMPLAZO 2: passesGiroFilters actualizado (lateStart relativo + tL_E >= 2) */
+/* ✅ REEMPLAZO 2: passesGiroFilters actualizado + filtro exacto de forma */
 function passesGiroFilters(best) {
   const ticks = best.ticks || [];
   if (ticks.length < 8) return null;
 
   const evalMs = EVAL_SEC * 1000;
 
-  // ✅ tramo final relativo al EVAL y respetando extremeMinMs
+  // tramo final relativo al EVAL y respetando extremeMinMs
   const lateStartMs = Math.max(RULES_GIRO.extremeMinMs, evalMs - GIRO_LATE_WINDOW_MS);
 
   const p0 = getPriceAtMs(ticks, 0);
@@ -3017,7 +3255,6 @@ function passesGiroFilters(best) {
   const tL_E = sliceTicks(ticks, lateStartMs, evalMs);
 
   if (t0_L.length < 4) return null;
-  // ✅ en estricto a veces llegan pocos ticks; bajamos a 2
   if (tL_E.length < 2) return null;
 
   const qs = ticks.map((t) => t.quote);
@@ -3036,17 +3273,22 @@ function passesGiroFilters(best) {
   let extremeMs = 0;
   if (dirSign > 0) {
     let maxIdx = 0;
-    for (let i = 1; i < ticks.length; i++) if (ticks[i].quote >= ticks[maxIdx].quote) maxIdx = i;
+    for (let i = 1; i < ticks.length; i++) {
+      if (ticks[i].quote >= ticks[maxIdx].quote) maxIdx = i;
+    }
     extremeMs = ticks[maxIdx].ms;
   } else {
     let minIdx = 0;
-    for (let i = 1; i < ticks.length; i++) if (ticks[i].quote <= ticks[minIdx].quote) minIdx = i;
+    for (let i = 1; i < ticks.length; i++) {
+      if (ticks[i].quote <= ticks[minIdx].quote) minIdx = i;
+    }
     extremeMs = ticks[minIdx].ms;
   }
+
   if (extremeMs < RULES_GIRO.extremeMinMs) return null;
   if (extremeMs > evalMs - RULES_GIRO.extremeNotAtEndMs) return null;
 
-  // tramo final: agotamiento (pierde favor, aparece oposición, serrucha)
+  // tramo final: agotamiento
   const rL_E_favor = directionalRatio(tL_E, dirSign);
   const rL_E_opp = directionalRatio(tL_E, -dirSign);
   const changes = signChangesCount(tL_E);
@@ -3056,14 +3298,22 @@ function passesGiroFilters(best) {
   if (changes < RULES_GIRO.minSignChanges_L_E) return null;
 
   // empuje contra en el tramo final
-  const lateMoveAgainst = (pE - pL) * (-dirSign);
+  const lateMoveAgainst = (pE - pL) * -dirSign;
   if (lateMoveAgainst < range * RULES_GIRO.lateMoveAgainstMinFracRange) return null;
 
   // retrace desde el extremo hacia el EVAL
   const retrace = dirSign > 0 ? (maxP - pE) : (pE - minP);
   if (retrace < range * RULES_GIRO.retraceMinFracRange) return null;
 
-  return dirSign > 0 ? "PUT" : "CALL";
+  // ✅ filtro exacto de forma
+  // Si el impulso principal fue alcista, la señal GIRO sería PUT.
+  // Si el impulso principal fue bajista, la señal GIRO sería CALL.
+  const signalDirection = dirSign > 0 ? "PUT" : "CALL";
+
+  const strictShape = analyzeStrictGiroShape(ticks, signalDirection);
+  if (!strictShape.ok) return null;
+
+  return signalDirection;
 }
 
 function evaluateMinute(minute) {
