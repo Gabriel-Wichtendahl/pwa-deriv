@@ -3376,4 +3376,4 @@ seedTradesJournalFromHistory();
 
 ensureInlineClearButtons();
 
-connect():
+connect();
