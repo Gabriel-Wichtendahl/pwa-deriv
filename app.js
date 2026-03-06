@@ -1,3 +1,7 @@
+Sí. El bug estaba en que NEXT seguía usando el color de la vela siguiente (close_next vs open_next) en vez de la regla correcta: comparar el cierre de la vela siguiente contra el cierre de la vela de señal.
+
+Te dejo el app.js completo ya corregido:
+
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
@@ -12,11 +16,11 @@
 //    - Señales: STORE_KEY (borrado independiente)
 //    - Trades (journal estudio): TRADES_STORE_KEY (borrado independiente)
 // ✅ NUEVO: Exportar Trades (journal) desde Configuración
-// ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por COLOR de la vela siguiente (close_next vs open_next)
+// ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE de la vela siguiente vs CIERRE de la vela de señal
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
-// ✅ FIX (este update): GIRO ya no calcula NEXT con close “parcial” de candleOC: confirma con OPEN/CLOSE reales via ticks_history
+// ✅ FIX (este update): GIRO/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vía ticks_history
 // ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
 
 "use strict";
@@ -706,8 +710,17 @@ function nextOutcomeToArrow(outcome) {
 function nextOutcomeToText(outcome) {
   if (outcome === "up") return "ALCISTA";
   if (outcome === "down") return "BAJISTA";
-  if (outcome === "flat") return "PLANA";
+  if (outcome === "flat") return "NEUTRA";
   return "PENDIENTE";
+}
+function compareConsecutiveCloses(signalClose, nextClose) {
+  const a = Number(signalClose);
+  const b = Number(nextClose);
+
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (b > a) return "up";
+  if (b < a) return "down";
+  return "flat";
 }
 function rebuildFeedbackFromHistory() {
   if (!feedbackEl) return;
@@ -1880,15 +1893,15 @@ function updateRowNextArrowOnRow(row, item) {
   if (item.nextOutcome === "up") {
     el.textContent = "⬆️";
     el.className = "nextArrow up";
-    el.title = "Próxima vela: alcista (verde)";
+    el.title = "Próxima vela: cerró arriba del cierre de la vela de señal";
   } else if (item.nextOutcome === "down") {
     el.textContent = "⬇️";
     el.className = "nextArrow down";
-    el.title = "Próxima vela: bajista (roja)";
+    el.title = "Próxima vela: cerró abajo del cierre de la vela de señal";
   } else if (item.nextOutcome === "flat") {
     el.textContent = "➖";
     el.className = "nextArrow flat";
-    el.title = "Próxima vela: plana (doji)";
+    el.title = "Próxima vela: cerró igual que la vela de señal";
   } else {
     el.textContent = "⏳";
     el.className = "nextArrow pending";
@@ -1925,6 +1938,7 @@ function animateFailShake(item) {
   setTimeout(() => arrow.classList.remove("failShake"), 260);
 }
 function setNextOutcome(item, outcome) {
+  const prevOutcome = item.nextOutcome || "";
   item.nextOutcome = outcome;
   saveHistory(history);
 
@@ -1937,8 +1951,10 @@ function setNextOutcome(item, outcome) {
     upsertTradeJournalFromSignal(item);
   } catch {}
 
-  if (ok) animateHitPop(item);
-  else animateFailShake(item);
+  if (prevOutcome !== outcome) {
+    if (ok) animateHitPop(item);
+    else animateFailShake(item);
+  }
 }
 
 /* =========================
@@ -2523,9 +2539,9 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   FIX NEXT (rehidratación): COLOR vela siguiente (close vs open)
+   FIX NEXT (rehidratación): cierre de vela siguiente vs cierre de vela señal
 ========================= */
-async function fetchMinuteOpenClose(symbol, minute) {
+async function fetchMinuteClose(symbol, minute) {
   try {
     const start = minuteToEpochSec(minute);
     const end = minuteToEpochSec(minute + 1);
@@ -2542,23 +2558,22 @@ async function fetchMinuteOpenClose(symbol, minute) {
     const prices = res?.history?.prices;
     if (!Array.isArray(prices) || prices.length < 2) return null;
 
-    const open = Number(prices[0]);
     const close = Number(prices[prices.length - 1]);
-    if (!Number.isFinite(open) || !Number.isFinite(close)) return null;
+    if (!Number.isFinite(close)) return null;
 
-    return { open, close };
+    return close;
   } catch {}
   return null;
 }
 
-async function computeNextOutcomeByCandleColor(symbol, minuteCur) {
-  // NEXT = color de la vela del minuto siguiente
-  const oc = await fetchMinuteOpenClose(symbol, minuteCur + 1);
-  if (!oc) return null;
+async function computeNextOutcomeByConsecutiveCloses(symbol, minuteCur) {
+  const signalClose = await fetchMinuteClose(symbol, minuteCur);
+  if (!Number.isFinite(signalClose)) return null;
 
-  if (oc.close > oc.open) return "up"; // verde
-  if (oc.close < oc.open) return "down"; // roja
-  return "flat";
+  const nextClose = await fetchMinuteClose(symbol, minuteCur + 1);
+  if (!Number.isFinite(nextClose)) return null;
+
+  return compareConsecutiveCloses(signalClose, nextClose);
 }
 
 /* =========================
@@ -2626,17 +2641,18 @@ async function rehydrateHistoryOnBoot() {
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  const pendingOutcomes = slice.filter((it) => !it.nextOutcome && it.minute + 1 < nowMin);
-  const totalB = pendingOutcomes.length || 1;
+  // ✅ Recalcula NEXT aunque ya exista, así corrige históricos guardados con la lógica vieja
+  const settledOutcomes = slice.filter((it) => it.minute + 1 < nowMin);
+  const totalB = settledOutcomes.length || 1;
   let doneB = 0;
 
-  for (const it of pendingOutcomes) {
+  for (const it of settledOutcomes) {
     doneB++;
-    setRehydrateStatus(`♻️ Rehidratando resultados… ${doneB}/${totalB}`);
+    setRehydrateStatus(`♻️ Rehidratando NEXT… ${doneB}/${totalB}`);
 
     try {
-      const outcome = await computeNextOutcomeByCandleColor(it.symbol, it.minute);
-      if (outcome) setNextOutcome(it, outcome);
+      const outcome = await computeNextOutcomeByConsecutiveCloses(it.symbol, it.minute);
+      if (outcome && outcome !== it.nextOutcome) setNextOutcome(it, outcome);
     } catch {}
 
     await sleep(REHYDRATE_SLEEP_MS);
@@ -2665,10 +2681,15 @@ async function rehydrateHistoryOnBoot() {
 }
 
 /* =========================
-   FIX NEXT (en vivo): COLOR vela siguiente (live + confirm)
+   FIX NEXT (en vivo): cierre de vela siguiente vs cierre de vela señal
 ========================= */
 function isGiroItem(it) {
   return String(it?.mode || "NORMAL").toUpperCase() === "GIRO";
+}
+
+function getCachedMinuteClose(symbol, minute) {
+  const close = Number(candleOC?.[minute]?.[symbol]?.close);
+  return Number.isFinite(close) ? close : null;
 }
 
 function finalizeMinute(minute) {
@@ -2677,18 +2698,15 @@ function finalizeMinute(minute) {
 
   const prevMinute = minute - 1;
 
-  // 1) Resultado rápido (live) usando open/close del minuto que acaba de cerrar
-  //    Ese minuto "minute" es la vela "NEXT" para las señales en prevMinute.
+  // 1) Resultado rápido (live) usando close(prevMinute) vs close(minute)
+  //    Ese minuto "minute" es la vela NEXT para las señales en prevMinute.
   const liveOutcomeBySymbol = Object.create(null);
 
   for (const symbol of Object.keys(oc)) {
-    const openNext = oc[symbol]?.open;
-    const closeNext = oc[symbol]?.close;
-    if (openNext == null || closeNext == null) continue;
-
-    if (closeNext > openNext) liveOutcomeBySymbol[symbol] = "up";
-    else if (closeNext < openNext) liveOutcomeBySymbol[symbol] = "down";
-    else liveOutcomeBySymbol[symbol] = "flat";
+    const signalClose = getCachedMinuteClose(symbol, prevMinute);
+    const nextClose = getCachedMinuteClose(symbol, minute);
+    const out = compareConsecutiveCloses(signalClose, nextClose);
+    if (out) liveOutcomeBySymbol[symbol] = out;
   }
 
   // Aplica a TODAS las señales de prevMinute (NORMAL + GIRO) si todavía no tienen nextOutcome
@@ -2704,7 +2722,7 @@ function finalizeMinute(minute) {
     }
   }
 
-  // 2) Confirmación canónica (ticks_history) para cualquier caso que no haya quedado resuelto
+  // 2) Confirmación canónica (ticks_history) para cualquier caso no resuelto
   (async () => {
     try {
       const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
@@ -2720,7 +2738,7 @@ function finalizeMinute(minute) {
         let out = cache.get(key);
 
         if (out === undefined) {
-          out = (await computeNextOutcomeByCandleColor(sym, prevMinute)) || null;
+          out = (await computeNextOutcomeByConsecutiveCloses(sym, prevMinute)) || null;
           cache.set(key, out);
         }
 
@@ -3362,4 +3380,4 @@ seedTradesJournalFromHistory();
 
 ensureInlineClearButtons();
 
-connect();
+connect():
