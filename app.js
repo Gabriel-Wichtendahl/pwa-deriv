@@ -1,7 +1,3 @@
-Sí. El bug estaba en que NEXT seguía usando el color de la vela siguiente (close_next vs open_next) en vez de la regla correcta: comparar el cierre de la vela siguiente contra el cierre de la vela de señal.
-
-Te dejo el app.js completo ya corregido:
-
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
