@@ -1571,8 +1571,10 @@ function updateModalCandleStatusUI() {
 ========================= */
 function updateModalLiveUI() {
   if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
-  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
+  modalLiveBtn.setAttribute("aria-hidden", "true");
+  modalLiveBtn.tabIndex = -1;
+  modalLiveBtn.disabled = true;
+  modalLiveBtn.style.display = "none";
 }
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
@@ -1597,10 +1599,11 @@ function requestModalDraw(force = false) {
 
     if (modalSub) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
-      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
+      modalSub.textContent = `${it.time} | ticks: ${n}${dTag ? " | " + dTag : ""}${tBadge}`;
+      modalSub.style.margin = "6px 0 8px 0";
+      modalSub.style.lineHeight = "1.25";
     }
 
     updateModalCandleStatusUI();
@@ -1632,12 +1635,16 @@ function applyModalTradeButtonsLayout() {
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
 
+  footer.style.paddingTop = "6px";
+  footer.style.gap = "8px";
+
   row.style.display = "flex";
   row.style.gap = "14px";
   row.style.alignItems = "stretch";
   row.style.justifyContent = "space-between";
   row.style.width = "100%";
   row.style.flexWrap = "nowrap";
+  row.style.marginTop = "0";
 
   if (bCall.parentElement !== row) row.appendChild(bCall);
   if (bPut.parentElement !== row) row.appendChild(bPut);
@@ -1645,7 +1652,7 @@ function applyModalTradeButtonsLayout() {
   const baseBtn = (b) => {
     b.style.flex = "1 1 0";
     b.style.minWidth = "0";
-    b.style.minHeight = "60px";
+    b.style.minHeight = "58px";
     b.style.padding = "14px 16px";
     b.style.fontWeight = "900";
     b.style.letterSpacing = "0.4px";
@@ -1656,6 +1663,7 @@ function applyModalTradeButtonsLayout() {
     b.style.gap = "10px";
     b.style.userSelect = "none";
     b.style.touchAction = "manipulation";
+    b.style.marginTop = "0";
   };
   baseBtn(bCall);
   baseBtn(bPut);
@@ -1678,9 +1686,33 @@ function applyModalTradeButtonsLayout() {
   }
 
   if (modalLiveBtn) {
-    modalLiveBtn.style.minHeight = "52px";
-    modalLiveBtn.style.width = "100%";
-    modalLiveBtn.style.marginTop = "10px";
+    modalLiveBtn.setAttribute("aria-hidden", "true");
+    modalLiveBtn.tabIndex = -1;
+    modalLiveBtn.disabled = true;
+    modalLiveBtn.style.display = "none";
+  }
+
+  if (statusBar) {
+    statusBar.style.margin = "0 0 8px 0";
+    statusBar.style.padding = "10px 14px";
+  }
+
+  const desiredCanvasHeight = w < 380 ? 300 : w < 768 ? 350 : 410;
+  if (minuteCanvas) {
+    minuteCanvas.style.display = "block";
+    minuteCanvas.style.width = "100%";
+    minuteCanvas.style.height = `${desiredCanvasHeight}px`;
+    minuteCanvas.style.minHeight = `${desiredCanvasHeight}px`;
+    minuteCanvas.style.maxHeight = "58vh";
+    minuteCanvas.style.margin = "0";
+    minuteCanvas.style.borderRadius = minuteCanvas.style.borderRadius || "16px";
+  }
+
+  const canvasWrap = minuteCanvas?.parentElement || null;
+  if (canvasWrap) {
+    canvasWrap.style.width = "100%";
+    canvasWrap.style.minHeight = `${desiredCanvasHeight}px`;
+    canvasWrap.style.marginBottom = "6px";
   }
 }
 
@@ -1888,20 +1920,6 @@ window.addEventListener("resize", () => {
   updateModalCandleStatusUI();
   requestModalDraw(true);
 });
-if (modalLiveBtn) {
-  modalLiveBtn.onclick = () => {
-    if (!modalCurrentItem) return;
-    if (!isItemLiveMinute(modalCurrentItem)) {
-      modalLive = false;
-      updateModalLiveUI();
-      requestModalDraw(true);
-      return;
-    }
-    modalLive = !modalLive;
-    updateModalLiveUI();
-    requestModalDraw(true);
-  };
-}
 
 /* =========================
    Row helpers (global, para Señales)
