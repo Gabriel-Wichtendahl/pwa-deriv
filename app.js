@@ -1651,6 +1651,17 @@ function applyChartModalResponsiveLayout() {
     chartModal.style.justifyContent = "center";
     chartModal.style.overflowX = "hidden";
     chartModal.style.overflowY = "auto";
+    chartModal.style.zIndex = "99999";
+    chartModal.style.isolation = "isolate";
+    chartModal.style.pointerEvents = "auto";
+  }
+
+  if (modalCloseBackdrop) {
+    modalCloseBackdrop.style.position = "fixed";
+    modalCloseBackdrop.style.inset = "0";
+    modalCloseBackdrop.style.width = "100%";
+    modalCloseBackdrop.style.height = "100%";
+    modalCloseBackdrop.style.zIndex = "0";
   }
 
   panel.style.position = "relative";
@@ -1667,6 +1678,8 @@ function applyChartModalResponsiveLayout() {
   panel.style.maxHeight = isPhone ? `calc(100dvh - ${gutter * 2}px)` : "90vh";
   panel.style.overflowX = "hidden";
   panel.style.overflowY = "auto";
+  panel.style.zIndex = "1";
+  panel.style.isolation = "isolate";
 
   const header =
     panel.querySelector(".modalHeader") ||
