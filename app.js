@@ -1521,7 +1521,7 @@ function ensureModalCandleStatusBar() {
     modalOpenDerivBtn.style.justifyContent = "center";
     modalOpenDerivBtn.style.flex = "0 0 auto";
     modalOpenDerivBtn.style.minWidth = "0";
-    modalOpenDerivBtn.style.maxWidth = "42%";
+    modalOpenDerivBtn.style.maxWidth = "118px";
     modalOpenDerivBtn.style.padding = "8px 10px";
     modalOpenDerivBtn.style.minHeight = "36px";
     modalOpenDerivBtn.style.borderRadius = "12px";
@@ -1545,39 +1545,192 @@ function getChartModalPanel() {
     null
   );
 }
-function applyChartModalResponsiveLayout() {
+function applyChartModalHeaderLayout() {
   const panel = getChartModalPanel();
   if (!panel) return;
 
   const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
   const isPhone = vw < 768;
 
-  if (chartModal) {
-    chartModal.style.padding = isPhone ? "10px" : "18px";
-    chartModal.style.boxSizing = "border-box";
+  const header =
+    panel.querySelector(".modalHeader") ||
+    modalTitle?.closest?.(".modalHeader") ||
+    modalTitle?.parentElement ||
+    null;
+
+  if (header) {
+    header.style.width = "100%";
+    header.style.maxWidth = "100%";
+    header.style.minWidth = "0";
+    header.style.boxSizing = "border-box";
+    header.style.overflow = "hidden";
   }
 
-  panel.style.width = isPhone ? "min(94vw, 560px)" : "min(92vw, 760px)";
-  panel.style.maxWidth = isPhone ? "94vw" : "92vw";
+  const titleWrap = modalTitle?.parentElement || null;
+  if (titleWrap) {
+    if (modalCloseBtn && modalCloseBtn.parentElement !== titleWrap) titleWrap.appendChild(modalCloseBtn);
+    titleWrap.style.display = "grid";
+    titleWrap.style.gridTemplateColumns = "minmax(0,1fr) auto";
+    titleWrap.style.alignItems = "center";
+    titleWrap.style.columnGap = isPhone ? "6px" : "10px";
+    titleWrap.style.width = "100%";
+    titleWrap.style.maxWidth = "100%";
+    titleWrap.style.minWidth = "0";
+    titleWrap.style.boxSizing = "border-box";
+    titleWrap.style.paddingRight = "0";
+    titleWrap.style.marginRight = "0";
+    titleWrap.style.overflow = "hidden";
+  }
+
+  if (modalTitle) {
+    modalTitle.style.display = "block";
+    modalTitle.style.minWidth = "0";
+    modalTitle.style.maxWidth = "100%";
+    modalTitle.style.margin = "0";
+    modalTitle.style.lineHeight = isPhone ? "1.08" : "1.15";
+    modalTitle.style.fontSize = isPhone ? "15px" : "18px";
+    modalTitle.style.overflowWrap = "anywhere";
+    modalTitle.style.wordBreak = "break-word";
+  }
+
+  if (modalCloseBtn) {
+    modalCloseBtn.style.position = "relative";
+    modalCloseBtn.style.inset = "auto";
+    modalCloseBtn.style.right = "auto";
+    modalCloseBtn.style.top = "auto";
+    modalCloseBtn.style.left = "auto";
+    modalCloseBtn.style.bottom = "auto";
+    modalCloseBtn.style.transform = "none";
+    modalCloseBtn.style.margin = "0";
+    modalCloseBtn.style.flex = "0 0 auto";
+    modalCloseBtn.style.width = isPhone ? "38px" : "44px";
+    modalCloseBtn.style.height = isPhone ? "38px" : "44px";
+    modalCloseBtn.style.minWidth = isPhone ? "38px" : "44px";
+    modalCloseBtn.style.minHeight = isPhone ? "38px" : "44px";
+    modalCloseBtn.style.borderRadius = "14px";
+    modalCloseBtn.style.display = "inline-flex";
+    modalCloseBtn.style.alignItems = "center";
+    modalCloseBtn.style.justifyContent = "center";
+    modalCloseBtn.style.justifySelf = "end";
+    modalCloseBtn.style.zIndex = "2";
+  }
+
+  if (modalSub) {
+    modalSub.style.width = "100%";
+    modalSub.style.maxWidth = "100%";
+    modalSub.style.minWidth = "0";
+    modalSub.style.boxSizing = "border-box";
+    modalSub.style.fontSize = isPhone ? "11px" : "13px";
+    modalSub.style.lineHeight = "1.14";
+    modalSub.style.margin = isPhone ? "4px 0 6px 0" : "6px 0 8px 0";
+    modalSub.style.overflow = "hidden";
+    modalSub.style.textOverflow = "ellipsis";
+    modalSub.style.whiteSpace = isPhone ? "nowrap" : "normal";
+  }
+}
+function applyChartModalResponsiveLayout() {
+  const panel = getChartModalPanel();
+  if (!panel) return;
+
+  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+  const isPhone = vw < 768;
+  const gutter = isPhone ? 10 : 18;
+  const panelWidth = isPhone ? Math.max(280, vw - gutter * 2) : Math.min(760, vw - gutter * 2);
+
+  if (chartModal) {
+    chartModal.style.position = "fixed";
+    chartModal.style.inset = "0";
+    chartModal.style.width = "100vw";
+    chartModal.style.height = "100dvh";
+    chartModal.style.maxWidth = "100vw";
+    chartModal.style.maxHeight = "100dvh";
+    chartModal.style.padding = `${gutter}px`;
+    chartModal.style.boxSizing = "border-box";
+    chartModal.style.alignItems = "center";
+    chartModal.style.justifyContent = "center";
+    chartModal.style.overflowX = "hidden";
+    chartModal.style.overflowY = "auto";
+  }
+
+  panel.style.position = "relative";
+  panel.style.left = "auto";
+  panel.style.right = "auto";
+  panel.style.top = "auto";
+  panel.style.bottom = "auto";
+  panel.style.transform = "none";
+  panel.style.width = `${panelWidth}px`;
+  panel.style.maxWidth = `${panelWidth}px`;
   panel.style.minWidth = "0";
   panel.style.margin = "0 auto";
   panel.style.boxSizing = "border-box";
-  panel.style.maxHeight = isPhone ? "92vh" : "90vh";
+  panel.style.maxHeight = isPhone ? `calc(100dvh - ${gutter * 2}px)` : "90vh";
   panel.style.overflowX = "hidden";
+  panel.style.overflowY = "auto";
+
+  const header =
+    panel.querySelector(".modalHeader") ||
+    modalTitle?.closest?.(".modalHeader") ||
+    modalTitle?.parentElement?.parentElement ||
+    null;
+  if (header) {
+    header.style.width = "100%";
+    header.style.maxWidth = "100%";
+    header.style.minWidth = "0";
+    header.style.boxSizing = "border-box";
+    header.style.overflow = "hidden";
+  }
 
   const body = panel.querySelector(".modalBody") || minuteCanvas?.parentElement || null;
   if (body) {
     body.style.width = "100%";
+    body.style.maxWidth = "100%";
     body.style.minWidth = "0";
     body.style.boxSizing = "border-box";
+    body.style.padding = "0";
+    body.style.margin = "0";
+    body.style.overflowX = "hidden";
   }
 
   const footer = panel.querySelector(".modalFooter") || null;
   if (footer) {
     footer.style.width = "100%";
+    footer.style.maxWidth = "100%";
     footer.style.minWidth = "0";
     footer.style.boxSizing = "border-box";
+    footer.style.padding = "0";
+    footer.style.margin = "0";
+    footer.style.overflowX = "hidden";
   }
+
+  const canvasWrap = minuteCanvas?.parentElement || null;
+  if (canvasWrap) {
+    canvasWrap.style.width = "100%";
+    canvasWrap.style.maxWidth = "100%";
+    canvasWrap.style.minWidth = "0";
+    canvasWrap.style.padding = "0";
+    canvasWrap.style.margin = "0";
+    canvasWrap.style.boxSizing = "border-box";
+    canvasWrap.style.overflow = "hidden";
+    canvasWrap.style.borderRadius = canvasWrap.style.borderRadius || "16px";
+  }
+
+  const desiredCanvasHeight = isPhone
+    ? Math.max(330, Math.min(450, Math.floor(vh * 0.40)))
+    : Math.max(360, Math.min(520, Math.floor(vh * 0.5)));
+
+  if (minuteCanvas) {
+    minuteCanvas.style.display = "block";
+    minuteCanvas.style.width = "100%";
+    minuteCanvas.style.maxWidth = "100%";
+    minuteCanvas.style.height = `${desiredCanvasHeight}px`;
+    minuteCanvas.style.minHeight = `${desiredCanvasHeight}px`;
+    minuteCanvas.style.maxHeight = isPhone ? "48dvh" : "58vh";
+    minuteCanvas.style.margin = "0";
+    minuteCanvas.style.boxSizing = "border-box";
+  }
+
+  applyChartModalHeaderLayout();
 }
 function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
   if (!btn) return;
@@ -1716,14 +1869,14 @@ function applyModalTradeButtonsLayout() {
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
 
-  footer.style.paddingTop = "4px";
+  footer.style.paddingTop = "2px";
   footer.style.gap = "6px";
   footer.style.width = "100%";
   footer.style.minWidth = "0";
   footer.style.boxSizing = "border-box";
 
   row.style.display = "flex";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
   row.style.justifyContent = "space-between";
   row.style.width = "100%";
@@ -1735,13 +1888,16 @@ function applyModalTradeButtonsLayout() {
   if (bCall.parentElement !== row) row.appendChild(bCall);
   if (bPut.parentElement !== row) row.appendChild(bPut);
 
+  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  const isPhone = w < 768;
+
   const baseBtn = (b) => {
     b.style.flex = "1 1 0";
     b.style.minWidth = "0";
-    b.style.minHeight = "54px";
-    b.style.padding = "12px 12px";
+    b.style.minHeight = isPhone ? "52px" : "56px";
+    b.style.padding = isPhone ? "10px 10px" : "12px 12px";
     b.style.fontWeight = "900";
-    b.style.letterSpacing = "0.25px";
+    b.style.letterSpacing = "0.2px";
     b.style.borderRadius = "16px";
     b.style.display = "flex";
     b.style.alignItems = "center";
@@ -1750,25 +1906,21 @@ function applyModalTradeButtonsLayout() {
     b.style.userSelect = "none";
     b.style.touchAction = "manipulation";
     b.style.marginTop = "0";
-    b.style.fontSize = "14px";
+    b.style.fontSize = isPhone ? "13px" : "14px";
+    b.style.boxSizing = "border-box";
   };
   baseBtn(bCall);
   baseBtn(bPut);
 
   bCall.style.borderColor = "rgba(34,197,94,.85)";
-  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.22)";
+  bCall.style.boxShadow = "0 0 14px rgba(34,197,94,.18)";
   bCall.style.background = "rgba(34,197,94,.20)";
   bCall.style.color = "var(--text, #e5e7eb)";
 
   bPut.style.borderColor = "rgba(239,68,68,.85)";
-  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.20)";
+  bPut.style.boxShadow = "0 0 14px rgba(239,68,68,.18)";
   bPut.style.background = "rgba(239,68,68,.18)";
   bPut.style.color = "var(--text, #e5e7eb)";
-
-  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  if (w < 380) {
-    row.style.gap = "8px";
-  }
 
   if (modalLiveBtn) {
     modalLiveBtn.setAttribute("aria-hidden", "true");
@@ -1779,40 +1931,31 @@ function applyModalTradeButtonsLayout() {
 
   if (statusBar) {
     statusBar.style.margin = "0 0 6px 0";
-    statusBar.style.padding = w < 380 ? "8px 10px" : "8px 12px";
+    statusBar.style.padding = isPhone ? "8px 10px" : "8px 12px";
+    statusBar.style.borderRadius = "14px";
+    statusBar.style.fontSize = isPhone ? "12px" : "13px";
+    statusBar.style.gap = isPhone ? "6px" : "8px";
+  }
+
+  if (modalOpenDerivBtn) {
+    modalOpenDerivBtn.style.maxWidth = isPhone ? "104px" : "140px";
+    modalOpenDerivBtn.style.padding = isPhone ? "7px 10px" : "8px 12px";
+    modalOpenDerivBtn.style.minHeight = isPhone ? "34px" : "36px";
+    modalOpenDerivBtn.style.fontSize = isPhone ? "11.5px" : "12px";
+    modalOpenDerivBtn.style.borderRadius = "12px";
   }
 
   if (modalSub) {
-    modalSub.style.fontSize = w < 380 ? "12px" : "13px";
+    modalSub.style.fontSize = isPhone ? "11.5px" : "13px";
     modalSub.style.margin = "4px 0 6px 0";
-    modalSub.style.lineHeight = "1.2";
-  }
-
-  const desiredCanvasHeight = w < 380 ? 330 : w < 768 ? 390 : 430;
-  if (minuteCanvas) {
-    minuteCanvas.style.display = "block";
-    minuteCanvas.style.width = "100%";
-    minuteCanvas.style.maxWidth = "100%";
-    minuteCanvas.style.height = `${desiredCanvasHeight}px`;
-    minuteCanvas.style.minHeight = `${desiredCanvasHeight}px`;
-    minuteCanvas.style.maxHeight = w < 768 ? "50vh" : "58vh";
-    minuteCanvas.style.margin = "0";
-    minuteCanvas.style.borderRadius = minuteCanvas.style.borderRadius || "16px";
-    minuteCanvas.style.boxSizing = "border-box";
+    modalSub.style.lineHeight = "1.18";
   }
 
   const canvasWrap = minuteCanvas?.parentElement || null;
   if (canvasWrap) {
-    canvasWrap.style.width = "100%";
-    canvasWrap.style.maxWidth = "100%";
-    canvasWrap.style.minWidth = "0";
-    canvasWrap.style.minHeight = `${desiredCanvasHeight}px`;
     canvasWrap.style.marginBottom = "4px";
-    canvasWrap.style.boxSizing = "border-box";
-    canvasWrap.style.overflow = "hidden";
   }
 }
-
 /* =========================
    Disciplina (persistencia + UI)
 ========================= */
