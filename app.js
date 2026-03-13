@@ -18,6 +18,7 @@
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
 // ✅ FIX (este update): ESCALERA/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vía ticks_history
 // ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
+// ✅ NUEVO: modal muestra "VELA ABIERTA | faltan XXs" y bloquea COMPRAR / VENDER cuando la vela ya cerró
 
 "use strict";
 
@@ -267,6 +268,7 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
+let modalCandleStatusEl = null;
 
 /* =========================
    Toast
@@ -1454,6 +1456,116 @@ function isItemLiveMinute(item) {
   return item.minute === currentServerMinute();
 }
 
+function getCurrentMinuteRemainingSec() {
+  const now = serverNowMs();
+  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+    ? currentMinuteStartMs
+    : Math.floor(now / 60000) * 60000;
+
+  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
+  return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+}
+function isTradeEntryOpen(item) {
+  if (!item) return false;
+  return isItemLiveMinute(item);
+}
+function ensureModalCandleStatusBar() {
+  if (modalCandleStatusEl) return modalCandleStatusEl;
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return null;
+
+  let el = footer.querySelector(".candleStatusBar");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "candleStatusBar";
+    el.setAttribute("role", "status");
+    el.style.width = "100%";
+    el.style.boxSizing = "border-box";
+    el.style.margin = "0 0 10px 0";
+    el.style.padding = "12px 14px";
+    el.style.borderRadius = "14px";
+    el.style.border = "1px solid rgba(255,255,255,.14)";
+    el.style.fontWeight = "900";
+    el.style.fontSize = "14px";
+    el.style.letterSpacing = "0.3px";
+    el.style.textAlign = "center";
+    el.style.transition = "opacity .12s ease, transform .12s ease";
+    footer.prepend(el);
+  }
+
+  modalCandleStatusEl = el;
+  return modalCandleStatusEl;
+}
+function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
+  if (!btn) return;
+
+  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
+
+  if (locked) {
+    btn.disabled = true;
+    btn.textContent = `🔒 ${btn.dataset.baseLabel.replace(/^🔒\s*/g, "")}`;
+    btn.style.filter = "grayscale(1) saturate(0.7)";
+    btn.style.opacity = "0.48";
+    btn.style.transform = "none";
+    btn.title = `Bloqueado por disciplina. Falta ${fmtRemaining(remainMs)}`;
+    return;
+  }
+
+  if (candleClosed) {
+    btn.disabled = true;
+    btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+    btn.style.filter = "grayscale(1) saturate(0.72)";
+    btn.style.opacity = "0.42";
+    btn.style.transform = "none";
+    btn.title = "La vela ya cerró";
+    return;
+  }
+
+  btn.disabled = false;
+  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+  btn.style.filter = "";
+  btn.style.opacity = "";
+  btn.title = "Operar DEMO 1m";
+}
+function updateModalCandleStatusUI() {
+  const bar = ensureModalCandleStatusBar();
+  if (!bar) return;
+
+  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
+    bar.style.display = "none";
+    return;
+  }
+
+  bar.style.display = "block";
+
+  const isOpen = isTradeEntryOpen(modalCurrentItem);
+  if (isOpen) {
+    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    bar.style.color = "#dcfce7";
+    bar.style.background = "rgba(22,163,74,.18)";
+    bar.style.borderColor = "rgba(34,197,94,.34)";
+    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
+  } else {
+    bar.textContent = "⚪ VELA CERRADA";
+    bar.style.color = "rgba(229,231,235,.95)";
+    bar.style.background = "rgba(107,114,128,.20)";
+    bar.style.borderColor = "rgba(156,163,175,.28)";
+    bar.style.boxShadow = "none";
+  }
+
+  const locked = isTradeLockedNow();
+  const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
+  const candleClosed = !isOpen;
+
+  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
+  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+}
+
 /* =========================
    LIVE modal draw
 ========================= */
@@ -1490,6 +1602,8 @@ function requestModalDraw(force = false) {
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
       modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
     }
+
+    updateModalCandleStatusUI();
   });
 }
 
@@ -1507,12 +1621,16 @@ function applyModalTradeButtonsLayout() {
 
   if (!footer) return;
 
+  const statusBar = ensureModalCandleStatusBar();
+
   let row = footer.querySelector(".tradeRow");
   if (!row) {
     row = document.createElement("div");
     row.className = "tradeRow";
-    footer.prepend(row);
+    footer.appendChild(row);
   }
+
+  if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
 
   row.style.display = "flex";
   row.style.gap = "14px";
@@ -1641,26 +1759,6 @@ function disciplineTagText() {
   const pTxt = pend ? ` • Pendientes:${pend}` : "";
   return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
 }
-function paintTradeButtonLocked(btn, locked, remainMs = 0) {
-  if (!btn) return;
-
-  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
-
-  if (locked) {
-    btn.disabled = true;
-    btn.textContent = `🔒 ${btn.dataset.baseLabel.replace(/^🔒\s*/g, "")}`;
-    btn.style.filter = "grayscale(1) saturate(0.7)";
-    btn.style.opacity = "0.48";
-    btn.style.transform = "none";
-    btn.title = `Bloqueado por disciplina. Falta ${fmtRemaining(remainMs)}`;
-  } else {
-    btn.disabled = false;
-    btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
-    btn.style.filter = "";
-    btn.style.opacity = "";
-    btn.title = "Operar DEMO 1m";
-  }
-}
 function updateDisciplineLockUI(forceToast = false) {
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
     disciplineLockUntilMs = 0;
@@ -1673,11 +1771,15 @@ function updateDisciplineLockUI(forceToast = false) {
 
   const locked = isTradeLockedNow();
   const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
+  const candleClosed = !!modalCurrentItem && !isTradeEntryOpen(modalCurrentItem);
 
-  paintTradeButtonLocked(modalBuyCallBtn, locked, remain);
-  paintTradeButtonLocked(modalBuyPutBtn, locked, remain);
+  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
+  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
 
-  if (chartModal && !chartModal.classList.contains("hidden")) requestModalDraw(true);
+  if (chartModal && !chartModal.classList.contains("hidden")) {
+    updateModalCandleStatusUI();
+    requestModalDraw(true);
+  }
   if (forceToast) toast(disciplineTagText(), 2200);
 }
 function startNewDisciplineWindowIfNeeded() {
@@ -1753,6 +1855,7 @@ function openChartModal(item) {
 
   applyModalTradeButtonsLayout();
   updateDisciplineLockUI(false);
+  updateModalCandleStatusUI();
 
   requestModalDraw(true);
 }
@@ -1763,6 +1866,7 @@ function closeChartModal() {
   modalCurrentItem = null;
   modalLive = false;
   updateModalLiveUI();
+  if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
@@ -1781,6 +1885,7 @@ if (modalOpenDerivBtn)
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   applyModalTradeButtonsLayout();
+  updateModalCandleStatusUI();
   requestModalDraw(true);
 });
 if (modalLiveBtn) {
@@ -2305,9 +2410,15 @@ function assertCanTrade() {
     throw new Error(`Bloqueado por disciplina (${fmtRemaining(remain)})`);
   }
 }
+function assertEntryWindowOpen() {
+  if (modalCurrentItem && !isTradeEntryOpen(modalCurrentItem)) {
+    throw new Error("La vela ya cerró");
+  }
+}
 
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
+  assertEntryWindowOpen();
 
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
@@ -3436,6 +3547,7 @@ ensureResetCacheButton();
 ensureSplitClearButtons();
 
 applyModalTradeButtonsLayout();
+updateModalCandleStatusUI();
 updateDisciplineLockUI(false);
 
 seedTradesJournalFromHistory();
