@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es"> 
+<html lang="es">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
@@ -10,7 +10,6 @@
 
   <link rel="stylesheet" href="style.css" />
 </head>
-
 <body class="neon">
   <div class="bgNeon" aria-hidden="true"></div>
 
@@ -52,13 +51,12 @@
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- ✅ Modal gráfico (LIVE + COMPRAR/VENDER) -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
-    <div class="modalCard" role="dialog" aria-modal="true">
+    <div class="modalCard chartModalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modalHeader">
-        <div>
+        <div class="modalHeaderText">
           <div id="modalTitle" class="modalTitle">Gráfico</div>
           <div id="modalSub" class="modalSub">—</div>
         </div>
@@ -68,28 +66,25 @@
       <canvas id="minuteCanvas"></canvas>
 
       <div class="modalFooter">
+        <div id="modalCandleStatus" class="candleStatusBar" role="status">
+          <span id="modalCandleStatusText" class="candleStatusText">—</span>
+          <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
+        </div>
+
         <div class="tradeRow">
           <button id="modalBuyCallBtn" class="btn" type="button">🟢 COMPRAR</button>
           <button id="modalBuyPutBtn" class="btn" type="button">🔴 VENDER</button>
-          <button id="modalLiveBtn" class="btn btnGhost" type="button" aria-pressed="false" title="Live ON/OFF">
-            LIVE OFF
-          </button>
-        </div>
-
-        <div class="modalFooterRow">
-          <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ✅ Modal configuración -->
   <div id="settingsModal" class="modal hidden" aria-hidden="true">
     <div id="settingsCloseBackdrop" class="modalBackdrop"></div>
 
     <div class="modalCard modalCardSmall" role="dialog" aria-modal="true">
       <div class="modalHeader">
-        <div>
+        <div class="modalHeaderText">
           <div class="modalTitle">Configuración</div>
           <div class="modalSub">Preferencias, token y modo</div>
         </div>
@@ -112,32 +107,29 @@
           <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
           <button id="lowPowerBtn" class="btn btnGhost" type="button">🔋 Bajo consumo OFF</button>
 
-          <!-- ✅ TOKEN DEMO (1 sola vez, sin duplicados) -->
           <div class="fieldWrap">
             <label class="fieldLabel" for="tokenInput">Token DEMO Deriv</label>
             <input id="tokenInput" class="fieldInput" type="password" placeholder="Pegá tu token DEMO (Read + Trade)" autocomplete="off" />
             <div class="fieldActions">
               <button id="saveTokenBtn" class="btn btnGhost" type="button">💾 Guardar</button>
-              <button id="clearTokenBtn" class="btn btnGhost" type="button">🗑️ Borrar</button>
+              <button id="deleteTokenBtn" class="btn btnGhost" type="button">🗑️ Borrar</button>
             </div>
           </div>
 
-          <!-- ✅ Stake -->
           <div class="fieldWrap">
             <label class="fieldLabel" for="stakeInput">Stake (USD) DEMO</label>
             <input id="stakeInput" class="fieldInput" type="number" min="0.35" step="0.01" placeholder="1.00" />
             <div class="fieldActions">
               <button id="saveStakeBtn" class="btn btnGhost" type="button">💾 Guardar</button>
-              <button id="resetStakeBtn" class="btn btnGhost" type="button">↩️ Default</button>
+              <button id="defaultStakeBtn" class="btn btnGhost" type="button">↩️ Default</button>
             </div>
           </div>
 
           <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
-
           <button id="resetCacheBtn" class="btn btnGhost" type="button">🧹 Reset Cache/SW</button>
         </div>
 
-        <div class="modalFooter" style="margin-top:10px">
+        <div class="modalFooter settingsFooter">
           <button id="settingsCloseBtn2" class="btn btnGhost" type="button">Cerrar</button>
         </div>
       </div>
@@ -145,7 +137,6 @@
   </div>
 
   <script src="app.js"></script>
-
   <script>
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("./sw.js");
