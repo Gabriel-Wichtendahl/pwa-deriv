@@ -269,10 +269,6 @@ const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
-let modalCandleStatusTextEl = null;
-let modalHeaderShell = null;
-let modalHeaderTopRow = null;
-let modalHeaderMetaRow = null;
 
 /* =========================
    Toast
@@ -1489,366 +1485,20 @@ function ensureModalCandleStatusBar() {
     el.setAttribute("role", "status");
     el.style.width = "100%";
     el.style.boxSizing = "border-box";
-    el.style.margin = "0 0 8px 0";
-    el.style.padding = "8px 10px";
+    el.style.margin = "0 0 10px 0";
+    el.style.padding = "12px 14px";
     el.style.borderRadius = "14px";
     el.style.border = "1px solid rgba(255,255,255,.14)";
     el.style.fontWeight = "900";
-    el.style.fontSize = "13px";
-    el.style.letterSpacing = "0.2px";
+    el.style.fontSize = "14px";
+    el.style.letterSpacing = "0.3px";
+    el.style.textAlign = "center";
     el.style.transition = "opacity .12s ease, transform .12s ease";
-    el.style.display = "flex";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "space-between";
-    el.style.gap = "8px";
     footer.prepend(el);
   }
 
-  let txt = el.querySelector(".candleStatusText");
-  if (!txt) {
-    txt = document.createElement("span");
-    txt.className = "candleStatusText";
-    txt.style.flex = "1 1 auto";
-    txt.style.minWidth = "0";
-    txt.style.textAlign = "left";
-    txt.style.lineHeight = "1.2";
-    txt.style.whiteSpace = "nowrap";
-    txt.style.overflow = "hidden";
-    txt.style.textOverflow = "ellipsis";
-    el.appendChild(txt);
-  }
-
-  if (modalOpenDerivBtn) {
-    modalOpenDerivBtn.style.display = "inline-flex";
-    modalOpenDerivBtn.style.alignItems = "center";
-    modalOpenDerivBtn.style.justifyContent = "center";
-    modalOpenDerivBtn.style.flex = "0 0 auto";
-    modalOpenDerivBtn.style.minWidth = "0";
-    modalOpenDerivBtn.style.maxWidth = "118px";
-    modalOpenDerivBtn.style.padding = "8px 10px";
-    modalOpenDerivBtn.style.minHeight = "36px";
-    modalOpenDerivBtn.style.borderRadius = "12px";
-    modalOpenDerivBtn.style.fontSize = "12px";
-    modalOpenDerivBtn.style.fontWeight = "900";
-    modalOpenDerivBtn.style.lineHeight = "1";
-    modalOpenDerivBtn.style.whiteSpace = "nowrap";
-    modalOpenDerivBtn.style.margin = "0";
-    if (modalOpenDerivBtn.parentElement !== el) el.appendChild(modalOpenDerivBtn);
-  }
-
   modalCandleStatusEl = el;
-  modalCandleStatusTextEl = txt;
   return modalCandleStatusEl;
-}
-function getChartModalPanel() {
-  if (!chartModal) return null;
-  return (
-    chartModal.querySelector(".modalCard, .modalContent, .modalPanel, .modalDialog") ||
-    chartModal.firstElementChild ||
-    null
-  );
-}
-function ensureChartModalHeaderShell() {
-  if (modalHeaderShell && modalHeaderTopRow && modalHeaderMetaRow) return modalHeaderShell;
-
-  const panel = getChartModalPanel();
-  if (!panel) return null;
-
-  let header =
-    panel.querySelector(".modalHeader") ||
-    modalTitle?.closest?.(".modalHeader") ||
-    null;
-
-  if (!header) {
-    header = document.createElement("div");
-    header.className = "modalHeader";
-    panel.insertBefore(header, panel.firstChild || null);
-  }
-
-  let shell = header.querySelector(".modalHeaderShell");
-  if (!shell) {
-    shell = document.createElement("div");
-    shell.className = "modalHeaderShell";
-    header.appendChild(shell);
-  }
-
-  let topRow = shell.querySelector(".modalHeaderTopRow");
-  if (!topRow) {
-    topRow = document.createElement("div");
-    topRow.className = "modalHeaderTopRow";
-    shell.appendChild(topRow);
-  }
-
-  let metaRow = shell.querySelector(".modalHeaderMetaRow");
-  if (!metaRow) {
-    metaRow = document.createElement("div");
-    metaRow.className = "modalHeaderMetaRow";
-    shell.appendChild(metaRow);
-  }
-
-  if (modalTitle && modalTitle.parentElement !== topRow) topRow.appendChild(modalTitle);
-  if (modalCloseBtn && modalCloseBtn.parentElement !== topRow) topRow.appendChild(modalCloseBtn);
-  if (modalSub && modalSub.parentElement !== metaRow) metaRow.appendChild(modalSub);
-
-  modalHeaderShell = shell;
-  modalHeaderTopRow = topRow;
-  modalHeaderMetaRow = metaRow;
-  return modalHeaderShell;
-}
-function applyChartModalHeaderLayout() {
-  const panel = getChartModalPanel();
-  if (!panel) return;
-
-  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  const isPhone = vw < 768;
-
-  const shell = ensureChartModalHeaderShell();
-  if (!shell) return;
-
-  const header = shell.parentElement;
-  if (header) {
-    header.style.width = "100%";
-    header.style.maxWidth = "100%";
-    header.style.minWidth = "0";
-    header.style.boxSizing = "border-box";
-    header.style.margin = "0";
-    header.style.padding = isPhone ? "12px 12px 0 12px" : "14px 14px 0 14px";
-    header.style.overflow = "visible";
-  }
-
-  shell.style.display = "flex";
-  shell.style.flexDirection = "column";
-  shell.style.width = "100%";
-  shell.style.maxWidth = "100%";
-  shell.style.minWidth = "0";
-  shell.style.boxSizing = "border-box";
-  shell.style.margin = "0 0 8px 0";
-  shell.style.padding = "0";
-  shell.style.gap = isPhone ? "4px" : "6px";
-  shell.style.overflow = "visible";
-
-  if (modalHeaderTopRow) {
-    modalHeaderTopRow.style.display = "grid";
-    modalHeaderTopRow.style.gridTemplateColumns = "minmax(0,1fr) auto";
-    modalHeaderTopRow.style.alignItems = "start";
-    modalHeaderTopRow.style.columnGap = isPhone ? "8px" : "10px";
-    modalHeaderTopRow.style.width = "100%";
-    modalHeaderTopRow.style.maxWidth = "100%";
-    modalHeaderTopRow.style.minWidth = "0";
-    modalHeaderTopRow.style.boxSizing = "border-box";
-    modalHeaderTopRow.style.margin = "0";
-    modalHeaderTopRow.style.padding = "0";
-    modalHeaderTopRow.style.overflow = "visible";
-    modalHeaderTopRow.style.minHeight = isPhone ? "40px" : "44px";
-  }
-
-  if (modalTitle) {
-    modalTitle.style.display = "-webkit-box";
-    modalTitle.style.width = "100%";
-    modalTitle.style.maxWidth = "100%";
-    modalTitle.style.minWidth = "0";
-    modalTitle.style.margin = "0";
-    modalTitle.style.padding = "0";
-    modalTitle.style.lineHeight = isPhone ? "1.08" : "1.12";
-    modalTitle.style.fontSize = isPhone ? "14px" : "18px";
-    modalTitle.style.fontWeight = "900";
-    modalTitle.style.letterSpacing = "0";
-    modalTitle.style.whiteSpace = "normal";
-    modalTitle.style.wordBreak = "normal";
-    modalTitle.style.overflowWrap = "break-word";
-    modalTitle.style.writingMode = "horizontal-tb";
-    modalTitle.style.textOrientation = "mixed";
-    modalTitle.style.maxHeight = isPhone ? "2.25em" : "2.4em";
-    modalTitle.style.overflow = "hidden";
-    modalTitle.style.textOverflow = "ellipsis";
-    modalTitle.style.setProperty("-webkit-line-clamp", "2");
-    modalTitle.style.setProperty("-webkit-box-orient", "vertical");
-  }
-
-  if (modalCloseBtn) {
-    modalCloseBtn.style.position = "relative";
-    modalCloseBtn.style.inset = "auto";
-    modalCloseBtn.style.right = "auto";
-    modalCloseBtn.style.top = "auto";
-    modalCloseBtn.style.left = "auto";
-    modalCloseBtn.style.bottom = "auto";
-    modalCloseBtn.style.transform = "none";
-    modalCloseBtn.style.margin = "0";
-    modalCloseBtn.style.padding = "0";
-    modalCloseBtn.style.flex = "0 0 auto";
-    modalCloseBtn.style.alignSelf = "start";
-    modalCloseBtn.style.width = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.height = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.minWidth = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.minHeight = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.borderRadius = "14px";
-    modalCloseBtn.style.display = "inline-flex";
-    modalCloseBtn.style.alignItems = "center";
-    modalCloseBtn.style.justifyContent = "center";
-    modalCloseBtn.style.justifySelf = "end";
-    modalCloseBtn.style.zIndex = "3";
-    modalCloseBtn.style.marginTop = "1px";
-  }
-
-  if (modalHeaderMetaRow) {
-    modalHeaderMetaRow.style.display = "block";
-    modalHeaderMetaRow.style.width = "100%";
-    modalHeaderMetaRow.style.maxWidth = "100%";
-    modalHeaderMetaRow.style.minWidth = "0";
-    modalHeaderMetaRow.style.boxSizing = "border-box";
-    modalHeaderMetaRow.style.margin = "0";
-    modalHeaderMetaRow.style.padding = "0";
-    modalHeaderMetaRow.style.overflow = "hidden";
-    modalHeaderMetaRow.style.marginTop = "1px";
-  }
-
-  if (modalSub) {
-    modalSub.style.display = "block";
-    modalSub.style.width = "100%";
-    modalSub.style.maxWidth = "100%";
-    modalSub.style.minWidth = "0";
-    modalSub.style.boxSizing = "border-box";
-    modalSub.style.fontSize = isPhone ? "11px" : "13px";
-    modalSub.style.lineHeight = "1.16";
-    modalSub.style.margin = "0";
-    modalSub.style.padding = "0";
-    modalSub.style.overflow = "hidden";
-    modalSub.style.textOverflow = "ellipsis";
-    modalSub.style.whiteSpace = "nowrap";
-    modalSub.style.opacity = "0.92";
-  }
-}
-function applyChartModalResponsiveLayout() {
-  const panel = getChartModalPanel();
-  if (!panel) return;
-
-  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-  const isPhone = vw < 768;
-  const gutter = isPhone ? 10 : 18;
-  const panelWidth = isPhone ? Math.max(280, vw - gutter * 2) : Math.min(760, vw - gutter * 2);
-
-  if (chartModal) {
-    chartModal.style.position = "fixed";
-    chartModal.style.inset = "0";
-    chartModal.style.width = "100%";
-    chartModal.style.height = "100dvh";
-    chartModal.style.maxWidth = "100%";
-    chartModal.style.maxHeight = "100dvh";
-    chartModal.style.padding = `${gutter}px`;
-    chartModal.style.boxSizing = "border-box";
-    chartModal.style.display = "flex";
-    chartModal.style.alignItems = isPhone ? "flex-start" : "center";
-    chartModal.style.justifyContent = "center";
-    chartModal.style.overflowX = "hidden";
-    chartModal.style.overflowY = "auto";
-    chartModal.style.zIndex = "99999";
-    chartModal.style.isolation = "isolate";
-    chartModal.style.pointerEvents = "auto";
-    chartModal.style.background = "transparent";
-  }
-
-  if (modalCloseBackdrop) {
-    modalCloseBackdrop.style.position = "fixed";
-    modalCloseBackdrop.style.inset = "0";
-    modalCloseBackdrop.style.width = "100%";
-    modalCloseBackdrop.style.height = "100%";
-    modalCloseBackdrop.style.zIndex = "0";
-    modalCloseBackdrop.style.background = "rgba(2, 6, 18, 0.78)";
-    modalCloseBackdrop.style.backdropFilter = "blur(4px)";
-    modalCloseBackdrop.style.webkitBackdropFilter = "blur(4px)";
-  }
-
-  panel.style.position = "relative";
-  panel.style.left = "auto";
-  panel.style.right = "auto";
-  panel.style.top = "auto";
-  panel.style.bottom = "auto";
-  panel.style.transform = "none";
-  panel.style.width = `${panelWidth}px`;
-  panel.style.maxWidth = `${panelWidth}px`;
-  panel.style.minWidth = "0";
-  panel.style.margin = isPhone ? "2px auto 10px auto" : "0 auto";
-  panel.style.boxSizing = "border-box";
-  panel.style.maxHeight = isPhone ? `calc(100dvh - ${gutter * 2}px)` : "90vh";
-  panel.style.overflowX = "hidden";
-  panel.style.overflowY = "auto";
-  panel.style.zIndex = "1";
-  panel.style.isolation = "isolate";
-  panel.style.background = "rgba(4, 8, 24, 0.96)";
-  panel.style.border = "1px solid rgba(255,255,255,.10)";
-  panel.style.borderRadius = isPhone ? "20px" : "22px";
-  panel.style.boxShadow = "0 22px 60px rgba(0,0,0,.45)";
-  panel.style.display = "block";
-
-  const header =
-    panel.querySelector(".modalHeader") ||
-    modalTitle?.closest?.(".modalHeader") ||
-    modalTitle?.parentElement?.parentElement ||
-    null;
-  if (header) {
-    header.style.width = "100%";
-    header.style.maxWidth = "100%";
-    header.style.minWidth = "0";
-    header.style.boxSizing = "border-box";
-    header.style.overflow = "visible";
-    header.style.padding = isPhone ? "12px 12px 0 12px" : "14px 14px 0 14px";
-    header.style.margin = "0";
-  }
-
-  const body = panel.querySelector(".modalBody") || minuteCanvas?.parentElement || null;
-  if (body) {
-    body.style.width = "100%";
-    body.style.maxWidth = "100%";
-    body.style.minWidth = "0";
-    body.style.boxSizing = "border-box";
-    body.style.padding = isPhone ? "0 12px" : "0 14px";
-    body.style.margin = "0";
-    body.style.overflowX = "hidden";
-  }
-
-  const footer = panel.querySelector(".modalFooter") || null;
-  if (footer) {
-    footer.style.width = "100%";
-    footer.style.maxWidth = "100%";
-    footer.style.minWidth = "0";
-    footer.style.boxSizing = "border-box";
-    footer.style.padding = isPhone ? "0 12px 12px 12px" : "0 14px 14px 14px";
-    footer.style.margin = "0";
-    footer.style.overflowX = "hidden";
-  }
-
-  const canvasWrap = minuteCanvas?.parentElement || null;
-  if (canvasWrap) {
-    canvasWrap.style.width = "100%";
-    canvasWrap.style.maxWidth = "100%";
-    canvasWrap.style.minWidth = "0";
-    canvasWrap.style.padding = "0";
-    canvasWrap.style.margin = "0";
-    canvasWrap.style.boxSizing = "border-box";
-    canvasWrap.style.overflow = "hidden";
-    canvasWrap.style.borderRadius = "16px";
-    canvasWrap.style.border = "1px solid rgba(255,255,255,.08)";
-    canvasWrap.style.background = "rgba(5, 10, 28, 0.92)";
-  }
-
-  const desiredCanvasHeight = isPhone
-    ? Math.max(320, Math.min(430, Math.floor(vh * 0.38)))
-    : Math.max(360, Math.min(520, Math.floor(vh * 0.5)));
-
-  if (minuteCanvas) {
-    minuteCanvas.style.display = "block";
-    minuteCanvas.style.width = "100%";
-    minuteCanvas.style.maxWidth = "100%";
-    minuteCanvas.style.height = `${desiredCanvasHeight}px`;
-    minuteCanvas.style.minHeight = `${desiredCanvasHeight}px`;
-    minuteCanvas.style.maxHeight = isPhone ? "46dvh" : "58vh";
-    minuteCanvas.style.margin = "0";
-    minuteCanvas.style.boxSizing = "border-box";
-    minuteCanvas.style.borderRadius = "16px";
-  }
-
-  applyChartModalHeaderLayout();
 }
 function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
   if (!btn) return;
@@ -1890,20 +1540,19 @@ function updateModalCandleStatusUI() {
     return;
   }
 
-  bar.style.display = "flex";
+  bar.style.display = "block";
 
-  const labelEl = modalCandleStatusTextEl || bar.querySelector(".candleStatusText") || bar;
   const isOpen = isTradeEntryOpen(modalCurrentItem);
   if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    labelEl.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
-    labelEl.style.color = "#dcfce7";
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
   } else {
-    labelEl.textContent = "⚪ VELA CERRADA";
-    labelEl.style.color = "rgba(229,231,235,.95)";
+    bar.textContent = "⚪ VELA CERRADA";
+    bar.style.color = "rgba(229,231,235,.95)";
     bar.style.background = "rgba(107,114,128,.20)";
     bar.style.borderColor = "rgba(156,163,175,.28)";
     bar.style.boxShadow = "none";
@@ -1922,10 +1571,8 @@ function updateModalCandleStatusUI() {
 ========================= */
 function updateModalLiveUI() {
   if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-hidden", "true");
-  modalLiveBtn.tabIndex = -1;
-  modalLiveBtn.disabled = true;
-  modalLiveBtn.style.display = "none";
+  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
+  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
 }
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
@@ -1950,11 +1597,10 @@ function requestModalDraw(force = false) {
 
     if (modalSub) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
+      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${dTag ? " | " + dTag : ""}${tBadge}`;
-      modalSub.style.margin = "6px 0 8px 0";
-      modalSub.style.lineHeight = "1.25";
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
     }
 
     updateModalCandleStatusUI();
@@ -1975,7 +1621,6 @@ function applyModalTradeButtonsLayout() {
 
   if (!footer) return;
 
-  applyChartModalResponsiveLayout();
   const statusBar = ensureModalCandleStatusBar();
 
   let row = footer.querySelector(".tradeRow");
@@ -1987,93 +1632,58 @@ function applyModalTradeButtonsLayout() {
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
 
-  footer.style.paddingTop = "2px";
-  footer.style.gap = "6px";
-  footer.style.width = "100%";
-  footer.style.minWidth = "0";
-  footer.style.boxSizing = "border-box";
-
   row.style.display = "flex";
-  row.style.gap = "8px";
+  row.style.gap = "14px";
   row.style.alignItems = "stretch";
   row.style.justifyContent = "space-between";
   row.style.width = "100%";
-  row.style.minWidth = "0";
   row.style.flexWrap = "nowrap";
-  row.style.marginTop = "0";
-  row.style.boxSizing = "border-box";
 
   if (bCall.parentElement !== row) row.appendChild(bCall);
   if (bPut.parentElement !== row) row.appendChild(bPut);
 
-  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  const isPhone = w < 768;
-
   const baseBtn = (b) => {
     b.style.flex = "1 1 0";
     b.style.minWidth = "0";
-    b.style.minHeight = isPhone ? "52px" : "56px";
-    b.style.padding = isPhone ? "10px 10px" : "12px 12px";
+    b.style.minHeight = "60px";
+    b.style.padding = "14px 16px";
     b.style.fontWeight = "900";
-    b.style.letterSpacing = "0.2px";
+    b.style.letterSpacing = "0.4px";
     b.style.borderRadius = "16px";
     b.style.display = "flex";
     b.style.alignItems = "center";
     b.style.justifyContent = "center";
-    b.style.gap = "8px";
+    b.style.gap = "10px";
     b.style.userSelect = "none";
     b.style.touchAction = "manipulation";
-    b.style.marginTop = "0";
-    b.style.fontSize = isPhone ? "13px" : "14px";
-    b.style.boxSizing = "border-box";
   };
   baseBtn(bCall);
   baseBtn(bPut);
 
   bCall.style.borderColor = "rgba(34,197,94,.85)";
-  bCall.style.boxShadow = "0 0 14px rgba(34,197,94,.18)";
+  bCall.style.boxShadow = "0 0 22px rgba(34,197,94,.25)";
   bCall.style.background = "rgba(34,197,94,.20)";
   bCall.style.color = "var(--text, #e5e7eb)";
 
   bPut.style.borderColor = "rgba(239,68,68,.85)";
-  bPut.style.boxShadow = "0 0 14px rgba(239,68,68,.18)";
+  bPut.style.boxShadow = "0 0 22px rgba(239,68,68,.23)";
   bPut.style.background = "rgba(239,68,68,.18)";
   bPut.style.color = "var(--text, #e5e7eb)";
 
+  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  if (w < 380) {
+    row.style.flexWrap = "wrap";
+    bCall.style.flex = "1 1 100%";
+    bPut.style.flex = "1 1 100%";
+  }
+
   if (modalLiveBtn) {
-    modalLiveBtn.setAttribute("aria-hidden", "true");
-    modalLiveBtn.tabIndex = -1;
-    modalLiveBtn.disabled = true;
-    modalLiveBtn.style.display = "none";
-  }
-
-  if (statusBar) {
-    statusBar.style.margin = "0 0 6px 0";
-    statusBar.style.padding = isPhone ? "8px 10px" : "8px 12px";
-    statusBar.style.borderRadius = "14px";
-    statusBar.style.fontSize = isPhone ? "12px" : "13px";
-    statusBar.style.gap = isPhone ? "6px" : "8px";
-  }
-
-  if (modalOpenDerivBtn) {
-    modalOpenDerivBtn.style.maxWidth = isPhone ? "104px" : "140px";
-    modalOpenDerivBtn.style.padding = isPhone ? "7px 10px" : "8px 12px";
-    modalOpenDerivBtn.style.minHeight = isPhone ? "34px" : "36px";
-    modalOpenDerivBtn.style.fontSize = isPhone ? "11.5px" : "12px";
-    modalOpenDerivBtn.style.borderRadius = "12px";
-  }
-
-  if (modalSub) {
-    modalSub.style.fontSize = isPhone ? "11.5px" : "13px";
-    modalSub.style.margin = "4px 0 6px 0";
-    modalSub.style.lineHeight = "1.18";
-  }
-
-  const canvasWrap = minuteCanvas?.parentElement || null;
-  if (canvasWrap) {
-    canvasWrap.style.marginBottom = "4px";
+    modalLiveBtn.style.minHeight = "52px";
+    modalLiveBtn.style.width = "100%";
+    modalLiveBtn.style.marginTop = "10px";
   }
 }
+
 /* =========================
    Disciplina (persistencia + UI)
 ========================= */
@@ -2243,7 +1853,6 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  applyChartModalResponsiveLayout();
   applyModalTradeButtonsLayout();
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
@@ -2275,11 +1884,24 @@ if (modalOpenDerivBtn)
 
 window.addEventListener("resize", () => {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
-  applyChartModalResponsiveLayout();
   applyModalTradeButtonsLayout();
   updateModalCandleStatusUI();
   requestModalDraw(true);
 });
+if (modalLiveBtn) {
+  modalLiveBtn.onclick = () => {
+    if (!modalCurrentItem) return;
+    if (!isItemLiveMinute(modalCurrentItem)) {
+      modalLive = false;
+      updateModalLiveUI();
+      requestModalDraw(true);
+      return;
+    }
+    modalLive = !modalLive;
+    updateModalLiveUI();
+    requestModalDraw(true);
+  };
+}
 
 /* =========================
    Row helpers (global, para Señales)
@@ -3933,3 +3555,419 @@ seedTradesJournalFromHistory();
 ensureInlineClearButtons();
 
 connect();
+
+
+/* =========================
+   Modal mobile fix (header + overlay + status bar)
+========================= */
+let modalCandleStatusTextEl = null;
+
+function getChartModalCard() {
+  if (!chartModal) return null;
+  return chartModal.querySelector(".modalCard") || null;
+}
+
+function applyChartModalBaseLayout() {
+  if (!chartModal) return;
+  const card = getChartModalCard();
+  if (!card) return;
+
+  const backdrop = modalCloseBackdrop || chartModal.querySelector(".modalBackdrop");
+  const header = card.querySelector(".modalHeader");
+  const footer = card.querySelector(".modalFooter");
+  const footerRow = card.querySelector(".modalFooterRow");
+  const titleWrap = modalTitle ? modalTitle.parentElement : null;
+
+  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+  const isPhone = vw <= 640;
+  const pad = isPhone ? 8 : 18;
+  const cardWidth = isPhone ? Math.min(vw - pad * 2, 430) : Math.min(vw - pad * 2, 760);
+  const canvasHeight = isPhone
+    ? Math.max(300, Math.min(Math.floor(vh * 0.42), 380))
+    : Math.max(320, Math.min(Math.floor(vh * 0.46), 480));
+
+  chartModal.style.position = "fixed";
+  chartModal.style.inset = "0";
+  chartModal.style.zIndex = "99999";
+  chartModal.style.display = "flex";
+  chartModal.style.alignItems = "center";
+  chartModal.style.justifyContent = "center";
+  chartModal.style.padding = `${pad}px`;
+  chartModal.style.boxSizing = "border-box";
+  chartModal.style.overflow = "hidden";
+
+  if (backdrop) {
+    backdrop.style.position = "fixed";
+    backdrop.style.inset = "0";
+    backdrop.style.zIndex = "0";
+    backdrop.style.background = "rgba(0,0,0,.82)";
+  }
+
+  card.style.position = "relative";
+  card.style.inset = "auto";
+  card.style.left = "auto";
+  card.style.right = "auto";
+  card.style.top = "auto";
+  card.style.bottom = "auto";
+  card.style.transform = "none";
+  card.style.width = `${cardWidth}px`;
+  card.style.maxWidth = "100%";
+  card.style.minWidth = "0";
+  card.style.maxHeight = `calc(100dvh - ${pad * 2}px)`;
+  card.style.margin = "0";
+  card.style.padding = isPhone ? "12px" : "14px";
+  card.style.boxSizing = "border-box";
+  card.style.display = "flex";
+  card.style.flexDirection = "column";
+  card.style.gap = "10px";
+  card.style.overflow = "hidden";
+  card.style.zIndex = "1";
+  card.style.background = "rgba(2,6,23,.96)";
+  card.style.borderColor = "rgba(148,163,184,.22)";
+  card.style.borderRadius = isPhone ? "18px" : "20px";
+
+  if (header) {
+    header.style.display = "flex";
+    header.style.alignItems = "flex-start";
+    header.style.justifyContent = "space-between";
+    header.style.gap = "10px";
+    header.style.width = "100%";
+    header.style.minWidth = "0";
+    header.style.margin = "0";
+  }
+
+  if (titleWrap) {
+    titleWrap.style.flex = "1 1 auto";
+    titleWrap.style.minWidth = "0";
+    titleWrap.style.maxWidth = "100%";
+    titleWrap.style.margin = "0";
+  }
+
+  if (modalTitle) {
+    modalTitle.style.display = "block";
+    modalTitle.style.margin = "0";
+    modalTitle.style.minWidth = "0";
+    modalTitle.style.maxWidth = "100%";
+    modalTitle.style.fontSize = isPhone ? "15px" : "18px";
+    modalTitle.style.lineHeight = "1.1";
+    modalTitle.style.whiteSpace = "normal";
+    modalTitle.style.wordBreak = "normal";
+    modalTitle.style.overflowWrap = "break-word";
+  }
+
+  if (modalSub) {
+    modalSub.style.margin = "3px 0 0 0";
+    modalSub.style.fontSize = isPhone ? "11.5px" : "13px";
+    modalSub.style.lineHeight = "1.2";
+    modalSub.style.whiteSpace = "nowrap";
+    modalSub.style.overflow = "hidden";
+    modalSub.style.textOverflow = "ellipsis";
+    modalSub.style.maxWidth = "100%";
+  }
+
+  if (modalCloseBtn) {
+    modalCloseBtn.style.position = "relative";
+    modalCloseBtn.style.inset = "auto";
+    modalCloseBtn.style.transform = "none";
+    modalCloseBtn.style.margin = "0";
+    modalCloseBtn.style.flex = "0 0 auto";
+    modalCloseBtn.style.width = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.height = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.minWidth = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.minHeight = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.borderRadius = "14px";
+  }
+
+  if (minuteCanvas) {
+    minuteCanvas.style.display = "block";
+    minuteCanvas.style.width = "100%";
+    minuteCanvas.style.maxWidth = "100%";
+    minuteCanvas.style.height = `${canvasHeight}px`;
+    minuteCanvas.style.minHeight = `${canvasHeight}px`;
+    minuteCanvas.style.maxHeight = isPhone ? "48dvh" : "56dvh";
+    minuteCanvas.style.margin = "0";
+    minuteCanvas.style.flex = "0 0 auto";
+    minuteCanvas.style.borderRadius = "16px";
+  }
+
+  if (footer) {
+    footer.style.display = "flex";
+    footer.style.flexDirection = "column";
+    footer.style.gap = "10px";
+    footer.style.width = "100%";
+    footer.style.margin = "0";
+    footer.style.padding = "0";
+  }
+
+  if (footerRow) footerRow.style.display = "none";
+}
+
+function ensureModalCandleStatusBar() {
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return null;
+
+  let el = footer.querySelector(".candleStatusBar");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "candleStatusBar";
+    el.setAttribute("role", "status");
+    el.style.width = "100%";
+    el.style.boxSizing = "border-box";
+    el.style.margin = "0";
+    el.style.padding = "10px 12px";
+    el.style.borderRadius = "14px";
+    el.style.border = "1px solid rgba(255,255,255,.14)";
+    el.style.fontWeight = "900";
+    el.style.fontSize = "13px";
+    el.style.letterSpacing = "0.2px";
+    el.style.transition = "opacity .12s ease, transform .12s ease";
+    el.style.display = "flex";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "space-between";
+    el.style.gap = "8px";
+    footer.prepend(el);
+  }
+
+  let txt = el.querySelector(".candleStatusText");
+  if (!txt) {
+    txt = document.createElement("span");
+    txt.className = "candleStatusText";
+    txt.style.flex = "1 1 auto";
+    txt.style.minWidth = "0";
+    txt.style.whiteSpace = "nowrap";
+    txt.style.overflow = "hidden";
+    txt.style.textOverflow = "ellipsis";
+    txt.style.lineHeight = "1.2";
+    el.appendChild(txt);
+  }
+
+  if (modalOpenDerivBtn) {
+    modalOpenDerivBtn.style.display = "inline-flex";
+    modalOpenDerivBtn.style.alignItems = "center";
+    modalOpenDerivBtn.style.justifyContent = "center";
+    modalOpenDerivBtn.style.flex = "0 0 auto";
+    modalOpenDerivBtn.style.minWidth = "0";
+    modalOpenDerivBtn.style.maxWidth = "112px";
+    modalOpenDerivBtn.style.padding = "8px 10px";
+    modalOpenDerivBtn.style.minHeight = "36px";
+    modalOpenDerivBtn.style.borderRadius = "12px";
+    modalOpenDerivBtn.style.fontSize = "12px";
+    modalOpenDerivBtn.style.fontWeight = "900";
+    modalOpenDerivBtn.style.lineHeight = "1";
+    modalOpenDerivBtn.style.whiteSpace = "nowrap";
+    modalOpenDerivBtn.style.margin = "0";
+    if (modalOpenDerivBtn.parentElement !== el) el.appendChild(modalOpenDerivBtn);
+  }
+
+  const footerRow = footer.querySelector(".modalFooterRow");
+  if (footerRow) footerRow.style.display = "none";
+
+  modalCandleStatusEl = el;
+  modalCandleStatusTextEl = txt;
+  return modalCandleStatusEl;
+}
+
+function updateModalCandleStatusUI() {
+  const bar = ensureModalCandleStatusBar();
+  if (!bar) return;
+
+  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
+    bar.style.display = "none";
+    return;
+  }
+
+  bar.style.display = "flex";
+
+  const labelEl = modalCandleStatusTextEl || bar.querySelector(".candleStatusText") || bar;
+  const isOpen = isTradeEntryOpen(modalCurrentItem);
+  if (isOpen) {
+    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
+    labelEl.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    labelEl.style.color = "#dcfce7";
+    bar.style.background = "rgba(22,163,74,.18)";
+    bar.style.borderColor = "rgba(34,197,94,.34)";
+    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
+  } else {
+    labelEl.textContent = "⚪ VELA CERRADA";
+    labelEl.style.color = "rgba(229,231,235,.95)";
+    bar.style.background = "rgba(107,114,128,.20)";
+    bar.style.borderColor = "rgba(156,163,175,.28)";
+    bar.style.boxShadow = "none";
+  }
+
+  const locked = isTradeLockedNow();
+  const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
+  const candleClosed = !isOpen;
+
+  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
+  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+}
+
+function updateModalLiveUI() {
+  if (!modalLiveBtn) return;
+  modalLiveBtn.setAttribute("aria-hidden", "true");
+  modalLiveBtn.tabIndex = -1;
+  modalLiveBtn.disabled = true;
+  modalLiveBtn.style.display = "none";
+}
+
+function requestModalDraw(force = false) {
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (!modalCurrentItem) return;
+
+  const now = Date.now();
+  if (!force && now - modalLastDrawAt < MODAL_DRAW_MIN_INTERVAL_MS) return;
+  modalLastDrawAt = now;
+
+  if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
+  modalDrawRaf = requestAnimationFrame(() => {
+    const it = modalCurrentItem;
+    if (!it) return;
+
+    let ticks = it.ticks || [];
+    if (modalLive && isItemLiveMinute(it)) {
+      const liveTicks = minuteData?.[it.minute]?.[it.symbol];
+      if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
+    }
+
+    drawDerivLikeChart(minuteCanvas, ticks);
+
+    if (modalSub) {
+      const n = Array.isArray(ticks) ? ticks.length : 0;
+      const dTag = disciplineTagText();
+      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
+      modalSub.textContent = `${it.time} | ticks: ${n}${dTag ? " | " + dTag : ""}${tBadge}`;
+    }
+
+    updateModalCandleStatusUI();
+  });
+}
+
+function applyModalTradeButtonsLayout() {
+  const bCall = modalBuyCallBtn;
+  const bPut = modalBuyPutBtn;
+  if (!bCall || !bPut) return;
+
+  applyChartModalBaseLayout();
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return;
+
+  const statusBar = ensureModalCandleStatusBar();
+  let row = footer.querySelector(".tradeRow");
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "tradeRow";
+    footer.appendChild(row);
+  }
+
+  if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
+
+  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  const isPhone = vw <= 640;
+
+  row.style.display = "flex";
+  row.style.gap = isPhone ? "8px" : "12px";
+  row.style.alignItems = "stretch";
+  row.style.justifyContent = "space-between";
+  row.style.width = "100%";
+  row.style.flexWrap = "nowrap";
+  row.style.margin = "0";
+
+  if (bCall.parentElement !== row) row.appendChild(bCall);
+  if (bPut.parentElement !== row) row.appendChild(bPut);
+
+  const baseBtn = (b) => {
+    b.style.flex = "1 1 0";
+    b.style.minWidth = "0";
+    b.style.minHeight = isPhone ? "52px" : "56px";
+    b.style.padding = isPhone ? "10px 10px" : "12px 14px";
+    b.style.fontWeight = "900";
+    b.style.letterSpacing = "0.2px";
+    b.style.borderRadius = "16px";
+    b.style.display = "flex";
+    b.style.alignItems = "center";
+    b.style.justifyContent = "center";
+    b.style.gap = "8px";
+    b.style.userSelect = "none";
+    b.style.touchAction = "manipulation";
+    b.style.fontSize = isPhone ? "13px" : "14px";
+    b.style.boxSizing = "border-box";
+    b.style.margin = "0";
+  };
+  baseBtn(bCall);
+  baseBtn(bPut);
+
+  bCall.style.borderColor = "rgba(34,197,94,.85)";
+  bCall.style.boxShadow = "0 0 14px rgba(34,197,94,.18)";
+  bCall.style.background = "rgba(34,197,94,.20)";
+  bCall.style.color = "var(--text, #e5e7eb)";
+
+  bPut.style.borderColor = "rgba(239,68,68,.85)";
+  bPut.style.boxShadow = "0 0 14px rgba(239,68,68,.18)";
+  bPut.style.background = "rgba(239,68,68,.18)";
+  bPut.style.color = "var(--text, #e5e7eb)";
+
+  if (statusBar) {
+    statusBar.style.margin = "0";
+    statusBar.style.padding = isPhone ? "9px 10px" : "10px 12px";
+    statusBar.style.borderRadius = "14px";
+    statusBar.style.fontSize = isPhone ? "12px" : "13px";
+    statusBar.style.gap = isPhone ? "6px" : "8px";
+  }
+
+  if (modalOpenDerivBtn) {
+    modalOpenDerivBtn.style.maxWidth = isPhone ? "104px" : "120px";
+    modalOpenDerivBtn.style.padding = isPhone ? "8px 10px" : "8px 12px";
+    modalOpenDerivBtn.style.minHeight = isPhone ? "34px" : "36px";
+    modalOpenDerivBtn.style.fontSize = isPhone ? "11.5px" : "12px";
+    modalOpenDerivBtn.style.borderRadius = "12px";
+  }
+
+  if (modalLiveBtn) {
+    modalLiveBtn.setAttribute("aria-hidden", "true");
+    modalLiveBtn.tabIndex = -1;
+    modalLiveBtn.disabled = true;
+    modalLiveBtn.style.display = "none";
+  }
+}
+
+function openChartModal(item) {
+  modalCurrentItem = item;
+  if (!chartModal || !modalTitle || !modalSub) return;
+
+  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
+
+  modalLive = isItemLiveMinute(item);
+  updateModalLiveUI();
+
+  chartModal.classList.remove("hidden");
+  chartModal.setAttribute("aria-hidden", "false");
+
+  applyChartModalBaseLayout();
+  applyModalTradeButtonsLayout();
+  updateDisciplineLockUI(false);
+  updateModalCandleStatusUI();
+
+  requestModalDraw(true);
+}
+
+if (modalLiveBtn) {
+  modalLiveBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+}
+
+try {
+  applyChartModalBaseLayout();
+  applyModalTradeButtonsLayout();
+  updateModalCandleStatusUI();
+} catch {}
