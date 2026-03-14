@@ -268,7 +268,8 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
-let modalCandleStatusEl = null;
+let modalCandleStatusEl = $("modalCandleStatus") || null;
+let modalCandleStatusTextEl = $("modalCandleStatusText") || null;
 
 /* =========================
    Toast
@@ -534,6 +535,7 @@ function startUiTimers() {
     updateTickHealthUI();
     updateCountdownUI();
     updateDisciplineLockUI(false);
+    updateModalCandleStatusUI();
   }, getUiIntervalMs());
 }
 function ensureLowPowerButton() {
@@ -1470,34 +1472,35 @@ function isTradeEntryOpen(item) {
   return isItemLiveMinute(item);
 }
 function ensureModalCandleStatusBar() {
-  if (modalCandleStatusEl) return modalCandleStatusEl;
-
   const footer =
     document.querySelector("#chartModal .modalFooter") ||
     (chartModal ? chartModal.querySelector(".modalFooter") : null);
 
   if (!footer) return null;
 
-  let el = footer.querySelector(".candleStatusBar");
+  let el = modalCandleStatusEl || footer.querySelector(".candleStatusBar");
   if (!el) {
     el = document.createElement("div");
+    el.id = "modalCandleStatus";
     el.className = "candleStatusBar";
     el.setAttribute("role", "status");
-    el.style.width = "100%";
-    el.style.boxSizing = "border-box";
-    el.style.margin = "0 0 10px 0";
-    el.style.padding = "12px 14px";
-    el.style.borderRadius = "14px";
-    el.style.border = "1px solid rgba(255,255,255,.14)";
-    el.style.fontWeight = "900";
-    el.style.fontSize = "14px";
-    el.style.letterSpacing = "0.3px";
-    el.style.textAlign = "center";
-    el.style.transition = "opacity .12s ease, transform .12s ease";
     footer.prepend(el);
   }
 
+  let txt = modalCandleStatusTextEl || el.querySelector(".candleStatusText");
+  if (!txt) {
+    txt = document.createElement("span");
+    txt.id = "modalCandleStatusText";
+    txt.className = "candleStatusText";
+    el.prepend(txt);
+  }
+
+  if (modalOpenDerivBtn && modalOpenDerivBtn.parentElement !== el) {
+    el.appendChild(modalOpenDerivBtn);
+  }
+
   modalCandleStatusEl = el;
+  modalCandleStatusTextEl = txt;
   return modalCandleStatusEl;
 }
 function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
@@ -1540,19 +1543,20 @@ function updateModalCandleStatusUI() {
     return;
   }
 
-  bar.style.display = "block";
+  bar.style.display = "flex";
 
+  const txt = modalCandleStatusTextEl || bar;
   const isOpen = isTradeEntryOpen(modalCurrentItem);
   if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
-    bar.style.color = "#dcfce7";
+    txt.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    txt.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
   } else {
-    bar.textContent = "⚪ VELA CERRADA";
-    bar.style.color = "rgba(229,231,235,.95)";
+    txt.textContent = "⚪ VELA CERRADA";
+    txt.style.color = "rgba(229,231,235,.95)";
     bar.style.background = "rgba(107,114,128,.20)";
     bar.style.borderColor = "rgba(156,163,175,.28)";
     bar.style.boxShadow = "none";
@@ -1571,8 +1575,10 @@ function updateModalCandleStatusUI() {
 ========================= */
 function updateModalLiveUI() {
   if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
-  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
+  modalLiveBtn.setAttribute("aria-hidden", "true");
+  modalLiveBtn.tabIndex = -1;
+  modalLiveBtn.disabled = true;
+  modalLiveBtn.style.display = "none";
 }
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
@@ -1597,10 +1603,9 @@ function requestModalDraw(force = false) {
 
     if (modalSub) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
-      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
+      modalSub.textContent = `${it.time} | ticks: ${n}${dTag ? " | " + dTag : ""}${tBadge}`;
     }
 
     updateModalCandleStatusUI();
@@ -1622,7 +1627,6 @@ function applyModalTradeButtonsLayout() {
   if (!footer) return;
 
   const statusBar = ensureModalCandleStatusBar();
-
   let row = footer.querySelector(".tradeRow");
   if (!row) {
     row = document.createElement("div");
@@ -1631,56 +1635,54 @@ function applyModalTradeButtonsLayout() {
   }
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
-
-  row.style.display = "flex";
-  row.style.gap = "14px";
-  row.style.alignItems = "stretch";
-  row.style.justifyContent = "space-between";
-  row.style.width = "100%";
-  row.style.flexWrap = "nowrap";
-
   if (bCall.parentElement !== row) row.appendChild(bCall);
   if (bPut.parentElement !== row) row.appendChild(bPut);
 
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
+  row.style.gap = "10px";
+  row.style.width = "100%";
+
   const baseBtn = (b) => {
-    b.style.flex = "1 1 0";
+    b.style.width = "100%";
     b.style.minWidth = "0";
-    b.style.minHeight = "60px";
-    b.style.padding = "14px 16px";
+    b.style.minHeight = "54px";
+    b.style.padding = "12px 10px";
     b.style.fontWeight = "900";
-    b.style.letterSpacing = "0.4px";
+    b.style.letterSpacing = "0.2px";
     b.style.borderRadius = "16px";
     b.style.display = "flex";
     b.style.alignItems = "center";
     b.style.justifyContent = "center";
-    b.style.gap = "10px";
+    b.style.gap = "8px";
     b.style.userSelect = "none";
     b.style.touchAction = "manipulation";
+    b.style.boxSizing = "border-box";
   };
   baseBtn(bCall);
   baseBtn(bPut);
 
   bCall.style.borderColor = "rgba(34,197,94,.85)";
-  bCall.style.boxShadow = "0 0 22px rgba(34,197,94,.25)";
+  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20)";
   bCall.style.background = "rgba(34,197,94,.20)";
   bCall.style.color = "var(--text, #e5e7eb)";
 
   bPut.style.borderColor = "rgba(239,68,68,.85)";
-  bPut.style.boxShadow = "0 0 22px rgba(239,68,68,.23)";
+  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18)";
   bPut.style.background = "rgba(239,68,68,.18)";
   bPut.style.color = "var(--text, #e5e7eb)";
 
-  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  if (w < 380) {
-    row.style.flexWrap = "wrap";
-    bCall.style.flex = "1 1 100%";
-    bPut.style.flex = "1 1 100%";
+  if (modalOpenDerivBtn) {
+    modalOpenDerivBtn.style.maxWidth = "112px";
+    modalOpenDerivBtn.style.padding = "8px 10px";
+    modalOpenDerivBtn.style.minHeight = "34px";
+    modalOpenDerivBtn.style.fontSize = "12px";
+    modalOpenDerivBtn.style.borderRadius = "12px";
+    modalOpenDerivBtn.style.flex = "0 0 auto";
   }
 
   if (modalLiveBtn) {
-    modalLiveBtn.style.minHeight = "52px";
-    modalLiveBtn.style.width = "100%";
-    modalLiveBtn.style.marginTop = "10px";
+    modalLiveBtn.style.display = "none";
   }
 }
 
@@ -1889,17 +1891,8 @@ window.addEventListener("resize", () => {
   requestModalDraw(true);
 });
 if (modalLiveBtn) {
-  modalLiveBtn.onclick = () => {
-    if (!modalCurrentItem) return;
-    if (!isItemLiveMinute(modalCurrentItem)) {
-      modalLive = false;
-      updateModalLiveUI();
-      requestModalDraw(true);
-      return;
-    }
-    modalLive = !modalLive;
-    updateModalLiveUI();
-    requestModalDraw(true);
+  modalLiveBtn.onclick = (e) => {
+    e.preventDefault();
   };
 }
 
@@ -3555,419 +3548,3 @@ seedTradesJournalFromHistory();
 ensureInlineClearButtons();
 
 connect();
-
-
-/* =========================
-   Modal mobile fix (header + overlay + status bar)
-========================= */
-let modalCandleStatusTextEl = null;
-
-function getChartModalCard() {
-  if (!chartModal) return null;
-  return chartModal.querySelector(".modalCard") || null;
-}
-
-function applyChartModalBaseLayout() {
-  if (!chartModal) return;
-  const card = getChartModalCard();
-  if (!card) return;
-
-  const backdrop = modalCloseBackdrop || chartModal.querySelector(".modalBackdrop");
-  const header = card.querySelector(".modalHeader");
-  const footer = card.querySelector(".modalFooter");
-  const footerRow = card.querySelector(".modalFooterRow");
-  const titleWrap = modalTitle ? modalTitle.parentElement : null;
-
-  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
-  const isPhone = vw <= 640;
-  const pad = isPhone ? 8 : 18;
-  const cardWidth = isPhone ? Math.min(vw - pad * 2, 430) : Math.min(vw - pad * 2, 760);
-  const canvasHeight = isPhone
-    ? Math.max(300, Math.min(Math.floor(vh * 0.42), 380))
-    : Math.max(320, Math.min(Math.floor(vh * 0.46), 480));
-
-  chartModal.style.position = "fixed";
-  chartModal.style.inset = "0";
-  chartModal.style.zIndex = "99999";
-  chartModal.style.display = "flex";
-  chartModal.style.alignItems = "center";
-  chartModal.style.justifyContent = "center";
-  chartModal.style.padding = `${pad}px`;
-  chartModal.style.boxSizing = "border-box";
-  chartModal.style.overflow = "hidden";
-
-  if (backdrop) {
-    backdrop.style.position = "fixed";
-    backdrop.style.inset = "0";
-    backdrop.style.zIndex = "0";
-    backdrop.style.background = "rgba(0,0,0,.82)";
-  }
-
-  card.style.position = "relative";
-  card.style.inset = "auto";
-  card.style.left = "auto";
-  card.style.right = "auto";
-  card.style.top = "auto";
-  card.style.bottom = "auto";
-  card.style.transform = "none";
-  card.style.width = `${cardWidth}px`;
-  card.style.maxWidth = "100%";
-  card.style.minWidth = "0";
-  card.style.maxHeight = `calc(100dvh - ${pad * 2}px)`;
-  card.style.margin = "0";
-  card.style.padding = isPhone ? "12px" : "14px";
-  card.style.boxSizing = "border-box";
-  card.style.display = "flex";
-  card.style.flexDirection = "column";
-  card.style.gap = "10px";
-  card.style.overflow = "hidden";
-  card.style.zIndex = "1";
-  card.style.background = "rgba(2,6,23,.96)";
-  card.style.borderColor = "rgba(148,163,184,.22)";
-  card.style.borderRadius = isPhone ? "18px" : "20px";
-
-  if (header) {
-    header.style.display = "flex";
-    header.style.alignItems = "flex-start";
-    header.style.justifyContent = "space-between";
-    header.style.gap = "10px";
-    header.style.width = "100%";
-    header.style.minWidth = "0";
-    header.style.margin = "0";
-  }
-
-  if (titleWrap) {
-    titleWrap.style.flex = "1 1 auto";
-    titleWrap.style.minWidth = "0";
-    titleWrap.style.maxWidth = "100%";
-    titleWrap.style.margin = "0";
-  }
-
-  if (modalTitle) {
-    modalTitle.style.display = "block";
-    modalTitle.style.margin = "0";
-    modalTitle.style.minWidth = "0";
-    modalTitle.style.maxWidth = "100%";
-    modalTitle.style.fontSize = isPhone ? "15px" : "18px";
-    modalTitle.style.lineHeight = "1.1";
-    modalTitle.style.whiteSpace = "normal";
-    modalTitle.style.wordBreak = "normal";
-    modalTitle.style.overflowWrap = "break-word";
-  }
-
-  if (modalSub) {
-    modalSub.style.margin = "3px 0 0 0";
-    modalSub.style.fontSize = isPhone ? "11.5px" : "13px";
-    modalSub.style.lineHeight = "1.2";
-    modalSub.style.whiteSpace = "nowrap";
-    modalSub.style.overflow = "hidden";
-    modalSub.style.textOverflow = "ellipsis";
-    modalSub.style.maxWidth = "100%";
-  }
-
-  if (modalCloseBtn) {
-    modalCloseBtn.style.position = "relative";
-    modalCloseBtn.style.inset = "auto";
-    modalCloseBtn.style.transform = "none";
-    modalCloseBtn.style.margin = "0";
-    modalCloseBtn.style.flex = "0 0 auto";
-    modalCloseBtn.style.width = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.height = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.minWidth = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.minHeight = isPhone ? "40px" : "44px";
-    modalCloseBtn.style.borderRadius = "14px";
-  }
-
-  if (minuteCanvas) {
-    minuteCanvas.style.display = "block";
-    minuteCanvas.style.width = "100%";
-    minuteCanvas.style.maxWidth = "100%";
-    minuteCanvas.style.height = `${canvasHeight}px`;
-    minuteCanvas.style.minHeight = `${canvasHeight}px`;
-    minuteCanvas.style.maxHeight = isPhone ? "48dvh" : "56dvh";
-    minuteCanvas.style.margin = "0";
-    minuteCanvas.style.flex = "0 0 auto";
-    minuteCanvas.style.borderRadius = "16px";
-  }
-
-  if (footer) {
-    footer.style.display = "flex";
-    footer.style.flexDirection = "column";
-    footer.style.gap = "10px";
-    footer.style.width = "100%";
-    footer.style.margin = "0";
-    footer.style.padding = "0";
-  }
-
-  if (footerRow) footerRow.style.display = "none";
-}
-
-function ensureModalCandleStatusBar() {
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-
-  if (!footer) return null;
-
-  let el = footer.querySelector(".candleStatusBar");
-  if (!el) {
-    el = document.createElement("div");
-    el.className = "candleStatusBar";
-    el.setAttribute("role", "status");
-    el.style.width = "100%";
-    el.style.boxSizing = "border-box";
-    el.style.margin = "0";
-    el.style.padding = "10px 12px";
-    el.style.borderRadius = "14px";
-    el.style.border = "1px solid rgba(255,255,255,.14)";
-    el.style.fontWeight = "900";
-    el.style.fontSize = "13px";
-    el.style.letterSpacing = "0.2px";
-    el.style.transition = "opacity .12s ease, transform .12s ease";
-    el.style.display = "flex";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "space-between";
-    el.style.gap = "8px";
-    footer.prepend(el);
-  }
-
-  let txt = el.querySelector(".candleStatusText");
-  if (!txt) {
-    txt = document.createElement("span");
-    txt.className = "candleStatusText";
-    txt.style.flex = "1 1 auto";
-    txt.style.minWidth = "0";
-    txt.style.whiteSpace = "nowrap";
-    txt.style.overflow = "hidden";
-    txt.style.textOverflow = "ellipsis";
-    txt.style.lineHeight = "1.2";
-    el.appendChild(txt);
-  }
-
-  if (modalOpenDerivBtn) {
-    modalOpenDerivBtn.style.display = "inline-flex";
-    modalOpenDerivBtn.style.alignItems = "center";
-    modalOpenDerivBtn.style.justifyContent = "center";
-    modalOpenDerivBtn.style.flex = "0 0 auto";
-    modalOpenDerivBtn.style.minWidth = "0";
-    modalOpenDerivBtn.style.maxWidth = "112px";
-    modalOpenDerivBtn.style.padding = "8px 10px";
-    modalOpenDerivBtn.style.minHeight = "36px";
-    modalOpenDerivBtn.style.borderRadius = "12px";
-    modalOpenDerivBtn.style.fontSize = "12px";
-    modalOpenDerivBtn.style.fontWeight = "900";
-    modalOpenDerivBtn.style.lineHeight = "1";
-    modalOpenDerivBtn.style.whiteSpace = "nowrap";
-    modalOpenDerivBtn.style.margin = "0";
-    if (modalOpenDerivBtn.parentElement !== el) el.appendChild(modalOpenDerivBtn);
-  }
-
-  const footerRow = footer.querySelector(".modalFooterRow");
-  if (footerRow) footerRow.style.display = "none";
-
-  modalCandleStatusEl = el;
-  modalCandleStatusTextEl = txt;
-  return modalCandleStatusEl;
-}
-
-function updateModalCandleStatusUI() {
-  const bar = ensureModalCandleStatusBar();
-  if (!bar) return;
-
-  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
-    bar.style.display = "none";
-    return;
-  }
-
-  bar.style.display = "flex";
-
-  const labelEl = modalCandleStatusTextEl || bar.querySelector(".candleStatusText") || bar;
-  const isOpen = isTradeEntryOpen(modalCurrentItem);
-  if (isOpen) {
-    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    labelEl.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
-    labelEl.style.color = "#dcfce7";
-    bar.style.background = "rgba(22,163,74,.18)";
-    bar.style.borderColor = "rgba(34,197,94,.34)";
-    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
-  } else {
-    labelEl.textContent = "⚪ VELA CERRADA";
-    labelEl.style.color = "rgba(229,231,235,.95)";
-    bar.style.background = "rgba(107,114,128,.20)";
-    bar.style.borderColor = "rgba(156,163,175,.28)";
-    bar.style.boxShadow = "none";
-  }
-
-  const locked = isTradeLockedNow();
-  const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
-  const candleClosed = !isOpen;
-
-  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
-  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
-}
-
-function updateModalLiveUI() {
-  if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-hidden", "true");
-  modalLiveBtn.tabIndex = -1;
-  modalLiveBtn.disabled = true;
-  modalLiveBtn.style.display = "none";
-}
-
-function requestModalDraw(force = false) {
-  if (!chartModal || chartModal.classList.contains("hidden")) return;
-  if (!modalCurrentItem) return;
-
-  const now = Date.now();
-  if (!force && now - modalLastDrawAt < MODAL_DRAW_MIN_INTERVAL_MS) return;
-  modalLastDrawAt = now;
-
-  if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
-  modalDrawRaf = requestAnimationFrame(() => {
-    const it = modalCurrentItem;
-    if (!it) return;
-
-    let ticks = it.ticks || [];
-    if (modalLive && isItemLiveMinute(it)) {
-      const liveTicks = minuteData?.[it.minute]?.[it.symbol];
-      if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
-    }
-
-    drawDerivLikeChart(minuteCanvas, ticks);
-
-    if (modalSub) {
-      const n = Array.isArray(ticks) ? ticks.length : 0;
-      const dTag = disciplineTagText();
-      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${dTag ? " | " + dTag : ""}${tBadge}`;
-    }
-
-    updateModalCandleStatusUI();
-  });
-}
-
-function applyModalTradeButtonsLayout() {
-  const bCall = modalBuyCallBtn;
-  const bPut = modalBuyPutBtn;
-  if (!bCall || !bPut) return;
-
-  applyChartModalBaseLayout();
-
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-
-  if (!footer) return;
-
-  const statusBar = ensureModalCandleStatusBar();
-  let row = footer.querySelector(".tradeRow");
-  if (!row) {
-    row = document.createElement("div");
-    row.className = "tradeRow";
-    footer.appendChild(row);
-  }
-
-  if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
-
-  const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  const isPhone = vw <= 640;
-
-  row.style.display = "flex";
-  row.style.gap = isPhone ? "8px" : "12px";
-  row.style.alignItems = "stretch";
-  row.style.justifyContent = "space-between";
-  row.style.width = "100%";
-  row.style.flexWrap = "nowrap";
-  row.style.margin = "0";
-
-  if (bCall.parentElement !== row) row.appendChild(bCall);
-  if (bPut.parentElement !== row) row.appendChild(bPut);
-
-  const baseBtn = (b) => {
-    b.style.flex = "1 1 0";
-    b.style.minWidth = "0";
-    b.style.minHeight = isPhone ? "52px" : "56px";
-    b.style.padding = isPhone ? "10px 10px" : "12px 14px";
-    b.style.fontWeight = "900";
-    b.style.letterSpacing = "0.2px";
-    b.style.borderRadius = "16px";
-    b.style.display = "flex";
-    b.style.alignItems = "center";
-    b.style.justifyContent = "center";
-    b.style.gap = "8px";
-    b.style.userSelect = "none";
-    b.style.touchAction = "manipulation";
-    b.style.fontSize = isPhone ? "13px" : "14px";
-    b.style.boxSizing = "border-box";
-    b.style.margin = "0";
-  };
-  baseBtn(bCall);
-  baseBtn(bPut);
-
-  bCall.style.borderColor = "rgba(34,197,94,.85)";
-  bCall.style.boxShadow = "0 0 14px rgba(34,197,94,.18)";
-  bCall.style.background = "rgba(34,197,94,.20)";
-  bCall.style.color = "var(--text, #e5e7eb)";
-
-  bPut.style.borderColor = "rgba(239,68,68,.85)";
-  bPut.style.boxShadow = "0 0 14px rgba(239,68,68,.18)";
-  bPut.style.background = "rgba(239,68,68,.18)";
-  bPut.style.color = "var(--text, #e5e7eb)";
-
-  if (statusBar) {
-    statusBar.style.margin = "0";
-    statusBar.style.padding = isPhone ? "9px 10px" : "10px 12px";
-    statusBar.style.borderRadius = "14px";
-    statusBar.style.fontSize = isPhone ? "12px" : "13px";
-    statusBar.style.gap = isPhone ? "6px" : "8px";
-  }
-
-  if (modalOpenDerivBtn) {
-    modalOpenDerivBtn.style.maxWidth = isPhone ? "104px" : "120px";
-    modalOpenDerivBtn.style.padding = isPhone ? "8px 10px" : "8px 12px";
-    modalOpenDerivBtn.style.minHeight = isPhone ? "34px" : "36px";
-    modalOpenDerivBtn.style.fontSize = isPhone ? "11.5px" : "12px";
-    modalOpenDerivBtn.style.borderRadius = "12px";
-  }
-
-  if (modalLiveBtn) {
-    modalLiveBtn.setAttribute("aria-hidden", "true");
-    modalLiveBtn.tabIndex = -1;
-    modalLiveBtn.disabled = true;
-    modalLiveBtn.style.display = "none";
-  }
-}
-
-function openChartModal(item) {
-  modalCurrentItem = item;
-  if (!chartModal || !modalTitle || !modalSub) return;
-
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
-
-  modalLive = isItemLiveMinute(item);
-  updateModalLiveUI();
-
-  chartModal.classList.remove("hidden");
-  chartModal.setAttribute("aria-hidden", "false");
-
-  applyChartModalBaseLayout();
-  applyModalTradeButtonsLayout();
-  updateDisciplineLockUI(false);
-  updateModalCandleStatusUI();
-
-  requestModalDraw(true);
-}
-
-if (modalLiveBtn) {
-  modalLiveBtn.onclick = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-}
-
-try {
-  applyChartModalBaseLayout();
-  applyModalTradeButtonsLayout();
-  updateModalCandleStatusUI();
-} catch {}
