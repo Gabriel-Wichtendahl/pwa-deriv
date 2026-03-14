@@ -268,7 +268,7 @@ textarea{
   box-shadow:0 18px 60px rgba(0,0,0,.42);
 }
 body.light .modalCard{background:rgba(255,255,255,.98)}
-.chartModalCard{width:min(100%,420px);max-width:420px}
+.chartModalCard{width:min(100%,420px);max-width:420px;max-height:min(95dvh,820px)}
 .modalCardSmall{
   width:min(100%,520px);
   max-width:520px;
@@ -302,9 +302,9 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
 #minuteCanvas{
   display:block;
   width:100%;
-  height:min(42dvh,360px);
-  min-height:280px;
-  max-height:360px;
+  height:min(48dvh,410px);
+  min-height:320px;
+  max-height:410px;
   margin:10px 0 8px;
   border-radius:14px;
   border:1px solid var(--border);
@@ -342,18 +342,34 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
 }
 .tradeRow{
   display:grid;
-  grid-template-columns:repeat(2, minmax(0,1fr));
+  grid-template-columns:minmax(0,1fr);
   gap:10px;
   width:100%;
 }
 .tradeRow .btn{
   width:100%;
   min-width:0;
-  min-height:54px;
+  min-height:58px;
   display:flex;
   align-items:center;
   justify-content:center;
-  padding:12px 10px;
+  padding:13px 12px;
+  font-weight:900;
+  letter-spacing:.25px;
+  border-radius:16px;
+}
+#modalBuyCallBtn{
+  border-color:rgba(34,197,94,.82);
+  background:linear-gradient(180deg, rgba(34,197,94,.24), rgba(34,197,94,.14));
+  box-shadow:0 0 18px rgba(34,197,94,.20), inset 0 0 14px rgba(34,197,94,.08);
+}
+#modalBuyPutBtn{
+  border-color:rgba(239,68,68,.82);
+  background:linear-gradient(180deg, rgba(239,68,68,.22), rgba(239,68,68,.14));
+  box-shadow:0 0 18px rgba(239,68,68,.18), inset 0 0 14px rgba(239,68,68,.07);
+}
+#modalBuyCallBtn:hover,#modalBuyPutBtn:hover{
+  transform:translateY(-1px) scale(1.005);
 }
 .modalFooterRow{display:none}
 .settingsBody{padding:8px 2px 2px}
@@ -529,11 +545,13 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
   body{padding:8px}
   .modal{padding:8px}
   .modalCard{padding:10px;width:min(100%,400px)}
+  .chartModalCard{max-height:min(96dvh,860px)}
   .modalTitle{font-size:15px}
   .modalSub{font-size:11px}
-  #minuteCanvas{height:min(44dvh,340px);min-height:260px}
+  #minuteCanvas{height:min(50dvh,390px);min-height:300px;max-height:390px}
   .candleStatusBar{padding:8px 9px}
   .candleStatusText{font-size:11.5px}
+  .tradeRow .btn{min-height:56px;padding:12px 10px}
 }
 @media (max-width:420px){
   .settingsBody .controls{grid-template-columns:1fr}
