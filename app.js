@@ -270,6 +270,9 @@ const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
 let modalCandleStatusTextEl = null;
+let modalHeaderShell = null;
+let modalHeaderTopRow = null;
+let modalHeaderMetaRow = null;
 
 /* =========================
    Toast
@@ -1545,6 +1548,53 @@ function getChartModalPanel() {
     null
   );
 }
+function ensureChartModalHeaderShell() {
+  if (modalHeaderShell && modalHeaderTopRow && modalHeaderMetaRow) return modalHeaderShell;
+
+  const panel = getChartModalPanel();
+  if (!panel) return null;
+
+  let header =
+    panel.querySelector(".modalHeader") ||
+    modalTitle?.closest?.(".modalHeader") ||
+    null;
+
+  if (!header) {
+    header = document.createElement("div");
+    header.className = "modalHeader";
+    panel.insertBefore(header, panel.firstChild || null);
+  }
+
+  let shell = header.querySelector(".modalHeaderShell");
+  if (!shell) {
+    shell = document.createElement("div");
+    shell.className = "modalHeaderShell";
+    header.appendChild(shell);
+  }
+
+  let topRow = shell.querySelector(".modalHeaderTopRow");
+  if (!topRow) {
+    topRow = document.createElement("div");
+    topRow.className = "modalHeaderTopRow";
+    shell.appendChild(topRow);
+  }
+
+  let metaRow = shell.querySelector(".modalHeaderMetaRow");
+  if (!metaRow) {
+    metaRow = document.createElement("div");
+    metaRow.className = "modalHeaderMetaRow";
+    shell.appendChild(metaRow);
+  }
+
+  if (modalTitle && modalTitle.parentElement !== topRow) topRow.appendChild(modalTitle);
+  if (modalCloseBtn && modalCloseBtn.parentElement !== topRow) topRow.appendChild(modalCloseBtn);
+  if (modalSub && modalSub.parentElement !== metaRow) metaRow.appendChild(modalSub);
+
+  modalHeaderShell = shell;
+  modalHeaderTopRow = topRow;
+  modalHeaderMetaRow = metaRow;
+  return modalHeaderShell;
+}
 function applyChartModalHeaderLayout() {
   const panel = getChartModalPanel();
   if (!panel) return;
@@ -1552,45 +1602,67 @@ function applyChartModalHeaderLayout() {
   const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
   const isPhone = vw < 768;
 
-  const header =
-    panel.querySelector(".modalHeader") ||
-    modalTitle?.closest?.(".modalHeader") ||
-    modalTitle?.parentElement ||
-    null;
+  const shell = ensureChartModalHeaderShell();
+  if (!shell) return;
 
+  const header = shell.parentElement;
   if (header) {
     header.style.width = "100%";
     header.style.maxWidth = "100%";
     header.style.minWidth = "0";
     header.style.boxSizing = "border-box";
-    header.style.overflow = "hidden";
+    header.style.margin = "0";
+    header.style.padding = isPhone ? "12px 12px 0 12px" : "14px 14px 0 14px";
+    header.style.overflow = "visible";
   }
 
-  const titleWrap = modalTitle?.parentElement || null;
-  if (titleWrap) {
-    if (modalCloseBtn && modalCloseBtn.parentElement !== titleWrap) titleWrap.appendChild(modalCloseBtn);
-    titleWrap.style.display = "grid";
-    titleWrap.style.gridTemplateColumns = "minmax(0,1fr) auto";
-    titleWrap.style.alignItems = "center";
-    titleWrap.style.columnGap = isPhone ? "6px" : "10px";
-    titleWrap.style.width = "100%";
-    titleWrap.style.maxWidth = "100%";
-    titleWrap.style.minWidth = "0";
-    titleWrap.style.boxSizing = "border-box";
-    titleWrap.style.paddingRight = "0";
-    titleWrap.style.marginRight = "0";
-    titleWrap.style.overflow = "hidden";
+  shell.style.display = "flex";
+  shell.style.flexDirection = "column";
+  shell.style.width = "100%";
+  shell.style.maxWidth = "100%";
+  shell.style.minWidth = "0";
+  shell.style.boxSizing = "border-box";
+  shell.style.margin = "0 0 8px 0";
+  shell.style.padding = "0";
+  shell.style.gap = isPhone ? "4px" : "6px";
+  shell.style.overflow = "visible";
+
+  if (modalHeaderTopRow) {
+    modalHeaderTopRow.style.display = "grid";
+    modalHeaderTopRow.style.gridTemplateColumns = "minmax(0,1fr) auto";
+    modalHeaderTopRow.style.alignItems = "start";
+    modalHeaderTopRow.style.columnGap = isPhone ? "8px" : "10px";
+    modalHeaderTopRow.style.width = "100%";
+    modalHeaderTopRow.style.maxWidth = "100%";
+    modalHeaderTopRow.style.minWidth = "0";
+    modalHeaderTopRow.style.boxSizing = "border-box";
+    modalHeaderTopRow.style.margin = "0";
+    modalHeaderTopRow.style.padding = "0";
+    modalHeaderTopRow.style.overflow = "visible";
+    modalHeaderTopRow.style.minHeight = isPhone ? "40px" : "44px";
   }
 
   if (modalTitle) {
-    modalTitle.style.display = "block";
-    modalTitle.style.minWidth = "0";
+    modalTitle.style.display = "-webkit-box";
+    modalTitle.style.width = "100%";
     modalTitle.style.maxWidth = "100%";
+    modalTitle.style.minWidth = "0";
     modalTitle.style.margin = "0";
-    modalTitle.style.lineHeight = isPhone ? "1.08" : "1.15";
-    modalTitle.style.fontSize = isPhone ? "15px" : "18px";
-    modalTitle.style.overflowWrap = "anywhere";
-    modalTitle.style.wordBreak = "break-word";
+    modalTitle.style.padding = "0";
+    modalTitle.style.lineHeight = isPhone ? "1.08" : "1.12";
+    modalTitle.style.fontSize = isPhone ? "14px" : "18px";
+    modalTitle.style.fontWeight = "900";
+    modalTitle.style.letterSpacing = "0";
+    modalTitle.style.whiteSpace = "normal";
+    modalTitle.style.wordBreak = "normal";
+    modalTitle.style.overflowWrap = "break-word";
+    modalTitle.style.writingMode = "horizontal-tb";
+    modalTitle.style.textOrientation = "mixed";
+    modalTitle.style.maxHeight = isPhone ? "2.25em" : "2.4em";
+    modalTitle.style.overflow = "hidden";
+    modalTitle.style.textOverflow = "ellipsis";
+    modalTitle.style.setProperty("-webkit-line-clamp", "2");
+    modalTitle.style.setProperty("-webkit-box-orient", "vertical");
   }
 
   if (modalCloseBtn) {
@@ -1602,30 +1674,48 @@ function applyChartModalHeaderLayout() {
     modalCloseBtn.style.bottom = "auto";
     modalCloseBtn.style.transform = "none";
     modalCloseBtn.style.margin = "0";
+    modalCloseBtn.style.padding = "0";
     modalCloseBtn.style.flex = "0 0 auto";
-    modalCloseBtn.style.width = isPhone ? "38px" : "44px";
-    modalCloseBtn.style.height = isPhone ? "38px" : "44px";
-    modalCloseBtn.style.minWidth = isPhone ? "38px" : "44px";
-    modalCloseBtn.style.minHeight = isPhone ? "38px" : "44px";
+    modalCloseBtn.style.alignSelf = "start";
+    modalCloseBtn.style.width = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.height = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.minWidth = isPhone ? "40px" : "44px";
+    modalCloseBtn.style.minHeight = isPhone ? "40px" : "44px";
     modalCloseBtn.style.borderRadius = "14px";
     modalCloseBtn.style.display = "inline-flex";
     modalCloseBtn.style.alignItems = "center";
     modalCloseBtn.style.justifyContent = "center";
     modalCloseBtn.style.justifySelf = "end";
-    modalCloseBtn.style.zIndex = "2";
+    modalCloseBtn.style.zIndex = "3";
+    modalCloseBtn.style.marginTop = "1px";
+  }
+
+  if (modalHeaderMetaRow) {
+    modalHeaderMetaRow.style.display = "block";
+    modalHeaderMetaRow.style.width = "100%";
+    modalHeaderMetaRow.style.maxWidth = "100%";
+    modalHeaderMetaRow.style.minWidth = "0";
+    modalHeaderMetaRow.style.boxSizing = "border-box";
+    modalHeaderMetaRow.style.margin = "0";
+    modalHeaderMetaRow.style.padding = "0";
+    modalHeaderMetaRow.style.overflow = "hidden";
+    modalHeaderMetaRow.style.marginTop = "1px";
   }
 
   if (modalSub) {
+    modalSub.style.display = "block";
     modalSub.style.width = "100%";
     modalSub.style.maxWidth = "100%";
     modalSub.style.minWidth = "0";
     modalSub.style.boxSizing = "border-box";
     modalSub.style.fontSize = isPhone ? "11px" : "13px";
-    modalSub.style.lineHeight = "1.14";
-    modalSub.style.margin = isPhone ? "4px 0 6px 0" : "6px 0 8px 0";
+    modalSub.style.lineHeight = "1.16";
+    modalSub.style.margin = "0";
+    modalSub.style.padding = "0";
     modalSub.style.overflow = "hidden";
     modalSub.style.textOverflow = "ellipsis";
-    modalSub.style.whiteSpace = isPhone ? "nowrap" : "normal";
+    modalSub.style.whiteSpace = "nowrap";
+    modalSub.style.opacity = "0.92";
   }
 }
 function applyChartModalResponsiveLayout() {
@@ -1641,19 +1731,21 @@ function applyChartModalResponsiveLayout() {
   if (chartModal) {
     chartModal.style.position = "fixed";
     chartModal.style.inset = "0";
-    chartModal.style.width = "100vw";
+    chartModal.style.width = "100%";
     chartModal.style.height = "100dvh";
-    chartModal.style.maxWidth = "100vw";
+    chartModal.style.maxWidth = "100%";
     chartModal.style.maxHeight = "100dvh";
     chartModal.style.padding = `${gutter}px`;
     chartModal.style.boxSizing = "border-box";
-    chartModal.style.alignItems = "center";
+    chartModal.style.display = "flex";
+    chartModal.style.alignItems = isPhone ? "flex-start" : "center";
     chartModal.style.justifyContent = "center";
     chartModal.style.overflowX = "hidden";
     chartModal.style.overflowY = "auto";
     chartModal.style.zIndex = "99999";
     chartModal.style.isolation = "isolate";
     chartModal.style.pointerEvents = "auto";
+    chartModal.style.background = "transparent";
   }
 
   if (modalCloseBackdrop) {
@@ -1662,6 +1754,9 @@ function applyChartModalResponsiveLayout() {
     modalCloseBackdrop.style.width = "100%";
     modalCloseBackdrop.style.height = "100%";
     modalCloseBackdrop.style.zIndex = "0";
+    modalCloseBackdrop.style.background = "rgba(2, 6, 18, 0.78)";
+    modalCloseBackdrop.style.backdropFilter = "blur(4px)";
+    modalCloseBackdrop.style.webkitBackdropFilter = "blur(4px)";
   }
 
   panel.style.position = "relative";
@@ -1673,13 +1768,18 @@ function applyChartModalResponsiveLayout() {
   panel.style.width = `${panelWidth}px`;
   panel.style.maxWidth = `${panelWidth}px`;
   panel.style.minWidth = "0";
-  panel.style.margin = "0 auto";
+  panel.style.margin = isPhone ? "2px auto 10px auto" : "0 auto";
   panel.style.boxSizing = "border-box";
   panel.style.maxHeight = isPhone ? `calc(100dvh - ${gutter * 2}px)` : "90vh";
   panel.style.overflowX = "hidden";
   panel.style.overflowY = "auto";
   panel.style.zIndex = "1";
   panel.style.isolation = "isolate";
+  panel.style.background = "rgba(4, 8, 24, 0.96)";
+  panel.style.border = "1px solid rgba(255,255,255,.10)";
+  panel.style.borderRadius = isPhone ? "20px" : "22px";
+  panel.style.boxShadow = "0 22px 60px rgba(0,0,0,.45)";
+  panel.style.display = "block";
 
   const header =
     panel.querySelector(".modalHeader") ||
@@ -1691,7 +1791,9 @@ function applyChartModalResponsiveLayout() {
     header.style.maxWidth = "100%";
     header.style.minWidth = "0";
     header.style.boxSizing = "border-box";
-    header.style.overflow = "hidden";
+    header.style.overflow = "visible";
+    header.style.padding = isPhone ? "12px 12px 0 12px" : "14px 14px 0 14px";
+    header.style.margin = "0";
   }
 
   const body = panel.querySelector(".modalBody") || minuteCanvas?.parentElement || null;
@@ -1700,7 +1802,7 @@ function applyChartModalResponsiveLayout() {
     body.style.maxWidth = "100%";
     body.style.minWidth = "0";
     body.style.boxSizing = "border-box";
-    body.style.padding = "0";
+    body.style.padding = isPhone ? "0 12px" : "0 14px";
     body.style.margin = "0";
     body.style.overflowX = "hidden";
   }
@@ -1711,7 +1813,7 @@ function applyChartModalResponsiveLayout() {
     footer.style.maxWidth = "100%";
     footer.style.minWidth = "0";
     footer.style.boxSizing = "border-box";
-    footer.style.padding = "0";
+    footer.style.padding = isPhone ? "0 12px 12px 12px" : "0 14px 14px 14px";
     footer.style.margin = "0";
     footer.style.overflowX = "hidden";
   }
@@ -1725,11 +1827,13 @@ function applyChartModalResponsiveLayout() {
     canvasWrap.style.margin = "0";
     canvasWrap.style.boxSizing = "border-box";
     canvasWrap.style.overflow = "hidden";
-    canvasWrap.style.borderRadius = canvasWrap.style.borderRadius || "16px";
+    canvasWrap.style.borderRadius = "16px";
+    canvasWrap.style.border = "1px solid rgba(255,255,255,.08)";
+    canvasWrap.style.background = "rgba(5, 10, 28, 0.92)";
   }
 
   const desiredCanvasHeight = isPhone
-    ? Math.max(330, Math.min(450, Math.floor(vh * 0.40)))
+    ? Math.max(320, Math.min(430, Math.floor(vh * 0.38)))
     : Math.max(360, Math.min(520, Math.floor(vh * 0.5)));
 
   if (minuteCanvas) {
@@ -1738,9 +1842,10 @@ function applyChartModalResponsiveLayout() {
     minuteCanvas.style.maxWidth = "100%";
     minuteCanvas.style.height = `${desiredCanvasHeight}px`;
     minuteCanvas.style.minHeight = `${desiredCanvasHeight}px`;
-    minuteCanvas.style.maxHeight = isPhone ? "48dvh" : "58vh";
+    minuteCanvas.style.maxHeight = isPhone ? "46dvh" : "58vh";
     minuteCanvas.style.margin = "0";
     minuteCanvas.style.boxSizing = "border-box";
+    minuteCanvas.style.borderRadius = "16px";
   }
 
   applyChartModalHeaderLayout();
