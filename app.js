@@ -268,8 +268,7 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
-let modalCandleStatusEl = $("modalCandleStatus") || null;
-let modalCandleStatusTextEl = $("modalCandleStatusText") || null;
+let modalCandleStatusEl = null;
 
 /* =========================
    Toast
@@ -535,7 +534,6 @@ function startUiTimers() {
     updateTickHealthUI();
     updateCountdownUI();
     updateDisciplineLockUI(false);
-    updateModalCandleStatusUI();
   }, getUiIntervalMs());
 }
 function ensureLowPowerButton() {
@@ -1472,35 +1470,34 @@ function isTradeEntryOpen(item) {
   return isItemLiveMinute(item);
 }
 function ensureModalCandleStatusBar() {
+  if (modalCandleStatusEl) return modalCandleStatusEl;
+
   const footer =
     document.querySelector("#chartModal .modalFooter") ||
     (chartModal ? chartModal.querySelector(".modalFooter") : null);
 
   if (!footer) return null;
 
-  let el = modalCandleStatusEl || footer.querySelector(".candleStatusBar");
+  let el = footer.querySelector(".candleStatusBar");
   if (!el) {
     el = document.createElement("div");
-    el.id = "modalCandleStatus";
     el.className = "candleStatusBar";
     el.setAttribute("role", "status");
+    el.style.width = "100%";
+    el.style.boxSizing = "border-box";
+    el.style.margin = "0 0 10px 0";
+    el.style.padding = "12px 14px";
+    el.style.borderRadius = "14px";
+    el.style.border = "1px solid rgba(255,255,255,.14)";
+    el.style.fontWeight = "900";
+    el.style.fontSize = "14px";
+    el.style.letterSpacing = "0.3px";
+    el.style.textAlign = "center";
+    el.style.transition = "opacity .12s ease, transform .12s ease";
     footer.prepend(el);
   }
 
-  let txt = modalCandleStatusTextEl || el.querySelector(".candleStatusText");
-  if (!txt) {
-    txt = document.createElement("span");
-    txt.id = "modalCandleStatusText";
-    txt.className = "candleStatusText";
-    el.prepend(txt);
-  }
-
-  if (modalOpenDerivBtn && modalOpenDerivBtn.parentElement !== el) {
-    el.appendChild(modalOpenDerivBtn);
-  }
-
   modalCandleStatusEl = el;
-  modalCandleStatusTextEl = txt;
   return modalCandleStatusEl;
 }
 function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
@@ -1543,20 +1540,19 @@ function updateModalCandleStatusUI() {
     return;
   }
 
-  bar.style.display = "flex";
+  bar.style.display = "block";
 
-  const txt = modalCandleStatusTextEl || bar;
   const isOpen = isTradeEntryOpen(modalCurrentItem);
   if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    txt.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
-    txt.style.color = "#dcfce7";
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
   } else {
-    txt.textContent = "⚪ VELA CERRADA";
-    txt.style.color = "rgba(229,231,235,.95)";
+    bar.textContent = "⚪ VELA CERRADA";
+    bar.style.color = "rgba(229,231,235,.95)";
     bar.style.background = "rgba(107,114,128,.20)";
     bar.style.borderColor = "rgba(156,163,175,.28)";
     bar.style.boxShadow = "none";
@@ -1575,10 +1571,8 @@ function updateModalCandleStatusUI() {
 ========================= */
 function updateModalLiveUI() {
   if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-hidden", "true");
-  modalLiveBtn.tabIndex = -1;
-  modalLiveBtn.disabled = true;
-  modalLiveBtn.style.display = "none";
+  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
+  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
 }
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
@@ -1603,9 +1597,10 @@ function requestModalDraw(force = false) {
 
     if (modalSub) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
+      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${dTag ? " | " + dTag : ""}${tBadge}`;
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
     }
 
     updateModalCandleStatusUI();
@@ -1627,6 +1622,7 @@ function applyModalTradeButtonsLayout() {
   if (!footer) return;
 
   const statusBar = ensureModalCandleStatusBar();
+
   let row = footer.querySelector(".tradeRow");
   if (!row) {
     row = document.createElement("div");
@@ -1635,54 +1631,58 @@ function applyModalTradeButtonsLayout() {
   }
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
+
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "minmax(0,1fr)";
+  row.style.gap = "10px";
+  row.style.alignItems = "stretch";
+  row.style.justifyContent = "stretch";
+  row.style.width = "100%";
+
   if (bCall.parentElement !== row) row.appendChild(bCall);
   if (bPut.parentElement !== row) row.appendChild(bPut);
 
-  row.style.display = "grid";
-  row.style.gridTemplateColumns = "repeat(2, minmax(0, 1fr))";
-  row.style.gap = "10px";
-  row.style.width = "100%";
-
   const baseBtn = (b) => {
     b.style.width = "100%";
+    b.style.flex = "0 0 auto";
     b.style.minWidth = "0";
-    b.style.minHeight = "54px";
-    b.style.padding = "12px 10px";
+    b.style.minHeight = "58px";
+    b.style.padding = "13px 14px";
     b.style.fontWeight = "900";
-    b.style.letterSpacing = "0.2px";
+    b.style.letterSpacing = "0.25px";
     b.style.borderRadius = "16px";
     b.style.display = "flex";
     b.style.alignItems = "center";
     b.style.justifyContent = "center";
-    b.style.gap = "8px";
+    b.style.gap = "10px";
     b.style.userSelect = "none";
     b.style.touchAction = "manipulation";
-    b.style.boxSizing = "border-box";
   };
   baseBtn(bCall);
   baseBtn(bPut);
 
   bCall.style.borderColor = "rgba(34,197,94,.85)";
-  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20)";
-  bCall.style.background = "rgba(34,197,94,.20)";
+  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20), inset 0 0 14px rgba(34,197,94,.08)";
+  bCall.style.background = "linear-gradient(180deg, rgba(34,197,94,.24), rgba(34,197,94,.14))";
   bCall.style.color = "var(--text, #e5e7eb)";
 
   bPut.style.borderColor = "rgba(239,68,68,.85)";
-  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18)";
-  bPut.style.background = "rgba(239,68,68,.18)";
+  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18), inset 0 0 14px rgba(239,68,68,.07)";
+  bPut.style.background = "linear-gradient(180deg, rgba(239,68,68,.22), rgba(239,68,68,.14))";
   bPut.style.color = "var(--text, #e5e7eb)";
 
-  if (modalOpenDerivBtn) {
-    modalOpenDerivBtn.style.maxWidth = "112px";
-    modalOpenDerivBtn.style.padding = "8px 10px";
-    modalOpenDerivBtn.style.minHeight = "34px";
-    modalOpenDerivBtn.style.fontSize = "12px";
-    modalOpenDerivBtn.style.borderRadius = "12px";
-    modalOpenDerivBtn.style.flex = "0 0 auto";
+  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  if (w < 480) {
+    bCall.style.minHeight = "56px";
+    bPut.style.minHeight = "56px";
+    bCall.style.padding = "12px 10px";
+    bPut.style.padding = "12px 10px";
   }
 
   if (modalLiveBtn) {
-    modalLiveBtn.style.display = "none";
+    modalLiveBtn.style.minHeight = "52px";
+    modalLiveBtn.style.width = "100%";
+    modalLiveBtn.style.marginTop = "10px";
   }
 }
 
@@ -1891,8 +1891,17 @@ window.addEventListener("resize", () => {
   requestModalDraw(true);
 });
 if (modalLiveBtn) {
-  modalLiveBtn.onclick = (e) => {
-    e.preventDefault();
+  modalLiveBtn.onclick = () => {
+    if (!modalCurrentItem) return;
+    if (!isItemLiveMinute(modalCurrentItem)) {
+      modalLive = false;
+      updateModalLiveUI();
+      requestModalDraw(true);
+      return;
+    }
+    modalLive = !modalLive;
+    updateModalLiveUI();
+    requestModalDraw(true);
   };
 }
 
