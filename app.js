@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo PATRÓN ESCALERA (ESTRICTO): evalúa SOLO en 45/50/55 (según config) — NORMAL queda igual
+// ✅ Modo PATRÓN ESCALERA (ESTRICTO): evalúa SOLO en 40/45 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
@@ -1214,7 +1214,7 @@ function applyTheme(theme) {
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
-  EVAL_SEC = [45, 50, 55].includes(savedSec) ? savedSec : 45;
+  EVAL_SEC = [40, 45].includes(savedSec) ? savedSec : 45;
 
   const paintEval = () =>
     evalBtns.forEach((b) => {
@@ -1227,7 +1227,7 @@ function applyTheme(theme) {
     (b) =>
       (b.onclick = () => {
         const v = parseInt(b.dataset.sec || "45", 10);
-        EVAL_SEC = [45, 50, 55].includes(v) ? v : 45;
+        EVAL_SEC = [40, 45].includes(v) ? v : 45;
         localStorage.setItem("evalSec", String(EVAL_SEC));
         paintEval();
       })
@@ -1349,7 +1349,6 @@ function showNotification(symbol, direction, modeLabel) {
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
-
   const ctx = canvas.getContext("2d");
   const cssW = canvas.clientWidth || 1;
   const cssH = canvas.clientHeight || 1;
@@ -1384,34 +1383,6 @@ function drawDerivLikeChart(canvas, ticks) {
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
-  const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
-    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
-    : null;
-
-  const segments = [
-    { start: 0, end: 15000, label: "0s" },
-    { start: 15000, end: 30000, label: "15s" },
-    { start: 30000, end: 45000, label: "30s" },
-    { start: 45000, end: 60000, label: "45s" },
-  ];
-
-  // sombreado por tramo
-  for (const seg of segments) {
-    const x1 = xOf(seg.start);
-    const x2 = xOf(seg.end);
-
-    let fill = "rgba(255,255,255,0.03)";
-    if (msNow != null) {
-      if (msNow >= seg.end) fill = "rgba(34,211,238,0.10)";
-      else if (msNow >= seg.start && msNow < seg.end) fill = "rgba(251,191,36,0.10)";
-      else fill = "rgba(255,255,255,0.025)";
-    }
-
-    ctx.fillStyle = fill;
-    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
-  }
-
-  // grilla horizontal
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
@@ -1424,46 +1395,20 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  // líneas verticales punteadas 0/15/30/45
-  const guideMarks = [0, 15000, 30000, 45000];
-  for (const ms of guideMarks) {
-    const x = xOf(ms);
+  const x30 = xOf(30000);
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x30, 10);
+  ctx.lineTo(x30, h - 20);
+  ctx.stroke();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.75)";
+  ctx.font = "12px system-ui, sans-serif";
+  ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
+  ctx.globalAlpha = 1;
 
-    ctx.save();
-    ctx.setLineDash([5, 5]);
-    ctx.strokeStyle = ms === 30000 ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.26)";
-    ctx.lineWidth = ms === 30000 ? 1.8 : 1.2;
-    ctx.beginPath();
-    ctx.moveTo(x, 10);
-    ctx.lineTo(x, h - 22);
-    ctx.stroke();
-    ctx.restore();
-
-    const label = ms === 0 ? "0s" : ms === 15000 ? "15s" : ms === 30000 ? "30s" : "45s";
-    ctx.fillStyle = "rgba(255,255,255,0.78)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(label, Math.min(w - 26, x + 4), h - 6);
-  }
-
-  // línea de “ahora” en live
-  if (msNow != null) {
-    const xNow = xOf(msNow);
-    ctx.save();
-    ctx.setLineDash([2, 4]);
-    ctx.strokeStyle = "rgba(251,191,36,0.95)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(xNow, 8);
-    ctx.lineTo(xNow, h - 22);
-    ctx.stroke();
-    ctx.restore();
-
-    ctx.fillStyle = "rgba(251,191,36,0.96)";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
-  }
-
-  // área
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
@@ -1474,7 +1419,6 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // línea principal
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -1488,7 +1432,6 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // último punto
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
@@ -1522,20 +1465,6 @@ function getCurrentMinuteRemainingSec() {
   const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
   return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
 }
-function getCurrent15sRangeLabel() {
-  const now = serverNowMs();
-  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-    ? currentMinuteStartMs
-    : Math.floor(now / 60000) * 60000;
-
-  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
-  const sec = Math.floor(msInMinute / 1000);
-
-  if (sec < 15) return "0-15s";
-  if (sec < 30) return "15-30s";
-  if (sec < 45) return "30-45s";
-  return "45-60s";
-}
 function isTradeEntryOpen(item) {
   if (!item) return false;
   return isItemLiveMinute(item);
@@ -1556,51 +1485,16 @@ function ensureModalCandleStatusBar() {
     el.setAttribute("role", "status");
     el.style.width = "100%";
     el.style.boxSizing = "border-box";
-    el.style.margin = "0 0 8px 0";
-    el.style.padding = "8px 10px";
+    el.style.margin = "0 0 10px 0";
+    el.style.padding = "12px 14px";
     el.style.borderRadius = "14px";
     el.style.border = "1px solid rgba(255,255,255,.14)";
     el.style.fontWeight = "900";
-    el.style.fontSize = "13px";
-    el.style.letterSpacing = "0.2px";
+    el.style.fontSize = "14px";
+    el.style.letterSpacing = "0.3px";
+    el.style.textAlign = "center";
     el.style.transition = "opacity .12s ease, transform .12s ease";
-    el.style.display = "flex";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "space-between";
-    el.style.gap = "8px";
     footer.prepend(el);
-  }
-
-  let txt = el.querySelector(".candleStatusText");
-  if (!txt) {
-    txt = document.createElement("span");
-    txt.className = "candleStatusText";
-    txt.style.flex = "1 1 auto";
-    txt.style.minWidth = "0";
-    txt.style.textAlign = "left";
-    txt.style.lineHeight = "1.2";
-    txt.style.whiteSpace = "nowrap";
-    txt.style.overflow = "hidden";
-    txt.style.textOverflow = "ellipsis";
-    el.appendChild(txt);
-  }
-
-  if (modalOpenDerivBtn) {
-    modalOpenDerivBtn.style.display = "inline-flex";
-    modalOpenDerivBtn.style.alignItems = "center";
-    modalOpenDerivBtn.style.justifyContent = "center";
-    modalOpenDerivBtn.style.flex = "0 0 auto";
-    modalOpenDerivBtn.style.minWidth = "0";
-    modalOpenDerivBtn.style.maxWidth = "118px";
-    modalOpenDerivBtn.style.padding = "8px 10px";
-    modalOpenDerivBtn.style.minHeight = "36px";
-    modalOpenDerivBtn.style.borderRadius = "12px";
-    modalOpenDerivBtn.style.fontSize = "12px";
-    modalOpenDerivBtn.style.fontWeight = "900";
-    modalOpenDerivBtn.style.lineHeight = "1";
-    modalOpenDerivBtn.style.whiteSpace = "nowrap";
-    modalOpenDerivBtn.style.margin = "0";
-    if (modalOpenDerivBtn.parentElement !== el) el.appendChild(modalOpenDerivBtn);
   }
 
   modalCandleStatusEl = el;
@@ -1646,20 +1540,19 @@ function updateModalCandleStatusUI() {
     return;
   }
 
-  bar.style.display = "flex";
+  bar.style.display = "block";
 
-  const labelEl = bar.querySelector(".candleStatusText") || bar;
   const isOpen = isTradeEntryOpen(modalCurrentItem);
   if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    labelEl.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
-    labelEl.style.color = "#dcfce7";
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
   } else {
-    labelEl.textContent = "⚪ VELA CERRADA";
-    labelEl.style.color = "rgba(229,231,235,.95)";
+    bar.textContent = "⚪ VELA CERRADA";
+    bar.style.color = "rgba(229,231,235,.95)";
     bar.style.background = "rgba(107,114,128,.20)";
     bar.style.borderColor = "rgba(156,163,175,.28)";
     bar.style.boxShadow = "none";
@@ -1678,10 +1571,8 @@ function updateModalCandleStatusUI() {
 ========================= */
 function updateModalLiveUI() {
   if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-hidden", "true");
-  modalLiveBtn.tabIndex = -1;
-  modalLiveBtn.disabled = true;
-  modalLiveBtn.style.display = "none";
+  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
+  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
 }
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
@@ -1694,7 +1585,7 @@ function requestModalDraw(force = false) {
   if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
   modalDrawRaf = requestAnimationFrame(() => {
     const it = modalCurrentItem;
-    if (!it) return;
+    if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
 
     let ticks = it.ticks || [];
     if (modalLive && isItemLiveMinute(it)) {
@@ -1706,12 +1597,10 @@ function requestModalDraw(force = false) {
 
     if (modalSub) {
       const n = Array.isArray(ticks) ? ticks.length : 0;
+      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      const rangeTag = modalLive && isItemLiveMinute(it) ? ` | tramo: ${getCurrent15sRangeLabel()}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${rangeTag}${dTag ? " | " + dTag : ""}${tBadge}`;
-      modalSub.style.margin = "6px 0 8px 0";
-      modalSub.style.lineHeight = "1.25";
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
     }
 
     updateModalCandleStatusUI();
@@ -1743,16 +1632,12 @@ function applyModalTradeButtonsLayout() {
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
 
-  footer.style.paddingTop = "2px";
-  footer.style.gap = "6px";
-
-  row.style.display = "flex";
-  row.style.flexDirection = "column";
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "minmax(0,1fr)";
   row.style.gap = "10px";
   row.style.alignItems = "stretch";
-  row.style.justifyContent = "flex-start";
+  row.style.justifyContent = "stretch";
   row.style.width = "100%";
-  row.style.marginTop = "0";
 
   if (bCall.parentElement !== row) row.appendChild(bCall);
   if (bPut.parentElement !== row) row.appendChild(bPut);
@@ -1762,7 +1647,7 @@ function applyModalTradeButtonsLayout() {
     b.style.flex = "0 0 auto";
     b.style.minWidth = "0";
     b.style.minHeight = "58px";
-    b.style.padding = "12px 14px";
+    b.style.padding = "13px 14px";
     b.style.fontWeight = "900";
     b.style.letterSpacing = "0.25px";
     b.style.borderRadius = "16px";
@@ -1772,32 +1657,32 @@ function applyModalTradeButtonsLayout() {
     b.style.gap = "10px";
     b.style.userSelect = "none";
     b.style.touchAction = "manipulation";
-    b.style.marginTop = "0";
-    b.style.fontSize = "14px";
   };
   baseBtn(bCall);
   baseBtn(bPut);
 
-  bCall.style.borderColor = "rgba(34,197,94,.88)";
-  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20)";
-  bCall.style.background = "rgba(34,197,94,.18)";
+  bCall.style.borderColor = "rgba(34,197,94,.85)";
+  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20), inset 0 0 14px rgba(34,197,94,.08)";
+  bCall.style.background = "linear-gradient(180deg, rgba(34,197,94,.24), rgba(34,197,94,.14))";
   bCall.style.color = "var(--text, #e5e7eb)";
 
-  bPut.style.borderColor = "rgba(239,68,68,.88)";
-  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18)";
-  bPut.style.background = "rgba(239,68,68,.16)";
+  bPut.style.borderColor = "rgba(239,68,68,.85)";
+  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18), inset 0 0 14px rgba(239,68,68,.07)";
+  bPut.style.background = "linear-gradient(180deg, rgba(239,68,68,.22), rgba(239,68,68,.14))";
   bPut.style.color = "var(--text, #e5e7eb)";
 
-  if (modalLiveBtn) {
-    modalLiveBtn.setAttribute("aria-hidden", "true");
-    modalLiveBtn.tabIndex = -1;
-    modalLiveBtn.disabled = true;
-    modalLiveBtn.style.display = "none";
+  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  if (w < 480) {
+    bCall.style.minHeight = "56px";
+    bPut.style.minHeight = "56px";
+    bCall.style.padding = "12px 10px";
+    bPut.style.padding = "12px 10px";
   }
 
-  if (minuteCanvas) {
-    minuteCanvas.style.minHeight = "360px";
-    minuteCanvas.style.height = "360px";
+  if (modalLiveBtn) {
+    modalLiveBtn.style.minHeight = "52px";
+    modalLiveBtn.style.width = "100%";
+    modalLiveBtn.style.marginTop = "10px";
   }
 }
 
@@ -2005,6 +1890,20 @@ window.addEventListener("resize", () => {
   updateModalCandleStatusUI();
   requestModalDraw(true);
 });
+if (modalLiveBtn) {
+  modalLiveBtn.onclick = () => {
+    if (!modalCurrentItem) return;
+    if (!isItemLiveMinute(modalCurrentItem)) {
+      modalLive = false;
+      updateModalLiveUI();
+      requestModalDraw(true);
+      return;
+    }
+    modalLive = !modalLive;
+    updateModalLiveUI();
+    requestModalDraw(true);
+  };
+}
 
 /* =========================
    Row helpers (global, para Señales)
@@ -2941,16 +2840,6 @@ function finalizeMinute(minute) {
       const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
 
       for (const it of history) {
-        if (!it || !it.nextOutcome) continue;
-      }
-    } catch {}
-  })();
-
-  (async () => {
-    try {
-      const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
-
-      for (const it of history) {
         if (!it || it.nextOutcome) continue;
         if (it.minute !== prevMinute) continue;
 
@@ -3038,6 +2927,7 @@ function onTick(tick) {
 
   candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) {
+    // ✅ Open más consistente: usa el primer punto que ya tenemos (idealmente el ms=0 con prevLast)
     const firstQ = minuteData?.[minute]?.[symbol]?.[0]?.quote;
     const openQ = Number.isFinite(firstQ) ? firstQ : tick.quote;
     candleOC[minute][symbol] = { open: openQ, close: tick.quote };
@@ -3066,6 +2956,7 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
+    // ✅ ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
     if (!ok && !stairMode) scheduleRetry(minute);
   }
 }
@@ -3200,20 +3091,33 @@ function passesTechnicalFilters(best, vol, rules) {
 
 /* =========================
    Patrón ESCALERA
+   - CALL = escalera alcista
+   - PUT  = escalera bajista
 ========================= */
 const RULES_STAIR = {
   scoreMin: 0.016,
   rangeScoreMin: 0.03,
+
   dirRatioMinWhole: 0.56,
+
+  // avance sostenido
   firstLegMinFracTotal: 0.34,
   lateLegMinFracTotal: 0.18,
+
+  // cierre cerca del extremo
   closeNearExtremeMaxFracRange: 0.20,
+
+  // pocas contras
   maxRetraceFracTotal: 0.45,
+
+  // estructura “escalonada”
   stepMinFracTotal: 0.06,
   flatBandFracTotal: 0.02,
   maxWeakAgainstFracTotal: 0.18,
   maxWeakAgainstSteps: 1,
   forwardCoverageMinFracTotal: 0.82,
+
+  // evita spike único dominante
   maxSingleStepFracTotal: 0.72,
 };
 
@@ -3254,26 +3158,32 @@ function detectStairPattern(candidate) {
   const range = maxP - minP;
   if (!(range > 1e-12)) return null;
 
+  // 1) Direccionalidad general
   const wholeDirRatio = directionalRatio(fullTicks, dirSign);
   if (wholeDirRatio < RULES_STAIR.dirRatioMinWhole) return null;
 
+  // 2) Tiene que avanzar tanto antes como después de los 30s
   const firstLeg = (p30 - p0) * dirSign;
   const lateLeg = (pE - p30) * dirSign;
   if (firstLeg < absTotal * RULES_STAIR.firstLegMinFracTotal) return null;
   if (lateLeg < absTotal * RULES_STAIR.lateLegMinFracTotal) return null;
 
+  // 3) Cierra cerca del extremo
   const closeToExtreme = dirSign > 0 ? maxP - pE : pE - minP;
   if (closeToExtreme > range * RULES_STAIR.closeNearExtremeMaxFracRange) return null;
 
+  // 4) Retroceso total controlado
   const retrace = maxRetraceAgainst(fullTicks, dirSign);
   if (retrace > absTotal * RULES_STAIR.maxRetraceFracTotal) return null;
 
+  // 5) Movimiento con suficiente entidad
   const score = absTotal / (candidate.vol || 1e-9);
   if (score < RULES_STAIR.scoreMin) return null;
 
   const rangeScore = rangeScoreCalc(fullTicks, candidate.vol);
   if (rangeScore < RULES_STAIR.rangeScoreMin) return null;
 
+  // 6) Comportamiento escalonado por checkpoints
   const checkpoints = buildStairCheckpoints(evalMs);
   if (checkpoints.length < 4) return null;
 
@@ -3369,6 +3279,7 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
 
+  // ✅ MODO PATRÓN ESCALERA: solo señales si la forma coincide con escalera alcista/bajista
   if (stairMode) {
     const matches = [];
 
@@ -3392,6 +3303,7 @@ function evaluateMinute(minute) {
     return true;
   }
 
+  // ---- NORMAL (igual que antes) ----
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) return true;
@@ -3525,6 +3437,7 @@ function connect() {
 
             toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
 
+            // pintar badge + journal
             try {
               const signalId = tradeLinks.get(String(cid)) || "";
               const it = signalId ? findHistoryItemById(signalId) : null;
