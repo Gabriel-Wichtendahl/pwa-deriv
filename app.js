@@ -1349,6 +1349,7 @@ function showNotification(symbol, direction, modeLabel) {
 ========================= */
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
+
   const ctx = canvas.getContext("2d");
   const cssW = canvas.clientWidth || 1;
   const cssH = canvas.clientHeight || 1;
@@ -1383,6 +1384,34 @@ function drawDerivLikeChart(canvas, ticks) {
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
+  const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
+    : null;
+
+  const segments = [
+    { start: 0, end: 15000, label: "0s" },
+    { start: 15000, end: 30000, label: "15s" },
+    { start: 30000, end: 45000, label: "30s" },
+    { start: 45000, end: 60000, label: "45s" },
+  ];
+
+  // sombreado por tramo
+  for (const seg of segments) {
+    const x1 = xOf(seg.start);
+    const x2 = xOf(seg.end);
+
+    let fill = "rgba(255,255,255,0.03)";
+    if (msNow != null) {
+      if (msNow >= seg.end) fill = "rgba(34,211,238,0.10)";
+      else if (msNow >= seg.start && msNow < seg.end) fill = "rgba(251,191,36,0.10)";
+      else fill = "rgba(255,255,255,0.025)";
+    }
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
+  }
+
+  // grilla horizontal
   ctx.globalAlpha = 0.22;
   ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
@@ -1395,20 +1424,46 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  const x30 = xOf(30000);
-  ctx.globalAlpha = 0.55;
-  ctx.strokeStyle = "rgba(255,255,255,0.35)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(x30, 10);
-  ctx.lineTo(x30, h - 20);
-  ctx.stroke();
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "rgba(255,255,255,0.75)";
-  ctx.font = "12px system-ui, sans-serif";
-  ctx.fillText("30s", Math.min(w - 28, x30 + 6), 22);
-  ctx.globalAlpha = 1;
+  // líneas verticales punteadas 0/15/30/45
+  const guideMarks = [0, 15000, 30000, 45000];
+  for (const ms of guideMarks) {
+    const x = xOf(ms);
 
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = ms === 30000 ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.26)";
+    ctx.lineWidth = ms === 30000 ? 1.8 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    const label = ms === 0 ? "0s" : ms === 15000 ? "15s" : ms === 30000 ? "30s" : "45s";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(label, Math.min(w - 26, x + 4), h - 6);
+  }
+
+  // línea de “ahora” en live
+  if (msNow != null) {
+    const xNow = xOf(msNow);
+    ctx.save();
+    ctx.setLineDash([2, 4]);
+    ctx.strokeStyle = "rgba(251,191,36,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xNow, 8);
+    ctx.lineTo(xNow, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(251,191,36,0.96)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
+  }
+
+  // área
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
@@ -1419,6 +1474,7 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
+  // línea principal
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -1432,6 +1488,7 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
+  // último punto
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
@@ -1464,6 +1521,20 @@ function getCurrentMinuteRemainingSec() {
 
   const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
   return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+}
+function getCurrent15sRangeLabel() {
+  const now = serverNowMs();
+  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+    ? currentMinuteStartMs
+    : Math.floor(now / 60000) * 60000;
+
+  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
+  const sec = Math.floor(msInMinute / 1000);
+
+  if (sec < 15) return "0-15s";
+  if (sec < 30) return "15-30s";
+  if (sec < 45) return "30-45s";
+  return "45-60s";
 }
 function isTradeEntryOpen(item) {
   if (!item) return false;
