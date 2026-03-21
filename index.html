@@ -51,11 +51,17 @@
 
       <div class="practiceStatsGrid">
         <div class="practiceStatsCard">
-          <div class="practiceStatsTitle">Sesión</div>
+          <div class="practiceStatsHead">
+            <div class="practiceStatsTitle">Sesión</div>
+            <button id="practiceResetSessionBtn" class="practiceResetBtn" type="button" title="Resetear sesión" aria-label="Resetear sesión">↺</button>
+          </div>
           <div id="practiceSessionStats" class="practiceStatsText">ITM 0 · OTM 0 · PASAR 0 · % 0 · TOTAL 0</div>
         </div>
         <div class="practiceStatsCard">
-          <div class="practiceStatsTitle">Histórico</div>
+          <div class="practiceStatsHead">
+            <div class="practiceStatsTitle">Histórico</div>
+            <button id="practiceResetAllBtn" class="practiceResetBtn" type="button" title="Resetear histórico" aria-label="Resetear histórico">↺</button>
+          </div>
           <div id="practiceAllStats" class="practiceStatsText">ITM 0 · OTM 0 · PASAR 0 · % 0 · TOTAL 0</div>
         </div>
       </div>
