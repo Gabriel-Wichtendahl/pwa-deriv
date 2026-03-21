@@ -1288,15 +1288,24 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "900 28px system-ui, sans-serif";
+    ctx.font = "900 30px system-ui, sans-serif";
 
-    ctx.globalAlpha = zone.upSelected ? 0.78 : 0.24;
-    ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,0.92)" : "rgba(34,197,94,0.72)";
-    ctx.fillText("⬆", zone.centerX, zone.upY);
+    ctx.save();
+    ctx.translate(zone.centerX, zone.upY);
+    ctx.scale(1.18, 1);
+    ctx.globalAlpha = zone.upSelected ? 0.88 : 0.34;
+    ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,0.96)" : "rgba(34,197,94,0.82)";
+    ctx.fillText("⬆", 0, 0);
+    ctx.restore();
 
-    ctx.globalAlpha = zone.downSelected ? 0.78 : 0.24;
-    ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,0.92)" : "rgba(239,68,68,0.72)";
-    ctx.fillText("⬇", zone.centerX, zone.downY);
+    ctx.save();
+    ctx.translate(zone.centerX, zone.downY);
+    ctx.scale(1.18, 1);
+    ctx.globalAlpha = zone.downSelected ? 0.88 : 0.34;
+    ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,0.96)" : "rgba(239,68,68,0.82)";
+    ctx.fillText("⬇", 0, 0);
+    ctx.restore();
+
     ctx.restore();
   }
 
