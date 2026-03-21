@@ -1194,9 +1194,9 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     if (!isVisible || visibleWidth < 34) continue;
 
     const centerX = x1 + visibleWidth / 2;
-    const upY = Math.max(38, (h - 28) * 0.34);
-    const downY = Math.max(upY + 34, (h - 28) * 0.58);
-    const hitW = Math.min(42, Math.max(34, visibleWidth - 8));
+    const upY = Math.max(40, (h - 28) * 0.33);
+    const downY = Math.max(upY + 40, (h - 28) * 0.60);
+    const hitW = Math.min(50, Math.max(38, visibleWidth - 6));
 
     arrowZones.push({
       segIndex: idx,
@@ -1208,8 +1208,8 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     });
 
     practiceChoiceHitZones.push(
-      { segIndex: idx, choice: "up", x: centerX - hitW / 2, y: upY - 18, w: hitW, h: 28 },
-      { segIndex: idx, choice: "down", x: centerX - hitW / 2, y: downY - 18, w: hitW, h: 28 }
+      { segIndex: idx, choice: "up", x: centerX - hitW / 2, y: upY - 22, w: hitW, h: 34 },
+      { segIndex: idx, choice: "down", x: centerX - hitW / 2, y: downY - 22, w: hitW, h: 34 }
     );
   }
 
@@ -1288,14 +1288,14 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.font = "900 22px system-ui, sans-serif";
+    ctx.font = "900 28px system-ui, sans-serif";
 
-    ctx.globalAlpha = zone.upSelected ? 0.98 : 0.36;
-    ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,1)" : "rgba(34,197,94,0.88)";
+    ctx.globalAlpha = zone.upSelected ? 0.78 : 0.24;
+    ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,0.92)" : "rgba(34,197,94,0.72)";
     ctx.fillText("⬆", zone.centerX, zone.upY);
 
-    ctx.globalAlpha = zone.downSelected ? 0.98 : 0.36;
-    ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,1)" : "rgba(239,68,68,0.88)";
+    ctx.globalAlpha = zone.downSelected ? 0.78 : 0.24;
+    ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,0.92)" : "rgba(239,68,68,0.72)";
     ctx.fillText("⬇", zone.centerX, zone.downY);
     ctx.restore();
   }
