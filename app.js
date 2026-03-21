@@ -229,7 +229,7 @@ function pickEl(...ids) {
 const statusEl = $("status");
 const signalsEl = $("signals");
 const counterEl = $("counter");
-const feedbackEl = $("feedback");
+const feedbackEl = $("feedback"); // compat (ya no se usa en V9.4 práctica)
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
 const sound = $("alertSound");
@@ -241,13 +241,28 @@ const themeBtn = $("themeBtn");
 const clearHistoryBtn = $("clearHistoryBtn"); // si existe, lo ocultamos
 const copyBtn = $("copyFeedback");
 
+const practiceView = $("practiceView");
+const practiceCanvas = $("practiceCanvas");
+const practiceStatusEl = $("practiceStatus");
+const practiceResultEl = $("practiceResult");
+const practiceRoundLabelEl = $("practiceRoundLabel");
+const practicePoolLabelEl = $("practicePoolLabel");
+const practiceSessionStatsEl = $("practiceSessionStats");
+const practiceAllStatsEl = $("practiceAllStats");
+const practice40Btn = $("practice40Btn");
+const practice45Btn = $("practice45Btn");
+const practiceNextBtn = $("practiceNextBtn");
+const practiceCallBtn = $("practiceCallBtn");
+const practicePutBtn = $("practicePutBtn");
+const practicePassBtn = $("practicePassBtn");
+
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
 
 // Tabs existentes (del HTML)
 const tabs = qsAll(".tab[data-view]");
 const signalsView = $("signalsView");
-const feedbackView = $("feedbackView");
+const feedbackView = $("feedbackView"); // compat
 
 // Config modal existente (engrane y modal)
 const configBtn = $("configBtn");
@@ -487,7 +502,7 @@ function shouldAutoOpenChartNow() {
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
 
   const activeView = localStorage.getItem("activeView") || "signals";
-  if (activeView === "feedback") return false;
+  if (activeView === "practice") return false;
   if (activeView === "trades") return false;
 
   return true;
@@ -676,7 +691,15 @@ function isHit(item) {
 function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
   if (!counterEl) return;
-  counterEl.textContent = activeView === "trades" ? `Trades: ${tradesJournal.length}` : `Señales: ${history.length}`;
+  if (activeView === "trades") {
+    counterEl.textContent = `Trades: ${tradesJournal.length}`;
+    return;
+  }
+  if (activeView === "practice") {
+    counterEl.textContent = `Práctica: ${practiceSessionStats.total}`;
+    return;
+  }
+  counterEl.textContent = `Señales: ${history.length}`;
 }
 
 function escapeHtml(str) {
@@ -815,6 +838,8 @@ function renderTradesView() {
   try {
     ensureInlineClearButtons();
     updatePerViewClearButtonsVisibility("trades");
+    ensurePracticeQueue();
+    updatePracticePoolLabel();
   } catch {}
 }
 
@@ -858,10 +883,13 @@ function clearSignalsOnly() {
 function clearTradesOnly() {
   tradesJournal = [];
   saveTradesJournal(tradesJournal);
+  practiceQueue = [];
+  practiceRound = null;
   try {
     const av = localStorage.getItem("activeView") || "signals";
     updateCounter(av);
     if (av === "trades") renderTradesView();
+    if (av === "practice") ensurePracticeReady();
   } catch {}
   toast("🗑️ Trades borrados", 1600);
 }
@@ -955,13 +983,13 @@ function ensureInlineClearButtons() {
 function setActiveView(name) {
   const isSignals = name === "signals";
   const isTrades = name === "trades";
-  const isFeedback = name === "feedback";
+  const isPractice = name === "practice";
 
   const tv = ensureTradesView();
 
   if (signalsView) signalsView.classList.toggle("hidden", !isSignals);
   if (tv) tv.classList.toggle("hidden", !isTrades);
-  if (feedbackView) feedbackView.classList.toggle("hidden", !isFeedback);
+  if (practiceView) practiceView.classList.toggle("hidden", !isPractice);
 
   qsAll(".tab[data-view]").forEach((t) => {
     const active = t.dataset.view === name;
@@ -972,9 +1000,8 @@ function setActiveView(name) {
   localStorage.setItem("activeView", name);
 
   if (isTrades) renderTradesView();
-  if (isFeedback) rebuildFeedbackFromHistory();
+  if (isPractice) ensurePracticeReady();
   updateCounter(name);
-
   updatePerViewClearButtonsVisibility(name);
 }
 
@@ -986,9 +1013,388 @@ function setActiveView(name) {
   qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 
   const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "trades", "feedback"].includes(saved) ? saved : "signals";
+  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 })();
+
+/* =========================
+   Práctica
+========================= */
+const PRACTICE_STATS_KEY = "practiceStats_v1";
+let practiceSessionStats = freshPracticeStats();
+let practiceAllStats = loadPracticeAllStats();
+let practiceQueue = [];
+let practiceRound = null;
+let practiceRaf = null;
+
+function freshPracticeStats() {
+  return { itm: 0, otm: 0, pass: 0, total: 0 };
+}
+function loadPracticeAllStats() {
+  try {
+    const raw = localStorage.getItem(PRACTICE_STATS_KEY);
+    if (!raw) return freshPracticeStats();
+    const obj = JSON.parse(raw);
+    return {
+      itm: Number(obj?.itm || 0),
+      otm: Number(obj?.otm || 0),
+      pass: Number(obj?.pass || 0),
+      total: Number(obj?.total || 0),
+    };
+  } catch {
+    return freshPracticeStats();
+  }
+}
+function savePracticeAllStats() {
+  try {
+    localStorage.setItem(PRACTICE_STATS_KEY, JSON.stringify(practiceAllStats));
+  } catch {}
+}
+function formatPracticeStats(stats) {
+  const decided = Number(stats.itm || 0) + Number(stats.otm || 0);
+  const pct = decided ? Math.round((Number(stats.itm || 0) / decided) * 100) : 0;
+  return `ITM ${stats.itm} · OTM ${stats.otm} · PASAR ${stats.pass} · % ${pct} · TOTAL ${stats.total}`;
+}
+function renderPracticeStats() {
+  if (practiceSessionStatsEl) practiceSessionStatsEl.textContent = formatPracticeStats(practiceSessionStats);
+  if (practiceAllStatsEl) practiceAllStatsEl.textContent = formatPracticeStats(practiceAllStats);
+  updateCounter("practice");
+}
+function getEligiblePracticeEntries() {
+  return (tradesJournal || []).filter((entry) => {
+    if (!entry) return false;
+    if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
+    if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
+    return true;
+  });
+}
+function shuffleArray(arr) {
+  const out = arr.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+function ensurePracticeQueue() {
+  const eligibleIds = new Set(getEligiblePracticeEntries().map((x) => String(x.journal_id || x.id || "")));
+  practiceQueue = practiceQueue.filter((id) => eligibleIds.has(String(id)));
+  if (practiceQueue.length) return;
+  practiceQueue = shuffleArray(Array.from(eligibleIds));
+}
+function updatePracticePoolLabel() {
+  const eligible = getEligiblePracticeEntries().length;
+  if (practicePoolLabelEl) practicePoolLabelEl.textContent = `Pool: ${practiceQueue.length}/${eligible}`;
+}
+function paintPracticeSecButtons() {
+  const active = EVAL_SEC;
+  [practice40Btn, practice45Btn].forEach((btn) => {
+    if (!btn) return;
+    const sec = Number(btn.dataset.sec || 0);
+    btn.classList.toggle("active", sec === active);
+  });
+}
+function normalizePracticeTicks(ticks) {
+  return (Array.isArray(ticks) ? ticks : []).slice().sort((a, b) => a.ms - b.ms);
+}
+function buildPracticeVisibleTicks(ticks, uptoMs) {
+  const pts = normalizePracticeTicks(ticks).filter((t) => t.ms <= uptoMs);
+  if (!pts.length) return [];
+  const last = pts[pts.length - 1];
+  if (last.ms < uptoMs) pts.push({ ms: uptoMs, quote: last.quote });
+  return pts;
+}
+function drawPracticeChart(canvas, ticks, replayMs) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
+
+  if (!ticks || ticks.length < 2) return;
+
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+  const quotes = pts.map((p) => p.quote);
+  let min = Math.min(...quotes);
+  let max = Math.max(...quotes);
+  let range = max - min;
+  if (range < 1e-9) range = 1e-9;
+  const pad = range * 0.08;
+  min -= pad;
+  max += pad;
+
+  const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
+  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
+
+  const segments = [
+    { start: 0, end: 15000, label: "0s" },
+    { start: 15000, end: 30000, label: "15s" },
+    { start: 30000, end: 45000, label: "30s" },
+    { start: 45000, end: 60000, label: "45s" },
+  ];
+
+  for (const seg of segments) {
+    const x1 = xOf(seg.start);
+    const x2 = xOf(seg.end);
+    let fill = "rgba(255,255,255,0.03)";
+    if (replayMs != null) {
+      if (replayMs >= seg.end) fill = "rgba(34,211,238,0.10)";
+      else if (replayMs >= seg.start && replayMs < seg.end) fill = "rgba(251,191,36,0.10)";
+      else fill = "rgba(255,255,255,0.025)";
+    }
+    ctx.fillStyle = fill;
+    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
+  }
+
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) {
+    const y = (h / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  const guideMarks = [0, 15000, 30000, 45000];
+  for (const ms of guideMarks) {
+    const x = xOf(ms);
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = ms === 30000 ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.26)";
+    ctx.lineWidth = ms === 30000 ? 1.8 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    const label = ms === 0 ? "0s" : ms === 15000 ? "15s" : ms === 30000 ? "30s" : "45s";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(label, Math.min(w - 26, x + 4), h - 6);
+  }
+
+  if (replayMs != null) {
+    const xNow = xOf(replayMs);
+    ctx.save();
+    ctx.setLineDash([2, 4]);
+    ctx.strokeStyle = "rgba(251,191,36,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xNow, 8);
+    ctx.lineTo(xNow, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(251,191,36,0.96)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(xOf(pts[0].ms), h - 20);
+  for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
+  ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
+  ctx.closePath();
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = xOf(p.ms);
+    const y = yOf(p.quote);
+    if (!i) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  const lx = xOf(pts[pts.length - 1].ms);
+  const ly = yOf(pts[pts.length - 1].quote);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+function setPracticeDecisionState(disabled, selected = "") {
+  const map = [
+    [practiceCallBtn, "CALL"],
+    [practicePutBtn, "PUT"],
+    [practicePassBtn, "PASS"],
+  ];
+  map.forEach(([btn, key]) => {
+    if (!btn) return;
+    btn.disabled = !!disabled;
+    btn.classList.toggle("selected", selected === key);
+  });
+}
+function updatePracticeStatusText(text) {
+  if (practiceStatusEl) practiceStatusEl.textContent = text;
+}
+function updatePracticeResult(text, cls = "") {
+  if (!practiceResultEl) return;
+  practiceResultEl.textContent = text;
+  practiceResultEl.classList.remove("is-itm", "is-otm", "is-pass");
+  if (cls) practiceResultEl.classList.add(cls);
+}
+function pullNextPracticeEntry() {
+  ensurePracticeQueue();
+  updatePracticePoolLabel();
+  if (!practiceQueue.length) return null;
+  const nextId = String(practiceQueue.shift());
+  updatePracticePoolLabel();
+  return getEligiblePracticeEntries().find((x) => String(x.journal_id || x.id || "") === nextId) || null;
+}
+function getOutcomeLabel(outcome) {
+  return outcome === "up" ? "ALCISTA" : outcome === "down" ? "BAJISTA" : "NEUTRA";
+}
+function cancelPracticeAnim() {
+  if (practiceRaf) cancelAnimationFrame(practiceRaf);
+  practiceRaf = null;
+}
+function finalizePracticeRound(answer = null) {
+  if (!practiceRound || practiceRound.finished) return;
+  cancelPracticeAnim();
+
+  const round = practiceRound;
+  round.finished = true;
+  round.answer = answer || round.answer || "PASS";
+  round.replayMs = 60000;
+
+  let resultType = "PASS";
+  if (round.answer === "CALL" || round.answer === "PUT") {
+    const ok = (round.answer === "CALL" && round.entry.nextOutcome === "up") ||
+      (round.answer === "PUT" && round.entry.nextOutcome === "down");
+    resultType = ok ? "ITM" : "OTM";
+  }
+  round.resultType = resultType;
+
+  practiceSessionStats.total += 1;
+  practiceAllStats.total += 1;
+  if (resultType === "ITM") {
+    practiceSessionStats.itm += 1;
+    practiceAllStats.itm += 1;
+  } else if (resultType === "OTM") {
+    practiceSessionStats.otm += 1;
+    practiceAllStats.otm += 1;
+  } else {
+    practiceSessionStats.pass += 1;
+    practiceAllStats.pass += 1;
+  }
+  savePracticeAllStats();
+  renderPracticeStats();
+
+  const fullTicks = buildPracticeVisibleTicks(round.ticks, 60000);
+  drawPracticeChart(practiceCanvas, fullTicks, 60000);
+  setPracticeDecisionState(true, round.answer);
+
+  const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
+  if (resultType === "ITM") {
+    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | Próxima vela: ${outcomeText}`, "is-itm");
+  } else if (resultType === "OTM") {
+    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | Próxima vela: ${outcomeText}`, "is-otm");
+  } else {
+    updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
+  }
+
+  if (practiceNextBtn) practiceNextBtn.textContent = "🎲 Siguiente";
+  updatePracticeStatusText(`Ronda terminada. Puedes pasar a la siguiente sin repetir hasta agotar el pool.`);
+}
+function practiceLoop(ts) {
+  if (!practiceRound || practiceRound.finished) return;
+  if (!practiceRound.startTs) practiceRound.startTs = ts;
+  const elapsed = Math.max(0, ts - practiceRound.startTs);
+  const replayMs = Math.min(60000, practiceRound.cutoffMs + elapsed);
+  practiceRound.replayMs = replayMs;
+
+  const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
+  drawPracticeChart(practiceCanvas, visibleTicks, replayMs);
+
+  const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
+  const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
+  const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "—";
+  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | decisión: ${picked}`);
+
+  if (replayMs >= 60000) {
+    finalizePracticeRound(practiceRound.answer || "PASS");
+    return;
+  }
+  practiceRaf = requestAnimationFrame(practiceLoop);
+}
+function startPracticeRound(entry = null) {
+  const chosen = entry || pullNextPracticeEntry();
+  if (!chosen) {
+    updatePracticeStatusText("No hay trades suficientes en el journal para practicar todavía.");
+    updatePracticeResult("Necesitas trades con ticks completos y nextOutcome resuelto.", "is-pass");
+    if (practiceRoundLabelEl) practiceRoundLabelEl.textContent = "Sin ronda";
+    if (practiceCanvas) {
+      const ctx = practiceCanvas.getContext("2d");
+      ctx.clearRect(0, 0, practiceCanvas.width, practiceCanvas.height);
+    }
+    setPracticeDecisionState(true);
+    return;
+  }
+
+  cancelPracticeAnim();
+  practiceRound = {
+    entry: chosen,
+    ticks: normalizePracticeTicks(chosen.ticks),
+    cutoffMs: EVAL_SEC * 1000,
+    startTs: 0,
+    replayMs: EVAL_SEC * 1000,
+    answer: null,
+    finished: false,
+  };
+
+  if (practiceRoundLabelEl) {
+    practiceRoundLabelEl.textContent = `${chosen.symbol} | ${chosen.mode || "NORMAL"} | ${chosen.time}`;
+  }
+  updatePracticePoolLabel();
+  updatePracticeResult("Elige COMPRA, VENTA o PASAR antes de que termine la vela.");
+  setPracticeDecisionState(false);
+  if (practiceNextBtn) practiceNextBtn.textContent = "⏳ En curso";
+
+  const initialTicks = buildPracticeVisibleTicks(practiceRound.ticks, practiceRound.cutoffMs);
+  drawPracticeChart(practiceCanvas, initialTicks, practiceRound.cutoffMs);
+  practiceRaf = requestAnimationFrame(practiceLoop);
+}
+function ensurePracticeReady() {
+  renderPracticeStats();
+  paintPracticeSecButtons();
+  ensurePracticeQueue();
+  updatePracticePoolLabel();
+  if (!practiceRound) {
+    updatePracticeStatusText("Toca “Empezar” para lanzar una ronda con trades aleatorios sin repetir.");
+    updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
+    setPracticeDecisionState(true);
+  } else if (practiceRound.finished) {
+    drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000);
+  }
+}
+
 
 /* =========================
    Settings modal (solo engranaje)
@@ -1227,6 +1633,7 @@ function applyTheme(theme) {
       b.classList.toggle("active", sec === EVAL_SEC);
     });
   paintEval();
+  try { paintPracticeSecButtons(); } catch {}
 
   evalBtns.forEach(
     (b) =>
@@ -1235,6 +1642,7 @@ function applyTheme(theme) {
         EVAL_SEC = [40, 45].includes(v) ? v : 45;
         localStorage.setItem("evalSec", String(EVAL_SEC));
         paintEval();
+        try { paintPracticeSecButtons(); } catch {}
       })
   );
 
@@ -1321,7 +1729,6 @@ function applyTheme(theme) {
 /* =========================
    Copy feedback
 ========================= */
-if (copyBtn && feedbackEl) copyBtn.onclick = () => navigator.clipboard.writeText(feedbackEl.value || "");
 
 /* =========================
    Notifications
@@ -2109,7 +2516,6 @@ function setNextOutcome(item, outcome) {
   updateRowNextArrow(item);
   const ok = updateRowHitIcon(item);
   updateCounter();
-  rebuildFeedbackFromHistory();
 
   try {
     upsertTradeJournalFromSignal(item);
@@ -2196,8 +2602,7 @@ function buildRow(item, opts = {}) {
         btn.classList.add("selected");
 
         saveHistory(history);
-        rebuildFeedbackFromHistory();
-
+      
         row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
       };
     });
@@ -2206,8 +2611,7 @@ function buildRow(item, opts = {}) {
     input.addEventListener("blur", () => {
       item.comment = input.value || "";
       saveHistory(history);
-      rebuildFeedbackFromHistory();
-    });
+        });
   }
 
   return row;
@@ -2227,7 +2631,6 @@ function renderHistory() {
   saveHistory(history);
 
   updateCounter();
-  rebuildFeedbackFromHistory();
 
   for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
 }
@@ -2839,7 +3242,6 @@ async function rehydrateHistoryOnBoot() {
 
   saveHistory(history);
   updateCounter();
-  rebuildFeedbackFromHistory();
 
   seedTradesJournalFromHistory();
 
@@ -3577,6 +3979,57 @@ document.addEventListener("visibilitychange", () => {
     }
   }
 });
+
+
+if (practice40Btn) {
+  practice40Btn.onclick = () => {
+    EVAL_SEC = 40;
+    localStorage.setItem("evalSec", "40");
+    qsAll(".evalBtn").forEach((b) => b.classList.toggle("active", Number(b.dataset.sec || 0) === 40));
+    paintPracticeSecButtons();
+    if (practiceRound && !practiceRound.finished) startPracticeRound(practiceRound.entry);
+    else ensurePracticeReady();
+  };
+}
+if (practice45Btn) {
+  practice45Btn.onclick = () => {
+    EVAL_SEC = 45;
+    localStorage.setItem("evalSec", "45");
+    qsAll(".evalBtn").forEach((b) => b.classList.toggle("active", Number(b.dataset.sec || 0) === 45));
+    paintPracticeSecButtons();
+    if (practiceRound && !practiceRound.finished) startPracticeRound(practiceRound.entry);
+    else ensurePracticeReady();
+  };
+}
+if (practiceNextBtn) {
+  practiceNextBtn.onclick = () => {
+    if (practiceRound && !practiceRound.finished) return;
+    startPracticeRound();
+  };
+}
+if (practiceCallBtn) {
+  practiceCallBtn.onclick = () => {
+    if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
+    practiceRound.answer = "CALL";
+    setPracticeDecisionState(true, "CALL");
+    updatePracticeResult("🟢 COMPRA elegida. Esperando cierre de la vela…", "is-pass");
+  };
+}
+if (practicePutBtn) {
+  practicePutBtn.onclick = () => {
+    if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
+    practiceRound.answer = "PUT";
+    setPracticeDecisionState(true, "PUT");
+    updatePracticeResult("🔴 VENTA elegida. Esperando cierre de la vela…", "is-pass");
+  };
+}
+if (practicePassBtn) {
+  practicePassBtn.onclick = () => {
+    if (!practiceRound || practiceRound.finished) return;
+    practiceRound.answer = "PASS";
+    finalizePracticeRound("PASS");
+  };
+}
 
 /* =========================
    Start
