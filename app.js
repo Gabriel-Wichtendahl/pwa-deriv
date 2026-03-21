@@ -251,7 +251,6 @@ const practiceSessionStatsEl = $("practiceSessionStats");
 const practiceAllStatsEl = $("practiceAllStats");
 const practice40Btn = $("practice40Btn");
 const practice45Btn = $("practice45Btn");
-const practiceNextBtn = $("practiceNextBtn");
 const practiceCallBtn = $("practiceCallBtn");
 const practicePutBtn = $("practicePutBtn");
 const practicePassBtn = $("practicePassBtn");
@@ -687,6 +686,10 @@ function isHit(item) {
     (item.direction === "CALL" && item.nextOutcome === "up") ||
     (item.direction === "PUT" && item.nextOutcome === "down")
   );
+}
+function areSignalsPaused(viewName = null) {
+  const activeView = viewName || (localStorage.getItem("activeView") || "signals");
+  return activeView === "practice";
 }
 function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
@@ -1239,6 +1242,13 @@ function drawPracticeChart(canvas, ticks, replayMs) {
   ctx.fill();
   ctx.globalAlpha = 1;
 }
+function setPracticePassButtonMode(mode = "PASS") {
+  if (!practicePassBtn) return;
+  const isNext = mode === "NEXT";
+  practicePassBtn.dataset.mode = isNext ? "NEXT" : "PASS";
+  practicePassBtn.textContent = isNext ? "🎲 SIGUIENTE" : "⏭️ PASAR";
+  practicePassBtn.classList.toggle("is-next", isNext);
+}
 function setPracticeDecisionState(disabled, selected = "") {
   const map = [
     [practiceCallBtn, "CALL"],
@@ -1247,8 +1257,9 @@ function setPracticeDecisionState(disabled, selected = "") {
   ];
   map.forEach(([btn, key]) => {
     if (!btn) return;
-    btn.disabled = !!disabled;
-    btn.classList.toggle("selected", selected === key);
+    const isNextBtn = btn === practicePassBtn && btn.dataset.mode === "NEXT";
+    btn.disabled = isNextBtn ? false : !!disabled;
+    btn.classList.toggle("selected", !isNextBtn && selected === key);
   });
 }
 function updatePracticeStatusText(text) {
@@ -1320,8 +1331,9 @@ function finalizePracticeRound(answer = null) {
     updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
   }
 
-  if (practiceNextBtn) practiceNextBtn.textContent = "🎲 Siguiente";
-  updatePracticeStatusText(`Ronda terminada. Puedes pasar a la siguiente sin repetir hasta agotar el pool.`);
+  setPracticePassButtonMode("NEXT");
+  setPracticeDecisionState(true, round.answer);
+  updatePracticeStatusText(`Ronda terminada. Toca SIGUIENTE para continuar sin repetir hasta agotar el pool.`);
 }
 function practiceLoop(ts) {
   if (!practiceRound || practiceRound.finished) return;
@@ -1354,6 +1366,7 @@ function startPracticeRound(entry = null) {
       const ctx = practiceCanvas.getContext("2d");
       ctx.clearRect(0, 0, practiceCanvas.width, practiceCanvas.height);
     }
+    setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
     return;
   }
@@ -1374,8 +1387,8 @@ function startPracticeRound(entry = null) {
   }
   updatePracticePoolLabel();
   updatePracticeResult("Elige COMPRA, VENTA o PASAR antes de que termine la vela.");
+  setPracticePassButtonMode("PASS");
   setPracticeDecisionState(false);
-  if (practiceNextBtn) practiceNextBtn.textContent = "⏳ En curso";
 
   const initialTicks = buildPracticeVisibleTicks(practiceRound.ticks, practiceRound.cutoffMs);
   drawPracticeChart(practiceCanvas, initialTicks, practiceRound.cutoffMs);
@@ -1387,11 +1400,16 @@ function ensurePracticeReady() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
   if (!practiceRound) {
-    updatePracticeStatusText("Toca “Empezar” para lanzar una ronda con trades aleatorios sin repetir.");
+    updatePracticeStatusText("Toca PASAR para empezar una ronda con trades aleatorios sin repetir. En Práctica, las señales quedan pausadas.");
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
+    setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
   } else if (practiceRound.finished) {
+    setPracticePassButtonMode("NEXT");
+    setPracticeDecisionState(true, practiceRound.answer || "");
     drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000);
+  } else {
+    setPracticePassButtonMode("PASS");
   }
 }
 
@@ -3408,7 +3426,7 @@ function onTick(tick) {
     for (const it of tail) updateRowChartBtn(it);
   }
 
-  if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+  if (!areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
@@ -3781,6 +3799,7 @@ function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 function addSignal(minute, symbol, direction, ticks) {
+  if (areSignalsPaused()) return;
   const modeLabel = stairMode ? "ESCALERA" : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
@@ -4001,12 +4020,6 @@ if (practice45Btn) {
     else ensurePracticeReady();
   };
 }
-if (practiceNextBtn) {
-  practiceNextBtn.onclick = () => {
-    if (practiceRound && !practiceRound.finished) return;
-    startPracticeRound();
-  };
-}
 if (practiceCallBtn) {
   practiceCallBtn.onclick = () => {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
@@ -4025,6 +4038,12 @@ if (practicePutBtn) {
 }
 if (practicePassBtn) {
   practicePassBtn.onclick = () => {
+    const mode = practicePassBtn.dataset.mode || "PASS";
+    if (mode === "NEXT") {
+      if (practiceRound && !practiceRound.finished) return;
+      startPracticeRound();
+      return;
+    }
     if (!practiceRound || practiceRound.finished) return;
     practiceRound.answer = "PASS";
     finalizePracticeRound("PASS");
