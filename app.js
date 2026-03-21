@@ -673,8 +673,10 @@ function isHit(item) {
     (item.direction === "PUT" && item.nextOutcome === "down")
   );
 }
-function updateCounter() {
-  if (counterEl) counterEl.textContent = `Señales: ${history.length}`;
+function updateCounter(viewName = null) {
+  const activeView = viewName || (localStorage.getItem("activeView") || "signals");
+  if (!counterEl) return;
+  counterEl.textContent = activeView === "trades" ? `Trades: ${tradesJournal.length}` : `Señales: ${history.length}`;
 }
 
 function escapeHtml(str) {
@@ -782,6 +784,7 @@ function renderTradesView() {
   const list = $("tradesList");
   if (!list) return;
 
+  updateCounter("trades");
   list.innerHTML = "";
 
   if (!tradesJournal.length) {
@@ -847,7 +850,7 @@ function ensureTradesTab() {
 function clearSignalsOnly() {
   history = [];
   saveHistory(history);
-  updateCounter();
+  updateCounter(localStorage.getItem("activeView") || "signals");
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
   toast("🧹 Señales borradas", 1600);
@@ -857,6 +860,7 @@ function clearTradesOnly() {
   saveTradesJournal(tradesJournal);
   try {
     const av = localStorage.getItem("activeView") || "signals";
+    updateCounter(av);
     if (av === "trades") renderTradesView();
   } catch {}
   toast("🗑️ Trades borrados", 1600);
@@ -927,7 +931,7 @@ function updatePerViewClearButtonsVisibility(activeView) {
   const wTrades = document.getElementById("clearTradesInlineBtnWrap");
 
   if (wSignals) wSignals.style.display = activeView === "signals" ? "flex" : "none";
-  if (wTrades) wTrades.style.display = activeView === "trades" ? "flex" : "none";
+  if (wTrades) wTrades.style.display = "none";
 }
 
 function ensureInlineClearButtons() {
@@ -941,15 +945,8 @@ function ensureInlineClearButtons() {
     },
   });
 
-  ensureViewActionButton("trades", {
-    id: "clearTradesInlineBtn",
-    text: "🗑️ Borrar Trades",
-    title: "Borra solo el historial de trades (estudio)",
-    onClick: () => {
-      if (!confirm("¿Borrar SOLO el historial de trades guardados para estudio?")) return;
-      clearTradesOnly();
-    },
-  });
+  const oldTradesWrap = document.getElementById("clearTradesInlineBtnWrap");
+  if (oldTradesWrap) oldTradesWrap.remove();
 
   const av = localStorage.getItem("activeView") || "signals";
   updatePerViewClearButtonsVisibility(av);
@@ -976,7 +973,7 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isFeedback) rebuildFeedbackFromHistory();
-  if (isSignals) updateCounter();
+  updateCounter(name);
 
   updatePerViewClearButtonsVisibility(name);
 }
@@ -1179,9 +1176,24 @@ function ensureSplitClearButtons() {
   // ocultar el botón viejo si existe
   if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
 
-  // ✅ ya NO agregamos botones de borrar acá
   const expT = ensureExportTradesButton();
   if (expT) expT.onclick = exportTradesJournal;
+
+  let btn = document.getElementById("clearTradesConfigBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "clearTradesConfigBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.textContent = "🗑️ Borrar Trades";
+    btn.title = "Borra solo el historial de trades guardados para estudio";
+    host.appendChild(btn);
+  }
+
+  btn.onclick = () => {
+    if (!confirm("¿Borrar SOLO el historial de trades guardados para estudio?")) return;
+    clearTradesOnly();
+  };
 }
 
 /* =========================
