@@ -545,7 +545,7 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
    Práctica
 ========================= */
 .practice{display:flex;flex-direction:column;gap:10px}
-.practiceTop{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.practiceTop{display:flex;gap:8px;align-items:center;justify-content:flex-start;flex-wrap:wrap}
 .practiceModeGroup{display:flex;gap:8px;flex:1 1 auto}
 .practiceModeGroup .btn{flex:1 1 0}
 .practiceSecBtn.active{border-color:var(--neon-cyan);box-shadow:0 0 14px rgba(34,211,238,.45)}
@@ -589,6 +589,7 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
 .practiceCallBtn{border-color:rgba(34,197,94,.88);box-shadow:0 0 18px rgba(34,197,94,.18);background:rgba(34,197,94,.18)}
 .practicePutBtn{border-color:rgba(239,68,68,.88);box-shadow:0 0 18px rgba(239,68,68,.16);background:rgba(239,68,68,.16)}
 .practicePassBtn{border-color:rgba(148,163,184,.50);background:rgba(148,163,184,.10)}
+.practicePassBtn.is-next{border-color:rgba(34,211,238,.72);box-shadow:0 0 18px rgba(34,211,238,.18);background:rgba(34,211,238,.12)}
 .practiceDecisionBtn.selected{border-color:rgba(34,211,238,.85)!important;box-shadow:0 0 18px rgba(34,211,238,.28)!important}
 .practiceDecisionBtn:disabled{opacity:.65;cursor:not-allowed;transform:none}
 @media (max-width:560px){
