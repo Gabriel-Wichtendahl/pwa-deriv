@@ -249,6 +249,8 @@ const practiceRoundLabelEl = $("practiceRoundLabel");
 const practicePoolLabelEl = $("practicePoolLabel");
 const practiceSessionStatsEl = $("practiceSessionStats");
 const practiceAllStatsEl = $("practiceAllStats");
+const practiceResetSessionBtn = $("practiceResetSessionBtn");
+const practiceResetAllBtn = $("practiceResetAllBtn");
 const practice40Btn = $("practice40Btn");
 const practice45Btn = $("practice45Btn");
 const practiceCallBtn = $("practiceCallBtn");
@@ -1029,9 +1031,19 @@ let practiceAllStats = loadPracticeAllStats();
 let practiceQueue = [];
 let practiceRound = null;
 let practiceRaf = null;
+let practiceChoiceHitZones = [];
+const PRACTICE_SEGMENTS = [
+  { start: 0, end: 15000, label: "0s" },
+  { start: 15000, end: 30000, label: "15s" },
+  { start: 30000, end: 45000, label: "30s" },
+  { start: 45000, end: 60000, label: "45s" },
+];
 
 function freshPracticeStats() {
   return { itm: 0, otm: 0, pass: 0, total: 0 };
+}
+function freshPracticeSegmentMarks() {
+  return PRACTICE_SEGMENTS.map(() => "");
 }
 function loadPracticeAllStats() {
   try {
@@ -1052,6 +1064,17 @@ function savePracticeAllStats() {
   try {
     localStorage.setItem(PRACTICE_STATS_KEY, JSON.stringify(practiceAllStats));
   } catch {}
+}
+function resetPracticeSessionStats() {
+  practiceSessionStats = freshPracticeStats();
+  renderPracticeStats();
+  toast("↺ Sesión de práctica reseteada", 1400);
+}
+function resetPracticeAllStats() {
+  practiceAllStats = freshPracticeStats();
+  savePracticeAllStats();
+  renderPracticeStats();
+  toast("↺ Histórico de práctica reseteado", 1600);
 }
 function formatPracticeStats(stats) {
   const decided = Number(stats.itm || 0) + Number(stats.otm || 0);
@@ -1107,7 +1130,7 @@ function buildPracticeVisibleTicks(ticks, uptoMs) {
   if (last.ms < uptoMs) pts.push({ ms: uptoMs, quote: last.quote });
   return pts;
 }
-function drawPracticeChart(canvas, ticks, replayMs) {
+function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   const cssW = canvas.clientWidth || 1;
@@ -1122,6 +1145,8 @@ function drawPracticeChart(canvas, ticks, replayMs) {
   const h = cssH;
 
   ctx.clearRect(0, 0, w, h);
+  practiceChoiceHitZones = [];
+
   ctx.globalAlpha = 0.18;
   ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, 0, w, h);
@@ -1141,25 +1166,51 @@ function drawPracticeChart(canvas, ticks, replayMs) {
 
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
+  const marks = Array.isArray(segmentMarks) ? segmentMarks : [];
+  const arrowZones = [];
 
-  const segments = [
-    { start: 0, end: 15000, label: "0s" },
-    { start: 15000, end: 30000, label: "15s" },
-    { start: 30000, end: 45000, label: "30s" },
-    { start: 45000, end: 60000, label: "45s" },
-  ];
-
-  for (const seg of segments) {
+  for (let idx = 0; idx < PRACTICE_SEGMENTS.length; idx++) {
+    const seg = PRACTICE_SEGMENTS[idx];
     const x1 = xOf(seg.start);
-    const x2 = xOf(seg.end);
-    let fill = "rgba(255,255,255,0.03)";
+    const visibleEnd = replayMs == null ? seg.end : Math.min(seg.end, replayMs);
+    const visibleWidth = Math.max(0, xOf(visibleEnd) - x1);
+    const isVisible = replayMs == null ? true : replayMs > seg.start;
+
+    let fill = "rgba(255,255,255,0.025)";
     if (replayMs != null) {
       if (replayMs >= seg.end) fill = "rgba(34,211,238,0.10)";
       else if (replayMs >= seg.start && replayMs < seg.end) fill = "rgba(251,191,36,0.10)";
-      else fill = "rgba(255,255,255,0.025)";
     }
-    ctx.fillStyle = fill;
-    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
+
+    const mark = marks[idx] || "";
+    if (mark === "up") fill = "rgba(34,197,94,0.18)";
+    if (mark === "down") fill = "rgba(239,68,68,0.18)";
+
+    if (isVisible) {
+      ctx.fillStyle = fill;
+      ctx.fillRect(x1, 8, visibleWidth, h - 32);
+    }
+
+    if (!isVisible || visibleWidth < 34) continue;
+
+    const centerX = x1 + visibleWidth / 2;
+    const upY = Math.max(38, (h - 28) * 0.34);
+    const downY = Math.max(upY + 34, (h - 28) * 0.58);
+    const hitW = Math.min(42, Math.max(34, visibleWidth - 8));
+
+    arrowZones.push({
+      segIndex: idx,
+      centerX,
+      upY,
+      downY,
+      upSelected: mark === "up",
+      downSelected: mark === "down",
+    });
+
+    practiceChoiceHitZones.push(
+      { segIndex: idx, choice: "up", x: centerX - hitW / 2, y: upY - 18, w: hitW, h: 28 },
+      { segIndex: idx, choice: "down", x: centerX - hitW / 2, y: downY - 18, w: hitW, h: 28 }
+    );
   }
 
   ctx.globalAlpha = 0.22;
@@ -1233,6 +1284,22 @@ function drawPracticeChart(canvas, ticks, replayMs) {
   });
   ctx.stroke();
 
+  for (const zone of arrowZones) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "900 22px system-ui, sans-serif";
+
+    ctx.globalAlpha = zone.upSelected ? 0.98 : 0.36;
+    ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,1)" : "rgba(34,197,94,0.88)";
+    ctx.fillText("⬆", zone.centerX, zone.upY);
+
+    ctx.globalAlpha = zone.downSelected ? 0.98 : 0.36;
+    ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,1)" : "rgba(239,68,68,0.88)";
+    ctx.fillText("⬇", zone.centerX, zone.downY);
+    ctx.restore();
+  }
+
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
@@ -1261,6 +1328,26 @@ function setPracticeDecisionState(disabled, selected = "") {
     btn.disabled = isNextBtn ? false : !!disabled;
     btn.classList.toggle("selected", !isNextBtn && selected === key);
   });
+}
+function getPracticeActiveMarks() {
+  return practiceRound?.segmentMarks || freshPracticeSegmentMarks();
+}
+function togglePracticeSegmentMark(segIndex, choice) {
+  if (!practiceRound || !Array.isArray(practiceRound.segmentMarks)) return;
+  if (practiceRound.finished) return;
+  const current = practiceRound.segmentMarks[segIndex] || "";
+  practiceRound.segmentMarks[segIndex] = current === choice ? "" : choice;
+  const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, practiceRound.replayMs || practiceRound.cutoffMs);
+  drawPracticeChart(practiceCanvas, visibleTicks, practiceRound.replayMs || practiceRound.cutoffMs, practiceRound.segmentMarks);
+}
+function handlePracticeCanvasPick(ev) {
+  if (!practiceRound || !practiceCanvas || !practiceChoiceHitZones.length) return;
+  const rect = practiceCanvas.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const y = ev.clientY - rect.top;
+  const hit = practiceChoiceHitZones.find((z) => x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h);
+  if (!hit) return;
+  togglePracticeSegmentMark(hit.segIndex, hit.choice);
 }
 function updatePracticeStatusText(text) {
   if (practiceStatusEl) practiceStatusEl.textContent = text;
@@ -1319,7 +1406,7 @@ function finalizePracticeRound(answer = null) {
   renderPracticeStats();
 
   const fullTicks = buildPracticeVisibleTicks(round.ticks, 60000);
-  drawPracticeChart(practiceCanvas, fullTicks, 60000);
+  drawPracticeChart(practiceCanvas, fullTicks, 60000, round.segmentMarks);
   setPracticeDecisionState(true, round.answer);
 
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
@@ -1343,7 +1430,7 @@ function practiceLoop(ts) {
   practiceRound.replayMs = replayMs;
 
   const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
-  drawPracticeChart(practiceCanvas, visibleTicks, replayMs);
+  drawPracticeChart(practiceCanvas, visibleTicks, replayMs, practiceRound.segmentMarks);
 
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
@@ -1365,6 +1452,7 @@ function startPracticeRound(entry = null) {
     if (practiceCanvas) {
       const ctx = practiceCanvas.getContext("2d");
       ctx.clearRect(0, 0, practiceCanvas.width, practiceCanvas.height);
+      practiceChoiceHitZones = [];
     }
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
@@ -1380,6 +1468,7 @@ function startPracticeRound(entry = null) {
     replayMs: EVAL_SEC * 1000,
     answer: null,
     finished: false,
+    segmentMarks: freshPracticeSegmentMarks(),
   };
 
   if (practiceRoundLabelEl) {
@@ -1391,7 +1480,7 @@ function startPracticeRound(entry = null) {
   setPracticeDecisionState(false);
 
   const initialTicks = buildPracticeVisibleTicks(practiceRound.ticks, practiceRound.cutoffMs);
-  drawPracticeChart(practiceCanvas, initialTicks, practiceRound.cutoffMs);
+  drawPracticeChart(practiceCanvas, initialTicks, practiceRound.cutoffMs, practiceRound.segmentMarks);
   practiceRaf = requestAnimationFrame(practiceLoop);
 }
 function ensurePracticeReady() {
@@ -1407,7 +1496,7 @@ function ensurePracticeReady() {
   } else if (practiceRound.finished) {
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true, practiceRound.answer || "");
-    drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000);
+    drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000, practiceRound.segmentMarks);
   } else {
     setPracticePassButtonMode("PASS");
   }
@@ -4048,6 +4137,20 @@ if (practicePassBtn) {
     practiceRound.answer = "PASS";
     finalizePracticeRound("PASS");
   };
+}
+if (practiceResetSessionBtn) {
+  practiceResetSessionBtn.onclick = () => {
+    resetPracticeSessionStats();
+  };
+}
+if (practiceResetAllBtn) {
+  practiceResetAllBtn.onclick = () => {
+    if (!confirm("¿Resetear el histórico de práctica?")) return;
+    resetPracticeAllStats();
+  };
+}
+if (practiceCanvas) {
+  practiceCanvas.addEventListener("click", handlePracticeCanvasPick);
 }
 
 /* =========================
