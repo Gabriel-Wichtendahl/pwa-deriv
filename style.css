@@ -301,6 +301,7 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
 }
 #minuteCanvas{
   display:block;
+  touch-action:manipulation;
   width:100%;
   height:min(42dvh,360px);
   min-height:280px;
@@ -557,7 +558,18 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
   padding:10px;
   backdrop-filter:blur(16px);
 }
-.practiceStatsTitle{font-size:13px;font-weight:800;color:var(--muted);margin-bottom:6px}
+.practiceStatsHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.practiceStatsTitle{font-size:13px;font-weight:800;color:var(--muted);margin-bottom:0}
+.practiceResetBtn{
+  width:34px;height:34px;padding:0;border-radius:12px;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:18px;font-weight:900;line-height:1;
+  border-color:rgba(34,211,238,.34);
+  background:rgba(34,211,238,.08);
+  box-shadow:0 0 10px rgba(34,211,238,.10);
+}
+.practiceResetBtn:hover{box-shadow:0 0 14px rgba(34,211,238,.20)}
+.practiceResetBtn:active{transform:translateY(0) scale(.98)}
 .practiceStatsText{font-size:13px;line-height:1.35}
 .practiceInfoRow{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 .practicePill{font-size:12px;padding:6px 10px}
@@ -576,6 +588,7 @@ body.light .modalCard{background:rgba(255,255,255,.98)}
 .practiceResult.is-pass{border-color:rgba(148,163,184,.30);background:rgba(148,163,184,.10);color:#e2e8f0}
 #practiceCanvas{
   display:block;
+  touch-action:manipulation;
   width:100%;
   height:360px;
   min-height:360px;
