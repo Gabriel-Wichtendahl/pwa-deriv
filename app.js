@@ -229,7 +229,6 @@ function pickEl(...ids) {
 const statusEl = $("status");
 const signalsEl = $("signals");
 const counterEl = $("counter");
-const hitCounterEl = $("hitCounter");
 const feedbackEl = $("feedback");
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
@@ -674,14 +673,8 @@ function isHit(item) {
     (item.direction === "PUT" && item.nextOutcome === "down")
   );
 }
-function computeHitsCount() {
-  let hits = 0;
-  for (const it of history) if (isHit(it)) hits++;
-  return hits;
-}
 function updateCounter() {
   if (counterEl) counterEl.textContent = `Señales: ${history.length}`;
-  if (hitCounterEl) hitCounterEl.textContent = `✅ Aciertos: ${computeHitsCount()}`;
 }
 
 function escapeHtml(str) {
@@ -1990,14 +1983,7 @@ function updateRowTradeBadge(item) {
   updateRowTradeBadgeOnRow(row, item);
 }
 function updateRowHitIcon(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return false;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return false;
-  const show = isHit(item);
-  hit.classList.toggle("hidden", !show);
-  hit.title = show ? "Acertó" : "";
-  return show;
+  return false;
 }
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -2087,23 +2073,11 @@ function updateRowNextArrowOnRow(row, item) {
   }
 }
 function updateRowHitIconOnRow(row, item) {
-  if (!row) return;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return;
-  const show = isHit(item);
-  hit.classList.toggle("hidden", !show);
-  hit.title = show ? "Acertó" : "";
+  return;
 }
 
 function animateHitPop(item) {
-  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
-  if (!row) return;
-  const hit = row.querySelector(".hitIcon");
-  if (!hit) return;
-  hit.classList.remove("pop");
-  void hit.offsetWidth;
-  hit.classList.add("pop");
-  setTimeout(() => hit.classList.remove("pop"), 260);
+  return;
 }
 function animateFailShake(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -2161,7 +2135,6 @@ function buildRow(item, opts = {}) {
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
-      <span class="hitIcon hidden" aria-label="Acertó">✓</span>
       <span class="tradeBadge hidden" title=""></span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -2187,7 +2160,6 @@ function buildRow(item, opts = {}) {
   };
 
   updateRowChartBtnOnRow(row, item);
-  updateRowHitIconOnRow(row, item);
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
 
@@ -2848,7 +2820,6 @@ async function rehydrateHistoryOnBoot() {
   try {
     for (const it of history) {
       updateRowNextArrow(it);
-      updateRowHitIcon(it);
       updateRowChartBtn(it);
       updateRowTradeBadge(it);
     }
