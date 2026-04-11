@@ -76,6 +76,18 @@
         <canvas id="practiceCanvas"></canvas>
         <div id="practiceResult" class="practiceResult">Tocá “Empezar” para cargar una ronda.</div>
 
+        <div class="practiceReviewRow">
+          <button id="practiceSimilarBtn" class="btn practiceReviewBtn hidden" type="button">🔎 Ver similares</button>
+        </div>
+
+        <div id="practiceSimilarPanel" class="practiceSimilarPanel hidden">
+          <div class="practiceSimilarHead">
+            <div class="practiceSimilarTitle">Formaciones similares</div>
+            <div id="practiceSimilarMeta" class="practiceSimilarMeta">Comparación por similitud</div>
+          </div>
+          <div id="practiceSimilarList" class="practiceSimilarList"></div>
+        </div>
+
         <div class="practiceDecisionRow">
           <button id="practiceCallBtn" class="btn practiceDecisionBtn practiceCallBtn" type="button">🟢 COMPRA</button>
           <button id="practicePutBtn" class="btn practiceDecisionBtn practicePutBtn" type="button">🔴 VENTA</button>
