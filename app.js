@@ -245,6 +245,10 @@ const practiceView = $("practiceView");
 const practiceCanvas = $("practiceCanvas");
 const practiceStatusEl = $("practiceStatus");
 const practiceResultEl = $("practiceResult");
+const practiceSimilarBtn = $("practiceSimilarBtn");
+const practiceSimilarPanel = $("practiceSimilarPanel");
+const practiceSimilarMetaEl = $("practiceSimilarMeta");
+const practiceSimilarListEl = $("practiceSimilarList");
 const practiceRoundLabelEl = $("practiceRoundLabel");
 const practicePoolLabelEl = $("practicePoolLabel");
 const practiceSessionStatsEl = $("practiceSessionStats");
@@ -890,6 +894,7 @@ function clearTradesOnly() {
   saveTradesJournal(tradesJournal);
   practiceQueue = [];
   practiceRound = null;
+  resetPracticeSimilarState();
   try {
     const av = localStorage.getItem("activeView") || "signals";
     updateCounter(av);
@@ -1032,6 +1037,7 @@ let practiceQueue = [];
 let practiceRound = null;
 let practiceRaf = null;
 let practiceChoiceHitZones = [];
+let practiceSimilarResults = [];
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
   { start: 15000, end: 30000, label: "15s" },
@@ -1367,6 +1373,302 @@ function updatePracticeResult(text, cls = "") {
   practiceResultEl.classList.remove("is-itm", "is-otm", "is-pass");
   if (cls) practiceResultEl.classList.add(cls);
 }
+function setPracticeSimilarButtonVisible(show) {
+  if (!practiceSimilarBtn) return;
+  practiceSimilarBtn.classList.toggle("hidden", !show);
+}
+function hidePracticeSimilarPanel() {
+  if (!practiceSimilarPanel) return;
+  practiceSimilarPanel.classList.add("hidden");
+}
+function resetPracticeSimilarState() {
+  practiceSimilarResults = [];
+  if (practiceSimilarBtn) {
+    practiceSimilarBtn.textContent = "🔎 Ver similares";
+    practiceSimilarBtn.disabled = false;
+  }
+  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación por similitud";
+  if (practiceSimilarListEl) practiceSimilarListEl.innerHTML = "";
+  hidePracticeSimilarPanel();
+  setPracticeSimilarButtonVisible(false);
+}
+function clipPracticeTicksToMs(ticks, cutoffMs) {
+  const pts = normalizePracticeTicks(ticks).filter((t) => Number.isFinite(t?.ms) && Number.isFinite(t?.quote) && t.ms <= cutoffMs);
+  if (!pts.length) return [];
+  if (pts[0].ms > 0) pts.unshift({ ms: 0, quote: pts[0].quote });
+  const last = pts[pts.length - 1];
+  if (last.ms < cutoffMs) pts.push({ ms: cutoffMs, quote: last.quote });
+  return pts;
+}
+function avgAbsDiff(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (!n) return 0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) acc += Math.abs(Number(a[i] || 0) - Number(b[i] || 0));
+  return acc / n;
+}
+function rmsDiff(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (!n) return 0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const d = Number(a[i] || 0) - Number(b[i] || 0);
+    acc += d * d;
+  }
+  return Math.sqrt(acc / n);
+}
+function buildPracticeSignature(ticks, cutoffMs, sampleCount = 28) {
+  const pts = clipPracticeTicksToMs(ticks, cutoffMs);
+  if (pts.length < 2) return null;
+
+  const base = Number(getPriceAtMs(pts, 0));
+  const end = Number(getPriceAtMs(pts, cutoffMs));
+  if (!Number.isFinite(base) || !Number.isFinite(end)) return null;
+
+  const qs = pts.map((p) => Number(p.quote));
+  let minQ = Math.min(...qs);
+  let maxQ = Math.max(...qs);
+  let range = maxQ - minQ;
+  if (!Number.isFinite(range) || range < 1e-9) range = 1;
+
+  const values = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const ms = (cutoffMs * i) / Math.max(1, sampleCount - 1);
+    const q = Number(getPriceAtMs(pts, ms));
+    values.push((q - base) / range);
+  }
+
+  const slopes = [];
+  for (let i = 1; i < values.length; i++) slopes.push(values[i] - values[i - 1]);
+
+  const cp = [0, cutoffMs * 0.25, cutoffMs * 0.5, cutoffMs * 0.75, cutoffMs];
+  const segMoves = [];
+  for (let i = 1; i < cp.length; i++) {
+    const a = Number(getPriceAtMs(pts, cp[i - 1]));
+    const b = Number(getPriceAtMs(pts, cp[i]));
+    segMoves.push((b - a) / range);
+  }
+
+  const dirSign = Math.sign(end - base) || 1;
+  const dirWhole = directionalRatio(pts, dirSign);
+  const retrace = maxRetraceAgainst(pts, dirSign) / range;
+  const finalStartMs = Math.max(0, cutoffMs - Math.min(10000, cutoffMs));
+  const finalStartQ = Number(getPriceAtMs(pts, finalStartMs));
+  const finalStretch = Number.isFinite(finalStartQ) ? (end - finalStartQ) / range : 0;
+
+  return {
+    values,
+    slopes,
+    segMoves,
+    net: (end - base) / range,
+    retrace,
+    dirWhole,
+    finalStretch,
+  };
+}
+function computePracticeSimilarityScore(baseSig, candidateSig) {
+  if (!baseSig || !candidateSig) return 0;
+
+  const pathDiff = rmsDiff(baseSig.values, candidateSig.values);
+  const slopeDiff = avgAbsDiff(baseSig.slopes, candidateSig.slopes);
+  const segDiff = avgAbsDiff(baseSig.segMoves, candidateSig.segMoves);
+  const netDiff = Math.abs(baseSig.net - candidateSig.net);
+  const retraceDiff = Math.abs(baseSig.retrace - candidateSig.retrace);
+  const dirDiff = Math.abs(baseSig.dirWhole - candidateSig.dirWhole);
+  const finalDiff = Math.abs(baseSig.finalStretch - candidateSig.finalStretch);
+
+  const distance =
+    pathDiff * 1.65 +
+    slopeDiff * 1.10 +
+    segDiff * 1.20 +
+    netDiff * 0.70 +
+    retraceDiff * 0.55 +
+    dirDiff * 0.40 +
+    finalDiff * 0.55;
+
+  return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.75))));
+}
+function findPracticeSimilarEntries(entry, cutoffMs, limit = 6) {
+  const entryKey = String(entry?.journal_id || entry?.id || "");
+  const baseSig = buildPracticeSignature(entry?.ticks || [], cutoffMs);
+  if (!entryKey || !baseSig) return [];
+
+  return getEligiblePracticeEntries()
+    .filter((candidate) => String(candidate?.journal_id || candidate?.id || "") !== entryKey)
+    .map((candidate) => {
+      const sig = buildPracticeSignature(candidate?.ticks || [], cutoffMs);
+      const similarity = computePracticeSimilarityScore(baseSig, sig);
+      return { ...candidate, similarity };
+    })
+    .filter((candidate) => candidate.similarity > 0)
+    .sort((a, b) => b.similarity - a.similarity || Number(b.saved_at || 0) - Number(a.saved_at || 0))
+    .slice(0, limit);
+}
+function practiceSimilarOutcomeText(outcome) {
+  if (outcome === "up") return "NEXT alcista";
+  if (outcome === "down") return "NEXT bajista";
+  if (outcome === "flat") return "NEXT neutra";
+  return "NEXT pendiente";
+}
+function practiceSimilarTradeText(entry) {
+  const badge = String(entry?.trade?.badge || "");
+  if (badge === "ITM") return "🎯 ITM";
+  if (badge === "OTM") return "💥 OTM";
+  return "⏳ TRADE";
+}
+function practiceSimilarToneClass(entry) {
+  const badge = String(entry?.trade?.badge || "");
+  if (badge === "ITM") return "is-itm";
+  if (badge === "OTM") return "is-otm";
+  return "is-pass";
+}
+function drawPracticeSimilarMiniChart(canvas, ticks, cutoffMs) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+  ctx.clearRect(0, 0, w, h);
+
+  const pts = clipPracticeTicksToMs(ticks, cutoffMs);
+  if (pts.length < 2) return;
+
+  const qs = pts.map((p) => Number(p.quote));
+  let min = Math.min(...qs);
+  let max = Math.max(...qs);
+  let range = max - min;
+  if (!Number.isFinite(range) || range < 1e-9) range = 1;
+  const pad = range * 0.08;
+  min -= pad;
+  max += pad;
+
+  const xOf = (ms) => (ms / cutoffMs) * (w - 16) + 8;
+  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 18) + 9;
+
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  ctx.fillRect(0, 0, w, h);
+
+  for (let i = 1; i <= 3; i++) {
+    const x = (w / 4) * i;
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 8);
+    ctx.lineTo(x, h - 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(xOf(pts[0].ms), h - 8);
+  for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
+  ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 8);
+  ctx.closePath();
+  ctx.globalAlpha = 0.16;
+  ctx.fillStyle = "rgba(255,255,255,0.82)";
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = "rgba(255,255,255,0.96)";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  pts.forEach((p, idx) => {
+    const x = xOf(p.ms);
+    const y = yOf(p.quote);
+    if (!idx) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  const last = pts[pts.length - 1];
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.arc(xOf(last.ms), yOf(last.quote), 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+function renderPracticeSimilarResults(results, cutoffMs) {
+  if (!practiceSimilarPanel || !practiceSimilarListEl) return;
+
+  practiceSimilarPanel.classList.remove("hidden");
+  if (practiceSimilarMetaEl) {
+    const secLabel = Math.round(cutoffMs / 1000);
+    practiceSimilarMetaEl.textContent = `Comparando solo la forma vista hasta ${secLabel}s · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
+  }
+
+  if (!results.length) {
+    practiceSimilarListEl.innerHTML = `<div class="practiceSimilarEmpty">No encontré suficientes formaciones parecidas con el historial actual.</div>`;
+    return;
+  }
+
+  practiceSimilarListEl.innerHTML = results
+    .map(
+      (entry, idx) => `
+        <div class="practiceSimilarCard ${practiceSimilarToneClass(entry)}" data-similar-idx="${idx}">
+          <div class="practiceSimilarCardHead">
+            <div class="practiceSimilarPct">${entry.similarity}%</div>
+            <div class="practiceSimilarMain">
+              <div class="practiceSimilarTop">${escapeHtml(entry.symbol || "—")} · ${escapeHtml(labelDir(entry.direction || "PUT"))}</div>
+              <div class="practiceSimilarSub">${escapeHtml(entry.time || "—")} · modo ${escapeHtml(entry.mode || "—")}</div>
+              <div class="practiceSimilarTags">
+                <span class="practiceSimilarTag">${escapeHtml(practiceSimilarOutcomeText(entry.nextOutcome))}</span>
+                <span class="practiceSimilarTag">${escapeHtml(practiceSimilarTradeText(entry))}</span>
+              </div>
+            </div>
+          </div>
+          <canvas class="practiceSimilarCanvas"></canvas>
+        </div>
+      `
+    )
+    .join("");
+
+  practiceSimilarListEl.querySelectorAll(".practiceSimilarCard").forEach((card, idx) => {
+    const canvas = card.querySelector(".practiceSimilarCanvas");
+    const entry = results[idx];
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], cutoffMs);
+  });
+}
+function togglePracticeSimilarResults() {
+  if (!practiceRound || !practiceRound.finished || !practiceRound.entry) return;
+  if (!practiceSimilarBtn) return;
+
+  const isOpen = practiceSimilarPanel && !practiceSimilarPanel.classList.contains("hidden");
+  if (isOpen) {
+    hidePracticeSimilarPanel();
+    practiceSimilarBtn.textContent = "🔎 Ver similares";
+    return;
+  }
+
+  if (!practiceSimilarResults.length) {
+    practiceSimilarBtn.disabled = true;
+    practiceSimilarBtn.textContent = "⏳ Buscando similares…";
+    practiceSimilarResults = findPracticeSimilarEntries(practiceRound.entry, practiceRound.cutoffMs, 6);
+    practiceSimilarBtn.disabled = false;
+  }
+
+  renderPracticeSimilarResults(practiceSimilarResults, practiceRound.cutoffMs);
+  practiceSimilarBtn.textContent = "🙈 Ocultar similares";
+}
+function redrawPracticeSimilarCanvases() {
+  if (!practiceSimilarPanel || practiceSimilarPanel.classList.contains("hidden")) return;
+  if (!practiceSimilarListEl || !practiceSimilarResults.length || !practiceRound) return;
+
+  practiceSimilarListEl.querySelectorAll(".practiceSimilarCard").forEach((card, idx) => {
+    const canvas = card.querySelector(".practiceSimilarCanvas");
+    const entry = practiceSimilarResults[idx];
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], practiceRound.cutoffMs);
+  });
+}
 function pullNextPracticeEntry() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
@@ -1429,7 +1731,10 @@ function finalizePracticeRound(answer = null) {
 
   setPracticePassButtonMode("NEXT");
   setPracticeDecisionState(true, round.answer);
-  updatePracticeStatusText(`Ronda terminada. Toca SIGUIENTE para continuar sin repetir hasta agotar el pool.`);
+  practiceSimilarResults = [];
+  if (getEligiblePracticeEntries().length > 1) setPracticeSimilarButtonVisible(true);
+  if (practiceSimilarBtn) practiceSimilarBtn.textContent = "🔎 Ver similares";
+  updatePracticeStatusText(`Ronda terminada. Toca VER SIMILARES o SIGUIENTE para continuar sin repetir hasta agotar el pool.`);
 }
 function practiceLoop(ts) {
   if (!practiceRound || practiceRound.finished) return;
@@ -1453,6 +1758,7 @@ function practiceLoop(ts) {
   practiceRaf = requestAnimationFrame(practiceLoop);
 }
 function startPracticeRound(entry = null) {
+  resetPracticeSimilarState();
   const chosen = entry || pullNextPracticeEntry();
   if (!chosen) {
     updatePracticeStatusText("No hay trades suficientes en el journal para practicar todavía.");
@@ -1498,15 +1804,19 @@ function ensurePracticeReady() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
   if (!practiceRound) {
+    resetPracticeSimilarState();
     updatePracticeStatusText("Toca PASAR para empezar una ronda con trades aleatorios sin repetir. En Práctica, las señales quedan pausadas.");
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
   } else if (practiceRound.finished) {
+    if (getEligiblePracticeEntries().length > 1) setPracticeSimilarButtonVisible(true);
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true, practiceRound.answer || "");
     drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000, practiceRound.segmentMarks);
+    redrawPracticeSimilarCanvases();
   } else {
+    resetPracticeSimilarState();
     setPracticePassButtonMode("PASS");
   }
 }
@@ -2484,6 +2794,7 @@ if (modalOpenDerivBtn)
   };
 
 window.addEventListener("resize", () => {
+  redrawPracticeSimilarCanvases();
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   applyModalTradeButtonsLayout();
   updateModalCandleStatusUI();
@@ -4145,6 +4456,11 @@ if (practicePassBtn) {
     if (!practiceRound || practiceRound.finished) return;
     practiceRound.answer = "PASS";
     finalizePracticeRound("PASS");
+  };
+}
+if (practiceSimilarBtn) {
+  practiceSimilarBtn.onclick = () => {
+    togglePracticeSimilarResults();
   };
 }
 if (practiceResetSessionBtn) {
