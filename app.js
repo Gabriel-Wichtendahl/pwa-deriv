@@ -1015,17 +1015,7 @@ function setActiveView(name) {
   updatePerViewClearButtonsVisibility(name);
 }
 
-(function initTabs() {
-  removeSettingsTabIfExists();
-  ensureTradesTab();
-  ensureTradesView();
-
-  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
-
-  const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
-  setActiveView(initial);
-})();
+;
 
 /* =========================
    Práctica
@@ -1967,6 +1957,18 @@ function ensurePracticeReady() {
   }
 }
 
+
+(function initTabs() {
+  removeSettingsTabIfExists();
+  ensureTradesTab();
+  ensureTradesView();
+
+  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
+
+  const saved = localStorage.getItem("activeView") || "signals";
+  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
+  setActiveView(initial);
+})()
 
 /* =========================
    Settings modal (solo engranaje)
