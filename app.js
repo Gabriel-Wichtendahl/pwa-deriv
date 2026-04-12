@@ -1388,7 +1388,7 @@ function resetPracticeSimilarState() {
     practiceSimilarBtn.textContent = "🔎 Ver similares";
     practiceSimilarBtn.disabled = false;
   }
-  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación por similitud de vela completa";
+  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación avanzada de vela completa";
   if (practiceSimilarListEl) practiceSimilarListEl.innerHTML = "";
   hidePracticeSimilarPanel();
   setPracticeSimilarButtonVisible(false);
@@ -1418,76 +1418,221 @@ function rmsDiff(a, b) {
   }
   return Math.sqrt(acc / n);
 }
-function buildPracticeSignature(ticks, cutoffMs, sampleCount = 28) {
+function clampNum(v, min, max) {
+  return Math.max(min, Math.min(max, Number(v)));
+}
+function diffSeries(values) {
+  const out = [];
+  for (let i = 1; i < values.length; i++) out.push(Number(values[i] || 0) - Number(values[i - 1] || 0));
+  return out;
+}
+function smoothSeries(values, passes = 1) {
+  let arr = values.slice();
+  for (let pass = 0; pass < passes; pass++) {
+    const next = arr.slice();
+    for (let i = 1; i < arr.length - 1; i++) next[i] = (arr[i - 1] + arr[i] + arr[i + 1]) / 3;
+    arr = next;
+  }
+  return arr;
+}
+function zNormalize(values) {
+  if (!Array.isArray(values) || !values.length) return [];
+  const mean = values.reduce((a, b) => a + Number(b || 0), 0) / values.length;
+  let variance = 0;
+  for (const v of values) {
+    const d = Number(v || 0) - mean;
+    variance += d * d;
+  }
+  const std = Math.sqrt(variance / values.length) || 1;
+  return values.map((v) => (Number(v || 0) - mean) / std);
+}
+function pearsonCorr(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (n < 2) return 0;
+  let sumA = 0, sumB = 0;
+  for (let i = 0; i < n; i++) {
+    sumA += Number(a[i] || 0);
+    sumB += Number(b[i] || 0);
+  }
+  const meanA = sumA / n;
+  const meanB = sumB / n;
+  let num = 0, denA = 0, denB = 0;
+  for (let i = 0; i < n; i++) {
+    const da = Number(a[i] || 0) - meanA;
+    const db = Number(b[i] || 0) - meanB;
+    num += da * db;
+    denA += da * da;
+    denB += db * db;
+  }
+  const den = Math.sqrt(denA * denB) || 1;
+  return clampNum(num / den, -1, 1);
+}
+function buildPracticeWeights(n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = n <= 1 ? 1 : i / (n - 1);
+    let w = 0.90 + t * 0.55;
+    if (t >= 0.50) w += 0.10;
+    if (t >= 0.75) w += 0.12;
+    if (t >= 0.90) w += 0.18;
+    out.push(w);
+  }
+  return out;
+}
+function weightedDTW(a, b, weights = null, bandRadius = 7) {
+  const n = Math.min(a.length, b.length);
+  if (!n) return 99;
+  const inf = Number.POSITIVE_INFINITY;
+  const prev = new Array(n + 1).fill(inf);
+  const curr = new Array(n + 1).fill(inf);
+  prev[0] = 0;
+
+  for (let i = 1; i <= n; i++) {
+    curr.fill(inf);
+    const from = Math.max(1, i - bandRadius);
+    const to = Math.min(n, i + bandRadius);
+    for (let j = from; j <= to; j++) {
+      const baseW = weights ? Number(weights[Math.max(i, j) - 1] || 1) : 1;
+      const cost = Math.abs(Number(a[i - 1] || 0) - Number(b[j - 1] || 0)) * baseW;
+      const bestPrev = Math.min(prev[j], curr[j - 1], prev[j - 1]);
+      curr[j] = cost + bestPrev;
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+
+  const normalizer = (weights ? weights.reduce((acc, x) => acc + Number(x || 0), 0) : n) || n || 1;
+  return prev[n] / normalizer;
+}
+function countTurningPoints(values, epsilon = 0.018) {
+  if (!Array.isArray(values) || values.length < 3) return 0;
+  let prevDir = 0;
+  let turns = 0;
+  for (let i = 1; i < values.length; i++) {
+    const diff = Number(values[i] || 0) - Number(values[i - 1] || 0);
+    let dir = 0;
+    if (diff > epsilon) dir = 1;
+    else if (diff < -epsilon) dir = -1;
+    if (!dir) continue;
+    if (prevDir && dir !== prevDir) turns++;
+    prevDir = dir;
+  }
+  return turns;
+}
+function findMajorExtrema(values) {
+  if (!Array.isArray(values) || values.length < 5) return { peakIdx: 0, troughIdx: 0, closeNearExtreme: 1 };
+  let peakIdx = 0;
+  let troughIdx = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (Number(values[i] || 0) > Number(values[peakIdx] || 0)) peakIdx = i;
+    if (Number(values[i] || 0) < Number(values[troughIdx] || 0)) troughIdx = i;
+  }
+  const last = Number(values[values.length - 1] || 0);
+  const peak = Number(values[peakIdx] || 0);
+  const trough = Number(values[troughIdx] || 0);
+  const range = Math.max(1e-9, peak - trough);
+  const closeNearExtreme = Math.min(Math.abs(last - peak), Math.abs(last - trough)) / range;
+  return { peakIdx, troughIdx, closeNearExtreme };
+}
+function buildPracticeSignature(ticks, cutoffMs, sampleCount = 72) {
   const pts = clipPracticeTicksToMs(ticks, cutoffMs);
-  if (pts.length < 2) return null;
+  if (pts.length < 4) return null;
 
   const base = Number(getPriceAtMs(pts, 0));
   const end = Number(getPriceAtMs(pts, cutoffMs));
   if (!Number.isFinite(base) || !Number.isFinite(end)) return null;
 
-  const qs = pts.map((p) => Number(p.quote));
-  let minQ = Math.min(...qs);
-  let maxQ = Math.max(...qs);
-  let range = maxQ - minQ;
-  if (!Number.isFinite(range) || range < 1e-9) range = 1;
-
-  const values = [];
+  const raw = [];
   for (let i = 0; i < sampleCount; i++) {
     const ms = (cutoffMs * i) / Math.max(1, sampleCount - 1);
-    const q = Number(getPriceAtMs(pts, ms));
-    values.push((q - base) / range);
+    raw.push(Number(getPriceAtMs(pts, ms)));
   }
 
-  const slopes = [];
-  for (let i = 1; i < values.length; i++) slopes.push(values[i] - values[i - 1]);
+  const minQ = Math.min(...raw);
+  const maxQ = Math.max(...raw);
+  const range = Math.max(1e-9, maxQ - minQ);
+  const rangeNorm = raw.map((q) => (q - base) / range);
+  const smoothed = smoothSeries(rangeNorm, 1);
+  const zPath = zNormalize(smoothed);
+  const deriv = smoothSeries(diffSeries(smoothed), 1);
+  const zDeriv = zNormalize(deriv);
 
-  const cp = [0, cutoffMs * 0.25, cutoffMs * 0.5, cutoffMs * 0.75, cutoffMs];
+  const segCount = 8;
   const segMoves = [];
-  for (let i = 1; i < cp.length; i++) {
-    const a = Number(getPriceAtMs(pts, cp[i - 1]));
-    const b = Number(getPriceAtMs(pts, cp[i]));
-    segMoves.push((b - a) / range);
+  for (let i = 1; i <= segCount; i++) {
+    const aIdx = Math.round(((i - 1) / segCount) * (sampleCount - 1));
+    const bIdx = Math.round((i / segCount) * (sampleCount - 1));
+    segMoves.push(smoothed[bIdx] - smoothed[aIdx]);
   }
 
   const dirSign = Math.sign(end - base) || 1;
   const dirWhole = directionalRatio(pts, dirSign);
   const retrace = maxRetraceAgainst(pts, dirSign) / range;
-  const finalStartMs = Math.max(0, cutoffMs - Math.min(10000, cutoffMs));
-  const finalStartQ = Number(getPriceAtMs(pts, finalStartMs));
-  const finalStretch = Number.isFinite(finalStartQ) ? (end - finalStartQ) / range : 0;
+
+  const final10Ms = Math.max(0, cutoffMs - 10000);
+  const final20Ms = Math.max(0, cutoffMs - 20000);
+  const qFinal10 = Number(getPriceAtMs(pts, final10Ms));
+  const qFinal20 = Number(getPriceAtMs(pts, final20Ms));
+  const final10 = Number.isFinite(qFinal10) ? (end - qFinal10) / range : 0;
+  const final20 = Number.isFinite(qFinal20) ? (end - qFinal20) / range : 0;
+
+  const { peakIdx, troughIdx, closeNearExtreme } = findMajorExtrema(smoothed);
+  const weights = buildPracticeWeights(sampleCount);
+  const turnCount = countTurningPoints(smoothed);
 
   return {
-    values,
-    slopes,
+    weights,
+    path: smoothed,
+    zPath,
+    deriv,
+    zDeriv,
     segMoves,
     net: (end - base) / range,
     retrace,
     dirWhole,
-    finalStretch,
+    final10,
+    final20,
+    closeNearExtreme,
+    peakPos: peakIdx / Math.max(1, sampleCount - 1),
+    troughPos: troughIdx / Math.max(1, sampleCount - 1),
+    turnCount,
   };
 }
 function computePracticeSimilarityScore(baseSig, candidateSig) {
   if (!baseSig || !candidateSig) return 0;
 
-  const pathDiff = rmsDiff(baseSig.values, candidateSig.values);
-  const slopeDiff = avgAbsDiff(baseSig.slopes, candidateSig.slopes);
+  const dtwPath = weightedDTW(baseSig.zPath, candidateSig.zPath, baseSig.weights, 7);
+  const dtwDeriv = weightedDTW(baseSig.zDeriv, candidateSig.zDeriv, null, 7);
+  const pathDiff = rmsDiff(baseSig.path, candidateSig.path);
   const segDiff = avgAbsDiff(baseSig.segMoves, candidateSig.segMoves);
+  const corrPenalty = 1 - ((pearsonCorr(baseSig.zPath, candidateSig.zPath) + 1) / 2);
+
   const netDiff = Math.abs(baseSig.net - candidateSig.net);
   const retraceDiff = Math.abs(baseSig.retrace - candidateSig.retrace);
   const dirDiff = Math.abs(baseSig.dirWhole - candidateSig.dirWhole);
-  const finalDiff = Math.abs(baseSig.finalStretch - candidateSig.finalStretch);
+  const final10Diff = Math.abs(baseSig.final10 - candidateSig.final10);
+  const final20Diff = Math.abs(baseSig.final20 - candidateSig.final20);
+  const closeExtremeDiff = Math.abs(baseSig.closeNearExtreme - candidateSig.closeNearExtreme);
+  const peakDiff = Math.abs(baseSig.peakPos - candidateSig.peakPos);
+  const troughDiff = Math.abs(baseSig.troughPos - candidateSig.troughPos);
+  const turnDiff = Math.abs(baseSig.turnCount - candidateSig.turnCount) / 12;
 
   const distance =
-    pathDiff * 1.65 +
-    slopeDiff * 1.10 +
-    segDiff * 1.20 +
-    netDiff * 0.70 +
-    retraceDiff * 0.55 +
-    dirDiff * 0.40 +
-    finalDiff * 0.55;
+    dtwPath * 2.05 +
+    dtwDeriv * 1.45 +
+    pathDiff * 1.10 +
+    segDiff * 1.05 +
+    corrPenalty * 0.95 +
+    netDiff * 0.58 +
+    retraceDiff * 0.64 +
+    dirDiff * 0.30 +
+    final10Diff * 0.72 +
+    final20Diff * 0.68 +
+    closeExtremeDiff * 0.50 +
+    peakDiff * 0.48 +
+    troughDiff * 0.48 +
+    turnDiff * 0.40;
 
-  return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.75))));
+  return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.95))));
 }
 function findPracticeSimilarEntries(entry, compareMs = PRACTICE_SIMILAR_COMPARE_MS, limit = 6) {
   const entryKey = String(entry?.journal_id || entry?.id || "");
@@ -1604,7 +1749,7 @@ function renderPracticeSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMP
   practiceSimilarPanel.classList.remove("hidden");
   if (practiceSimilarMetaEl) {
     const secLabel = Math.round(compareMs / 1000);
-    practiceSimilarMetaEl.textContent = `Comparando vela completa (${secLabel}s) · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
+    practiceSimilarMetaEl.textContent = `Comparando vela completa (${secLabel}s) · motor avanzado de similitud · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
   }
 
   if (!results.length) {
