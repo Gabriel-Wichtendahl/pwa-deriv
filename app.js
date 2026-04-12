@@ -1044,6 +1044,7 @@ const PRACTICE_SEGMENTS = [
   { start: 30000, end: 45000, label: "30s" },
   { start: 45000, end: 60000, label: "45s" },
 ];
+const PRACTICE_SIMILAR_COMPARE_MS = 60000;
 
 function freshPracticeStats() {
   return { itm: 0, otm: 0, pass: 0, total: 0 };
@@ -1387,7 +1388,7 @@ function resetPracticeSimilarState() {
     practiceSimilarBtn.textContent = "🔎 Ver similares";
     practiceSimilarBtn.disabled = false;
   }
-  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación por similitud";
+  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación por similitud de vela completa";
   if (practiceSimilarListEl) practiceSimilarListEl.innerHTML = "";
   hidePracticeSimilarPanel();
   setPracticeSimilarButtonVisible(false);
@@ -1488,15 +1489,15 @@ function computePracticeSimilarityScore(baseSig, candidateSig) {
 
   return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.75))));
 }
-function findPracticeSimilarEntries(entry, cutoffMs, limit = 6) {
+function findPracticeSimilarEntries(entry, compareMs = PRACTICE_SIMILAR_COMPARE_MS, limit = 6) {
   const entryKey = String(entry?.journal_id || entry?.id || "");
-  const baseSig = buildPracticeSignature(entry?.ticks || [], cutoffMs);
+  const baseSig = buildPracticeSignature(entry?.ticks || [], compareMs);
   if (!entryKey || !baseSig) return [];
 
   return getEligiblePracticeEntries()
     .filter((candidate) => String(candidate?.journal_id || candidate?.id || "") !== entryKey)
     .map((candidate) => {
-      const sig = buildPracticeSignature(candidate?.ticks || [], cutoffMs);
+      const sig = buildPracticeSignature(candidate?.ticks || [], compareMs);
       const similarity = computePracticeSimilarityScore(baseSig, sig);
       return { ...candidate, similarity };
     })
@@ -1597,13 +1598,13 @@ function drawPracticeSimilarMiniChart(canvas, ticks, cutoffMs) {
   ctx.arc(xOf(last.ms), yOf(last.quote), 3, 0, Math.PI * 2);
   ctx.fill();
 }
-function renderPracticeSimilarResults(results, cutoffMs) {
+function renderPracticeSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMPARE_MS) {
   if (!practiceSimilarPanel || !practiceSimilarListEl) return;
 
   practiceSimilarPanel.classList.remove("hidden");
   if (practiceSimilarMetaEl) {
-    const secLabel = Math.round(cutoffMs / 1000);
-    practiceSimilarMetaEl.textContent = `Comparando solo la forma vista hasta ${secLabel}s · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
+    const secLabel = Math.round(compareMs / 1000);
+    practiceSimilarMetaEl.textContent = `Comparando vela completa (${secLabel}s) · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
   }
 
   if (!results.length) {
@@ -1635,7 +1636,7 @@ function renderPracticeSimilarResults(results, cutoffMs) {
   practiceSimilarListEl.querySelectorAll(".practiceSimilarCard").forEach((card, idx) => {
     const canvas = card.querySelector(".practiceSimilarCanvas");
     const entry = results[idx];
-    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], cutoffMs);
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], compareMs);
   });
 }
 function togglePracticeSimilarResults() {
@@ -1652,11 +1653,11 @@ function togglePracticeSimilarResults() {
   if (!practiceSimilarResults.length) {
     practiceSimilarBtn.disabled = true;
     practiceSimilarBtn.textContent = "⏳ Buscando similares…";
-    practiceSimilarResults = findPracticeSimilarEntries(practiceRound.entry, practiceRound.cutoffMs, 6);
+    practiceSimilarResults = findPracticeSimilarEntries(practiceRound.entry, PRACTICE_SIMILAR_COMPARE_MS, 6);
     practiceSimilarBtn.disabled = false;
   }
 
-  renderPracticeSimilarResults(practiceSimilarResults, practiceRound.cutoffMs);
+  renderPracticeSimilarResults(practiceSimilarResults, PRACTICE_SIMILAR_COMPARE_MS);
   practiceSimilarBtn.textContent = "🙈 Ocultar similares";
 }
 function redrawPracticeSimilarCanvases() {
@@ -1666,7 +1667,7 @@ function redrawPracticeSimilarCanvases() {
   practiceSimilarListEl.querySelectorAll(".practiceSimilarCard").forEach((card, idx) => {
     const canvas = card.querySelector(".practiceSimilarCanvas");
     const entry = practiceSimilarResults[idx];
-    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], practiceRound.cutoffMs);
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], PRACTICE_SIMILAR_COMPARE_MS);
   });
 }
 function pullNextPracticeEntry() {
