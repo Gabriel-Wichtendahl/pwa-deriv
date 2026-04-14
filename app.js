@@ -1,24 +1,24 @@
-// app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo PATRÓN ESCALERA (ESTRICTO): evalúa SOLO en 40/45 (según config) — NORMAL queda igual
-// ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
-// ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
-// ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
-// ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
-// ✅ FIX NUEVO: si proposal_open_contract no manda is_sold, fallback poll y cuenta igual
-// ✅ FIX CRÍTICO: al reconectar, autoriza antes de reenganchar pendientes
-// ✅ NUEVO: cada señal muestra badge del trade: ⏳ TRADE / 🎯 ITM / 💥 OTM
-// ✅ NUEVO: pestañas: Señales | Trades | Feedback (sin pestaña Configuración; queda SOLO el engranaje)
-// ✅ NUEVO: separar historial:
-//    - Señales: STORE_KEY (borrado independiente)
+// app.js â€” Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + âœ… Auto-abrir grÃ¡fico (configurable)
+// âœ… Modo PATRÃ“N ESCALERA (ESTRICTO): evalÃºa SOLO en 40/45 (segÃºn config) â€” NORMAL queda igual
+// âœ… FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
+// âœ… Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
+// âœ… FIX Disciplina: feedback visual (candado + â€œpolarizadoâ€) + contador visible + auto-unlock con reset
+// âœ… FIX INTERNET: contratos â€œpendientesâ€ persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
+// âœ… FIX NUEVO: si proposal_open_contract no manda is_sold, fallback poll y cuenta igual
+// âœ… FIX CRÃTICO: al reconectar, autoriza antes de reenganchar pendientes
+// âœ… NUEVO: cada seÃ±al muestra badge del trade: â³ TRADE / ðŸŽ¯ ITM / ðŸ’¥ OTM
+// âœ… NUEVO: pestaÃ±as: SeÃ±ales | Trades | Feedback (sin pestaÃ±a ConfiguraciÃ³n; queda SOLO el engranaje)
+// âœ… NUEVO: separar historial:
+//    - SeÃ±ales: STORE_KEY (borrado independiente)
 //    - Trades (journal estudio): TRADES_STORE_KEY (borrado independiente)
-// ✅ NUEVO: Exportar Trades (journal) desde Configuración
-// ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE de la vela siguiente vs CIERRE de la vela de señal
-// ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
-// ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
-// ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
-// ✅ FIX (este update): ESCALERA/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vía ticks_history
-// ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
-// ✅ NUEVO: modal muestra "VELA ABIERTA | faltan XXs" y bloquea COMPRAR / VENDER cuando la vela ya cerró
+// âœ… NUEVO: Exportar Trades (journal) desde ConfiguraciÃ³n
+// âœ… FIX IMPORTANTE (NEXT): la prÃ³xima vela (NEXT) se calcula por CIERRE de la vela siguiente vs CIERRE de la vela de seÃ±al
+// âœ… FIX UI Trades: se ve igual que SeÃ±ales y SIN voto/comentario en Trades
+// âœ… NUEVO UX: botones de borrar por pestaÃ±a (SeÃ±ales/Trades) en la UI, NO en el modal Config
+// âœ… FIX (este update): el botÃ³n ðŸ—‘ï¸ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
+// âœ… FIX (este update): ESCALERA/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vÃ­a ticks_history
+// âœ… FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
+// âœ… NUEVO: modal muestra "VELA ABIERTA | faltan XXs" y bloquea COMPRAR / VENDER cuando la vela ya cerrÃ³
 
 "use strict";
 
@@ -144,7 +144,7 @@ function upsertTradeJournalFromSignal(it) {
     journal_id: makeJournalIdFromSignal(it),
     saved_at: Date.now(),
 
-    // snapshot señal
+    // snapshot seÃ±al
     id: it.id,
     minute: it.minute,
     time: it.time,
@@ -171,7 +171,7 @@ function upsertTradeJournalFromSignal(it) {
   saveTradesJournal(tradesJournal);
 }
 
-// siembra (una vez) desde history por si existían ITM/OTM ya guardados
+// siembra (una vez) desde history por si existÃ­an ITM/OTM ya guardados
 function seedTradesJournalFromHistory() {
   try {
     let changed = false;
@@ -200,12 +200,12 @@ function setTradeBadge(item, badge /* 'PENDING'|'ITM'|'OTM'|'' */, extra = {}) {
   saveHistory(history);
   updateRowTradeBadge(item);
 
-  // si cerró ITM/OTM, guardar en journal
+  // si cerrÃ³ ITM/OTM, guardar en journal
   try {
     upsertTradeJournalFromSignal(item);
   } catch {}
 
-  // si estás mirando Trades, refrescar
+  // si estÃ¡s mirando Trades, refrescar
   try {
     const av = localStorage.getItem("activeView") || "signals";
     if (av === "trades") renderTradesView();
@@ -229,7 +229,7 @@ function pickEl(...ids) {
 const statusEl = $("status");
 const signalsEl = $("signals");
 const counterEl = $("counter");
-const feedbackEl = $("feedback"); // compat (ya no se usa en V9.4 práctica)
+const feedbackEl = $("feedback"); // compat (ya no se usa en V9.4 prÃ¡ctica)
 const tickHealthEl = $("tickHealth");
 const countdownEl = $("countdown");
 const sound = $("alertSound");
@@ -288,6 +288,11 @@ const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
+let modalSimilarBtnEl = null;
+let modalSimilarPanelEl = null;
+let modalSimilarMetaEl = null;
+let modalSimilarListEl = null;
+let modalSimilarResults = [];
 
 /* =========================
    Toast
@@ -318,18 +323,18 @@ function toast(msg, ms = 1600) {
   window.addEventListener("error", (e) => {
     const m = e?.message || "Error";
     const src = e?.filename ? ` @ ${String(e.filename).split("/").slice(-1)[0]}:${e.lineno || 0}` : "";
-    show(`❌ JS: ${m}${src}`);
+    show(`âŒ JS: ${m}${src}`);
   });
 
   window.addEventListener("unhandledrejection", (e) => {
     const r = e?.reason;
     const m = (r && (r.message || String(r))) || "Promise rejection";
-    show(`❌ Promise: ${m}`);
+    show(`âŒ Promise: ${m}`);
   });
 })();
 
 /* =========================
-   🧹 Reset SW/Cache
+   ðŸ§¹ Reset SW/Cache
 ========================= */
 async function resetServiceWorkerAndCaches() {
   try {
@@ -344,10 +349,10 @@ async function resetServiceWorkerAndCaches() {
     try {
       sessionStorage.clear();
     } catch {}
-    toast("🧹 Cache/SW reseteado ✓", 1400);
+    toast("ðŸ§¹ Cache/SW reseteado âœ“", 1400);
     setTimeout(() => location.reload(true), 300);
   } catch {
-    toast("⚠️ Reset falló (recargo igual)", 1600);
+    toast("âš ï¸ Reset fallÃ³ (recargo igual)", 1600);
     setTimeout(() => location.reload(true), 300);
   }
 }
@@ -370,7 +375,7 @@ function ensureResetCacheButton() {
   btn.id = "resetCacheBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "🧹 Reset Cache/SW";
+  btn.textContent = "ðŸ§¹ Reset Cache/SW";
   btn.title = "Borra caches + desregistra Service Worker y recarga";
   btn.onclick = resetServiceWorkerAndCaches;
 
@@ -388,7 +393,7 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 
-// ✅ NORMAL vs PATRÓN ESCALERA
+// âœ… NORMAL vs PATRÃ“N ESCALERA
 let stairMode = false;
 
 let history = loadHistory();
@@ -416,7 +421,7 @@ let modalDrawRaf = null;
 let modalLastDrawAt = 0;
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
-// Migración: FUERTE / GIRO -> ESCALERA en history viejo
+// MigraciÃ³n: FUERTE / GIRO -> ESCALERA en history viejo
 function migrateHistoryModesToStair() {
   try {
     let changed = false;
@@ -468,11 +473,11 @@ function saveAutoOpenChartSetting() {
 function applyAutoOpenChartUI() {
   const btn = pickEl("autoOpenChartBtn");
   if (!btn) return;
-  btn.textContent = autoOpenChartOnSignal ? "📈 Auto-abrir gráfico ON" : "📈 Auto-abrir gráfico OFF";
+  btn.textContent = autoOpenChartOnSignal ? "ðŸ“ˆ Auto-abrir grÃ¡fico ON" : "ðŸ“ˆ Auto-abrir grÃ¡fico OFF";
   btn.classList.toggle("active", autoOpenChartOnSignal);
   btn.title = autoOpenChartOnSignal
-    ? "Al salir una señal, abre el gráfico automáticamente (solo si la app está en pantalla)"
-    : "No abre el gráfico automáticamente";
+    ? "Al salir una seÃ±al, abre el grÃ¡fico automÃ¡ticamente (solo si la app estÃ¡ en pantalla)"
+    : "No abre el grÃ¡fico automÃ¡ticamente";
 }
 function ensureAutoOpenChartButton() {
   let btn = pickEl("autoOpenChartBtn");
@@ -494,7 +499,7 @@ function ensureAutoOpenChartButton() {
     autoOpenChartOnSignal = !autoOpenChartOnSignal;
     saveAutoOpenChartSetting();
     applyAutoOpenChartUI();
-    toast(autoOpenChartOnSignal ? "📈 Auto-abrir gráfico ON" : "📈 Auto-abrir gráfico OFF");
+    toast(autoOpenChartOnSignal ? "ðŸ“ˆ Auto-abrir grÃ¡fico ON" : "ðŸ“ˆ Auto-abrir grÃ¡fico OFF");
   };
 
   applyAutoOpenChartUI();
@@ -514,7 +519,7 @@ function shouldAutoOpenChartNow() {
 }
 
 /* =========================
-   🪫 Low power mode
+   ðŸª« Low power mode
 ========================= */
 let lowPowerMode = false;
 const LOWPOWER_KEY = "lowPowerMode_v1";
@@ -568,7 +573,7 @@ function ensureLowPowerButton() {
     btn.id = "lowPowerBtn";
     btn.type = "button";
     btn.className = "btn btnGhost";
-    btn.textContent = "🪫 Bajo consumo OFF";
+    btn.textContent = "ðŸª« Bajo consumo OFF";
     host.appendChild(btn);
   }
 
@@ -576,7 +581,7 @@ function ensureLowPowerButton() {
     lowPowerMode = !lowPowerMode;
     saveLowPowerMode();
     applyLowPowerModeUI();
-    toast(lowPowerMode ? "🪫 Bajo consumo ON" : "🔋 Bajo consumo OFF");
+    toast(lowPowerMode ? "ðŸª« Bajo consumo ON" : "ðŸ”‹ Bajo consumo OFF");
     try {
       if (lowPowerMode && ws && ws.readyState === 1 && document.visibilityState !== "visible") ws.close();
     } catch {}
@@ -587,10 +592,10 @@ function ensureLowPowerButton() {
 function applyLowPowerModeUI() {
   const btn = pickEl("lowPowerBtn");
   if (btn) {
-    btn.textContent = lowPowerMode ? "🪫 Bajo consumo ON" : "🔋 Bajo consumo OFF";
+    btn.textContent = lowPowerMode ? "ðŸª« Bajo consumo ON" : "ðŸ”‹ Bajo consumo OFF";
     btn.classList.toggle("active", lowPowerMode);
     btn.title = lowPowerMode
-      ? "Ahorra batería: UI más lenta, histórico más liviano, WS se corta en background"
+      ? "Ahorra baterÃ­a: UI mÃ¡s lenta, histÃ³rico mÃ¡s liviano, WS se corta en background"
       : "Modo normal";
   }
   startUiTimers();
@@ -621,7 +626,7 @@ async function releaseWakeLock() {
 function setWakeBtnUI(active) {
   if (!wakeBtn) return;
   wakeBtn.classList.toggle("active", !!active);
-  wakeBtn.textContent = active ? "🔒 Pantalla activa ON" : "🔓 Pantalla activa";
+  wakeBtn.textContent = active ? "ðŸ”’ Pantalla activa ON" : "ðŸ”“ Pantalla activa";
 }
 function initWakeButton() {
   if (!wakeBtn) return;
@@ -631,15 +636,15 @@ function initWakeButton() {
     try {
       if (wakeLock) {
         await releaseWakeLock();
-        toast("🔓 Pantalla activa OFF");
+        toast("ðŸ”“ Pantalla activa OFF");
         return;
       }
       await acquireWakeLock();
-      toast("🔒 Pantalla activa ON");
+      toast("ðŸ”’ Pantalla activa ON");
     } catch {
-      toast("⚠️ No se pudo activar pantalla");
+      toast("âš ï¸ No se pudo activar pantalla");
       alert(
-        "No pude activar Pantalla activa.\n\nTip: en algunos Android solo funciona si la app está en primer plano y con interacción reciente."
+        "No pude activar Pantalla activa.\n\nTip: en algunos Android solo funciona si la app estÃ¡ en primer plano y con interacciÃ³n reciente."
       );
     }
   };
@@ -654,7 +659,7 @@ function initWakeButton() {
 }
 
 /* =========================
-   Persistencia (history señales)
+   Persistencia (history seÃ±ales)
 ========================= */
 function loadHistory() {
   try {
@@ -705,10 +710,10 @@ function updateCounter(viewName = null) {
     return;
   }
   if (activeView === "practice") {
-    counterEl.textContent = `Práctica: ${practiceSessionStats.total}`;
+    counterEl.textContent = `PrÃ¡ctica: ${practiceSessionStats.total}`;
     return;
   }
-  counterEl.textContent = `Señales: ${history.length}`;
+  counterEl.textContent = `SeÃ±ales: ${history.length}`;
 }
 
 function escapeHtml(str) {
@@ -727,10 +732,10 @@ function cssEscape(s) {
    NEXT helpers
 ========================= */
 function nextOutcomeToArrow(outcome) {
-  if (outcome === "up") return "⬆️";
-  if (outcome === "down") return "⬇️";
-  if (outcome === "flat") return "➖";
-  return "⏳";
+  if (outcome === "up") return "â¬†ï¸";
+  if (outcome === "down") return "â¬‡ï¸";
+  if (outcome === "flat") return "âž–";
+  return "â³";
 }
 function nextOutcomeToText(outcome) {
   if (outcome === "up") return "ALCISTA";
@@ -767,7 +772,7 @@ function rebuildFeedbackFromHistory() {
 }
 
 /* =========================
-   Trades view (journal) — ✅ FIX: actions + list
+   Trades view (journal) â€” âœ… FIX: actions + list
 ========================= */
 function ensureTradesView() {
   let el = $("tradesView");
@@ -786,7 +791,7 @@ function ensureTradesView() {
     host.appendChild(el);
   }
 
-  // ✅ Barra fija (NO se borra al renderizar trades)
+  // âœ… Barra fija (NO se borra al renderizar trades)
   let actions = $("tradesActions");
   if (!actions) {
     actions = document.createElement("div");
@@ -800,7 +805,7 @@ function ensureTradesView() {
     el.appendChild(actions);
   }
 
-  // ✅ Lista (esta SÍ se limpia)
+  // âœ… Lista (esta SÃ se limpia)
   let list = $("tradesList");
   if (!list) {
     list = document.createElement("div");
@@ -820,7 +825,7 @@ function renderTradesView() {
   list.innerHTML = "";
 
   if (!tradesJournal.length) {
-    list.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
+    list.innerHTML = `<div style="padding:12px; opacity:.9;">TodavÃ­a no hay trades guardados para estudio.</div>`;
   } else {
     for (const entry of tradesJournal) {
       const item = {
@@ -838,12 +843,12 @@ function renderTradesView() {
         trade: entry.trade || null,
       };
 
-      // ✅ SIN voto/comentario en Trades
+      // âœ… SIN voto/comentario en Trades
       list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
     }
   }
 
-  // ✅ extra robusto: re-asegura el botón al final del render
+  // âœ… extra robusto: re-asegura el botÃ³n al final del render
   try {
     ensureInlineClearButtons();
     updatePerViewClearButtonsVisibility("trades");
@@ -853,7 +858,7 @@ function renderTradesView() {
 }
 
 /* =========================
-   Tabs: Señales | Trades | Feedback
+   Tabs: SeÃ±ales | Trades | Feedback
 ========================= */
 function removeSettingsTabIfExists() {
   try {
@@ -879,7 +884,7 @@ function ensureTradesTab() {
 }
 
 /* =========================
-   ✅ Clear por pestaña (inline)
+   âœ… Clear por pestaÃ±a (inline)
 ========================= */
 function clearSignalsOnly() {
   history = [];
@@ -887,12 +892,12 @@ function clearSignalsOnly() {
   updateCounter(localStorage.getItem("activeView") || "signals");
   if (signalsEl) signalsEl.innerHTML = "";
   if (feedbackEl) feedbackEl.value = "";
-  toast("🧹 Señales borradas", 1600);
+  toast("ðŸ§¹ SeÃ±ales borradas", 1600);
 }
 function clearTradesOnly() {
   tradesJournal = [];
   saveTradesJournal(tradesJournal);
-  practiceQueue = [];
+  resetPracticeQueueState();
   practiceRound = null;
   resetPracticeSimilarState();
   try {
@@ -901,7 +906,7 @@ function clearTradesOnly() {
     if (av === "trades") renderTradesView();
     if (av === "practice") ensurePracticeReady();
   } catch {}
-  toast("🗑️ Trades borrados", 1600);
+  toast("ðŸ—‘ï¸ Trades borrados", 1600);
 }
 
 function ensureViewActionButton(viewName, opts) {
@@ -975,10 +980,10 @@ function updatePerViewClearButtonsVisibility(activeView) {
 function ensureInlineClearButtons() {
   ensureViewActionButton("signals", {
     id: "clearSignalsInlineBtn",
-    text: "🧹 Borrar Señales",
-    title: "Borra solo el historial de señales",
+    text: "ðŸ§¹ Borrar SeÃ±ales",
+    title: "Borra solo el historial de seÃ±ales",
     onClick: () => {
-      if (!confirm("¿Borrar SOLO el historial de señales? (Trades se conserva)")) return;
+      if (!confirm("Â¿Borrar SOLO el historial de seÃ±ales? (Trades se conserva)")) return;
       clearSignalsOnly();
     },
   });
@@ -1018,9 +1023,11 @@ function setActiveView(name) {
 ;
 
 /* =========================
-   Práctica
+   PrÃ¡ctica
 ========================= */
 const PRACTICE_STATS_KEY = "practiceStats_v1";
+const PRACTICE_QUEUE_KEY = "practiceQueue_v1";
+let practiceQueueLoaded = false;
 let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
 let practiceQueue = [];
@@ -1062,21 +1069,43 @@ function savePracticeAllStats() {
     localStorage.setItem(PRACTICE_STATS_KEY, JSON.stringify(practiceAllStats));
   } catch {}
 }
+function loadPracticeQueueState() {
+  try {
+    const raw = localStorage.getItem(PRACTICE_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
+  } catch {
+    return [];
+  }
+}
+function savePracticeQueueState() {
+  try {
+    localStorage.setItem(PRACTICE_QUEUE_KEY, JSON.stringify((practiceQueue || []).map((x) => String(x))));
+  } catch {}
+}
+function resetPracticeQueueState() {
+  practiceQueue = [];
+  practiceQueueLoaded = false;
+  try {
+    localStorage.removeItem(PRACTICE_QUEUE_KEY);
+  } catch {}
+}
 function resetPracticeSessionStats() {
   practiceSessionStats = freshPracticeStats();
   renderPracticeStats();
-  toast("↺ Sesión de práctica reseteada", 1400);
+  toast("â†º SesiÃ³n de prÃ¡ctica reseteada", 1400);
 }
 function resetPracticeAllStats() {
   practiceAllStats = freshPracticeStats();
   savePracticeAllStats();
   renderPracticeStats();
-  toast("↺ Histórico de práctica reseteado", 1600);
+  toast("â†º HistÃ³rico de prÃ¡ctica reseteado", 1600);
 }
 function formatPracticeStats(stats) {
   const decided = Number(stats.itm || 0) + Number(stats.otm || 0);
   const pct = decided ? Math.round((Number(stats.itm || 0) / decided) * 100) : 0;
-  return `ITM ${stats.itm} · OTM ${stats.otm} · PASAR ${stats.pass} · % ${pct} · TOTAL ${stats.total}`;
+  return `ITM ${stats.itm} Â· OTM ${stats.otm} Â· PASAR ${stats.pass} Â· % ${pct} Â· TOTAL ${stats.total}`;
 }
 function renderPracticeStats() {
   if (practiceSessionStatsEl) practiceSessionStatsEl.textContent = formatPracticeStats(practiceSessionStats);
@@ -1101,9 +1130,19 @@ function shuffleArray(arr) {
 }
 function ensurePracticeQueue() {
   const eligibleIds = new Set(getEligiblePracticeEntries().map((x) => String(x.journal_id || x.id || "")));
-  practiceQueue = practiceQueue.filter((id) => eligibleIds.has(String(id)));
-  if (practiceQueue.length) return;
-  practiceQueue = shuffleArray(Array.from(eligibleIds));
+
+  if (!practiceQueueLoaded) {
+    practiceQueue = loadPracticeQueueState();
+    practiceQueueLoaded = true;
+  }
+
+  practiceQueue = (practiceQueue || []).filter((id) => eligibleIds.has(String(id)));
+
+  if (!practiceQueue.length) {
+    practiceQueue = shuffleArray(Array.from(eligibleIds));
+  }
+
+  savePracticeQueueState();
 }
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
@@ -1292,7 +1331,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     ctx.scale(1.18, 1);
     ctx.globalAlpha = zone.upSelected ? 0.88 : 0.34;
     ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,0.96)" : "rgba(34,197,94,0.82)";
-    ctx.fillText("⬆", 0, 0);
+    ctx.fillText("â¬†", 0, 0);
     ctx.restore();
 
     ctx.save();
@@ -1300,7 +1339,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     ctx.scale(1.18, 1);
     ctx.globalAlpha = zone.downSelected ? 0.88 : 0.34;
     ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,0.96)" : "rgba(239,68,68,0.82)";
-    ctx.fillText("⬇", 0, 0);
+    ctx.fillText("â¬‡", 0, 0);
     ctx.restore();
 
     ctx.restore();
@@ -1319,7 +1358,7 @@ function setPracticePassButtonMode(mode = "PASS") {
   if (!practicePassBtn) return;
   const isNext = mode === "NEXT";
   practicePassBtn.dataset.mode = isNext ? "NEXT" : "PASS";
-  practicePassBtn.textContent = isNext ? "🎲 SIGUIENTE" : "⏭️ PASAR";
+  practicePassBtn.textContent = isNext ? "ðŸŽ² SIGUIENTE" : "â­ï¸ PASAR";
   practicePassBtn.classList.toggle("is-next", isNext);
 }
 function setPracticeDecisionState(disabled, selected = "") {
@@ -1375,10 +1414,10 @@ function hidePracticeSimilarPanel() {
 function resetPracticeSimilarState() {
   practiceSimilarResults = [];
   if (practiceSimilarBtn) {
-    practiceSimilarBtn.textContent = "🔎 Ver similares";
+    practiceSimilarBtn.textContent = "ðŸ”Ž Ver similares";
     practiceSimilarBtn.disabled = false;
   }
-  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación avanzada de vela completa";
+  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "ComparaciÃ³n avanzada de vela completa";
   if (practiceSimilarListEl) practiceSimilarListEl.innerHTML = "";
   hidePracticeSimilarPanel();
   setPracticeSimilarButtonVisible(false);
@@ -1648,9 +1687,9 @@ function practiceSimilarOutcomeText(outcome) {
 }
 function practiceSimilarTradeText(entry) {
   const badge = String(entry?.trade?.badge || "");
-  if (badge === "ITM") return "🎯 ITM";
-  if (badge === "OTM") return "💥 OTM";
-  return "⏳ TRADE";
+  if (badge === "ITM") return "ðŸŽ¯ ITM";
+  if (badge === "OTM") return "ðŸ’¥ OTM";
+  return "â³ TRADE";
 }
 function practiceSimilarToneClass(entry) {
   const badge = String(entry?.trade?.badge || "");
@@ -1739,11 +1778,11 @@ function renderPracticeSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMP
   practiceSimilarPanel.classList.remove("hidden");
   if (practiceSimilarMetaEl) {
     const secLabel = Math.round(compareMs / 1000);
-    practiceSimilarMetaEl.textContent = `Comparando vela completa (${secLabel}s) · motor avanzado de similitud · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
+    practiceSimilarMetaEl.textContent = `Comparando vela completa (${secLabel}s) Â· motor avanzado de similitud Â· ${results.length} hallazgo${results.length === 1 ? "" : "s"} Â· sin filtrar por modo`;
   }
 
   if (!results.length) {
-    practiceSimilarListEl.innerHTML = `<div class="practiceSimilarEmpty">No encontré suficientes formaciones parecidas con el historial actual.</div>`;
+    practiceSimilarListEl.innerHTML = `<div class="practiceSimilarEmpty">No encontrÃ© suficientes formaciones parecidas con el historial actual.</div>`;
     return;
   }
 
@@ -1754,8 +1793,8 @@ function renderPracticeSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMP
           <div class="practiceSimilarCardHead">
             <div class="practiceSimilarPct">${entry.similarity}%</div>
             <div class="practiceSimilarMain">
-              <div class="practiceSimilarTop">${escapeHtml(entry.symbol || "—")} · ${escapeHtml(labelDir(entry.direction || "PUT"))}</div>
-              <div class="practiceSimilarSub">${escapeHtml(entry.time || "—")} · modo ${escapeHtml(entry.mode || "—")}</div>
+              <div class="practiceSimilarTop">${escapeHtml(entry.symbol || "â€”")} Â· ${escapeHtml(labelDir(entry.direction || "PUT"))}</div>
+              <div class="practiceSimilarSub">${escapeHtml(entry.time || "â€”")} Â· modo ${escapeHtml(entry.mode || "â€”")}</div>
               <div class="practiceSimilarTags">
                 <span class="practiceSimilarTag">${escapeHtml(practiceSimilarOutcomeText(entry.nextOutcome))}</span>
                 <span class="practiceSimilarTag">${escapeHtml(practiceSimilarTradeText(entry))}</span>
@@ -1781,19 +1820,19 @@ function togglePracticeSimilarResults() {
   const isOpen = practiceSimilarPanel && !practiceSimilarPanel.classList.contains("hidden");
   if (isOpen) {
     hidePracticeSimilarPanel();
-    practiceSimilarBtn.textContent = "🔎 Ver similares";
+    practiceSimilarBtn.textContent = "ðŸ”Ž Ver similares";
     return;
   }
 
   if (!practiceSimilarResults.length) {
     practiceSimilarBtn.disabled = true;
-    practiceSimilarBtn.textContent = "⏳ Buscando similares…";
+    practiceSimilarBtn.textContent = "â³ Buscando similaresâ€¦";
     practiceSimilarResults = findPracticeSimilarEntries(practiceRound.entry, PRACTICE_SIMILAR_COMPARE_MS, 6);
     practiceSimilarBtn.disabled = false;
   }
 
   renderPracticeSimilarResults(practiceSimilarResults, PRACTICE_SIMILAR_COMPARE_MS);
-  practiceSimilarBtn.textContent = "🙈 Ocultar similares";
+  practiceSimilarBtn.textContent = "ðŸ™ˆ Ocultar similares";
 }
 function redrawPracticeSimilarCanvases() {
   if (!practiceSimilarPanel || practiceSimilarPanel.classList.contains("hidden")) return;
@@ -1805,11 +1844,209 @@ function redrawPracticeSimilarCanvases() {
     drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], PRACTICE_SIMILAR_COMPARE_MS);
   });
 }
+
+function signalHasSettledTrade(item) {
+  const badge = String(item?.trade?.badge || "");
+  return badge === "ITM" || badge === "OTM";
+}
+function ensureModalSimilarUI() {
+  if (modalSimilarBtnEl && modalSimilarPanelEl && modalSimilarMetaEl && modalSimilarListEl) return { btn: modalSimilarBtnEl, panel: modalSimilarPanelEl, meta: modalSimilarMetaEl, list: modalSimilarListEl };
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+  if (!footer) return null;
+
+  let btn = footer.querySelector("#modalSimilarBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "modalSimilarBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost hidden";
+    btn.textContent = "ðŸ”Ž Ver similares";
+    btn.style.width = "100%";
+    btn.style.minHeight = "52px";
+    btn.style.borderRadius = "16px";
+    btn.style.fontWeight = "900";
+    btn.style.letterSpacing = ".2px";
+    footer.appendChild(btn);
+  }
+
+  let panel = footer.querySelector("#modalSimilarPanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "modalSimilarPanel";
+    panel.className = "hidden";
+    panel.style.width = "100%";
+    panel.style.border = "1px solid rgba(255,255,255,.12)";
+    panel.style.borderRadius = "16px";
+    panel.style.padding = "10px";
+    panel.style.background = "rgba(255,255,255,.03)";
+    panel.style.maxHeight = "46dvh";
+    panel.style.overflow = "auto";
+    panel.style.boxSizing = "border-box";
+    footer.appendChild(panel);
+
+    const meta = document.createElement("div");
+    meta.id = "modalSimilarMeta";
+    meta.style.fontSize = "12px";
+    meta.style.lineHeight = "1.3";
+    meta.style.color = "var(--muted, #94a3b8)";
+    meta.style.marginBottom = "10px";
+    meta.textContent = "ComparaciÃ³n avanzada de vela completa";
+    panel.appendChild(meta);
+
+    const list = document.createElement("div");
+    list.id = "modalSimilarList";
+    list.style.display = "flex";
+    list.style.flexDirection = "column";
+    list.style.gap = "12px";
+    panel.appendChild(list);
+  }
+
+  modalSimilarBtnEl = btn;
+  modalSimilarPanelEl = panel;
+  modalSimilarMetaEl = panel.querySelector("#modalSimilarMeta");
+  modalSimilarListEl = panel.querySelector("#modalSimilarList");
+
+  if (!btn.dataset.bound) {
+    btn.dataset.bound = "1";
+    btn.onclick = () => toggleModalSignalSimilarResults();
+  }
+
+  return { btn: modalSimilarBtnEl, panel: modalSimilarPanelEl, meta: modalSimilarMetaEl, list: modalSimilarListEl };
+}
+function setModalSimilarButtonVisible(show) {
+  const ui = ensureModalSimilarUI();
+  if (!ui?.btn) return;
+  ui.btn.classList.toggle("hidden", !show);
+}
+function hideModalSimilarPanel() {
+  const ui = ensureModalSimilarUI();
+  if (!ui?.panel) return;
+  ui.panel.classList.add("hidden");
+}
+function resetModalSimilarState() {
+  modalSimilarResults = [];
+  const ui = ensureModalSimilarUI();
+  if (!ui) return;
+  if (ui.btn) {
+    ui.btn.textContent = "ðŸ”Ž Ver similares";
+    ui.btn.disabled = false;
+  }
+  if (ui.meta) ui.meta.textContent = "ComparaciÃ³n avanzada de vela completa";
+  if (ui.list) ui.list.innerHTML = "";
+  hideModalSimilarPanel();
+  setModalSimilarButtonVisible(false);
+}
+function findSignalModalSimilarEntries(item, compareMs = PRACTICE_SIMILAR_COMPARE_MS, limit = 6) {
+  const baseSig = buildPracticeSignature(item?.ticks || [], compareMs);
+  const signalId = String(item?.id || "");
+  if (!signalId || !baseSig) return [];
+
+  return getEligiblePracticeEntries()
+    .filter((candidate) => String(candidate?.id || "") !== signalId)
+    .map((candidate) => {
+      const sig = buildPracticeSignature(candidate?.ticks || [], compareMs);
+      const similarity = computePracticeSimilarityScore(baseSig, sig);
+      return { ...candidate, similarity };
+    })
+    .filter((candidate) => candidate.similarity > 0)
+    .sort((a, b) => b.similarity - a.similarity || Number(b.saved_at || 0) - Number(a.saved_at || 0))
+    .slice(0, limit);
+}
+function renderModalSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMPARE_MS) {
+  const ui = ensureModalSimilarUI();
+  if (!ui?.panel || !ui?.list) return;
+
+  ui.panel.classList.remove("hidden");
+  if (ui.meta) {
+    const secLabel = Math.round(compareMs / 1000);
+    ui.meta.textContent = `Comparando vela completa (${secLabel}s) Â· solo disponible cuando la seÃ±al ya tiene ITM/OTM Â· ${results.length} hallazgo${results.length === 1 ? "" : "s"}`;
+  }
+
+  if (!results.length) {
+    ui.list.innerHTML = `<div style="padding:12px; border:1px solid rgba(255,255,255,.10); border-radius:14px; background:rgba(255,255,255,.03); color:var(--muted,#94a3b8);">No encontrÃ© suficientes formaciones parecidas en tu journal.</div>`;
+    return;
+  }
+
+  ui.list.innerHTML = results.map((entry, idx) => `
+    <div data-modal-similar-idx="${idx}" style="border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:10px; background:${entry?.trade?.badge === "ITM" ? "rgba(34,197,94,.10)" : entry?.trade?.badge === "OTM" ? "rgba(239,68,68,.10)" : "rgba(255,255,255,.03)"};">
+      <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:8px;">
+        <div style="min-width:64px; padding:8px 10px; border-radius:12px; border:1px solid rgba(34,211,238,.28); background:rgba(34,211,238,.10); font-weight:900; text-align:center;">${entry.similarity}%</div>
+        <div style="flex:1 1 auto; min-width:0;">
+          <div style="font-weight:800; line-height:1.2;">${escapeHtml(entry.symbol || "â€”")} Â· ${escapeHtml(labelDir(entry.direction || "PUT"))}</div>
+          <div style="font-size:12px; color:var(--muted,#94a3b8); margin-top:3px;">${escapeHtml(entry.time || "â€”")} Â· modo ${escapeHtml(entry.mode || "â€”")}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:7px;">
+            <span style="padding:6px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.05); font-size:11px; font-weight:800;">${escapeHtml(practiceSimilarOutcomeText(entry.nextOutcome))}</span>
+            <span style="padding:6px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.05); font-size:11px; font-weight:800;">${escapeHtml(practiceSimilarTradeText(entry))}</span>
+          </div>
+        </div>
+      </div>
+      <canvas class="modalSimilarCanvas" style="display:block; width:100%; height:320px; min-height:320px; border-radius:14px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.03);"></canvas>
+    </div>
+  `).join("");
+
+  ui.list.querySelectorAll("[data-modal-similar-idx]").forEach((card, idx) => {
+    const canvas = card.querySelector(".modalSimilarCanvas");
+    const entry = results[idx];
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], compareMs);
+  });
+}
+function redrawModalSimilarCanvases() {
+  const ui = ensureModalSimilarUI();
+  if (!ui?.panel || ui.panel.classList.contains("hidden") || !ui?.list || !modalSimilarResults.length) return;
+  ui.list.querySelectorAll("[data-modal-similar-idx]").forEach((card, idx) => {
+    const canvas = card.querySelector(".modalSimilarCanvas");
+    const entry = modalSimilarResults[idx];
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], PRACTICE_SIMILAR_COMPARE_MS);
+  });
+}
+function updateModalSimilarVisibility() {
+  const ui = ensureModalSimilarUI();
+  if (!ui) return;
+
+  const item = modalCurrentItem;
+  const canShow = !!item && signalHasSettledTrade(item) && Array.isArray(item.ticks) && item.ticks.length >= 6 && getEligiblePracticeEntries().length > 0;
+  if (!canShow) {
+    resetModalSimilarState();
+    return;
+  }
+
+  setModalSimilarButtonVisible(true);
+  if (ui.btn && !ui.panel.classList.contains("hidden")) {
+    ui.btn.textContent = "ðŸ™ˆ Ocultar similares";
+  } else if (ui.btn) {
+    ui.btn.textContent = "ðŸ”Ž Ver similares";
+  }
+}
+function toggleModalSignalSimilarResults() {
+  const ui = ensureModalSimilarUI();
+  const item = modalCurrentItem;
+  if (!ui?.btn || !item || !signalHasSettledTrade(item)) return;
+
+  const isOpen = ui.panel && !ui.panel.classList.contains("hidden");
+  if (isOpen) {
+    hideModalSimilarPanel();
+    ui.btn.textContent = "ðŸ”Ž Ver similares";
+    return;
+  }
+
+  if (!modalSimilarResults.length) {
+    ui.btn.disabled = true;
+    ui.btn.textContent = "â³ Buscando similaresâ€¦";
+    modalSimilarResults = findSignalModalSimilarEntries(item, PRACTICE_SIMILAR_COMPARE_MS, 6);
+    ui.btn.disabled = false;
+  }
+
+  renderModalSimilarResults(modalSimilarResults, PRACTICE_SIMILAR_COMPARE_MS);
+  ui.btn.textContent = "ðŸ™ˆ Ocultar similares";
+}
 function pullNextPracticeEntry() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
   if (!practiceQueue.length) return null;
   const nextId = String(practiceQueue.shift());
+  savePracticeQueueState();
   updatePracticePoolLabel();
   return getEligiblePracticeEntries().find((x) => String(x.journal_id || x.id || "") === nextId) || null;
 }
@@ -1858,18 +2095,18 @@ function finalizePracticeRound(answer = null) {
 
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
   if (resultType === "ITM") {
-    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | Próxima vela: ${outcomeText}`, "is-itm");
+    updatePracticeResult(`âœ… ITM | Tu decisiÃ³n: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | PrÃ³xima vela: ${outcomeText}`, "is-itm");
   } else if (resultType === "OTM") {
-    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | Próxima vela: ${outcomeText}`, "is-otm");
+    updatePracticeResult(`âŒ OTM | Tu decisiÃ³n: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | PrÃ³xima vela: ${outcomeText}`, "is-otm");
   } else {
-    updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
+    updatePracticeResult(`â­ï¸ PASAR | PrÃ³xima vela: ${outcomeText}`, "is-pass");
   }
 
   setPracticePassButtonMode("NEXT");
   setPracticeDecisionState(true, round.answer);
   practiceSimilarResults = [];
   if (getEligiblePracticeEntries().length > 1) setPracticeSimilarButtonVisible(true);
-  if (practiceSimilarBtn) practiceSimilarBtn.textContent = "🔎 Ver similares";
+  if (practiceSimilarBtn) practiceSimilarBtn.textContent = "ðŸ”Ž Ver similares";
   updatePracticeStatusText(`Ronda terminada. Toca VER SIMILARES o SIGUIENTE para continuar sin repetir hasta agotar el pool.`);
 }
 function practiceLoop(ts) {
@@ -1884,8 +2121,8 @@ function practiceLoop(ts) {
 
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
-  const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "—";
-  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | decisión: ${picked}`);
+  const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "â€”";
+  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | decisiÃ³n: ${picked}`);
 
   if (replayMs >= 60000) {
     finalizePracticeRound(practiceRound.answer || "PASS");
@@ -1897,7 +2134,7 @@ function startPracticeRound(entry = null) {
   resetPracticeSimilarState();
   const chosen = entry || pullNextPracticeEntry();
   if (!chosen) {
-    updatePracticeStatusText("No hay trades suficientes en el journal para practicar todavía.");
+    updatePracticeStatusText("No hay trades suficientes en el journal para practicar todavÃ­a.");
     updatePracticeResult("Necesitas trades con ticks completos y nextOutcome resuelto.", "is-pass");
     if (practiceRoundLabelEl) practiceRoundLabelEl.textContent = "Sin ronda";
     if (practiceCanvas) {
@@ -1941,7 +2178,7 @@ function ensurePracticeReady() {
   updatePracticePoolLabel();
   if (!practiceRound) {
     resetPracticeSimilarState();
-    updatePracticeStatusText("Toca PASAR para empezar una ronda con trades aleatorios sin repetir. En Práctica, las señales quedan pausadas.");
+    updatePracticeStatusText("Toca PASAR para empezar una ronda con trades aleatorios sin repetir. En PrÃ¡ctica, las seÃ±ales quedan pausadas.");
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
@@ -2007,12 +2244,12 @@ function downloadTextFile(filename, text, mime = "application/json") {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1500);
   } catch {
-    alert("No se pudo descargar el archivo. Probá copiar desde el portapapeles.");
+    alert("No se pudo descargar el archivo. ProbÃ¡ copiar desde el portapapeles.");
   }
 }
 
 /* =========================
-   Export (solo señales con voto)
+   Export (solo seÃ±ales con voto)
 ========================= */
 function buildExportPayloadVoted() {
   const voted = (history || []).filter((it) => it && it.vote);
@@ -2041,18 +2278,18 @@ async function exportVotedSignals() {
   const json = JSON.stringify(payload, null, 2);
 
   if (!payload.count_voted) {
-    alert("No hay señales con voto (like/dislike) para exportar todavía.");
+    alert("No hay seÃ±ales con voto (like/dislike) para exportar todavÃ­a.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado al portapapeles (${payload.count_voted}). Pegalo acá en el chat.`);
+    alert(`âœ… Exportado al portapapeles (${payload.count_voted}). Pegalo acÃ¡ en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
     downloadTextFile(`deriv-signals-voted-${ts}.json`, json);
-    alert(`📥 Descargado JSON (${payload.count_voted}).`);
+    alert(`ðŸ“¥ Descargado JSON (${payload.count_voted}).`);
   }
 }
 function ensureExportButton() {
@@ -2070,8 +2307,8 @@ function ensureExportButton() {
   btn.id = "exportVotedBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "📤 Exportar (solo con voto)";
-  btn.title = "Copia al portapapeles / descarga JSON con señales like/dislike";
+  btn.textContent = "ðŸ“¤ Exportar (solo con voto)";
+  btn.title = "Copia al portapapeles / descarga JSON con seÃ±ales like/dislike";
   host.appendChild(btn);
 
   return btn;
@@ -2109,18 +2346,18 @@ async function exportTradesJournal() {
   const json = JSON.stringify(payload, null, 2);
 
   if (!payload.count_trades) {
-    alert("No hay trades guardados todavía.");
+    alert("No hay trades guardados todavÃ­a.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Trades exportados al portapapeles (${payload.count_trades}). Pegalo acá en el chat.`);
+    alert(`âœ… Trades exportados al portapapeles (${payload.count_trades}). Pegalo acÃ¡ en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
     downloadTextFile(`deriv-trades-journal-${ts}.json`, json);
-    alert(`📥 Descargado JSON (${payload.count_trades}).`);
+    alert(`ðŸ“¥ Descargado JSON (${payload.count_trades}).`);
   }
 }
 function ensureExportTradesButton() {
@@ -2137,14 +2374,14 @@ function ensureExportTradesButton() {
   btn.id = "exportTradesBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "📤 Exportar Trades (estudio)";
+  btn.textContent = "ðŸ“¤ Exportar Trades (estudio)";
   btn.title = "Copia al portapapeles / descarga JSON del journal de trades";
   host.appendChild(btn);
   return btn;
 }
 
 /* =========================
-   ✅ Modal Config: sacar botones borrar y dejar solo export/reset/etc
+   âœ… Modal Config: sacar botones borrar y dejar solo export/reset/etc
 ========================= */
 function ensureSplitClearButtons() {
   const host =
@@ -2153,7 +2390,7 @@ function ensureSplitClearButtons() {
     null;
   if (!host) return;
 
-  // ocultar el botón viejo si existe
+  // ocultar el botÃ³n viejo si existe
   if (clearHistoryBtn) clearHistoryBtn.style.display = "none";
 
   const expT = ensureExportTradesButton();
@@ -2165,13 +2402,13 @@ function ensureSplitClearButtons() {
     btn.id = "clearTradesConfigBtn";
     btn.type = "button";
     btn.className = "btn btnGhost";
-    btn.textContent = "🗑️ Borrar Trades";
+    btn.textContent = "ðŸ—‘ï¸ Borrar Trades";
     btn.title = "Borra solo el historial de trades guardados para estudio";
     host.appendChild(btn);
   }
 
   btn.onclick = () => {
-    if (!confirm("¿Borrar SOLO el historial de trades guardados para estudio?")) return;
+    if (!confirm("Â¿Borrar SOLO el historial de trades guardados para estudio?")) return;
     clearTradesOnly();
   };
 }
@@ -2182,7 +2419,7 @@ function ensureSplitClearButtons() {
 function applyTheme(theme) {
   const isLight = theme === "light";
   document.body.classList.toggle("light", isLight);
-  if (themeBtn) themeBtn.textContent = isLight ? "☀️ Claro" : "🌙 Oscuro";
+  if (themeBtn) themeBtn.textContent = isLight ? "â˜€ï¸ Claro" : "ðŸŒ™ Oscuro";
   localStorage.setItem("theme", theme);
 }
 (function initTheme() {
@@ -2220,7 +2457,7 @@ function applyTheme(theme) {
       })
   );
 
-  // ✅ PATRÓN ESCALERA (compat: si venías usando GIRO, hereda ese estado una sola vez)
+  // âœ… PATRÃ“N ESCALERA (compat: si venÃ­as usando GIRO, hereda ese estado una sola vez)
   const hasStairKey = localStorage.getItem("stairMode") !== null;
   stairMode = loadBool("stairMode", false);
 
@@ -2231,7 +2468,7 @@ function applyTheme(theme) {
 
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.textContent = stairMode ? "🟪 Patrón ESCALERA" : "🟦 Modo NORMAL";
+    modeBtn.textContent = stairMode ? "ðŸŸª PatrÃ³n ESCALERA" : "ðŸŸ¦ Modo NORMAL";
     modeBtn.classList.toggle("active-strong", stairMode);
   };
   paintMode();
@@ -2255,7 +2492,7 @@ function applyTheme(theme) {
 (function initSoundToggle() {
   soundEnabled = loadBool("soundEnabled", false);
   setBtnActive(soundBtn, soundEnabled);
-  if (soundBtn) soundBtn.textContent = soundEnabled ? "🔊 Sonido ON" : "🔇 Sonido OFF";
+  if (soundBtn) soundBtn.textContent = soundEnabled ? "ðŸ”Š Sonido ON" : "ðŸ”‡ Sonido OFF";
   if (!soundBtn || !sound) return;
 
   soundBtn.onclick = async () => {
@@ -2269,33 +2506,33 @@ function applyTheme(theme) {
         soundEnabled = true;
         saveBool("soundEnabled", true);
         setBtnActive(soundBtn, true);
-        soundBtn.textContent = "🔊 Sonido ON";
+        soundBtn.textContent = "ðŸ”Š Sonido ON";
       } catch {
-        alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
+        alert("âš ï¸ El navegador bloqueÃ³ el audio. TocÃ¡ nuevamente.");
       }
       return;
     }
     soundEnabled = false;
     saveBool("soundEnabled", false);
     setBtnActive(soundBtn, false);
-    soundBtn.textContent = "🔇 Sonido OFF";
+    soundBtn.textContent = "ðŸ”‡ Sonido OFF";
   };
 })();
 
 /* =========================
-   Vibración
+   VibraciÃ³n
 ========================= */
 (function initVibrationToggle() {
   vibrateEnabled = loadBool("vibrateEnabled", true);
   if (!vibrateBtn) return;
   setBtnActive(vibrateBtn, vibrateEnabled);
-  vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
+  vibrateBtn.textContent = vibrateEnabled ? "ðŸ“³ VibraciÃ³n ON" : "ðŸ“³ VibraciÃ³n OFF";
 
   vibrateBtn.onclick = () => {
     vibrateEnabled = !vibrateEnabled;
     saveBool("vibrateEnabled", vibrateEnabled);
     setBtnActive(vibrateBtn, vibrateEnabled);
-    vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
+    vibrateBtn.textContent = vibrateEnabled ? "ðŸ“³ VibraciÃ³n ON" : "ðŸ“³ VibraciÃ³n OFF";
     if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([80]);
   };
 })();
@@ -2316,8 +2553,8 @@ function showNotification(symbol, direction, modeLabel) {
 
   navigator.serviceWorker.getRegistration().then((reg) => {
     if (!reg) return;
-    reg.showNotification("📈 Deriv Signal", {
-      body: `${symbol} – ${labelDir(direction)} – [${modeLabel || "NORMAL"}]`,
+    reg.showNotification("ðŸ“ˆ Deriv Signal", {
+      body: `${symbol} â€“ ${labelDir(direction)} â€“ [${modeLabel || "NORMAL"}]`,
       icon: "icon-192.png",
       badge: "icon-192.png",
       tag: "deriv-signal",
@@ -2410,7 +2647,7 @@ function drawDerivLikeChart(canvas, ticks) {
   }
   ctx.globalAlpha = 1;
 
-  // líneas verticales punteadas 0/15/30/45
+  // lÃ­neas verticales punteadas 0/15/30/45
   const guideMarks = [0, 15000, 30000, 45000];
   for (const ms of guideMarks) {
     const x = xOf(ms);
@@ -2431,7 +2668,7 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.fillText(label, Math.min(w - 26, x + 4), h - 6);
   }
 
-  // línea de “ahora” en live
+  // lÃ­nea de â€œahoraâ€ en live
   if (msNow != null) {
     const xNow = xOf(msNow);
     ctx.save();
@@ -2449,7 +2686,7 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
   }
 
-  // área
+  // Ã¡rea
   ctx.beginPath();
   ctx.moveTo(xOf(pts[0].ms), h - 20);
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
@@ -2460,7 +2697,7 @@ function drawDerivLikeChart(canvas, ticks) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // línea principal
+  // lÃ­nea principal
   ctx.strokeStyle = "rgba(255,255,255,0.95)";
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
@@ -2474,7 +2711,7 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // último punto
+  // Ãºltimo punto
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
@@ -2564,7 +2801,7 @@ function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false)
 
   if (locked) {
     btn.disabled = true;
-    btn.textContent = `🔒 ${btn.dataset.baseLabel.replace(/^🔒\s*/g, "")}`;
+    btn.textContent = `ðŸ”’ ${btn.dataset.baseLabel.replace(/^ðŸ”’\s*/g, "")}`;
     btn.style.filter = "grayscale(1) saturate(0.7)";
     btn.style.opacity = "0.48";
     btn.style.transform = "none";
@@ -2574,16 +2811,16 @@ function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false)
 
   if (candleClosed) {
     btn.disabled = true;
-    btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+    btn.textContent = btn.dataset.baseLabel.replace(/^ðŸ”’\s*/g, "");
     btn.style.filter = "grayscale(1) saturate(0.72)";
     btn.style.opacity = "0.42";
     btn.style.transform = "none";
-    btn.title = "La vela ya cerró";
+    btn.title = "La vela ya cerrÃ³";
     return;
   }
 
   btn.disabled = false;
-  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+  btn.textContent = btn.dataset.baseLabel.replace(/^ðŸ”’\s*/g, "");
   btn.style.filter = "";
   btn.style.opacity = "";
   btn.title = "Operar DEMO 1m";
@@ -2602,13 +2839,13 @@ function updateModalCandleStatusUI() {
   const isOpen = isTradeEntryOpen(modalCurrentItem);
   if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    bar.textContent = `ðŸŸ¢ VELA ABIERTA | faltan ${sec}s`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
   } else {
-    bar.textContent = "⚪ VELA CERRADA";
+    bar.textContent = "âšª VELA CERRADA";
     bar.style.color = "rgba(229,231,235,.95)";
     bar.style.background = "rgba(107,114,128,.20)";
     bar.style.borderColor = "rgba(156,163,175,.28)";
@@ -2629,7 +2866,7 @@ function updateModalCandleStatusUI() {
 function updateModalLiveUI() {
   if (!modalLiveBtn) return;
   modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
-  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
+  modalLiveBtn.textContent = modalLive ? "ðŸ“¡ LIVE ON" : "ðŸ“¡ LIVE OFF";
 }
 function requestModalDraw(force = false) {
   if (!chartModal || chartModal.classList.contains("hidden")) return;
@@ -2642,7 +2879,7 @@ function requestModalDraw(force = false) {
   if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
   modalDrawRaf = requestAnimationFrame(() => {
     const it = modalCurrentItem;
-    if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
+    if (!it) return; // âœ… FIX: si se cerrÃ³ el modal entre frames, evita leer it.ticks
 
     let ticks = it.ticks || [];
     if (modalLive && isItemLiveMinute(it)) {
@@ -2661,6 +2898,7 @@ function requestModalDraw(force = false) {
     }
 
     updateModalCandleStatusUI();
+    updateModalSimilarVisibility();
   });
 }
 
@@ -2741,6 +2979,8 @@ function applyModalTradeButtonsLayout() {
     modalLiveBtn.style.width = "100%";
     modalLiveBtn.style.marginTop = "10px";
   }
+
+  ensureModalSimilarUI();
 }
 
 /* =========================
@@ -2811,12 +3051,12 @@ function disciplineTagText() {
 
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
-    return `🔒 BLOQUEADO ${fmtRemaining(remain)} (${disciplineWins}W/${disciplineLosses}L)`;
+    return `ðŸ”’ BLOQUEADO ${fmtRemaining(remain)} (${disciplineWins}W/${disciplineLosses}L)`;
   }
 
   const pend = (disciplinePendingContracts || []).length;
-  const pTxt = pend ? ` • Pendientes:${pend}` : "";
-  return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
+  const pTxt = pend ? ` â€¢ Pendientes:${pend}` : "";
+  return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W â€¢ ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
 }
 function updateDisciplineLockUI(forceToast = false) {
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
@@ -2825,7 +3065,7 @@ function updateDisciplineLockUI(forceToast = false) {
     disciplineWins = 0;
     disciplineLosses = 0;
     saveDiscipline();
-    if (forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
+    if (forceToast) toast("âœ… Bloqueo terminado. Contadores reseteados.", 1800);
   }
 
   const locked = isTradeLockedNow();
@@ -2868,7 +3108,7 @@ function applyDisciplineOutcome(isWin) {
     return;
   }
 
-  toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
+  toast(`âœ… Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM â€¢ ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
   updateDisciplineLockUI(false);
 }
 
@@ -2884,7 +3124,7 @@ async function resubscribePendingContracts() {
     try {
       await ensureAuthorized();
     } catch {
-      toast("⚠️ No autorizado (token/login). No puedo rescatar pendientes.", 2200);
+      toast("âš ï¸ No autorizado (token/login). No puedo rescatar pendientes.", 2200);
       return;
     }
 
@@ -2893,7 +3133,7 @@ async function resubscribePendingContracts() {
       scheduleOutcomeFallbackPoll(cid, 20000);
     }
 
-    toast(`🔁 Reenganche pendientes: ${list.length}`, 1400);
+    toast(`ðŸ” Reenganche pendientes: ${list.length}`, 1400);
   } catch {}
 }
 
@@ -2904,7 +3144,7 @@ function openChartModal(item) {
   modalCurrentItem = item;
   if (!chartModal || !modalTitle || !modalSub) return;
 
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
+  modalTitle.textContent = `${item.symbol} â€“ ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
 
   modalLive = isItemLiveMinute(item);
   updateModalLiveUI();
@@ -2912,9 +3152,11 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
+  resetModalSimilarState();
   applyModalTradeButtonsLayout();
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
+  updateModalSimilarVisibility();
 
   requestModalDraw(true);
 }
@@ -2925,6 +3167,7 @@ function closeChartModal() {
   modalCurrentItem = null;
   modalLive = false;
   updateModalLiveUI();
+  resetModalSimilarState();
   if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
@@ -2943,9 +3186,11 @@ if (modalOpenDerivBtn)
 
 window.addEventListener("resize", () => {
   redrawPracticeSimilarCanvases();
+  redrawModalSimilarCanvases();
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   applyModalTradeButtonsLayout();
   updateModalCandleStatusUI();
+  updateModalSimilarVisibility();
   requestModalDraw(true);
 });
 if (modalLiveBtn) {
@@ -2964,7 +3209,7 @@ if (modalLiveBtn) {
 }
 
 /* =========================
-   Row helpers (global, para Señales)
+   Row helpers (global, para SeÃ±ales)
 ========================= */
 function updateRowChartBtn(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
@@ -3001,10 +3246,10 @@ function updateRowChartBtnOnRow(row, item) {
 
   if (ready) {
     btn.innerHTML = CHART_ICON_SVG;
-    btn.title = liveEligible ? "Ver gráfico en vivo (ticks reales)" : "Ver gráfico del minuto (ticks 0–60)";
+    btn.title = liveEligible ? "Ver grÃ¡fico en vivo (ticks reales)" : "Ver grÃ¡fico del minuto (ticks 0â€“60)";
   } else {
-    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto…";
+    btn.innerHTML = `<span class="lockBadge" aria-hidden="true">ðŸ”’</span>`;
+    btn.title = "Esperando cierre del minutoâ€¦";
   }
 }
 function updateRowTradeBadgeOnRow(row, item) {
@@ -3022,15 +3267,15 @@ function updateRowTradeBadgeOnRow(row, item) {
 
   el.classList.remove("hidden");
   if (badge === "ITM") {
-    el.textContent = "🎯 ITM";
+    el.textContent = "ðŸŽ¯ ITM";
     el.title = "Trade ganada (ITM)";
     el.style.opacity = "1";
   } else if (badge === "OTM") {
-    el.textContent = "💥 OTM";
+    el.textContent = "ðŸ’¥ OTM";
     el.title = "Trade perdida (OTM)";
     el.style.opacity = "1";
   } else {
-    el.textContent = "⏳ TRADE";
+    el.textContent = "â³ TRADE";
     el.title = "Trade pendiente";
     el.style.opacity = "0.85";
   }
@@ -3049,21 +3294,21 @@ function updateRowNextArrowOnRow(row, item) {
   if (!el) return;
 
   if (item.nextOutcome === "up") {
-    el.textContent = "⬆️";
+    el.textContent = "â¬†ï¸";
     el.className = "nextArrow up";
-    el.title = "Próxima vela: cerró arriba del cierre de la vela de señal";
+    el.title = "PrÃ³xima vela: cerrÃ³ arriba del cierre de la vela de seÃ±al";
   } else if (item.nextOutcome === "down") {
-    el.textContent = "⬇️";
+    el.textContent = "â¬‡ï¸";
     el.className = "nextArrow down";
-    el.title = "Próxima vela: cerró abajo del cierre de la vela de señal";
+    el.title = "PrÃ³xima vela: cerrÃ³ abajo del cierre de la vela de seÃ±al";
   } else if (item.nextOutcome === "flat") {
-    el.textContent = "➖";
+    el.textContent = "âž–";
     el.className = "nextArrow flat";
-    el.title = "Próxima vela: cerró igual que la vela de señal";
+    el.title = "PrÃ³xima vela: cerrÃ³ igual que la vela de seÃ±al";
   } else {
-    el.textContent = "⏳";
+    el.textContent = "â³";
     el.className = "nextArrow pending";
-    el.title = "Próxima vela: esperando…";
+    el.title = "PrÃ³xima vela: esperandoâ€¦";
   }
 }
 function updateRowHitIconOnRow(row, item) {
@@ -3118,8 +3363,8 @@ function buildRow(item, opts = {}) {
     ? ""
     : `
     <div class="row-actions">
-      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
-      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
+      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>ðŸ‘</button>
+      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>ðŸ‘Ž</button>
       <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
     </div>
   `;
@@ -3129,7 +3374,7 @@ function buildRow(item, opts = {}) {
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <button class="chartBtn" type="button"></button>
       <span class="tradeBadge hidden" title=""></span>
-      <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
+      <span class="nextArrow pending" title="PrÃ³xima vela: esperandoâ€¦">â³</span>
     </div>
     ${actionsHtml}
   `;
@@ -3156,7 +3401,7 @@ function buildRow(item, opts = {}) {
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
 
-  // acciones (solo señales)
+  // acciones (solo seÃ±ales)
   if (!opts.hideActions) {
     if (item.vote) {
       const likeBtn = row.querySelector('button[data-v="like"]');
@@ -3193,7 +3438,7 @@ function buildRow(item, opts = {}) {
 }
 
 /* =========================
-   Render señales
+   Render seÃ±ales
 ========================= */
 function renderHistory() {
   if (!signalsEl) return;
@@ -3222,12 +3467,12 @@ function updateTickHealthUI() {
     null;
 
   if (!base) {
-    tickHealthEl.textContent = "Último tick: —";
+    tickHealthEl.textContent = "Ãšltimo tick: â€”";
     return;
   }
 
   const ageSec = Math.max(0, Math.floor((Date.now() - base) / 1000));
-  tickHealthEl.textContent = `Último tick: hace ${ageSec}s`;
+  tickHealthEl.textContent = `Ãšltimo tick: hace ${ageSec}s`;
 }
 
 function updateCountdownUI() {
@@ -3236,7 +3481,7 @@ function updateCountdownUI() {
   const textEl = document.getElementById("countdownText") || countdownEl;
 
   if (!currentMinuteStartMs) {
-    if (textEl) textEl.textContent = "⏱️ 60";
+    if (textEl) textEl.textContent = "â±ï¸ 60";
     countdownEl.classList.remove("urgent", "warn", "tick");
     return;
   }
@@ -3246,7 +3491,7 @@ function updateCountdownUI() {
 
   const remaining = 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
   const v = String(remaining).padStart(2, "0");
-  if (textEl) textEl.textContent = `⏱️ ${v}`;
+  if (textEl) textEl.textContent = `â±ï¸ ${v}`;
 
   const urgent = remaining <= 5;
   const warn = !urgent && remaining <= 15;
@@ -3345,7 +3590,7 @@ function subscribeContractOutcome(contractId, silent = false) {
 
     ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
     contractSubs.set(cid, "__pending__");
-    if (!silent) toast(`📡 Subscript contrato ${cid}`, 900);
+    if (!silent) toast(`ðŸ“¡ Subscript contrato ${cid}`, 900);
   } catch {}
 }
 function forgetSubscription(subId) {
@@ -3388,7 +3633,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
           else if (status === "lost") isWin = false;
           else if (Number.isFinite(profit)) isWin = profit > 0;
 
-          toast(isWin ? "✅ ITM (fallback) registrada" : "❌ OTM (fallback) registrada", 1600);
+          toast(isWin ? "âœ… ITM (fallback) registrada" : "âŒ OTM (fallback) registrada", 1600);
 
           // pintar badge + journal
           try {
@@ -3420,7 +3665,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
 async function ensureAuthorized() {
   const token = getDerivToken();
-  if (!token) throw new Error("Sin token DEMO (cargalo en Configuración)");
+  if (!token) throw new Error("Sin token DEMO (cargalo en ConfiguraciÃ³n)");
 
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
@@ -3447,7 +3692,7 @@ function assertCanTrade() {
 }
 function assertEntryWindowOpen() {
   if (modalCurrentItem && !isTradeEntryOpen(modalCurrentItem)) {
-    throw new Error("La vela ya cerró");
+    throw new Error("La vela ya cerrÃ³");
   }
 }
 
@@ -3455,7 +3700,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
   assertEntryWindowOpen();
 
-  if (tradeInFlight) throw new Error("Operación en curso");
+  if (tradeInFlight) throw new Error("OperaciÃ³n en curso");
   tradeInFlight = true;
 
   try {
@@ -3484,7 +3729,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     );
 
     if (res?.error) throw new Error(res.error.message || "buy error");
-    if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
+    if (!res?.buy) throw new Error("buy: respuesta invÃ¡lida (sin buy)");
 
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
@@ -3497,7 +3742,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     subscribeContractOutcome(cid, true);
     scheduleOutcomeFallbackPoll(cid, 85000);
 
-    toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
+    toast(`ðŸ“Œ Trade registrado. Esperando resultadoâ€¦ (${disciplineWins}W/${disciplineLosses}L)`, 1600);
 
     updateDisciplineLockUI(false);
     return res;
@@ -3512,7 +3757,7 @@ if (modalBuyCallBtn) {
     modalBuyCallBtn.disabled = true;
     try {
       updateDisciplineLockUI(false);
-      toast("🟢 Enviando COMPRA…", 1200);
+      toast("ðŸŸ¢ Enviando COMPRAâ€¦", 1200);
 
       const r = await Promise.race([
         buyOneClick("CALL"),
@@ -3520,9 +3765,9 @@ if (modalBuyCallBtn) {
       ]);
 
       const cid = r?.buy?.contract_id || "";
-      toast(`🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
+      toast(`ðŸŸ¢ COMPRADO âœ“ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
-      toast(`⚠️ Error COMPRA: ${e?.message || e}`, 2400);
+      toast(`âš ï¸ Error COMPRA: ${e?.message || e}`, 2400);
     } finally {
       modalBuyCallBtn.disabled = false;
       updateDisciplineLockUI(false);
@@ -3534,7 +3779,7 @@ if (modalBuyPutBtn) {
     modalBuyPutBtn.disabled = true;
     try {
       updateDisciplineLockUI(false);
-      toast("🔴 Enviando VENTA…", 1200);
+      toast("ðŸ”´ Enviando VENTAâ€¦", 1200);
 
       const r = await Promise.race([
         buyOneClick("PUT"),
@@ -3542,9 +3787,9 @@ if (modalBuyPutBtn) {
       ]);
 
       const cid = r?.buy?.contract_id || "";
-      toast(`🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
+      toast(`ðŸ”´ VENDIDO âœ“ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
-      toast(`⚠️ Error VENTA: ${e?.message || e}`, 2400);
+      toast(`âš ï¸ Error VENTA: ${e?.message || e}`, 2400);
     } finally {
       modalBuyPutBtn.disabled = false;
       updateDisciplineLockUI(false);
@@ -3568,11 +3813,11 @@ function initTokenAndStakeUI() {
   if (tokenSaveBtn && tokenInput) {
     tokenSaveBtn.onclick = () => {
       const v = String(tokenInput.value || "").trim();
-      if (!v) return alert("Pegá un token DEMO primero.");
+      if (!v) return alert("PegÃ¡ un token DEMO primero.");
       setDerivToken(v);
       resetAuthState();
-      toast("💾 Token guardado ✓", 1600);
-      alert("✅ Token DEMO guardado.");
+      toast("ðŸ’¾ Token guardado âœ“", 1600);
+      alert("âœ… Token DEMO guardado.");
     };
   }
 
@@ -3581,8 +3826,8 @@ function initTokenAndStakeUI() {
       clearDerivToken();
       resetAuthState();
       if (tokenInput) tokenInput.value = "";
-      toast("🗑️ Token borrado ✓", 1600);
-      alert("🗑️ Token DEMO borrado.");
+      toast("ðŸ—‘ï¸ Token borrado âœ“", 1600);
+      alert("ðŸ—‘ï¸ Token DEMO borrado.");
     };
   }
 
@@ -3598,12 +3843,12 @@ function initTokenAndStakeUI() {
   if (stakeSaveBtn && stakeInput) {
     stakeSaveBtn.onclick = () => {
       const n = Number(stakeInput.value);
-      if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido.");
+      if (!Number.isFinite(n) || n <= 0) return alert("Stake invÃ¡lido.");
       const ok = setTradeStake(n);
       if (!ok) return alert("No se pudo guardar el stake.");
       stakeInput.value = Number(getTradeStake()).toFixed(2);
-      toast("💾 Stake guardado ✓", 1600);
-      alert(`✅ Stake guardado: ${Number(getTradeStake()).toFixed(2)} USD`);
+      toast("ðŸ’¾ Stake guardado âœ“", 1600);
+      alert(`âœ… Stake guardado: ${Number(getTradeStake()).toFixed(2)} USD`);
     };
   }
 
@@ -3612,8 +3857,8 @@ function initTokenAndStakeUI() {
       clearTradeStake();
       stakeInput.value = Number(DEFAULT_STAKE).toFixed(2);
       setTradeStake(DEFAULT_STAKE);
-      toast("↩️ Stake default ✓", 1600);
-      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
+      toast("â†©ï¸ Stake default âœ“", 1600);
+      alert(`â†©ï¸ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
     };
   }
 }
@@ -3688,7 +3933,7 @@ async function hydrateSignalsFromDerivHistory(minute) {
 }
 
 /* =========================
-   FIX NEXT (rehidratación): cierre de vela siguiente vs cierre de vela señal
+   FIX NEXT (rehidrataciÃ³n): cierre de vela siguiente vs cierre de vela seÃ±al
 ========================= */
 async function fetchMinuteClose(symbol, minute) {
   try {
@@ -3726,7 +3971,7 @@ async function computeNextOutcomeByConsecutiveCloses(symbol, minuteCur) {
 }
 
 /* =========================
-   Loader rehidratación
+   Loader rehidrataciÃ³n
 ========================= */
 let rehydrateRunning = false;
 let lastStatusBeforeRehydrate = "";
@@ -3743,7 +3988,7 @@ function clearRehydrateStatus() {
   if (!statusEl) return;
   if (!rehydrateRunning) return;
   rehydrateRunning = false;
-  statusEl.textContent = lastStatusBeforeRehydrate || "Conectado – Analizando";
+  statusEl.textContent = lastStatusBeforeRehydrate || "Conectado â€“ Analizando";
 }
 
 /* =========================
@@ -3768,7 +4013,7 @@ async function rehydrateHistoryOnBoot() {
 
   for (const m of minutes) {
     doneA++;
-    setRehydrateStatus(`♻️ Rehidratando gráficos… ${doneA}/${totalA}`);
+    setRehydrateStatus(`â™»ï¸ Rehidratando grÃ¡ficosâ€¦ ${doneA}/${totalA}`);
 
     try {
       const changed = await hydrateSignalsFromDerivHistory(m);
@@ -3790,14 +4035,14 @@ async function rehydrateHistoryOnBoot() {
     await sleep(REHYDRATE_SLEEP_MS);
   }
 
-  // ✅ Recalcula NEXT aunque ya exista, así corrige históricos guardados con la lógica vieja
+  // âœ… Recalcula NEXT aunque ya exista, asÃ­ corrige histÃ³ricos guardados con la lÃ³gica vieja
   const settledOutcomes = slice.filter((it) => it.minute + 1 < nowMin);
   const totalB = settledOutcomes.length || 1;
   let doneB = 0;
 
   for (const it of settledOutcomes) {
     doneB++;
-    setRehydrateStatus(`♻️ Rehidratando NEXT… ${doneB}/${totalB}`);
+    setRehydrateStatus(`â™»ï¸ Rehidratando NEXTâ€¦ ${doneB}/${totalB}`);
 
     try {
       const outcome = await computeNextOutcomeByConsecutiveCloses(it.symbol, it.minute);
@@ -3828,7 +4073,7 @@ async function rehydrateHistoryOnBoot() {
 }
 
 /* =========================
-   FIX NEXT (en vivo): cierre de vela siguiente vs cierre de vela señal
+   FIX NEXT (en vivo): cierre de vela siguiente vs cierre de vela seÃ±al
 ========================= */
 function getCachedMinuteClose(symbol, minute) {
   const close = Number(candleOC?.[minute]?.[symbol]?.close);
@@ -3841,8 +4086,8 @@ function finalizeMinute(minute) {
 
   const prevMinute = minute - 1;
 
-  // 1) Resultado rápido (live) usando close(prevMinute) vs close(minute)
-  //    Ese minuto "minute" es la vela NEXT para las señales en prevMinute.
+  // 1) Resultado rÃ¡pido (live) usando close(prevMinute) vs close(minute)
+  //    Ese minuto "minute" es la vela NEXT para las seÃ±ales en prevMinute.
   const liveOutcomeBySymbol = Object.create(null);
 
   for (const symbol of Object.keys(oc)) {
@@ -3852,7 +4097,7 @@ function finalizeMinute(minute) {
     if (out) liveOutcomeBySymbol[symbol] = out;
   }
 
-  // Aplica a TODAS las señales de prevMinute (NORMAL + ESCALERA) si todavía no tienen nextOutcome
+  // Aplica a TODAS las seÃ±ales de prevMinute (NORMAL + ESCALERA) si todavÃ­a no tienen nextOutcome
   for (const it of history) {
     if (!it || it.nextOutcome) continue;
     if (it.minute !== prevMinute) continue;
@@ -3865,7 +4110,7 @@ function finalizeMinute(minute) {
     }
   }
 
-  // 2) Confirmación canónica (ticks_history) para cualquier caso no resuelto
+  // 2) ConfirmaciÃ³n canÃ³nica (ticks_history) para cualquier caso no resuelto
   (async () => {
     try {
       const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
@@ -3958,7 +4203,7 @@ function onTick(tick) {
 
   candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) {
-    // ✅ Open más consistente: usa el primer punto que ya tenemos (idealmente el ms=0 con prevLast)
+    // âœ… Open mÃ¡s consistente: usa el primer punto que ya tenemos (idealmente el ms=0 con prevLast)
     const firstQ = minuteData?.[minute]?.[symbol]?.[0]?.quote;
     const openQ = Number.isFinite(firstQ) ? firstQ : tick.quote;
     candleOC[minute][symbol] = { open: openQ, close: tick.quote };
@@ -3987,7 +4232,7 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    // ✅ ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
+    // âœ… ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
     if (!ok && !stairMode) scheduleRetry(minute);
   }
 }
@@ -4121,7 +4366,7 @@ function passesTechnicalFilters(best, vol, rules) {
 }
 
 /* =========================
-   Patrón ESCALERA
+   PatrÃ³n ESCALERA
    - CALL = escalera alcista
    - PUT  = escalera bajista
 ========================= */
@@ -4141,14 +4386,14 @@ const RULES_STAIR = {
   // pocas contras
   maxRetraceFracTotal: 0.45,
 
-  // estructura “escalonada”
+  // estructura â€œescalonadaâ€
   stepMinFracTotal: 0.06,
   flatBandFracTotal: 0.02,
   maxWeakAgainstFracTotal: 0.18,
   maxWeakAgainstSteps: 1,
   forwardCoverageMinFracTotal: 0.82,
 
-  // evita spike único dominante
+  // evita spike Ãºnico dominante
   maxSingleStepFracTotal: 0.72,
 };
 
@@ -4193,7 +4438,7 @@ function detectStairPattern(candidate) {
   const wholeDirRatio = directionalRatio(fullTicks, dirSign);
   if (wholeDirRatio < RULES_STAIR.dirRatioMinWhole) return null;
 
-  // 2) Tiene que avanzar tanto antes como después de los 30s
+  // 2) Tiene que avanzar tanto antes como despuÃ©s de los 30s
   const firstLeg = (p30 - p0) * dirSign;
   const lateLeg = (pE - p30) * dirSign;
   if (firstLeg < absTotal * RULES_STAIR.firstLegMinFracTotal) return null;
@@ -4310,7 +4555,7 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
 
-  // ✅ MODO PATRÓN ESCALERA: solo señales si la forma coincide con escalera alcista/bajista
+  // âœ… MODO PATRÃ“N ESCALERA: solo seÃ±ales si la forma coincide con escalera alcista/bajista
   if (stairMode) {
     const matches = [];
 
@@ -4413,10 +4658,10 @@ function addSignal(minute, symbol, direction, ticks) {
 ========================= */
 function connect() {
   try {
-    if (statusEl) statusEl.textContent = "Conectando…";
+    if (statusEl) statusEl.textContent = "Conectandoâ€¦";
     ws = new WebSocket(WS_URL);
   } catch {
-    if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
+    if (statusEl) statusEl.textContent = "Error WS â€“ no se pudo iniciar";
     return;
   }
 
@@ -4425,7 +4670,7 @@ function connect() {
       resetAuthState();
     } catch {}
 
-    if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
+    if (statusEl) statusEl.textContent = "Conectado â€“ Suscribiendoâ€¦";
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
     setTimeout(() => {
@@ -4467,7 +4712,7 @@ function connect() {
             else if (status === "lost") isWin = false;
             else if (Number.isFinite(profit)) isWin = profit > 0;
 
-            toast(isWin ? "✅ ITM (ganada) registrada" : "❌ OTM (perdida) registrada", 1400);
+            toast(isWin ? "âœ… ITM (ganada) registrada" : "âŒ OTM (perdida) registrada", 1400);
 
             // pintar badge + journal
             try {
@@ -4497,17 +4742,17 @@ function connect() {
       }
 
       if (data?.error) {
-        if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
+        if (statusEl) statusEl.textContent = `âš ï¸ WS error: ${data.error.message || "unknown"}`;
       }
 
       if (data.tick) onTick(data.tick);
     } catch (err) {
-      if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
+      if (statusEl) statusEl.textContent = `âŒ Parse WS: ${err?.message || err}`;
     }
   };
 
   ws.onerror = () => {
-    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
+    if (statusEl) statusEl.textContent = "Error WS â€“ reconectandoâ€¦";
   };
 
   ws.onclose = (ev) => {
@@ -4525,7 +4770,7 @@ function connect() {
 
     const code = ev?.code || 0;
     const reason = ev?.reason || "";
-    if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`;
+    if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "â€“ " + reason : ""} â€“ reconectandoâ€¦`;
 
     if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
     setTimeout(connect, 1500);
@@ -4533,7 +4778,7 @@ function connect() {
 }
 
 /* =========================
-   🪫 Behavior en background/foreground
+   ðŸª« Behavior en background/foreground
 ========================= */
 document.addEventListener("visibilitychange", () => {
   if (!("visibilityState" in document)) return;
@@ -4582,7 +4827,7 @@ if (practiceCallBtn) {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
     practiceRound.answer = "CALL";
     setPracticeDecisionState(true, "CALL");
-    updatePracticeResult("🟢 COMPRA elegida. Esperando cierre de la vela…", "is-pass");
+    updatePracticeResult("ðŸŸ¢ COMPRA elegida. Esperando cierre de la velaâ€¦", "is-pass");
   };
 }
 if (practicePutBtn) {
@@ -4590,7 +4835,7 @@ if (practicePutBtn) {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
     practiceRound.answer = "PUT";
     setPracticeDecisionState(true, "PUT");
-    updatePracticeResult("🔴 VENTA elegida. Esperando cierre de la vela…", "is-pass");
+    updatePracticeResult("ðŸ”´ VENTA elegida. Esperando cierre de la velaâ€¦", "is-pass");
   };
 }
 if (practicePassBtn) {
@@ -4618,7 +4863,7 @@ if (practiceResetSessionBtn) {
 }
 if (practiceResetAllBtn) {
   practiceResetAllBtn.onclick = () => {
-    if (!confirm("¿Resetear el histórico de práctica?")) return;
+    if (!confirm("Â¿Resetear el histÃ³rico de prÃ¡ctica?")) return;
     resetPracticeAllStats();
   };
 }
