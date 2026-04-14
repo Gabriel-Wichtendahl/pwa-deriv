@@ -1850,11 +1850,16 @@ function signalHasSettledTrade(item) {
   return badge === "ITM" || badge === "OTM";
 }
 function ensureModalSimilarUI() {
-  if (modalSimilarBtnEl && modalSimilarPanelEl && modalSimilarMetaEl && modalSimilarListEl) return { btn: modalSimilarBtnEl, panel: modalSimilarPanelEl, meta: modalSimilarMetaEl, list: modalSimilarListEl };
+  if (modalSimilarBtnEl && modalSimilarPanelEl && modalSimilarMetaEl && modalSimilarListEl) {
+    return { btn: modalSimilarBtnEl, panel: modalSimilarPanelEl, meta: modalSimilarMetaEl, list: modalSimilarListEl };
+  }
+
   const footer =
     document.querySelector("#chartModal .modalFooter") ||
     (chartModal ? chartModal.querySelector(".modalFooter") : null);
   if (!footer) return null;
+
+  const tradeRow = footer.querySelector(".tradeRow") || null;
 
   let btn = footer.querySelector("#modalSimilarBtn");
   if (!btn) {
@@ -1864,11 +1869,14 @@ function ensureModalSimilarUI() {
     btn.className = "btn btnGhost hidden";
     btn.textContent = "🔎 Ver similares";
     btn.style.width = "100%";
-    btn.style.minHeight = "52px";
+    btn.style.minHeight = "54px";
     btn.style.borderRadius = "16px";
     btn.style.fontWeight = "900";
     btn.style.letterSpacing = ".2px";
-    footer.appendChild(btn);
+    btn.style.marginTop = "2px";
+  }
+  if (btn.parentElement !== footer || (tradeRow && btn.nextElementSibling !== tradeRow && btn.nextElementSibling?.id !== "modalSimilarPanel")) {
+    footer.insertBefore(btn, tradeRow || null);
   }
 
   let panel = footer.querySelector("#modalSimilarPanel");
@@ -1881,17 +1889,16 @@ function ensureModalSimilarUI() {
     panel.style.borderRadius = "16px";
     panel.style.padding = "10px";
     panel.style.background = "rgba(255,255,255,.03)";
-    panel.style.maxHeight = "46dvh";
-    panel.style.overflow = "auto";
     panel.style.boxSizing = "border-box";
-    footer.appendChild(panel);
+    panel.style.display = "flex";
+    panel.style.flexDirection = "column";
+    panel.style.gap = "10px";
 
     const meta = document.createElement("div");
     meta.id = "modalSimilarMeta";
     meta.style.fontSize = "12px";
     meta.style.lineHeight = "1.3";
     meta.style.color = "var(--muted, #94a3b8)";
-    meta.style.marginBottom = "10px";
     meta.textContent = "Comparación avanzada de vela completa";
     panel.appendChild(meta);
 
@@ -1901,6 +1908,9 @@ function ensureModalSimilarUI() {
     list.style.flexDirection = "column";
     list.style.gap = "12px";
     panel.appendChild(list);
+  }
+  if (panel.parentElement !== footer || (tradeRow && panel.nextElementSibling !== tradeRow)) {
+    footer.insertBefore(panel, tradeRow || null);
   }
 
   modalSimilarBtnEl = btn;
