@@ -2326,8 +2326,13 @@ function drawDerivLikeChart(canvas, ticks) {
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
   const quotes = pts.map((p) => p.quote);
+  const polarityLevel = modalCurrentItem?.polarity || null;
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
+  if (polarityLevel && Number.isFinite(polarityLevel.zoneLow) && Number.isFinite(polarityLevel.zoneHigh)) {
+    min = Math.min(min, Number(polarityLevel.zoneLow));
+    max = Math.max(max, Number(polarityLevel.zoneHigh));
+  }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
   const pad = range * 0.08;
