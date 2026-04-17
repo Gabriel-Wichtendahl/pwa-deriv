@@ -63,6 +63,20 @@ const DEFAULT_CURRENCY = "USD";
 const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
 
+const SIGNAL_MODE_KEY = "signalMode_v2";
+const RECENT_CANDLES_KEY = "recentMinuteCandles_v1";
+
+const POLARITY_LOOKBACK = 50;
+const POLARITY_STORE_MAX = 80;
+const POLARITY_MIN_CANDLES = 18;
+const POLARITY_NEAR_FRAC_RANGE = 0.18;
+const POLARITY_ZONE_MAX_FRAC_RANGE = 0.28;
+const POLARITY_BREAK_FRAC_RANGE = 0.12;
+const POLARITY_REJECTION_RANGE_FRAC = 0.85;
+const POLARITY_REJECTION_BODY_FRAC = 0.28;
+const POLARITY_MOVE_AWAY_FRAC = 0.16;
+const POLARITY_MIN_USES_STRONG = 3;
+
 /* =========================
    Disciplina
 ========================= */
@@ -288,11 +302,6 @@ const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
-let modalSimilarBtnEl = null;
-let modalSimilarPanelEl = null;
-let modalSimilarMetaEl = null;
-let modalSimilarListEl = null;
-let modalSimilarResults = [];
 
 /* =========================
    Toast
@@ -395,6 +404,8 @@ let EVAL_SEC = 45;
 
 // ✅ NORMAL vs PATRÓN ESCALERA
 let stairMode = false;
+let signalMode = "NORMAL";
+let recentCandlesBySymbol = loadRecentCandlesStore();
 
 let history = loadHistory();
 migrateHistoryModesToStair();
@@ -677,6 +688,69 @@ function saveHistory(arr) {
   } catch {}
 }
 
+
+function loadRecentCandlesStore() {
+  try {
+    const raw = localStorage.getItem(RECENT_CANDLES_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    const out = {};
+    for (const sym of Object.keys(obj || {})) {
+      const arr = Array.isArray(obj[sym]) ? obj[sym] : [];
+      out[sym] = arr
+        .map((c) => ({
+          minute: Number(c?.minute),
+          open: Number(c?.open),
+          high: Number(c?.high),
+          low: Number(c?.low),
+          close: Number(c?.close),
+        }))
+        .filter((c) =>
+          Number.isFinite(c.minute) &&
+          Number.isFinite(c.open) &&
+          Number.isFinite(c.high) &&
+          Number.isFinite(c.low) &&
+          Number.isFinite(c.close)
+        )
+        .sort((a, b) => a.minute - b.minute)
+        .slice(-POLARITY_STORE_MAX);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+function saveRecentCandlesStore() {
+  try {
+    localStorage.setItem(RECENT_CANDLES_KEY, JSON.stringify(recentCandlesBySymbol || {}));
+  } catch {}
+}
+function upsertRecentMinuteCandle(symbol, candle) {
+  if (!symbol || !candle) return;
+  const safe = {
+    minute: Number(candle.minute),
+    open: Number(candle.open),
+    high: Number(candle.high),
+    low: Number(candle.low),
+    close: Number(candle.close),
+  };
+  if (
+    !Number.isFinite(safe.minute) ||
+    !Number.isFinite(safe.open) ||
+    !Number.isFinite(safe.high) ||
+    !Number.isFinite(safe.low) ||
+    !Number.isFinite(safe.close)
+  ) return;
+
+  recentCandlesBySymbol[symbol] ||= [];
+  const arr = recentCandlesBySymbol[symbol];
+  const idx = arr.findIndex((x) => Number(x?.minute) === safe.minute);
+  if (idx >= 0) arr[idx] = safe;
+  else arr.push(safe);
+  arr.sort((a, b) => a.minute - b.minute);
+  recentCandlesBySymbol[symbol] = arr.slice(-POLARITY_STORE_MAX);
+}
+
 /* =========================
    Helpers UI
 ========================= */
@@ -689,6 +763,19 @@ function loadBool(key, fallback) {
 }
 function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
+}
+
+
+function isStairSignalMode() {
+  return signalMode === "ESCALERA";
+}
+function isNormalPolarityMode() {
+  return signalMode === "NORMAL_POLARIDAD";
+}
+function getSignalModeLabel(mode = signalMode) {
+  if (mode === "ESCALERA") return "ESCALERA";
+  if (mode === "NORMAL_POLARIDAD") return "NORMAL + POLARIDAD";
+  return "NORMAL";
 }
 
 function isHit(item) {
@@ -897,7 +984,7 @@ function clearSignalsOnly() {
 function clearTradesOnly() {
   tradesJournal = [];
   saveTradesJournal(tradesJournal);
-  resetPracticeQueueState();
+  practiceQueue = [];
   practiceRound = null;
   resetPracticeSimilarState();
   try {
@@ -1020,14 +1107,22 @@ function setActiveView(name) {
   updatePerViewClearButtonsVisibility(name);
 }
 
-;
+(function initTabs() {
+  removeSettingsTabIfExists();
+  ensureTradesTab();
+  ensureTradesView();
+
+  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
+
+  const saved = localStorage.getItem("activeView") || "signals";
+  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
+  setActiveView(initial);
+})();
 
 /* =========================
    Práctica
 ========================= */
 const PRACTICE_STATS_KEY = "practiceStats_v1";
-const PRACTICE_QUEUE_KEY = "practiceQueue_v1";
-let practiceQueueLoaded = false;
 let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
 let practiceQueue = [];
@@ -1041,7 +1136,6 @@ const PRACTICE_SEGMENTS = [
   { start: 30000, end: 45000, label: "30s" },
   { start: 45000, end: 60000, label: "45s" },
 ];
-const PRACTICE_SIMILAR_COMPARE_MS = 60000;
 
 function freshPracticeStats() {
   return { itm: 0, otm: 0, pass: 0, total: 0 };
@@ -1067,28 +1161,6 @@ function loadPracticeAllStats() {
 function savePracticeAllStats() {
   try {
     localStorage.setItem(PRACTICE_STATS_KEY, JSON.stringify(practiceAllStats));
-  } catch {}
-}
-function loadPracticeQueueState() {
-  try {
-    const raw = localStorage.getItem(PRACTICE_QUEUE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map((x) => String(x)) : [];
-  } catch {
-    return [];
-  }
-}
-function savePracticeQueueState() {
-  try {
-    localStorage.setItem(PRACTICE_QUEUE_KEY, JSON.stringify((practiceQueue || []).map((x) => String(x))));
-  } catch {}
-}
-function resetPracticeQueueState() {
-  practiceQueue = [];
-  practiceQueueLoaded = false;
-  try {
-    localStorage.removeItem(PRACTICE_QUEUE_KEY);
   } catch {}
 }
 function resetPracticeSessionStats() {
@@ -1130,19 +1202,9 @@ function shuffleArray(arr) {
 }
 function ensurePracticeQueue() {
   const eligibleIds = new Set(getEligiblePracticeEntries().map((x) => String(x.journal_id || x.id || "")));
-
-  if (!practiceQueueLoaded) {
-    practiceQueue = loadPracticeQueueState();
-    practiceQueueLoaded = true;
-  }
-
-  practiceQueue = (practiceQueue || []).filter((id) => eligibleIds.has(String(id)));
-
-  if (!practiceQueue.length) {
-    practiceQueue = shuffleArray(Array.from(eligibleIds));
-  }
-
-  savePracticeQueueState();
+  practiceQueue = practiceQueue.filter((id) => eligibleIds.has(String(id)));
+  if (practiceQueue.length) return;
+  practiceQueue = shuffleArray(Array.from(eligibleIds));
 }
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
@@ -1192,8 +1254,13 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
 
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
   const quotes = pts.map((p) => p.quote);
+  const polarityLevel = modalCurrentItem?.polarity || null;
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
+  if (polarityLevel && Number.isFinite(polarityLevel.zoneLow) && Number.isFinite(polarityLevel.zoneHigh)) {
+    min = Math.min(min, Number(polarityLevel.zoneLow));
+    max = Math.max(max, Number(polarityLevel.zoneHigh));
+  }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
   const pad = range * 0.08;
@@ -1417,7 +1484,7 @@ function resetPracticeSimilarState() {
     practiceSimilarBtn.textContent = "🔎 Ver similares";
     practiceSimilarBtn.disabled = false;
   }
-  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación avanzada de vela completa";
+  if (practiceSimilarMetaEl) practiceSimilarMetaEl.textContent = "Comparación por similitud";
   if (practiceSimilarListEl) practiceSimilarListEl.innerHTML = "";
   hidePracticeSimilarPanel();
   setPracticeSimilarButtonVisible(false);
@@ -1447,231 +1514,86 @@ function rmsDiff(a, b) {
   }
   return Math.sqrt(acc / n);
 }
-function clampNum(v, min, max) {
-  return Math.max(min, Math.min(max, Number(v)));
-}
-function diffSeries(values) {
-  const out = [];
-  for (let i = 1; i < values.length; i++) out.push(Number(values[i] || 0) - Number(values[i - 1] || 0));
-  return out;
-}
-function smoothSeries(values, passes = 1) {
-  let arr = values.slice();
-  for (let pass = 0; pass < passes; pass++) {
-    const next = arr.slice();
-    for (let i = 1; i < arr.length - 1; i++) next[i] = (arr[i - 1] + arr[i] + arr[i + 1]) / 3;
-    arr = next;
-  }
-  return arr;
-}
-function zNormalize(values) {
-  if (!Array.isArray(values) || !values.length) return [];
-  const mean = values.reduce((a, b) => a + Number(b || 0), 0) / values.length;
-  let variance = 0;
-  for (const v of values) {
-    const d = Number(v || 0) - mean;
-    variance += d * d;
-  }
-  const std = Math.sqrt(variance / values.length) || 1;
-  return values.map((v) => (Number(v || 0) - mean) / std);
-}
-function pearsonCorr(a, b) {
-  const n = Math.min(a.length, b.length);
-  if (n < 2) return 0;
-  let sumA = 0, sumB = 0;
-  for (let i = 0; i < n; i++) {
-    sumA += Number(a[i] || 0);
-    sumB += Number(b[i] || 0);
-  }
-  const meanA = sumA / n;
-  const meanB = sumB / n;
-  let num = 0, denA = 0, denB = 0;
-  for (let i = 0; i < n; i++) {
-    const da = Number(a[i] || 0) - meanA;
-    const db = Number(b[i] || 0) - meanB;
-    num += da * db;
-    denA += da * da;
-    denB += db * db;
-  }
-  const den = Math.sqrt(denA * denB) || 1;
-  return clampNum(num / den, -1, 1);
-}
-function buildPracticeWeights(n) {
-  const out = [];
-  for (let i = 0; i < n; i++) {
-    const t = n <= 1 ? 1 : i / (n - 1);
-    let w = 0.90 + t * 0.55;
-    if (t >= 0.50) w += 0.10;
-    if (t >= 0.75) w += 0.12;
-    if (t >= 0.90) w += 0.18;
-    out.push(w);
-  }
-  return out;
-}
-function weightedDTW(a, b, weights = null, bandRadius = 7) {
-  const n = Math.min(a.length, b.length);
-  if (!n) return 99;
-  const inf = Number.POSITIVE_INFINITY;
-  const prev = new Array(n + 1).fill(inf);
-  const curr = new Array(n + 1).fill(inf);
-  prev[0] = 0;
-
-  for (let i = 1; i <= n; i++) {
-    curr.fill(inf);
-    const from = Math.max(1, i - bandRadius);
-    const to = Math.min(n, i + bandRadius);
-    for (let j = from; j <= to; j++) {
-      const baseW = weights ? Number(weights[Math.max(i, j) - 1] || 1) : 1;
-      const cost = Math.abs(Number(a[i - 1] || 0) - Number(b[j - 1] || 0)) * baseW;
-      const bestPrev = Math.min(prev[j], curr[j - 1], prev[j - 1]);
-      curr[j] = cost + bestPrev;
-    }
-    for (let j = 0; j <= n; j++) prev[j] = curr[j];
-  }
-
-  const normalizer = (weights ? weights.reduce((acc, x) => acc + Number(x || 0), 0) : n) || n || 1;
-  return prev[n] / normalizer;
-}
-function countTurningPoints(values, epsilon = 0.018) {
-  if (!Array.isArray(values) || values.length < 3) return 0;
-  let prevDir = 0;
-  let turns = 0;
-  for (let i = 1; i < values.length; i++) {
-    const diff = Number(values[i] || 0) - Number(values[i - 1] || 0);
-    let dir = 0;
-    if (diff > epsilon) dir = 1;
-    else if (diff < -epsilon) dir = -1;
-    if (!dir) continue;
-    if (prevDir && dir !== prevDir) turns++;
-    prevDir = dir;
-  }
-  return turns;
-}
-function findMajorExtrema(values) {
-  if (!Array.isArray(values) || values.length < 5) return { peakIdx: 0, troughIdx: 0, closeNearExtreme: 1 };
-  let peakIdx = 0;
-  let troughIdx = 0;
-  for (let i = 1; i < values.length; i++) {
-    if (Number(values[i] || 0) > Number(values[peakIdx] || 0)) peakIdx = i;
-    if (Number(values[i] || 0) < Number(values[troughIdx] || 0)) troughIdx = i;
-  }
-  const last = Number(values[values.length - 1] || 0);
-  const peak = Number(values[peakIdx] || 0);
-  const trough = Number(values[troughIdx] || 0);
-  const range = Math.max(1e-9, peak - trough);
-  const closeNearExtreme = Math.min(Math.abs(last - peak), Math.abs(last - trough)) / range;
-  return { peakIdx, troughIdx, closeNearExtreme };
-}
-function buildPracticeSignature(ticks, cutoffMs, sampleCount = 72) {
+function buildPracticeSignature(ticks, cutoffMs, sampleCount = 28) {
   const pts = clipPracticeTicksToMs(ticks, cutoffMs);
-  if (pts.length < 4) return null;
+  if (pts.length < 2) return null;
 
   const base = Number(getPriceAtMs(pts, 0));
   const end = Number(getPriceAtMs(pts, cutoffMs));
   if (!Number.isFinite(base) || !Number.isFinite(end)) return null;
 
-  const raw = [];
+  const qs = pts.map((p) => Number(p.quote));
+  let minQ = Math.min(...qs);
+  let maxQ = Math.max(...qs);
+  let range = maxQ - minQ;
+  if (!Number.isFinite(range) || range < 1e-9) range = 1;
+
+  const values = [];
   for (let i = 0; i < sampleCount; i++) {
     const ms = (cutoffMs * i) / Math.max(1, sampleCount - 1);
-    raw.push(Number(getPriceAtMs(pts, ms)));
+    const q = Number(getPriceAtMs(pts, ms));
+    values.push((q - base) / range);
   }
 
-  const minQ = Math.min(...raw);
-  const maxQ = Math.max(...raw);
-  const range = Math.max(1e-9, maxQ - minQ);
-  const rangeNorm = raw.map((q) => (q - base) / range);
-  const smoothed = smoothSeries(rangeNorm, 1);
-  const zPath = zNormalize(smoothed);
-  const deriv = smoothSeries(diffSeries(smoothed), 1);
-  const zDeriv = zNormalize(deriv);
+  const slopes = [];
+  for (let i = 1; i < values.length; i++) slopes.push(values[i] - values[i - 1]);
 
-  const segCount = 8;
+  const cp = [0, cutoffMs * 0.25, cutoffMs * 0.5, cutoffMs * 0.75, cutoffMs];
   const segMoves = [];
-  for (let i = 1; i <= segCount; i++) {
-    const aIdx = Math.round(((i - 1) / segCount) * (sampleCount - 1));
-    const bIdx = Math.round((i / segCount) * (sampleCount - 1));
-    segMoves.push(smoothed[bIdx] - smoothed[aIdx]);
+  for (let i = 1; i < cp.length; i++) {
+    const a = Number(getPriceAtMs(pts, cp[i - 1]));
+    const b = Number(getPriceAtMs(pts, cp[i]));
+    segMoves.push((b - a) / range);
   }
 
   const dirSign = Math.sign(end - base) || 1;
   const dirWhole = directionalRatio(pts, dirSign);
   const retrace = maxRetraceAgainst(pts, dirSign) / range;
-
-  const final10Ms = Math.max(0, cutoffMs - 10000);
-  const final20Ms = Math.max(0, cutoffMs - 20000);
-  const qFinal10 = Number(getPriceAtMs(pts, final10Ms));
-  const qFinal20 = Number(getPriceAtMs(pts, final20Ms));
-  const final10 = Number.isFinite(qFinal10) ? (end - qFinal10) / range : 0;
-  const final20 = Number.isFinite(qFinal20) ? (end - qFinal20) / range : 0;
-
-  const { peakIdx, troughIdx, closeNearExtreme } = findMajorExtrema(smoothed);
-  const weights = buildPracticeWeights(sampleCount);
-  const turnCount = countTurningPoints(smoothed);
+  const finalStartMs = Math.max(0, cutoffMs - Math.min(10000, cutoffMs));
+  const finalStartQ = Number(getPriceAtMs(pts, finalStartMs));
+  const finalStretch = Number.isFinite(finalStartQ) ? (end - finalStartQ) / range : 0;
 
   return {
-    weights,
-    path: smoothed,
-    zPath,
-    deriv,
-    zDeriv,
+    values,
+    slopes,
     segMoves,
     net: (end - base) / range,
     retrace,
     dirWhole,
-    final10,
-    final20,
-    closeNearExtreme,
-    peakPos: peakIdx / Math.max(1, sampleCount - 1),
-    troughPos: troughIdx / Math.max(1, sampleCount - 1),
-    turnCount,
+    finalStretch,
   };
 }
 function computePracticeSimilarityScore(baseSig, candidateSig) {
   if (!baseSig || !candidateSig) return 0;
 
-  const dtwPath = weightedDTW(baseSig.zPath, candidateSig.zPath, baseSig.weights, 7);
-  const dtwDeriv = weightedDTW(baseSig.zDeriv, candidateSig.zDeriv, null, 7);
-  const pathDiff = rmsDiff(baseSig.path, candidateSig.path);
+  const pathDiff = rmsDiff(baseSig.values, candidateSig.values);
+  const slopeDiff = avgAbsDiff(baseSig.slopes, candidateSig.slopes);
   const segDiff = avgAbsDiff(baseSig.segMoves, candidateSig.segMoves);
-  const corrPenalty = 1 - ((pearsonCorr(baseSig.zPath, candidateSig.zPath) + 1) / 2);
-
   const netDiff = Math.abs(baseSig.net - candidateSig.net);
   const retraceDiff = Math.abs(baseSig.retrace - candidateSig.retrace);
   const dirDiff = Math.abs(baseSig.dirWhole - candidateSig.dirWhole);
-  const final10Diff = Math.abs(baseSig.final10 - candidateSig.final10);
-  const final20Diff = Math.abs(baseSig.final20 - candidateSig.final20);
-  const closeExtremeDiff = Math.abs(baseSig.closeNearExtreme - candidateSig.closeNearExtreme);
-  const peakDiff = Math.abs(baseSig.peakPos - candidateSig.peakPos);
-  const troughDiff = Math.abs(baseSig.troughPos - candidateSig.troughPos);
-  const turnDiff = Math.abs(baseSig.turnCount - candidateSig.turnCount) / 12;
+  const finalDiff = Math.abs(baseSig.finalStretch - candidateSig.finalStretch);
 
   const distance =
-    dtwPath * 2.05 +
-    dtwDeriv * 1.45 +
-    pathDiff * 1.10 +
-    segDiff * 1.05 +
-    corrPenalty * 0.95 +
-    netDiff * 0.58 +
-    retraceDiff * 0.64 +
-    dirDiff * 0.30 +
-    final10Diff * 0.72 +
-    final20Diff * 0.68 +
-    closeExtremeDiff * 0.50 +
-    peakDiff * 0.48 +
-    troughDiff * 0.48 +
-    turnDiff * 0.40;
+    pathDiff * 1.65 +
+    slopeDiff * 1.10 +
+    segDiff * 1.20 +
+    netDiff * 0.70 +
+    retraceDiff * 0.55 +
+    dirDiff * 0.40 +
+    finalDiff * 0.55;
 
-  return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.95))));
+  return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.75))));
 }
-function findPracticeSimilarEntries(entry, compareMs = PRACTICE_SIMILAR_COMPARE_MS, limit = 6) {
+function findPracticeSimilarEntries(entry, cutoffMs, limit = 6) {
   const entryKey = String(entry?.journal_id || entry?.id || "");
-  const baseSig = buildPracticeSignature(entry?.ticks || [], compareMs);
+  const baseSig = buildPracticeSignature(entry?.ticks || [], cutoffMs);
   if (!entryKey || !baseSig) return [];
 
   return getEligiblePracticeEntries()
     .filter((candidate) => String(candidate?.journal_id || candidate?.id || "") !== entryKey)
     .map((candidate) => {
-      const sig = buildPracticeSignature(candidate?.ticks || [], compareMs);
+      const sig = buildPracticeSignature(candidate?.ticks || [], cutoffMs);
       const similarity = computePracticeSimilarityScore(baseSig, sig);
       return { ...candidate, similarity };
     })
@@ -1772,13 +1694,13 @@ function drawPracticeSimilarMiniChart(canvas, ticks, cutoffMs) {
   ctx.arc(xOf(last.ms), yOf(last.quote), 3, 0, Math.PI * 2);
   ctx.fill();
 }
-function renderPracticeSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMPARE_MS) {
+function renderPracticeSimilarResults(results, cutoffMs) {
   if (!practiceSimilarPanel || !practiceSimilarListEl) return;
 
   practiceSimilarPanel.classList.remove("hidden");
   if (practiceSimilarMetaEl) {
-    const secLabel = Math.round(compareMs / 1000);
-    practiceSimilarMetaEl.textContent = `Comparando vela completa (${secLabel}s) · motor avanzado de similitud · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
+    const secLabel = Math.round(cutoffMs / 1000);
+    practiceSimilarMetaEl.textContent = `Comparando solo la forma vista hasta ${secLabel}s · ${results.length} hallazgo${results.length === 1 ? "" : "s"} · sin filtrar por modo`;
   }
 
   if (!results.length) {
@@ -1810,7 +1732,7 @@ function renderPracticeSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMP
   practiceSimilarListEl.querySelectorAll(".practiceSimilarCard").forEach((card, idx) => {
     const canvas = card.querySelector(".practiceSimilarCanvas");
     const entry = results[idx];
-    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], compareMs);
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], cutoffMs);
   });
 }
 function togglePracticeSimilarResults() {
@@ -1827,11 +1749,11 @@ function togglePracticeSimilarResults() {
   if (!practiceSimilarResults.length) {
     practiceSimilarBtn.disabled = true;
     practiceSimilarBtn.textContent = "⏳ Buscando similares…";
-    practiceSimilarResults = findPracticeSimilarEntries(practiceRound.entry, PRACTICE_SIMILAR_COMPARE_MS, 6);
+    practiceSimilarResults = findPracticeSimilarEntries(practiceRound.entry, practiceRound.cutoffMs, 6);
     practiceSimilarBtn.disabled = false;
   }
 
-  renderPracticeSimilarResults(practiceSimilarResults, PRACTICE_SIMILAR_COMPARE_MS);
+  renderPracticeSimilarResults(practiceSimilarResults, practiceRound.cutoffMs);
   practiceSimilarBtn.textContent = "🙈 Ocultar similares";
 }
 function redrawPracticeSimilarCanvases() {
@@ -1841,222 +1763,14 @@ function redrawPracticeSimilarCanvases() {
   practiceSimilarListEl.querySelectorAll(".practiceSimilarCard").forEach((card, idx) => {
     const canvas = card.querySelector(".practiceSimilarCanvas");
     const entry = practiceSimilarResults[idx];
-    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], PRACTICE_SIMILAR_COMPARE_MS);
+    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], practiceRound.cutoffMs);
   });
-}
-
-function signalHasSettledTrade(item) {
-  const badge = String(item?.trade?.badge || "");
-  return badge === "ITM" || badge === "OTM";
-}
-function ensureModalSimilarUI() {
-  if (modalSimilarBtnEl && modalSimilarPanelEl && modalSimilarMetaEl && modalSimilarListEl) {
-    return { btn: modalSimilarBtnEl, panel: modalSimilarPanelEl, meta: modalSimilarMetaEl, list: modalSimilarListEl };
-  }
-
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-  if (!footer) return null;
-
-  const tradeRow = footer.querySelector(".tradeRow") || null;
-
-  let btn = footer.querySelector("#modalSimilarBtn");
-  if (!btn) {
-    btn = document.createElement("button");
-    btn.id = "modalSimilarBtn";
-    btn.type = "button";
-    btn.className = "btn btnGhost hidden";
-    btn.textContent = "🔎 Ver similares";
-    btn.style.width = "100%";
-    btn.style.minHeight = "54px";
-    btn.style.borderRadius = "16px";
-    btn.style.fontWeight = "900";
-    btn.style.letterSpacing = ".2px";
-    btn.style.marginTop = "2px";
-  }
-  if (btn.parentElement !== footer || (tradeRow && btn.nextElementSibling !== tradeRow && btn.nextElementSibling?.id !== "modalSimilarPanel")) {
-    footer.insertBefore(btn, tradeRow || null);
-  }
-
-  let panel = footer.querySelector("#modalSimilarPanel");
-  if (!panel) {
-    panel = document.createElement("div");
-    panel.id = "modalSimilarPanel";
-    panel.className = "hidden";
-    panel.style.width = "100%";
-    panel.style.border = "1px solid rgba(255,255,255,.12)";
-    panel.style.borderRadius = "16px";
-    panel.style.padding = "10px";
-    panel.style.background = "rgba(255,255,255,.03)";
-    panel.style.boxSizing = "border-box";
-    panel.style.display = "flex";
-    panel.style.flexDirection = "column";
-    panel.style.gap = "10px";
-
-    const meta = document.createElement("div");
-    meta.id = "modalSimilarMeta";
-    meta.style.fontSize = "12px";
-    meta.style.lineHeight = "1.3";
-    meta.style.color = "var(--muted, #94a3b8)";
-    meta.textContent = "Comparación avanzada de vela completa";
-    panel.appendChild(meta);
-
-    const list = document.createElement("div");
-    list.id = "modalSimilarList";
-    list.style.display = "flex";
-    list.style.flexDirection = "column";
-    list.style.gap = "12px";
-    panel.appendChild(list);
-  }
-  if (panel.parentElement !== footer || (tradeRow && panel.nextElementSibling !== tradeRow)) {
-    footer.insertBefore(panel, tradeRow || null);
-  }
-
-  modalSimilarBtnEl = btn;
-  modalSimilarPanelEl = panel;
-  modalSimilarMetaEl = panel.querySelector("#modalSimilarMeta");
-  modalSimilarListEl = panel.querySelector("#modalSimilarList");
-
-  if (!btn.dataset.bound) {
-    btn.dataset.bound = "1";
-    btn.onclick = () => toggleModalSignalSimilarResults();
-  }
-
-  return { btn: modalSimilarBtnEl, panel: modalSimilarPanelEl, meta: modalSimilarMetaEl, list: modalSimilarListEl };
-}
-function setModalSimilarButtonVisible(show) {
-  const ui = ensureModalSimilarUI();
-  if (!ui?.btn) return;
-  ui.btn.classList.toggle("hidden", !show);
-}
-function hideModalSimilarPanel() {
-  const ui = ensureModalSimilarUI();
-  if (!ui?.panel) return;
-  ui.panel.classList.add("hidden");
-}
-function resetModalSimilarState() {
-  modalSimilarResults = [];
-  const ui = ensureModalSimilarUI();
-  if (!ui) return;
-  if (ui.btn) {
-    ui.btn.textContent = "🔎 Ver similares";
-    ui.btn.disabled = false;
-  }
-  if (ui.meta) ui.meta.textContent = "Comparación avanzada de vela completa";
-  if (ui.list) ui.list.innerHTML = "";
-  hideModalSimilarPanel();
-  setModalSimilarButtonVisible(false);
-}
-function findSignalModalSimilarEntries(item, compareMs = PRACTICE_SIMILAR_COMPARE_MS, limit = 6) {
-  const baseSig = buildPracticeSignature(item?.ticks || [], compareMs);
-  const signalId = String(item?.id || "");
-  if (!signalId || !baseSig) return [];
-
-  return getEligiblePracticeEntries()
-    .filter((candidate) => String(candidate?.id || "") !== signalId)
-    .map((candidate) => {
-      const sig = buildPracticeSignature(candidate?.ticks || [], compareMs);
-      const similarity = computePracticeSimilarityScore(baseSig, sig);
-      return { ...candidate, similarity };
-    })
-    .filter((candidate) => candidate.similarity > 0)
-    .sort((a, b) => b.similarity - a.similarity || Number(b.saved_at || 0) - Number(a.saved_at || 0))
-    .slice(0, limit);
-}
-function renderModalSimilarResults(results, compareMs = PRACTICE_SIMILAR_COMPARE_MS) {
-  const ui = ensureModalSimilarUI();
-  if (!ui?.panel || !ui?.list) return;
-
-  ui.panel.classList.remove("hidden");
-  if (ui.meta) {
-    const secLabel = Math.round(compareMs / 1000);
-    ui.meta.textContent = `Comparando vela completa (${secLabel}s) · solo disponible cuando la señal ya tiene ITM/OTM · ${results.length} hallazgo${results.length === 1 ? "" : "s"}`;
-  }
-
-  if (!results.length) {
-    ui.list.innerHTML = `<div style="padding:12px; border:1px solid rgba(255,255,255,.10); border-radius:14px; background:rgba(255,255,255,.03); color:var(--muted,#94a3b8);">No encontré suficientes formaciones parecidas en tu journal.</div>`;
-    return;
-  }
-
-  ui.list.innerHTML = results.map((entry, idx) => `
-    <div data-modal-similar-idx="${idx}" style="border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:10px; background:${entry?.trade?.badge === "ITM" ? "rgba(34,197,94,.10)" : entry?.trade?.badge === "OTM" ? "rgba(239,68,68,.10)" : "rgba(255,255,255,.03)"};">
-      <div style="display:flex; gap:10px; align-items:flex-start; margin-bottom:8px;">
-        <div style="min-width:64px; padding:8px 10px; border-radius:12px; border:1px solid rgba(34,211,238,.28); background:rgba(34,211,238,.10); font-weight:900; text-align:center;">${entry.similarity}%</div>
-        <div style="flex:1 1 auto; min-width:0;">
-          <div style="font-weight:800; line-height:1.2;">${escapeHtml(entry.symbol || "—")} · ${escapeHtml(labelDir(entry.direction || "PUT"))}</div>
-          <div style="font-size:12px; color:var(--muted,#94a3b8); margin-top:3px;">${escapeHtml(entry.time || "—")} · modo ${escapeHtml(entry.mode || "—")}</div>
-          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:7px;">
-            <span style="padding:6px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.05); font-size:11px; font-weight:800;">${escapeHtml(practiceSimilarOutcomeText(entry.nextOutcome))}</span>
-            <span style="padding:6px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.05); font-size:11px; font-weight:800;">${escapeHtml(practiceSimilarTradeText(entry))}</span>
-          </div>
-        </div>
-      </div>
-      <canvas class="modalSimilarCanvas" style="display:block; width:100%; height:320px; min-height:320px; border-radius:14px; border:1px solid rgba(255,255,255,.10); background:rgba(255,255,255,.03);"></canvas>
-    </div>
-  `).join("");
-
-  ui.list.querySelectorAll("[data-modal-similar-idx]").forEach((card, idx) => {
-    const canvas = card.querySelector(".modalSimilarCanvas");
-    const entry = results[idx];
-    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], compareMs);
-  });
-}
-function redrawModalSimilarCanvases() {
-  const ui = ensureModalSimilarUI();
-  if (!ui?.panel || ui.panel.classList.contains("hidden") || !ui?.list || !modalSimilarResults.length) return;
-  ui.list.querySelectorAll("[data-modal-similar-idx]").forEach((card, idx) => {
-    const canvas = card.querySelector(".modalSimilarCanvas");
-    const entry = modalSimilarResults[idx];
-    drawPracticeSimilarMiniChart(canvas, entry?.ticks || [], PRACTICE_SIMILAR_COMPARE_MS);
-  });
-}
-function updateModalSimilarVisibility() {
-  const ui = ensureModalSimilarUI();
-  if (!ui) return;
-
-  const item = modalCurrentItem;
-  const canShow = !!item && signalHasSettledTrade(item) && Array.isArray(item.ticks) && item.ticks.length >= 6 && getEligiblePracticeEntries().length > 0;
-  if (!canShow) {
-    resetModalSimilarState();
-    return;
-  }
-
-  setModalSimilarButtonVisible(true);
-  if (ui.btn && !ui.panel.classList.contains("hidden")) {
-    ui.btn.textContent = "🙈 Ocultar similares";
-  } else if (ui.btn) {
-    ui.btn.textContent = "🔎 Ver similares";
-  }
-}
-function toggleModalSignalSimilarResults() {
-  const ui = ensureModalSimilarUI();
-  const item = modalCurrentItem;
-  if (!ui?.btn || !item || !signalHasSettledTrade(item)) return;
-
-  const isOpen = ui.panel && !ui.panel.classList.contains("hidden");
-  if (isOpen) {
-    hideModalSimilarPanel();
-    ui.btn.textContent = "🔎 Ver similares";
-    return;
-  }
-
-  if (!modalSimilarResults.length) {
-    ui.btn.disabled = true;
-    ui.btn.textContent = "⏳ Buscando similares…";
-    modalSimilarResults = findSignalModalSimilarEntries(item, PRACTICE_SIMILAR_COMPARE_MS, 6);
-    ui.btn.disabled = false;
-  }
-
-  renderModalSimilarResults(modalSimilarResults, PRACTICE_SIMILAR_COMPARE_MS);
-  ui.btn.textContent = "🙈 Ocultar similares";
 }
 function pullNextPracticeEntry() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
   if (!practiceQueue.length) return null;
   const nextId = String(practiceQueue.shift());
-  savePracticeQueueState();
   updatePracticePoolLabel();
   return getEligiblePracticeEntries().find((x) => String(x.journal_id || x.id || "") === nextId) || null;
 }
@@ -2204,18 +1918,6 @@ function ensurePracticeReady() {
   }
 }
 
-
-(function initTabs() {
-  removeSettingsTabIfExists();
-  ensureTradesTab();
-  ensureTradesView();
-
-  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
-
-  const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
-  setActiveView(initial);
-})()
 
 /* =========================
    Settings modal (solo engranaje)
@@ -2444,6 +2146,7 @@ function applyTheme(theme) {
 /* =========================
    Eval sec + ESCALERA mode
 ========================= */
+
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
   EVAL_SEC = [40, 45].includes(savedSec) ? savedSec : 45;
@@ -2467,34 +2170,51 @@ function applyTheme(theme) {
       })
   );
 
-  // ✅ PATRÓN ESCALERA (compat: si venías usando GIRO, hereda ese estado una sola vez)
-  const hasStairKey = localStorage.getItem("stairMode") !== null;
-  stairMode = loadBool("stairMode", false);
-
-  if (!hasStairKey) {
-    stairMode = loadBool("giroMode", false) || loadBool("strongMode", false);
-    saveBool("stairMode", stairMode);
+  const savedMode = localStorage.getItem(SIGNAL_MODE_KEY);
+  if (savedMode === "NORMAL" || savedMode === "NORMAL_POLARIDAD" || savedMode === "ESCALERA") {
+    signalMode = savedMode;
+  } else {
+    const hasStairKey = localStorage.getItem("stairMode") !== null;
+    stairMode = loadBool("stairMode", false);
+    if (!hasStairKey) {
+      stairMode = loadBool("giroMode", false) || loadBool("strongMode", false);
+      saveBool("stairMode", stairMode);
+    }
+    signalMode = stairMode ? "ESCALERA" : "NORMAL";
+    localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
   }
 
   const paintMode = () => {
+    stairMode = signalMode === "ESCALERA";
     if (!modeBtn) return;
-    modeBtn.textContent = stairMode ? "🟪 Patrón ESCALERA" : "🟦 Modo NORMAL";
-    modeBtn.classList.toggle("active-strong", stairMode);
+    modeBtn.classList.remove("active-strong");
+    if (signalMode === "ESCALERA") {
+      modeBtn.textContent = "🟪 Patrón ESCALERA";
+      modeBtn.classList.add("active-strong");
+    } else if (signalMode === "NORMAL_POLARIDAD") {
+      modeBtn.textContent = "🟨 NORMAL + POLARIDAD";
+      modeBtn.classList.add("active-strong");
+    } else {
+      modeBtn.textContent = "🟦 Modo NORMAL";
+    }
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      stairMode = !stairMode;
+      const order = ["NORMAL", "NORMAL_POLARIDAD", "ESCALERA"];
+      const idx = order.indexOf(signalMode);
+      signalMode = order[(idx + 1) % order.length];
+      stairMode = signalMode === "ESCALERA";
+      localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
       saveBool("stairMode", stairMode);
-
-      // compat vieja: apagamos GIRO / STRONG
       saveBool("giroMode", false);
       saveBool("strongMode", false);
-
       paintMode();
+      toast(`Modo: ${getSignalModeLabel(signalMode)}`, 1400);
     };
 })();
+
 
 /* =========================
    Sonido
@@ -2694,6 +2414,12 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.fillStyle = "rgba(251,191,36,0.96)";
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
+  }
+
+  if (polarityLevel) {
+    const currentPrice =
+      msNow != null ? Number(getPriceAtMs(pts, msNow)) : Number(pts[pts.length - 1]?.quote);
+    drawPolarityOverlay(ctx, w, h, xOf, yOf, polarityLevel, currentPrice);
   }
 
   // área
@@ -2904,11 +2630,13 @@ function requestModalDraw(force = false) {
       const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}`;
+      const pTag = it?.polarity
+        ? ` | ${it.polarity.direction === "bullish" ? "POL ALCISTA" : "POL BAJISTA"} · ${String(it.polarity.interaction || "TOQUE")} · x${Number(it.polarity.uses || 1)}`
+        : "";
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${pTag}`;
     }
 
     updateModalCandleStatusUI();
-    updateModalSimilarVisibility();
   });
 }
 
@@ -2989,8 +2717,6 @@ function applyModalTradeButtonsLayout() {
     modalLiveBtn.style.width = "100%";
     modalLiveBtn.style.marginTop = "10px";
   }
-
-  ensureModalSimilarUI();
 }
 
 /* =========================
@@ -3162,11 +2888,9 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  resetModalSimilarState();
   applyModalTradeButtonsLayout();
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
-  updateModalSimilarVisibility();
 
   requestModalDraw(true);
 }
@@ -3177,7 +2901,6 @@ function closeChartModal() {
   modalCurrentItem = null;
   modalLive = false;
   updateModalLiveUI();
-  resetModalSimilarState();
   if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
@@ -3196,11 +2919,9 @@ if (modalOpenDerivBtn)
 
 window.addEventListener("resize", () => {
   redrawPracticeSimilarCanvases();
-  redrawModalSimilarCanvases();
   if (!chartModal || chartModal.classList.contains("hidden")) return;
   applyModalTradeButtonsLayout();
   updateModalCandleStatusUI();
-  updateModalSimilarVisibility();
   requestModalDraw(true);
 });
 if (modalLiveBtn) {
@@ -3913,6 +3634,7 @@ async function fetchFullMinuteTicks(symbol, minute) {
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
+
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter((it) => it.minute === minute);
   if (!items.length) return false;
@@ -3940,6 +3662,99 @@ async function hydrateSignalsFromDerivHistory(minute) {
   }
 
   return any;
+}
+
+function finalizeRecentMinuteCandleFromCache(symbol, minute) {
+  const ticks = minuteData?.[minute]?.[symbol] || [];
+  const oc = candleOC?.[minute]?.[symbol] || null;
+  if (!ticks.length && !oc) return null;
+
+  if (ticks.length) {
+    const qs = ticks.map((t) => Number(t.quote)).filter(Number.isFinite);
+    if (!qs.length) return null;
+    return {
+      minute: Number(minute),
+      open: Number(ticks[0].quote),
+      high: Math.max(...qs),
+      low: Math.min(...qs),
+      close: Number(ticks[ticks.length - 1].quote),
+    };
+  }
+
+  const open = Number(oc?.open);
+  const close = Number(oc?.close);
+  if (!Number.isFinite(open) || !Number.isFinite(close)) return null;
+  return {
+    minute: Number(minute),
+    open,
+    high: Math.max(open, close),
+    low: Math.min(open, close),
+    close,
+  };
+}
+function updateRecentCandlesFromMinute(minute) {
+  const syms = new Set([
+    ...Object.keys(candleOC?.[minute] || {}),
+    ...Object.keys(minuteData?.[minute] || {}),
+  ]);
+  let changed = false;
+  for (const symbol of syms) {
+    const candle = finalizeRecentMinuteCandleFromCache(symbol, minute);
+    if (!candle) continue;
+    upsertRecentMinuteCandle(symbol, candle);
+    changed = true;
+  }
+  if (changed) saveRecentCandlesStore();
+}
+async function fetchRecentMinuteCandles(symbol, count = POLARITY_LOOKBACK + 12) {
+  try {
+    const res = await wsRequest(
+      {
+        ticks_history: symbol,
+        end: "latest",
+        count,
+        style: "candles",
+        granularity: 60,
+        adjust_start_time: 1,
+      },
+      15000
+    );
+    const rows = Array.isArray(res?.candles)
+      ? res.candles
+      : Array.isArray(res?.history?.candles)
+      ? res.history.candles
+      : [];
+    return rows
+      .map((c) => ({
+        minute: Math.floor(Number(c?.epoch ?? c?.open_time ?? 0) / 60),
+        open: Number(c?.open),
+        high: Number(c?.high),
+        low: Number(c?.low),
+        close: Number(c?.close),
+      }))
+      .filter(
+        (c) =>
+          Number.isFinite(c.minute) &&
+          Number.isFinite(c.open) &&
+          Number.isFinite(c.high) &&
+          Number.isFinite(c.low) &&
+          Number.isFinite(c.close)
+      );
+  } catch {
+    return [];
+  }
+}
+async function backfillRecentCandlesOnBoot() {
+  try {
+    for (const symbol of SYMBOLS) {
+      const have = Array.isArray(recentCandlesBySymbol?.[symbol]) ? recentCandlesBySymbol[symbol].length : 0;
+      if (have >= POLARITY_LOOKBACK) continue;
+      const rows = await fetchRecentMinuteCandles(symbol);
+      if (!rows.length) continue;
+      for (const candle of rows) upsertRecentMinuteCandle(symbol, candle);
+    }
+    saveRecentCandlesStore();
+  } catch {}
 }
 
 /* =========================
@@ -4094,6 +3909,8 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
+  updateRecentCandlesFromMinute(minute);
+
   const prevMinute = minute - 1;
 
   // 1) Resultado rápido (live) usando close(prevMinute) vs close(minute)
@@ -4243,7 +4060,7 @@ function onTick(tick) {
     const ok = evaluateMinute(minute);
 
     // ✅ ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
-    if (!ok && !stairMode) scheduleRetry(minute);
+    if (!ok && !isStairSignalMode()) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -4319,6 +4136,313 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   }
 }
 
+
+function candleRange(c) {
+  return Math.max(1e-9, Number(c?.high) - Number(c?.low));
+}
+function candleBody(c) {
+  return Math.abs(Number(c?.close) - Number(c?.open));
+}
+function avgRecentCandleRange(candles, endExclusive = candles.length, span = 12) {
+  const start = Math.max(0, endExclusive - span);
+  const slice = candles.slice(start, endExclusive);
+  if (!slice.length) return 0;
+  return slice.reduce((acc, c) => acc + candleRange(c), 0) / slice.length;
+}
+function zoneDistanceFromCandle(candle, zoneLow, zoneHigh) {
+  const low = Number(candle?.low);
+  const high = Number(candle?.high);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return Number.POSITIVE_INFINITY;
+  if (high < zoneLow) return zoneLow - high;
+  if (low > zoneHigh) return low - zoneHigh;
+  return 0;
+}
+function zoneDistanceFromPrice(price, zoneLow, zoneHigh) {
+  const p = Number(price);
+  if (!Number.isFinite(p)) return Number.POSITIVE_INFINITY;
+  if (p < zoneLow) return zoneLow - p;
+  if (p > zoneHigh) return p - zoneHigh;
+  return 0;
+}
+function getRecentClosedCandles(symbol, beforeMinute, lookback = POLARITY_LOOKBACK) {
+  const arr = Array.isArray(recentCandlesBySymbol?.[symbol]) ? recentCandlesBySymbol[symbol] : [];
+  return arr.filter((c) => Number(c.minute) < Number(beforeMinute)).slice(-lookback);
+}
+function detectDirectionalTrend(candles, idx, dir) {
+  const start = Math.max(0, idx - 4);
+  const prev = candles.slice(start, idx);
+  if (prev.length < 3) return false;
+  const first = Number(prev[0]?.close);
+  const last = Number(prev[prev.length - 1]?.close);
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return false;
+  if (dir === "down") return last < first;
+  return last > first;
+}
+function buildMicroZoneFromSupport(candle, avgRange) {
+  const maxWidth = Math.max(avgRange * 0.06, Math.min(avgRange * POLARITY_ZONE_MAX_FRAC_RANGE, candleRange(candle) * 0.34));
+  const zoneLow = Number(candle.low);
+  const zoneHigh = zoneLow + maxWidth;
+  return { zoneLow, zoneHigh, center: (zoneLow + zoneHigh) / 2 };
+}
+function buildMicroZoneFromResistance(candle, avgRange) {
+  const maxWidth = Math.max(avgRange * 0.06, Math.min(avgRange * POLARITY_ZONE_MAX_FRAC_RANGE, candleRange(candle) * 0.34));
+  const zoneHigh = Number(candle.high);
+  const zoneLow = zoneHigh - maxWidth;
+  return { zoneLow, zoneHigh, center: (zoneLow + zoneHigh) / 2 };
+}
+function isBearishRejectionFromZone(candle, zoneLow, zoneHigh, avgRange, nearTol) {
+  const range = candleRange(candle);
+  const body = candleBody(candle);
+  const touched = zoneDistanceFromCandle(candle, zoneLow, zoneHigh) <= nearTol;
+  const traveled = Number(candle.close) <= zoneLow - avgRange * POLARITY_MOVE_AWAY_FRAC;
+  return (
+    touched &&
+    Number(candle.close) < Number(candle.open) &&
+    range >= avgRange * POLARITY_REJECTION_RANGE_FRAC &&
+    body >= avgRange * POLARITY_REJECTION_BODY_FRAC &&
+    traveled
+  );
+}
+function isBullishRejectionFromZone(candle, zoneLow, zoneHigh, avgRange, nearTol) {
+  const range = candleRange(candle);
+  const body = candleBody(candle);
+  const touched = zoneDistanceFromCandle(candle, zoneLow, zoneHigh) <= nearTol;
+  const traveled = Number(candle.close) >= zoneHigh + avgRange * POLARITY_MOVE_AWAY_FRAC;
+  return (
+    touched &&
+    Number(candle.close) > Number(candle.open) &&
+    range >= avgRange * POLARITY_REJECTION_RANGE_FRAC &&
+    body >= avgRange * POLARITY_REJECTION_BODY_FRAC &&
+    traveled
+  );
+}
+function countLevelUses(candles, zoneLow, zoneHigh, nearTol, direction) {
+  let uses = 0;
+  let cooling = false;
+  for (const candle of candles) {
+    const touched = zoneDistanceFromCandle(candle, zoneLow, zoneHigh) <= nearTol;
+    if (!touched) {
+      cooling = false;
+      continue;
+    }
+    const ok =
+      direction === "bearish"
+        ? Number(candle.close) < Number(candle.open)
+        : Number(candle.close) > Number(candle.open);
+    if (ok && !cooling) {
+      uses++;
+      cooling = true;
+    }
+  }
+  return uses;
+}
+function deriveCurrentInteractionFromTicks(ticks, level) {
+  const pts = Array.isArray(ticks) ? ticks : [];
+  if (!pts.length) return null;
+  const prices = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (!prices.length) return null;
+
+  const low = Math.min(...prices);
+  const high = Math.max(...prices);
+  const last = prices[prices.length - 1];
+  const zoneLow = Number(level.zoneLow);
+  const zoneHigh = Number(level.zoneHigh);
+  const nearTol = Number(level.nearTol || 0);
+  const breakTol = Number(level.breakTol || 0);
+
+  const touch = high >= zoneLow && low <= zoneHigh;
+  const near = !touch && ((high < zoneLow && zoneLow - high <= nearTol) || (low > zoneHigh && low - zoneHigh <= nearTol));
+
+  if (level.direction === "bullish") {
+    if (last > zoneHigh + breakTol && low <= zoneHigh + nearTol) {
+      return { kind: "RUPTURA", rank: 3, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+    }
+    if (touch) return { kind: "TOQUE", rank: 2, distance: 0 };
+    if (near) return { kind: "CERCA", rank: 1, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+  } else {
+    if (last < zoneLow - breakTol && high >= zoneLow - nearTol) {
+      return { kind: "RUPTURA", rank: 3, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+    }
+    if (touch) return { kind: "TOQUE", rank: 2, distance: 0 };
+    if (near) return { kind: "CERCA", rank: 1, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+  }
+  return null;
+}
+function detectConfirmedPolarityLevels(symbol, beforeMinute) {
+  const candles = getRecentClosedCandles(symbol, beforeMinute, POLARITY_LOOKBACK);
+  if (candles.length < POLARITY_MIN_CANDLES) return [];
+
+  const levels = [];
+  for (let i = 4; i < candles.length - 4; i++) {
+    const candle = candles[i];
+    const avgRange = avgRecentCandleRange(candles, i, 12) || candleRange(candle);
+    const nearTol = avgRange * POLARITY_NEAR_FRAC_RANGE;
+    const breakTol = avgRange * POLARITY_BREAK_FRAC_RANGE;
+
+    const localLow = Number(candle.low) <= Math.min(Number(candles[i - 1]?.low), Number(candles[i + 1]?.low));
+    const localHigh = Number(candle.high) >= Math.max(Number(candles[i - 1]?.high), Number(candles[i + 1]?.high));
+
+    if (localLow && detectDirectionalTrend(candles, i, "down")) {
+      const zone = buildMicroZoneFromSupport(candle, avgRange);
+      let breakIdx = -1;
+      for (let j = i + 1; j < candles.length - 2; j++) {
+        if (Number(candles[j]?.close) < zone.zoneLow - breakTol) {
+          breakIdx = j;
+          break;
+        }
+      }
+      if (breakIdx > 0) {
+        for (let k = breakIdx + 1; k < candles.length - 1; k++) {
+          const retest = candles[k];
+          if (zoneDistanceFromCandle(retest, zone.zoneLow, zone.zoneHigh) > nearTol) continue;
+          const rejectNow = isBearishRejectionFromZone(retest, zone.zoneLow, zone.zoneHigh, avgRange, nearTol);
+          const rejectNext = candles[k + 1]
+            ? isBearishRejectionFromZone(candles[k + 1], zone.zoneLow, zone.zoneHigh, avgRange, nearTol)
+            : false;
+          if (rejectNow || rejectNext) {
+            const uses = countLevelUses(candles, zone.zoneLow, zone.zoneHigh, nearTol, "bearish");
+            levels.push({
+              direction: "bearish",
+              zoneLow: zone.zoneLow,
+              zoneHigh: zone.zoneHigh,
+              center: zone.center,
+              uses,
+              strengthLabel: uses >= 5 ? "muy fuerte" : uses >= POLARITY_MIN_USES_STRONG ? "fuerte" : "normal",
+              nearTol,
+              breakTol,
+              sourceMinute: candle.minute,
+              confirmedMinute: (rejectNow ? retest : candles[k + 1]).minute,
+            });
+            break;
+          }
+        }
+      }
+    }
+
+    if (localHigh && detectDirectionalTrend(candles, i, "up")) {
+      const zone = buildMicroZoneFromResistance(candle, avgRange);
+      let breakIdx = -1;
+      for (let j = i + 1; j < candles.length - 2; j++) {
+        if (Number(candles[j]?.close) > zone.zoneHigh + breakTol) {
+          breakIdx = j;
+          break;
+        }
+      }
+      if (breakIdx > 0) {
+        for (let k = breakIdx + 1; k < candles.length - 1; k++) {
+          const retest = candles[k];
+          if (zoneDistanceFromCandle(retest, zone.zoneLow, zone.zoneHigh) > nearTol) continue;
+          const rejectNow = isBullishRejectionFromZone(retest, zone.zoneLow, zone.zoneHigh, avgRange, nearTol);
+          const rejectNext = candles[k + 1]
+            ? isBullishRejectionFromZone(candles[k + 1], zone.zoneLow, zone.zoneHigh, avgRange, nearTol)
+            : false;
+          if (rejectNow || rejectNext) {
+            const uses = countLevelUses(candles, zone.zoneLow, zone.zoneHigh, nearTol, "bullish");
+            levels.push({
+              direction: "bullish",
+              zoneLow: zone.zoneLow,
+              zoneHigh: zone.zoneHigh,
+              center: zone.center,
+              uses,
+              strengthLabel: uses >= 5 ? "muy fuerte" : uses >= POLARITY_MIN_USES_STRONG ? "fuerte" : "normal",
+              nearTol,
+              breakTol,
+              sourceMinute: candle.minute,
+              confirmedMinute: (rejectNow ? retest : candles[k + 1]).minute,
+            });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // dedupe niveles muy cercanos quedándose con el más fuerte/reciente
+  levels.sort((a, b) => b.uses - a.uses || b.confirmedMinute - a.confirmedMinute);
+  const deduped = [];
+  for (const level of levels) {
+    const duplicate = deduped.some((x) => x.direction === level.direction && Math.abs(x.center - level.center) <= Math.max(x.nearTol, level.nearTol));
+    if (!duplicate) deduped.push(level);
+  }
+  return deduped.slice(0, 10);
+}
+function findPolarityContextForCandidate(candidate, direction, minute) {
+  const wanted = direction === "CALL" ? "bullish" : "bearish";
+  const levels = detectConfirmedPolarityLevels(candidate.symbol, minute).filter((level) => level.direction === wanted);
+  if (!levels.length) return null;
+
+  const enriched = levels
+    .map((level) => {
+      const interaction = deriveCurrentInteractionFromTicks(candidate.ticks || [], level);
+      if (!interaction) return null;
+      const recency = Math.max(0, minute - Number(level.confirmedMinute || minute));
+      const score = interaction.rank * 100 + Math.min(Number(level.uses || 0), 8) * 8 - recency * 0.25;
+      return {
+        ...level,
+        interaction: interaction.kind,
+        interactionRank: interaction.rank,
+        currentDistance: interaction.distance,
+        score,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  return enriched[0] || null;
+}
+function formatPolarityStrength(level) {
+  const uses = Number(level?.uses || 0);
+  return uses >= POLARITY_MIN_USES_STRONG ? `Nivel ${level?.strengthLabel || "fuerte"} x${uses}` : `Nivel x${uses || 1}`;
+}
+function drawPolarityOverlay(ctx, w, h, xOf, yOf, level, currentPrice) {
+  if (!level) return;
+  const zoneLow = Number(level.zoneLow);
+  const zoneHigh = Number(level.zoneHigh);
+  if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) return;
+
+  const bullish = level.direction === "bullish";
+  const fill = bullish ? "rgba(34,197,94,.11)" : "rgba(239,68,68,.11)";
+  const stroke = bullish ? "rgba(34,197,94,.88)" : "rgba(239,68,68,.88)";
+  const soft = bullish ? "rgba(34,197,94,.28)" : "rgba(239,68,68,.28)";
+
+  const y1 = yOf(zoneHigh);
+  const y2 = yOf(zoneLow);
+  const top = Math.min(y1, y2);
+  const height = Math.max(6, Math.abs(y2 - y1));
+
+  ctx.save();
+  ctx.fillStyle = fill;
+  ctx.fillRect(10, top, w - 20, height);
+
+  ctx.setLineDash([6, 4]);
+  ctx.strokeStyle = soft;
+  ctx.lineWidth = 1.4;
+  ctx.strokeRect(10, top, w - 20, height);
+
+  ctx.setLineDash([9, 5]);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(10, yOf(level.center));
+  ctx.lineTo(w - 10, yOf(level.center));
+  ctx.stroke();
+  ctx.restore();
+
+  const dist = zoneDistanceFromPrice(currentPrice, zoneLow, zoneHigh);
+  const dirTxt = bullish ? "POL ALCISTA" : "POL BAJISTA";
+  const meta = `${dirTxt} · ${String(level.interaction || "TOQUE")} · x${Number(level.uses || 1)} · dist ${dist.toFixed(3)}`;
+  const labelX = 16;
+  const labelY = Math.max(18, Math.min(h - 26, top - 10));
+
+  ctx.save();
+  ctx.font = "900 12px system-ui, sans-serif";
+  const tw = ctx.measureText(meta).width + 16;
+  ctx.fillStyle = "rgba(2,6,23,.72)";
+  ctx.fillRect(labelX - 6, labelY - 12, Math.min(tw, w - 24), 20);
+  ctx.fillStyle = stroke;
+  ctx.fillText(meta, labelX, labelY + 3);
+  ctx.restore();
+}
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
@@ -4530,9 +4654,10 @@ function detectStairPattern(candidate) {
   };
 }
 
+
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return stairMode ? true : false;
+  if (!data) return isStairSignalMode() ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -4563,10 +4688,9 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return isStairSignalMode() ? true : false;
 
-  // ✅ MODO PATRÓN ESCALERA: solo señales si la forma coincide con escalera alcista/bajista
-  if (stairMode) {
+  if (isStairSignalMode()) {
     const matches = [];
 
     for (const c of candidates) {
@@ -4589,7 +4713,6 @@ function evaluateMinute(minute) {
     return true;
   }
 
-  // ---- NORMAL (igual que antes) ----
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) return true;
@@ -4600,9 +4723,23 @@ function evaluateMinute(minute) {
   const ok = passesTechnicalFilters(best, best.vol, rules);
   if (!ok) return true;
 
-  addSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT", best.ticks);
+  const direction = best.move > 0 ? "CALL" : "PUT";
+
+  if (isNormalPolarityMode()) {
+    const polarity = findPolarityContextForCandidate(best, direction, minute);
+    if (!polarity) return true;
+
+    addSignal(minute, best.symbol, direction, best.ticks, {
+      modeOverride: "NORMAL + POLARIDAD",
+      polarity,
+    });
+    return true;
+  }
+
+  addSignal(minute, best.symbol, direction, best.ticks);
   return true;
 }
+
 
 /* =========================
    Add signal
@@ -4610,9 +4747,9 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
-function addSignal(minute, symbol, direction, ticks) {
+function addSignal(minute, symbol, direction, ticks, extra = null) {
   if (areSignalsPaused()) return;
-  const modeLabel = stairMode ? "ESCALERA" : "NORMAL";
+  const modeLabel = extra?.modeOverride || getSignalModeLabel();
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
@@ -4626,6 +4763,7 @@ function addSignal(minute, symbol, direction, ticks) {
     nextOutcome: "",
     minuteComplete: false,
     trade: null,
+    polarity: extra?.polarity ? { ...extra.polarity } : null,
   };
 
   if (history.some((x) => x.id === item.id)) return;
@@ -4688,6 +4826,11 @@ function connect() {
         rehydrateHistoryOnBoot();
       } catch {}
     }, 350);
+    setTimeout(() => {
+      try {
+        backfillRecentCandlesOnBoot();
+      } catch {}
+    }, 650);
 
     updateDisciplineLockUI(false);
     await resubscribePendingContracts();
