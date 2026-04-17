@@ -76,6 +76,9 @@ const POLARITY_REJECTION_RANGE_FRAC = 0.85;
 const POLARITY_REJECTION_BODY_FRAC = 0.28;
 const POLARITY_MOVE_AWAY_FRAC = 0.16;
 const POLARITY_MIN_USES_STRONG = 3;
+const POLARITY_ACTIVE_DIST_TOUCH_MULT = 1.15;
+const POLARITY_ACTIVE_DIST_BREAK_MULT = 1.55;
+const POLARITY_ACTIVE_ZONE_WIDTH_MULT = 2.0;
 
 /* =========================
    Disciplina
@@ -4254,22 +4257,34 @@ function deriveCurrentInteractionFromTicks(ticks, level) {
   const zoneHigh = Number(level.zoneHigh);
   const nearTol = Number(level.nearTol || 0);
   const breakTol = Number(level.breakTol || 0);
+  const zoneWidth = Math.max(1e-9, zoneHigh - zoneLow);
+  const currentDistance = zoneDistanceFromPrice(last, zoneLow, zoneHigh);
+  const activeTouchMaxDist = Math.max(nearTol * POLARITY_ACTIVE_DIST_TOUCH_MULT, zoneWidth * POLARITY_ACTIVE_ZONE_WIDTH_MULT);
+  const activeBreakMaxDist = Math.max(nearTol * POLARITY_ACTIVE_DIST_BREAK_MULT, zoneWidth * (POLARITY_ACTIVE_ZONE_WIDTH_MULT + 0.6));
 
   const touch = high >= zoneLow && low <= zoneHigh;
   const near = !touch && ((high < zoneLow && zoneLow - high <= nearTol) || (low > zoneHigh && low - zoneHigh <= nearTol));
 
   if (level.direction === "bullish") {
-    if (last > zoneHigh + breakTol && low <= zoneHigh + nearTol) {
-      return { kind: "RUPTURA", rank: 3, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+    if (last > zoneHigh + breakTol && low <= zoneHigh + nearTol && currentDistance <= activeBreakMaxDist) {
+      return { kind: "RUPTURA", rank: 3, distance: currentDistance, activeMaxDistance: activeBreakMaxDist };
     }
-    if (touch) return { kind: "TOQUE", rank: 2, distance: 0 };
-    if (near) return { kind: "CERCA", rank: 1, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+    if (touch && currentDistance <= activeTouchMaxDist) {
+      return { kind: "TOQUE", rank: 2, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
+    }
+    if (near && currentDistance <= activeTouchMaxDist) {
+      return { kind: "CERCA", rank: 1, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
+    }
   } else {
-    if (last < zoneLow - breakTol && high >= zoneLow - nearTol) {
-      return { kind: "RUPTURA", rank: 3, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+    if (last < zoneLow - breakTol && high >= zoneLow - nearTol && currentDistance <= activeBreakMaxDist) {
+      return { kind: "RUPTURA", rank: 3, distance: currentDistance, activeMaxDistance: activeBreakMaxDist };
     }
-    if (touch) return { kind: "TOQUE", rank: 2, distance: 0 };
-    if (near) return { kind: "CERCA", rank: 1, distance: zoneDistanceFromPrice(last, zoneLow, zoneHigh) };
+    if (touch && currentDistance <= activeTouchMaxDist) {
+      return { kind: "TOQUE", rank: 2, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
+    }
+    if (near && currentDistance <= activeTouchMaxDist) {
+      return { kind: "CERCA", rank: 1, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
+    }
   }
   return null;
 }
@@ -4381,19 +4396,44 @@ function findPolarityContextForCandidate(candidate, direction, minute) {
       const interaction = deriveCurrentInteractionFromTicks(candidate.ticks || [], level);
       if (!interaction) return null;
       const recency = Math.max(0, minute - Number(level.confirmedMinute || minute));
-      const score = interaction.rank * 100 + Math.min(Number(level.uses || 0), 8) * 8 - recency * 0.25;
+      const zoneWidth = Math.max(1e-9, Number(level.zoneHigh) - Number(level.zoneLow));
+      const normalizedDistance = Number(interaction.distance || 0) / Math.max(1e-9, Number(interaction.activeMaxDistance || zoneWidth));
+      const score =
+        interaction.rank * 100 +
+        Math.min(Number(level.uses || 0), 8) * 7 -
+        recency * 0.22 -
+        normalizedDistance * 120;
       return {
         ...level,
         interaction: interaction.kind,
         interactionRank: interaction.rank,
         currentDistance: interaction.distance,
+        activeMaxDistance: interaction.activeMaxDistance,
+        normalizedDistance,
+        zoneWidth,
         score,
       };
     })
     .filter(Boolean)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      const distDiff = Number(a.normalizedDistance || 0) - Number(b.normalizedDistance || 0);
+      if (Math.abs(distDiff) > 0.08) return distDiff;
+      const rankDiff = Number(b.interactionRank || 0) - Number(a.interactionRank || 0);
+      if (rankDiff) return rankDiff;
+      const usesDiff = Number(b.uses || 0) - Number(a.uses || 0);
+      if (usesDiff) return usesDiff;
+      const recencyDiff = Number(b.confirmedMinute || 0) - Number(a.confirmedMinute || 0);
+      if (recencyDiff) return recencyDiff;
+      return Number(b.score || 0) - Number(a.score || 0);
+    });
 
-  return enriched[0] || null;
+  const best = enriched[0] || null;
+  if (!best) return null;
+
+  const hardLimit = Math.max(Number(best.activeMaxDistance || 0), Number(best.zoneWidth || 0) * (POLARITY_ACTIVE_ZONE_WIDTH_MULT + 0.4));
+  if (!Number.isFinite(best.currentDistance) || best.currentDistance > hardLimit) return null;
+
+  return best;
 }
 function formatPolarityStrength(level) {
   const uses = Number(level?.uses || 0);
