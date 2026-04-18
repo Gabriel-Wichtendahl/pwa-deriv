@@ -79,6 +79,9 @@ const POLARITY_MIN_USES_STRONG = 3;
 const POLARITY_ACTIVE_DIST_TOUCH_MULT = 1.15;
 const POLARITY_ACTIVE_DIST_BREAK_MULT = 1.55;
 const POLARITY_ACTIVE_ZONE_WIDTH_MULT = 2.0;
+const POLARITY_ONLY_MAX_LEVELS = 3;
+const POLARITY_ONLY_BORDER_FRAC = 0.14;
+const POLARITY_ONLY_RECENCY_WEIGHT = 0.10;
 
 /* =========================
    Disciplina
@@ -769,14 +772,14 @@ function saveBool(key, value) {
 }
 
 
-function isStairSignalMode() {
-  return signalMode === "ESCALERA";
+function isPolarityLevelsMode() {
+  return signalMode === "POLARIDAD_NIVELES";
 }
 function isNormalPolarityMode() {
   return signalMode === "NORMAL_POLARIDAD";
 }
 function getSignalModeLabel(mode = signalMode) {
-  if (mode === "ESCALERA") return "ESCALERA";
+  if (mode === "POLARIDAD_NIVELES") return "NIVELES POLARIDAD";
   if (mode === "NORMAL_POLARIDAD") return "NORMAL + POLARIDAD";
   return "NORMAL";
 }
@@ -1257,12 +1260,17 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
 
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
   const quotes = pts.map((p) => p.quote);
-  const polarityLevel = modalCurrentItem?.polarity || null;
+  const polarityLevels = Array.isArray(modalCurrentItem?.polarityLevels) && modalCurrentItem.polarityLevels.length
+    ? modalCurrentItem.polarityLevels.filter(Boolean)
+    : (modalCurrentItem?.polarity ? [modalCurrentItem.polarity] : []);
+  const polarityLevel = polarityLevels[0] || null;
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  if (polarityLevel && Number.isFinite(polarityLevel.zoneLow) && Number.isFinite(polarityLevel.zoneHigh)) {
-    min = Math.min(min, Number(polarityLevel.zoneLow));
-    max = Math.max(max, Number(polarityLevel.zoneHigh));
+  for (const level of polarityLevels) {
+    if (Number.isFinite(level?.zoneLow) && Number.isFinite(level?.zoneHigh)) {
+      min = Math.min(min, Number(level.zoneLow));
+      max = Math.max(max, Number(level.zoneHigh));
+    }
   }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
@@ -2174,25 +2182,26 @@ function applyTheme(theme) {
   );
 
   const savedMode = localStorage.getItem(SIGNAL_MODE_KEY);
-  if (savedMode === "NORMAL" || savedMode === "NORMAL_POLARIDAD" || savedMode === "ESCALERA") {
+  if (savedMode === "ESCALERA") savedMode = "POLARIDAD_NIVELES";
+  if (savedMode === "NORMAL" || savedMode === "NORMAL_POLARIDAD" || savedMode === "POLARIDAD_NIVELES") {
     signalMode = savedMode;
   } else {
     const hasStairKey = localStorage.getItem("stairMode") !== null;
     stairMode = loadBool("stairMode", false);
     if (!hasStairKey) {
       stairMode = loadBool("giroMode", false) || loadBool("strongMode", false);
-      saveBool("stairMode", stairMode);
+      saveBool("stairMode", false);
     }
-    signalMode = stairMode ? "ESCALERA" : "NORMAL";
+    signalMode = stairMode ? "POLARIDAD_NIVELES" : "NORMAL";
     localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
   }
 
   const paintMode = () => {
-    stairMode = signalMode === "ESCALERA";
+    stairMode = false;
     if (!modeBtn) return;
     modeBtn.classList.remove("active-strong");
-    if (signalMode === "ESCALERA") {
-      modeBtn.textContent = "🟪 Patrón ESCALERA";
+    if (signalMode === "POLARIDAD_NIVELES") {
+      modeBtn.textContent = "🟩 NIVELES POLARIDAD";
       modeBtn.classList.add("active-strong");
     } else if (signalMode === "NORMAL_POLARIDAD") {
       modeBtn.textContent = "🟨 NORMAL + POLARIDAD";
@@ -2205,12 +2214,12 @@ function applyTheme(theme) {
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      const order = ["NORMAL", "NORMAL_POLARIDAD", "ESCALERA"];
+      const order = ["NORMAL", "NORMAL_POLARIDAD", "POLARIDAD_NIVELES"];
       const idx = order.indexOf(signalMode);
       signalMode = order[(idx + 1) % order.length];
-      stairMode = signalMode === "ESCALERA";
+      stairMode = false;
       localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
-      saveBool("stairMode", stairMode);
+      saveBool("stairMode", false);
       saveBool("giroMode", false);
       saveBool("strongMode", false);
       paintMode();
@@ -2329,12 +2338,17 @@ function drawDerivLikeChart(canvas, ticks) {
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
   const quotes = pts.map((p) => p.quote);
-  const polarityLevel = modalCurrentItem?.polarity || null;
+  const polarityLevels = Array.isArray(modalCurrentItem?.polarityLevels) && modalCurrentItem.polarityLevels.length
+    ? modalCurrentItem.polarityLevels.filter(Boolean)
+    : (modalCurrentItem?.polarity ? [modalCurrentItem.polarity] : []);
+  const polarityLevel = polarityLevels[0] || null;
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  if (polarityLevel && Number.isFinite(polarityLevel.zoneLow) && Number.isFinite(polarityLevel.zoneHigh)) {
-    min = Math.min(min, Number(polarityLevel.zoneLow));
-    max = Math.max(max, Number(polarityLevel.zoneHigh));
+  for (const level of polarityLevels) {
+    if (Number.isFinite(level?.zoneLow) && Number.isFinite(level?.zoneHigh)) {
+      min = Math.min(min, Number(level.zoneLow));
+      max = Math.max(max, Number(level.zoneHigh));
+    }
   }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
@@ -2424,10 +2438,16 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
   }
 
-  if (polarityLevel) {
+  if (polarityLevels.length) {
     const currentPrice =
       msNow != null ? Number(getPriceAtMs(pts, msNow)) : Number(pts[pts.length - 1]?.quote);
-    drawPolarityOverlay(ctx, w, h, xOf, yOf, polarityLevel, currentPrice);
+    for (let i = polarityLevels.length - 1; i >= 0; i--) {
+      drawPolarityOverlay(ctx, w, h, xOf, yOf, polarityLevels[i], currentPrice, {
+        secondary: i !== 0,
+        index: i,
+        label: i === 0,
+      });
+    }
   }
 
   // área
@@ -4067,8 +4087,7 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    // ✅ ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
-    if (!ok && !isStairSignalMode()) scheduleRetry(minute);
+    if (!ok) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -4079,7 +4098,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + ESCALERA)
+   Technical rules + Evaluation (NORMAL + POLARIDAD)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -4435,20 +4454,106 @@ function findPolarityContextForCandidate(candidate, direction, minute) {
 
   return best;
 }
+function findPolarityInZoneContextsForCandidate(candidate, minute, limit = POLARITY_ONLY_MAX_LEVELS) {
+  const levels = detectConfirmedPolarityLevels(candidate.symbol, minute);
+  if (!levels.length) return [];
+
+  const ticks = Array.isArray(candidate?.ticks) ? candidate.ticks : [];
+  const lastPrice = Number(ticks[ticks.length - 1]?.quote);
+  if (!Number.isFinite(lastPrice)) return [];
+
+  const contexts = levels
+    .map((level) => {
+      const zoneLow = Number(level.zoneLow);
+      const zoneHigh = Number(level.zoneHigh);
+      const zoneWidth = Math.max(1e-9, zoneHigh - zoneLow);
+      const borderTol = Math.max(zoneWidth * POLARITY_ONLY_BORDER_FRAC, Number(level.nearTol || 0) * 0.08);
+      const inside = lastPrice >= zoneLow - borderTol && lastPrice <= zoneHigh + borderTol;
+      if (!inside) return null;
+
+      const interaction = lastPrice >= zoneLow && lastPrice <= zoneHigh ? "CIERRE EN ZONA" : "BORDE";
+      const distCenter = Math.abs(lastPrice - Number(level.center || (zoneLow + zoneHigh) / 2));
+      const recency = Math.max(0, minute - Number(level.confirmedMinute || minute));
+      const score =
+        Math.min(Number(level.uses || 0), 8) * 18 +
+        (interaction === "CIERRE EN ZONA" ? 100 : 82) -
+        (distCenter / zoneWidth) * 16 -
+        recency * POLARITY_ONLY_RECENCY_WEIGHT;
+
+      return {
+        ...level,
+        interaction,
+        interactionRank: interaction === "CIERRE EN ZONA" ? 4 : 3,
+        currentDistance: zoneDistanceFromPrice(lastPrice, zoneLow, zoneHigh),
+        activeMaxDistance: borderTol,
+        zoneWidth,
+        normalizedDistance: distCenter / zoneWidth,
+        score,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      const usesDiff = Number(b.uses || 0) - Number(a.uses || 0);
+      if (usesDiff) return usesDiff;
+      const centerDiff = Number(a.normalizedDistance || 0) - Number(b.normalizedDistance || 0);
+      if (Math.abs(centerDiff) > 0.02) return centerDiff;
+      const recencyDiff = Number(b.confirmedMinute || 0) - Number(a.confirmedMinute || 0);
+      if (recencyDiff) return recencyDiff;
+      return Number(b.score || 0) - Number(a.score || 0);
+    });
+
+  if (!contexts.length) return [];
+  const primary = contexts[0];
+  const sameDirection = contexts.filter((x) => x.direction === primary.direction);
+  return sameDirection.slice(0, limit);
+}
+function buildPolarityOnlySignalFromCandidates(candidates, minute) {
+  const signalCandidates = [];
+  for (const candidate of candidates) {
+    const levels = findPolarityInZoneContextsForCandidate(candidate, minute, POLARITY_ONLY_MAX_LEVELS);
+    if (!levels.length) continue;
+    const primary = levels[0];
+    const direction = primary.direction === "bullish" ? "CALL" : "PUT";
+    const score =
+      Number(primary.score || 0) +
+      Math.min(Number(primary.uses || 0), 8) * 6 +
+      Math.max(0, 22 - Number(primary.normalizedDistance || 0) * 18) +
+      Math.min(levels.length, POLARITY_ONLY_MAX_LEVELS) * 6 +
+      Math.abs(Number(candidate.move || 0)) / Math.max(Number(candidate.vol || 1e-9), 1e-9) * 1.8;
+    signalCandidates.push({
+      ...candidate,
+      direction,
+      polarity: primary,
+      polarityLevels: levels,
+      polarityScore: score,
+    });
+  }
+  signalCandidates.sort((a, b) => Number(b.polarityScore || 0) - Number(a.polarityScore || 0));
+  return signalCandidates[0] || null;
+}
+
 function formatPolarityStrength(level) {
   const uses = Number(level?.uses || 0);
   return uses >= POLARITY_MIN_USES_STRONG ? `Nivel ${level?.strengthLabel || "fuerte"} x${uses}` : `Nivel x${uses || 1}`;
 }
-function drawPolarityOverlay(ctx, w, h, xOf, yOf, level, currentPrice) {
+function drawPolarityOverlay(ctx, w, h, xOf, yOf, level, currentPrice, opts = {}) {
   if (!level) return;
   const zoneLow = Number(level.zoneLow);
   const zoneHigh = Number(level.zoneHigh);
   if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) return;
 
   const bullish = level.direction === "bullish";
-  const fill = bullish ? "rgba(34,197,94,.11)" : "rgba(239,68,68,.11)";
-  const stroke = bullish ? "rgba(34,197,94,.88)" : "rgba(239,68,68,.88)";
-  const soft = bullish ? "rgba(34,197,94,.28)" : "rgba(239,68,68,.28)";
+  const secondary = !!opts.secondary;
+  const shouldLabel = opts.label !== false;
+  const fill = bullish
+    ? (secondary ? "rgba(34,197,94,.06)" : "rgba(34,197,94,.11)")
+    : (secondary ? "rgba(239,68,68,.06)" : "rgba(239,68,68,.11)");
+  const stroke = bullish
+    ? (secondary ? "rgba(34,197,94,.54)" : "rgba(34,197,94,.88)")
+    : (secondary ? "rgba(239,68,68,.54)" : "rgba(239,68,68,.88)");
+  const soft = bullish
+    ? (secondary ? "rgba(34,197,94,.18)" : "rgba(34,197,94,.28)")
+    : (secondary ? "rgba(239,68,68,.18)" : "rgba(239,68,68,.28)");
 
   const y1 = yOf(zoneHigh);
   const y2 = yOf(zoneLow);
@@ -4459,19 +4564,21 @@ function drawPolarityOverlay(ctx, w, h, xOf, yOf, level, currentPrice) {
   ctx.fillStyle = fill;
   ctx.fillRect(10, top, w - 20, height);
 
-  ctx.setLineDash([6, 4]);
+  ctx.setLineDash(secondary ? [4, 5] : [6, 4]);
   ctx.strokeStyle = soft;
-  ctx.lineWidth = 1.4;
+  ctx.lineWidth = secondary ? 1.0 : 1.4;
   ctx.strokeRect(10, top, w - 20, height);
 
-  ctx.setLineDash([9, 5]);
+  ctx.setLineDash(secondary ? [5, 5] : [9, 5]);
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = secondary ? 1.3 : 2;
   ctx.beginPath();
   ctx.moveTo(10, yOf(level.center));
   ctx.lineTo(w - 10, yOf(level.center));
   ctx.stroke();
   ctx.restore();
+
+  if (!shouldLabel) return;
 
   const dist = zoneDistanceFromPrice(currentPrice, zoneLow, zoneHigh);
   const dirTxt = bullish ? "POL ALCISTA" : "POL BAJISTA";
@@ -4702,7 +4809,7 @@ function detectStairPattern(candidate) {
 
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return isStairSignalMode() ? true : false;
+  if (!data) return false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -4733,28 +4840,17 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return isStairSignalMode() ? true : false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
 
-  if (isStairSignalMode()) {
-    const matches = [];
+  if (isPolarityLevelsMode()) {
+    const bestPolarity = buildPolarityOnlySignalFromCandidates(candidates, minute);
+    if (!bestPolarity) return true;
 
-    for (const c of candidates) {
-      const match = detectStairPattern(c);
-      if (!match) continue;
-
-      matches.push({
-        ...c,
-        direction: match.direction,
-        quality: match.quality,
-      });
-    }
-
-    if (!matches.length) return true;
-
-    matches.sort((a, b) => b.quality - a.quality);
-    const bestMatch = matches[0];
-
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks);
+    addSignal(minute, bestPolarity.symbol, bestPolarity.direction, bestPolarity.ticks, {
+      modeOverride: "NIVELES POLARIDAD",
+      polarity: bestPolarity.polarity,
+      polarityLevels: bestPolarity.polarityLevels,
+    });
     return true;
   }
 
@@ -4777,6 +4873,7 @@ function evaluateMinute(minute) {
     addSignal(minute, best.symbol, direction, best.ticks, {
       modeOverride: "NORMAL + POLARIDAD",
       polarity,
+      polarityLevels: [polarity],
     });
     return true;
   }
@@ -4809,6 +4906,7 @@ function addSignal(minute, symbol, direction, ticks, extra = null) {
     minuteComplete: false,
     trade: null,
     polarity: extra?.polarity ? { ...extra.polarity } : null,
+    polarityLevels: Array.isArray(extra?.polarityLevels) ? extra.polarityLevels.map((x) => ({ ...x })) : (extra?.polarity ? [{ ...extra.polarity }] : null),
   };
 
   if (history.some((x) => x.id === item.id)) return;
