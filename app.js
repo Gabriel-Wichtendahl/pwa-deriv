@@ -784,6 +784,127 @@ function getSignalModeLabel(mode = signalMode) {
   return "NORMAL";
 }
 
+function isPurePolaritySignalItem(item = null) {
+  return String(item?.mode || "") === "NIVELES POLARIDAD";
+}
+function getItemPolarityLevels(item = null) {
+  return Array.isArray(item?.polarityLevels) && item.polarityLevels.length
+    ? item.polarityLevels.filter(Boolean)
+    : (item?.polarity ? [item.polarity].filter(Boolean) : []);
+}
+function getModalRenderableTicks(item = null) {
+  const target = item || modalCurrentItem;
+  if (!target) return [];
+  if (modalLive && isItemLiveMinute(target)) {
+    const liveTicks = minuteData?.[target.minute]?.[target.symbol];
+    if (Array.isArray(liveTicks) && liveTicks.length) return liveTicks;
+  }
+  return Array.isArray(target?.ticks) ? target.ticks : [];
+}
+function getPolarityTradeGate(item = null, ticksOverride = null) {
+  const target = item || modalCurrentItem;
+  if (!isPurePolaritySignalItem(target)) {
+    return { restricted: false, allowed: true, desiredSide: target?.direction || "", status: "LIBRE", reason: "" };
+  }
+
+  const desiredSide = String(target?.direction || "");
+  const desiredPolarityDir = desiredSide === "CALL" ? "bullish" : desiredSide === "PUT" ? "bearish" : "";
+  const levels = getItemPolarityLevels(target).filter((level) => String(level?.direction || "") === desiredPolarityDir);
+  const ticks = Array.isArray(ticksOverride) ? ticksOverride : getModalRenderableTicks(target);
+  const lastPrice = Number(ticks[ticks.length - 1]?.quote);
+
+  if (!levels.length || !Number.isFinite(lastPrice)) {
+    return {
+      restricted: true,
+      allowed: false,
+      desiredSide,
+      status: "SIN_NIVEL",
+      reason: "Sin nivel de polaridad operativo",
+      currentPrice: lastPrice,
+      level: null,
+    };
+  }
+
+  const evaluated = levels.map((level) => {
+    const zoneLow = Number(level?.zoneLow);
+    const zoneHigh = Number(level?.zoneHigh);
+    const zoneWidth = Math.max(1e-9, zoneHigh - zoneLow);
+    const nearTol = Math.max(Number(level?.nearTol || 0), zoneWidth * 0.30);
+    const inside = lastPrice >= zoneLow && lastPrice <= zoneHigh;
+    let behindNear = false;
+    let continuationSide = false;
+    let distance = 0;
+
+    if (desiredPolarityDir === "bullish") {
+      behindNear = lastPrice < zoneLow && zoneLow - lastPrice <= nearTol;
+      continuationSide = lastPrice > zoneHigh;
+      distance = inside ? 0 : lastPrice < zoneLow ? zoneLow - lastPrice : lastPrice - zoneHigh;
+    } else {
+      behindNear = lastPrice > zoneHigh && lastPrice - zoneHigh <= nearTol;
+      continuationSide = lastPrice < zoneLow;
+      distance = inside ? 0 : lastPrice > zoneHigh ? lastPrice - zoneHigh : zoneLow - lastPrice;
+    }
+
+    const allowed = inside || behindNear;
+    const stateRank = inside ? 3 : behindNear ? 2 : continuationSide ? 0 : 1;
+    const status = inside ? "EN_ZONA" : behindNear ? "CERCA_DETRAS" : continuationSide ? "CONTINUIDAD" : "LEJOS";
+    const score = stateRank * 100 + Math.min(Number(level?.uses || 0), 8) * 9 - distance / Math.max(zoneWidth, nearTol, 1e-9) * 24;
+
+    return {
+      ...level,
+      zoneWidth,
+      nearTol,
+      allowed,
+      inside,
+      behindNear,
+      continuationSide,
+      distance,
+      status,
+      score,
+      currentPrice: lastPrice,
+    };
+  }).sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+
+  const bestAllowed = evaluated.find((x) => x.allowed) || null;
+  const best = bestAllowed || evaluated[0] || null;
+  const reason = bestAllowed
+    ? (bestAllowed.inside ? "Operable: precio dentro de zona" : "Operable: precio cerca detrás del nivel")
+    : best?.continuationSide
+      ? "Solo giros: el precio quedó del lado de continuidad"
+      : "Solo giros: esperá que vuelva a la zona o quede cerca detrás del nivel";
+
+  return {
+    restricted: true,
+    allowed: !!bestAllowed,
+    desiredSide,
+    status: bestAllowed ? (bestAllowed.inside ? "EN_ZONA" : "CERCA_DETRAS") : (best?.status || "FUERA"),
+    reason,
+    level: best,
+    currentPrice: lastPrice,
+    levels: evaluated,
+  };
+}
+function paintTradeButtonRuleDisabled(btn, title) {
+  if (!btn) return;
+  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
+  btn.disabled = true;
+  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+  btn.style.filter = "grayscale(1) saturate(0.72)";
+  btn.style.opacity = "0.42";
+  btn.style.transform = "none";
+  btn.title = title || "No disponible";
+}
+function paintTradeButtonAllowed(btn, title) {
+  if (!btn) return;
+  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
+  btn.disabled = false;
+  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+  btn.style.filter = "";
+  btn.style.opacity = "";
+  btn.style.transform = "";
+  btn.title = title || "Operar DEMO 1m";
+}
+
 function isHit(item) {
   if (!item || !item.nextOutcome) return false;
   return (
@@ -2181,7 +2302,7 @@ function applyTheme(theme) {
       })
   );
 
-  const savedMode = localStorage.getItem(SIGNAL_MODE_KEY);
+  let savedMode = localStorage.getItem(SIGNAL_MODE_KEY);
   if (savedMode === "ESCALERA") savedMode = "POLARIDAD_NIVELES";
   if (savedMode === "NORMAL" || savedMode === "NORMAL_POLARIDAD" || savedMode === "POLARIDAD_NIVELES") {
     signalMode = savedMode;
@@ -2622,6 +2743,33 @@ function updateModalCandleStatusUI() {
 
   paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
   paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+
+  if (!locked && !candleClosed && isPurePolaritySignalItem(modalCurrentItem)) {
+    const gate = getPolarityTradeGate(modalCurrentItem);
+    const desiredIsCall = String(gate.desiredSide || "") === "CALL";
+    const desiredBtn = desiredIsCall ? modalBuyCallBtn : modalBuyPutBtn;
+    const otherBtn = desiredIsCall ? modalBuyPutBtn : modalBuyCallBtn;
+    const desiredLabel = desiredIsCall ? "COMPRA" : "VENTA";
+
+    paintTradeButtonRuleDisabled(otherBtn, `Solo giros: en este modo solo ${desiredLabel}`);
+
+    if (gate.allowed) {
+      paintTradeButtonAllowed(desiredBtn, gate.reason || `Solo giros: ${desiredLabel} habilitada`);
+      const zoneTag = gate.status === "EN_ZONA" ? "EN ZONA" : "CERCA DETRÁS";
+      bar.textContent = `${isOpen ? "🟢 VELA ABIERTA" : "⚪ VELA CERRADA"} | SOLO GIROS · ${desiredLabel} · ${zoneTag}`;
+      bar.style.color = "#dcfce7";
+      bar.style.background = "rgba(22,163,74,.18)";
+      bar.style.borderColor = "rgba(34,197,94,.34)";
+      bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
+    } else {
+      paintTradeButtonRuleDisabled(desiredBtn, gate.reason || "Solo giros: esperá mejor proximidad al nivel");
+      bar.textContent = `${isOpen ? "🟡 VELA ABIERTA" : "⚪ VELA CERRADA"} | SOLO GIROS · BLOQUEADO`;
+      bar.style.color = "#fef3c7";
+      bar.style.background = "rgba(245,158,11,.18)";
+      bar.style.borderColor = "rgba(245,158,11,.34)";
+      bar.style.boxShadow = "0 0 0 1px rgba(245,158,11,.06) inset";
+    }
+  }
 }
 
 /* =========================
@@ -3458,6 +3606,15 @@ function assertEntryWindowOpen() {
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
   assertEntryWindowOpen();
+  if (isPurePolaritySignalItem(modalCurrentItem)) {
+    const gate = getPolarityTradeGate(modalCurrentItem);
+    if (String(side || "") !== String(gate.desiredSide || "")) {
+      throw new Error(`Solo giros: esta señal permite ${labelDir(gate.desiredSide || modalCurrentItem?.direction || side)}`);
+    }
+    if (!gate.allowed) {
+      throw new Error(gate.reason || "Solo se opera dentro de la zona o cerca detrás del nivel");
+    }
+  }
 
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
