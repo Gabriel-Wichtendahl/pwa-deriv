@@ -5025,4 +5025,4 @@ seedTradesJournalFromHistory();
 
 ensureInlineClearButtons();
 
-connect();
+connect(); 
