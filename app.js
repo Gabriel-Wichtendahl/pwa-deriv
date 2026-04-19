@@ -571,36 +571,70 @@ function getExecutionSearchRange(item) {
   if (Number.isFinite(lastQuote) && lastQuote > 0) return Math.max(lastQuote * 0.0025, 0.001);
   return 0.1;
 }
-function buildBarrierCandidates(item, side, mode = "full") {
-  const precision = getPricePrecisionFromTicks(getSignalTicksForExecution(item), 3);
-  const unit = 10 ** -precision;
+const AUTO_PRECALC_SCALE_FACTORS = [1, 0.1, 0.01, 0.001, 0.0001];
+
+function makeBarrierCandidateFromAbsolute(side, absValue) {
   const sign = side === "CALL" ? 1 : -1;
+  const raw = Math.abs(Number(absValue || 0));
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+
+  let precision = 0;
+  const rawStr = String(raw);
+  if (rawStr.includes("e-")) {
+    precision = Number(rawStr.split("e-")[1] || 0);
+  } else if (rawStr.includes(".")) {
+    precision = rawStr.split(".")[1].length;
+  }
+  precision = Math.max(0, Math.min(8, precision));
+
+  const barrierNum = sign * raw;
+  const barrier = `${sign > 0 ? "+" : "-"}${raw.toFixed(precision)}`;
+  return { barrierNum, precision, barrier };
+}
+function makeBarrierCandidateFromPlan(plan) {
+  if (!plan) return null;
+  return makeBarrierCandidateFromAbsolute(plan.barrierNum >= 0 ? "CALL" : "PUT", Math.abs(Number(plan.barrierNum || 0)));
+}
+function dedupeBarrierCandidates(candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const candidate of candidates || []) {
+    if (!candidate || !candidate.barrier) continue;
+    const key = String(candidate.barrier);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
+}
+function buildBarrierCandidates(item, side, mode = "full") {
   const sourcePips = mode === "fast" ? AUTO_PRECALC_FAST_PIPS : AUTO_PRECALC_COARSE_PIPS;
-
   const hint = getExecutionBarrierHint(item?.symbol, side);
-  const hintedPips = hint?.pips && Number.isFinite(Number(hint.pips)) ? [
-    Math.max(1, Math.round(Number(hint.pips) * 0.85)),
-    Math.max(1, Math.round(Number(hint.pips) * 0.92)),
-    Math.max(1, Math.round(Number(hint.pips))),
-    Math.max(1, Math.round(Number(hint.pips) * 1.08)),
-    Math.max(1, Math.round(Number(hint.pips) * 1.15)),
-  ] : [];
 
-  const mergedPips = Array.from(new Set([...hintedPips, ...sourcePips]))
-    .filter((p) => Number.isFinite(Number(p)) && Number(p) > 0)
-    .sort((a, b) => a - b);
+  const hintedAbs = [];
+  if (Number.isFinite(Number(hint?.barrierAbs)) && Number(hint.barrierAbs) > 0) {
+    const base = Math.abs(Number(hint.barrierAbs));
+    for (const factor of [0.82, 0.92, 1, 1.08, 1.18]) hintedAbs.push(base * factor);
+  }
 
-  const coarse = mergedPips
-    .map((pips) => sign * roundTo(Number(pips) * unit, precision))
-    .filter((v) => Number.isFinite(v) && Math.abs(v) >= unit);
+  const scaledPresets = [];
+  for (const pips of sourcePips) {
+    const absPips = Math.abs(Number(pips || 0));
+    if (!Number.isFinite(absPips) || absPips <= 0) continue;
+    for (const scale of AUTO_PRECALC_SCALE_FACTORS) scaledPresets.push(absPips * scale);
+  }
 
-  return {
-    precision,
-    coarse: Array.from(new Set(coarse)),
-  };
+  const candidates = dedupeBarrierCandidates(
+    [...hintedAbs, ...scaledPresets]
+      .filter((v) => Number.isFinite(v) && v > 0)
+      .map((absValue) => makeBarrierCandidateFromAbsolute(side, absValue))
+  );
+
+  return { coarse: candidates };
 }
 function formatRelativeBarrier(value, precision = 3) {
   const n = Number(value || 0);
+  if (!Number.isFinite(n) || n === 0) return "+0";
   const p = Math.max(0, Number(precision || 0));
   const abs = Math.abs(n).toFixed(p);
   return `${n >= 0 ? "+" : "-"}${abs}`;
@@ -611,6 +645,8 @@ function parseProposalToExecution(planRaw, side, precision) {
   const payout = Number(proposal?.payout);
   const id = proposal?.id ? String(proposal.id) : "";
   const barrierNum = Number(planRaw?.barrierNum);
+  const barrierPrecision = Math.max(0, Number(planRaw?.precision ?? precision ?? 0));
+  const barrier = planRaw?.barrier ? String(planRaw.barrier) : formatRelativeBarrier(barrierNum, barrierPrecision);
   if (!id || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) return null;
   const profitPct = ((payout - askPrice) / askPrice) * 100;
   return {
@@ -621,12 +657,18 @@ function parseProposalToExecution(planRaw, side, precision) {
     profitPct,
     distance: Math.abs(profitPct - AUTO_TARGET_RETURN_PCT),
     barrierNum,
-    barrier: formatRelativeBarrier(barrierNum, precision),
+    precision: barrierPrecision,
+    barrier,
     longcode: proposal?.longcode ? String(proposal.longcode) : "",
     updatedAt: Date.now(),
   };
 }
-async function getHighLowProposalQuote(symbol, side, barrierNum, precision, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+  const candidate = typeof barrierCandidate === "object" && barrierCandidate
+    ? barrierCandidate
+    : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
+  if (!candidate?.barrier) return null;
+
   const req = {
     proposal: 1,
     amount: stake,
@@ -635,52 +677,47 @@ async function getHighLowProposalQuote(symbol, side, barrierNum, precision, stak
     currency: DEFAULT_CURRENCY,
     duration: Number(DEFAULT_DURATION) || 1,
     duration_unit: DEFAULT_DURATION_UNIT || "m",
-    barrier: formatRelativeBarrier(barrierNum, precision),
+    barrier: candidate.barrier,
     symbol,
   };
   const res = await wsRequest(req, timeoutMs);
   if (res?.error) throw new Error(res.error.message || "proposal error");
-  return parseProposalToExecution({ proposal: res?.proposal, barrierNum }, side, precision);
+  return parseProposalToExecution({ proposal: res?.proposal, barrierNum: candidate.barrierNum, precision: candidate.precision, barrier: candidate.barrier }, side, candidate.precision);
 }
 async function findBestHighLowPlan(item, side, opts = {}) {
   const symbol = item?.symbol;
   if (!symbol) return null;
   const stake = getTradeStake();
   const fast = !!opts.fast;
-  const { precision, coarse } = buildBarrierCandidates(item, side, fast ? "fast" : "full");
+  const { coarse } = buildBarrierCandidates(item, side, fast ? "fast" : "full");
   if (!coarse.length) return null;
 
   const timeoutMs = fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS;
   const firstPass = (await Promise.allSettled(
-    coarse.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake, timeoutMs))
+    coarse.map((candidate) => getHighLowProposalQuote(symbol, side, candidate, candidate?.precision || 0, stake, timeoutMs))
   ))
     .filter((r) => r.status === "fulfilled" && r.value)
     .map((r) => r.value);
   if (!firstPass.length) return null;
 
   let best = firstPass.sort((a, b) => a.distance - b.distance)[0];
-  rememberExecutionBarrierHint(symbol, side, best, precision);
+  rememberExecutionBarrierHint(symbol, side, best, best.precision || 0);
   if (fast) return best;
 
-  const fineCandidates = Array.from(
-    new Set(
-      AUTO_PRECALC_FINE_FACTORS.map((factor) => {
-        const raw = Math.max(Math.abs(best.barrierNum) * factor, 10 ** -precision);
-        return (side === "CALL" ? 1 : -1) * roundTo(raw, precision);
-      }).filter((v) => Number.isFinite(v) && Math.abs(v) > 0)
-    )
+  const fineCandidates = dedupeBarrierCandidates(
+    AUTO_PRECALC_FINE_FACTORS.map((factor) => makeBarrierCandidateFromAbsolute(side, Math.max(Math.abs(best.barrierNum) * factor, 1e-8)))
   );
 
   if (fineCandidates.length) {
     const secondPass = (await Promise.allSettled(
-      fineCandidates.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake, timeoutMs))
+      fineCandidates.map((candidate) => getHighLowProposalQuote(symbol, side, candidate, candidate?.precision || 0, stake, timeoutMs))
     ))
       .filter((r) => r.status === "fulfilled" && r.value)
       .map((r) => r.value);
     if (secondPass.length) best = secondPass.concat(firstPass).sort((a, b) => a.distance - b.distance)[0];
   }
 
-  rememberExecutionBarrierHint(symbol, side, best, precision);
+  rememberExecutionBarrierHint(symbol, side, best, best.precision || 0);
   return best;
 }
 const executionBarrierHintCache = new Map();
@@ -692,12 +729,11 @@ function getExecutionBarrierHint(symbol, side) {
 }
 function rememberExecutionBarrierHint(symbol, side, plan, precision = 3) {
   if (!symbol || !side || !plan) return;
-  const unit = 10 ** -Math.max(0, Number(precision || 0));
-  const pips = Math.max(1, Math.round(Math.abs(Number(plan.barrierNum || 0)) / unit));
   executionBarrierHintCache.set(getExecutionHintKey(symbol, side), {
-    pips,
+    barrierAbs: Math.abs(Number(plan.barrierNum || 0)),
     barrierNum: Number(plan.barrierNum || 0),
-    precision: Math.max(0, Number(precision || 0)),
+    barrier: String(plan.barrier || formatRelativeBarrier(plan.barrierNum, precision)),
+    precision: Math.max(0, Number(plan.precision ?? precision ?? 0)),
     updatedAt: Date.now(),
   });
 }
