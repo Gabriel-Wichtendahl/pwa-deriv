@@ -508,9 +508,22 @@ function ensureExecutionModeButton() {
     btn.type = "button";
     btn.className = "btn btnGhost";
     btn.style.gridColumn = "1 / -1";
-    host.appendChild(btn);
+
+    const anchor =
+      pickEl("modeBtn") ||
+      pickEl("lowPowerBtn") ||
+      pickEl("resetCacheBtn") ||
+      null;
+
+    if (anchor && anchor.parentElement === host) {
+      anchor.insertAdjacentElement("afterend", btn);
+    } else {
+      host.appendChild(btn);
+    }
   }
 
+  btn.style.display = "";
+  btn.hidden = false;
   btn.onclick = () => {
     executionMode = shouldUseAutoHighLowExecution() ? EXECUTION_MODE_RISE_FALL : EXECUTION_MODE_HIGHLOW_AUTO;
     saveExecutionMode();
