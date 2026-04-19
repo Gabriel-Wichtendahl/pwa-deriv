@@ -805,23 +805,34 @@ function applyModalExecutionButtonUI(locked = false, candleClosed = false) {
   if (locked || candleClosed) return;
   if (!shouldUseAutoHighLowExecution()) return;
 
-  const canSearchNow = !!getDerivToken() && !!ws && ws.readyState === 1;
+  const hasToken = !!getDerivToken();
+  const wsReady = !!ws && ws.readyState === 1;
+  const canSearchNow = hasToken && wsReady;
+
   const applyState = (btn, plan, sideLabel) => {
     if (!btn) return;
     btn.style.filter = "";
     btn.style.opacity = "";
+
+    // En AUTO HL los botones no deben quedar muertos solo porque el plan aún no terminó.
+    // Se permite tocar y el click handler hace búsqueda rápida/fallback si todavía no hay proposal lista.
+    btn.disabled = false;
+
     if (plan) {
-      btn.disabled = false;
       btn.title = `${sideLabel} listo | barrier ${plan.barrier} | retorno ${Math.round(plan.profitPct)}%`;
       return;
     }
-    btn.disabled = !canSearchNow;
-    if (!canSearchNow) {
-      btn.style.filter = "grayscale(1) saturate(0.6)";
-      btn.style.opacity = "0.55";
-      btn.title = "Necesita token DEMO y conexión para buscar barrier";
+
+    if (!hasToken) {
+      btn.title = "No hay token DEMO guardado. Si tocás, te avisaré para guardarlo.";
       return;
     }
+
+    if (!wsReady) {
+      btn.title = "Conexión no lista todavía. Si tocás, intento refrescar apenas conecte.";
+      return;
+    }
+
     btn.title = `${sideLabel} no está listo todavía. Si tocás, hago una búsqueda rápida y compro.`;
   };
   applyState(modalBuyCallBtn, callPlan, "HIGHER");
