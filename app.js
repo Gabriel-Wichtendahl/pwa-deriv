@@ -63,13 +63,15 @@ const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_AUTO_120";
 const AUTO_TARGET_RETURN_PCT = 120;
 const AUTO_PRECALC_REFRESH_MS = 900;
 const AUTO_PRECALC_STALE_MS = 7000;
-// En vez de adivinar un barrier, probamos payout_per_point.
-// Deriv calcula la barrera automáticamente para HIGHER/LOWER.
-const AUTO_PRECALC_COARSE_PPP = [0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8, 12, 20, 35, 50, 80, 120, 200];
-const AUTO_PRECALC_FAST_PPP = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8, 12, 20, 35];
-const AUTO_PRECALC_FINE_FACTORS = [0.7, 0.85, 1.0, 1.15, 1.35];
+// Búsqueda por presets de "pips" relativos (no por rango reciente de la vela),
+// porque en práctica los niveles útiles suelen estar mucho más lejos que el micro-rango del minuto.
+const AUTO_PRECALC_COARSE_PIPS = [60, 80, 100, 120, 150, 180, 200, 220, 250, 285, 320, 350, 400, 450, 500, 650, 800, 1000, 1200];
+const AUTO_PRECALC_FAST_PIPS = [120, 180, 220, 250, 285, 320, 350, 400, 500, 650, 800];
+const AUTO_PRECALC_FINE_FACTORS = [0.85, 0.92, 1.0, 1.08, 1.15];
 const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 2600;
 const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 5200;
+const AUTO_BARRIER_PIP_FAST = [80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500];
+const AUTO_BARRIER_PIP_FULL = [40, 60, 80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500, 3500, 5000, 8000];
 
 /* =========================
    Auto-open chart config
@@ -508,22 +510,9 @@ function ensureExecutionModeButton() {
     btn.type = "button";
     btn.className = "btn btnGhost";
     btn.style.gridColumn = "1 / -1";
-
-    const anchor =
-      pickEl("modeBtn") ||
-      pickEl("lowPowerBtn") ||
-      pickEl("resetCacheBtn") ||
-      null;
-
-    if (anchor && anchor.parentElement === host) {
-      anchor.insertAdjacentElement("afterend", btn);
-    } else {
-      host.appendChild(btn);
-    }
+    host.appendChild(btn);
   }
 
-  btn.style.display = "";
-  btn.hidden = false;
   btn.onclick = () => {
     executionMode = shouldUseAutoHighLowExecution() ? EXECUTION_MODE_RISE_FALL : EXECUTION_MODE_HIGHLOW_AUTO;
     saveExecutionMode();
@@ -565,130 +554,242 @@ function getSignalTicksForExecution(item) {
   if (Array.isArray(item.ticks) && item.ticks.length >= 2) return item.ticks.slice();
   return [];
 }
-function buildPayoutPerPointCandidates(item, side, mode = "full") {
-  const source = mode === "fast" ? AUTO_PRECALC_FAST_PPP : AUTO_PRECALC_COARSE_PPP;
-  const hint = getExecutionBarrierHint(item?.symbol, side);
-
-  const hinted = [];
-  if (Number.isFinite(Number(hint?.ppp)) && Number(hint.ppp) > 0) {
-    const base = Number(hint.ppp);
-    for (const factor of [0.7, 0.85, 1, 1.15, 1.35]) {
-      hinted.push(roundTo(base * factor, 6));
+function getExecutionSearchRange(item) {
+  const pts = getSignalTicksForExecution(item).sort((a, b) => a.ms - b.ms);
+  if (pts.length >= 2) {
+    const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+    if (qs.length >= 2) {
+      const range = Math.max(...qs) - Math.min(...qs);
+      const first = Number(pts[0].quote);
+      const last = Number(pts[pts.length - 1].quote);
+      const move = Math.abs(last - first);
+      const avgStep = qs.length > 1 ? qs.slice(1).reduce((acc, q, idx) => acc + Math.abs(q - qs[idx]), 0) / Math.max(1, qs.length - 1) : 0;
+      return Math.max(range, move * 1.2, avgStep * 10, 0.001);
     }
   }
-
-  const merged = Array.from(new Set([...hinted, ...source]))
-    .filter((v) => Number.isFinite(Number(v)) && Number(v) > 0)
-    .sort((a, b) => a - b);
-
-  return { coarse: merged };
+  const lastQuote = Number(lastQuoteBySymbol?.[item?.symbol]);
+  if (Number.isFinite(lastQuote) && lastQuote > 0) return Math.max(lastQuote * 0.0025, 0.001);
+  return 0.1;
 }
-function inferBarrierLabelFromProposal(proposal, fallbackPPP) {
-  const details = proposal?.contract_details;
-  const directBarrier = details?.barrier ?? proposal?.barrier;
-  if (Number.isFinite(Number(directBarrier))) return String(directBarrier);
+const AUTO_PRECALC_SCALE_FACTORS = [1, 0.1, 0.01, 0.001, 0.0001];
 
-  const longcode = String(proposal?.longcode || "");
-  const m = longcode.match(/(?:higher|lower) than\s+([0-9]+(?:\.[0-9]+)?)/i);
-  if (m?.[1]) return m[1];
+function makeBarrierCandidateFromAbsolute(side, absValue) {
+  const sign = side === "CALL" ? 1 : -1;
+  const raw = Math.abs(Number(absValue || 0));
+  if (!Number.isFinite(raw) || raw <= 0) return null;
 
-  return `PPP ${roundTo(fallbackPPP, 4)}`;
+  let precision = 0;
+  const rawStr = String(raw);
+  if (rawStr.includes("e-")) {
+    precision = Number(rawStr.split("e-")[1] || 0);
+  } else if (rawStr.includes(".")) {
+    precision = rawStr.split(".")[1].length;
+  }
+  precision = Math.max(0, Math.min(8, precision));
+
+  const barrierNum = sign * raw;
+  const barrier = `${sign > 0 ? "+" : "-"}${raw.toFixed(precision)}`;
+  return { barrierNum, precision, barrier };
 }
-function parseProposalToExecution(planRaw, side) {
+function makeBarrierCandidateFromPlan(plan) {
+  if (!plan) return null;
+  return makeBarrierCandidateFromAbsolute(plan.barrierNum >= 0 ? "CALL" : "PUT", Math.abs(Number(plan.barrierNum || 0)));
+}
+function dedupeBarrierCandidates(candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const candidate of candidates || []) {
+    if (!candidate || !candidate.barrier) continue;
+    const key = String(candidate.barrier);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
+}
+function buildBarrierCandidates(item, side, mode = "full") {
+  const sourcePips = mode === "fast" ? AUTO_PRECALC_FAST_PIPS : AUTO_PRECALC_COARSE_PIPS;
+  const hint = getExecutionBarrierHint(item?.symbol, side);
+
+  const hintedAbs = [];
+  if (Number.isFinite(Number(hint?.barrierAbs)) && Number(hint.barrierAbs) > 0) {
+    const base = Math.abs(Number(hint.barrierAbs));
+    for (const factor of [0.82, 0.92, 1, 1.08, 1.18]) hintedAbs.push(base * factor);
+  }
+
+  const scaledPresets = [];
+  for (const pips of sourcePips) {
+    const absPips = Math.abs(Number(pips || 0));
+    if (!Number.isFinite(absPips) || absPips <= 0) continue;
+    for (const scale of AUTO_PRECALC_SCALE_FACTORS) scaledPresets.push(absPips * scale);
+  }
+
+  const candidates = dedupeBarrierCandidates(
+    [...hintedAbs, ...scaledPresets]
+      .filter((v) => Number.isFinite(v) && v > 0)
+      .map((absValue) => makeBarrierCandidateFromAbsolute(side, absValue))
+  );
+
+  return { coarse: candidates };
+}
+function formatRelativeBarrier(value, precision = 3) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n === 0) return "+0";
+  const p = Math.max(0, Number(precision || 0));
+  const abs = Math.abs(n).toFixed(p);
+  return `${n >= 0 ? "+" : "-"}${abs}`;
+}
+function parseProposalToExecution(planRaw, side, precision) {
   const proposal = planRaw?.proposal;
   const askPrice = Number(proposal?.ask_price);
   const payout = Number(proposal?.payout);
   const id = proposal?.id ? String(proposal.id) : "";
-  const payoutPerPoint = Number(planRaw?.payoutPerPoint);
-
+  const barrierNum = Number(planRaw?.barrierNum);
+  const barrierPrecision = Math.max(0, Number(planRaw?.precision ?? precision ?? 0));
+  const barrier = planRaw?.barrier ? String(planRaw.barrier) : formatRelativeBarrier(barrierNum, barrierPrecision);
   if (!id || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) return null;
-
   const profitPct = ((payout - askPrice) / askPrice) * 100;
-
   return {
     proposalId: id,
     contractType: side === "CALL" ? "HIGHER" : "LOWER",
+    apiContractType: String(planRaw?.apiContractType || (side === "CALL" ? "CALL" : "PUT")),
+    symbolKey: String(planRaw?.symbolKey || "symbol"),
     askPrice,
     payout,
     profitPct,
     distance: Math.abs(profitPct - AUTO_TARGET_RETURN_PCT),
-    payoutPerPoint,
-    barrier: inferBarrierLabelFromProposal(proposal, payoutPerPoint),
+    barrierNum,
+    precision: barrierPrecision,
+    barrier,
     longcode: proposal?.longcode ? String(proposal.longcode) : "",
     updatedAt: Date.now(),
   };
 }
-async function getHighLowProposalQuote(symbol, side, payoutPerPoint, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
-  const req = {
-    proposal: 1,
-    amount: stake,
-    basis: "stake",
-    contract_type: side === "CALL" ? "HIGHER" : "LOWER",
-    currency: DEFAULT_CURRENCY,
-    duration: Number(DEFAULT_DURATION) || 1,
-    duration_unit: DEFAULT_DURATION_UNIT || "m",
-    payout_per_point: Number(payoutPerPoint),
-    symbol,
-  };
+const autoHLContractsCache = new Map();
 
-  const res = await wsRequest(req, timeoutMs);
-  if (res?.error) throw new Error(res.error.message || "proposal error");
+function getAutoHLCacheKey(symbol) {
+  return String(symbol || "");
+}
+async function fetchContractsForSymbol(symbol) {
+  const key = getAutoHLCacheKey(symbol);
+  const cached = autoHLContractsCache.get(key);
+  if (cached && Date.now() - Number(cached.updatedAt || 0) < 5 * 60 * 1000) return cached.available;
 
-  return parseProposalToExecution({ proposal: res?.proposal, payoutPerPoint }, side);
+  const res = await wsRequest({ contracts_for: symbol }, 12000);
+  if (res?.error) throw new Error(res.error.message || "contracts_for error");
+
+  const available = Array.isArray(res?.contracts_for?.available) ? res.contracts_for.available : [];
+  autoHLContractsCache.set(key, { available, updatedAt: Date.now() });
+  return available;
+}
+async function getAutoHLContractTypeCandidates(symbol, side) {
+  const fallback = side === "CALL" ? ["CALL", "HIGHER"] : ["PUT", "LOWER"];
+  try {
+    const available = await fetchContractsForSymbol(symbol);
+    if (!Array.isArray(available) || !available.length) return fallback;
+
+    const preferredSentiment = side === "CALL" ? "up" : "down";
+    const bySentiment = available
+      .filter((item) => String(item?.sentiment || "").toLowerCase() === preferredSentiment)
+      .map((item) => String(item?.contract_type || "").toUpperCase())
+      .filter(Boolean);
+
+    const deduped = Array.from(new Set([...bySentiment, ...fallback]));
+    return deduped.length ? deduped : fallback;
+  } catch {
+    return fallback;
+  }
+}
+async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+  const candidate = typeof barrierCandidate === "object" && barrierCandidate
+    ? barrierCandidate
+    : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
+  if (!candidate?.barrier) return null;
+
+  const contractTypes = await getAutoHLContractTypeCandidates(symbol, side);
+  const symbolVariants = [
+    ["underlying_symbol", symbol],
+    ["symbol", symbol],
+  ];
+
+  let lastError = null;
+
+  for (const apiContractType of contractTypes) {
+    for (const [symbolKey, symbolValue] of symbolVariants) {
+      const req = {
+        proposal: 1,
+        amount: stake,
+        basis: "stake",
+        contract_type: apiContractType,
+        currency: DEFAULT_CURRENCY,
+        duration: Number(DEFAULT_DURATION) || 1,
+        duration_unit: DEFAULT_DURATION_UNIT || "m",
+        barrier: candidate.barrier,
+        [symbolKey]: symbolValue,
+      };
+
+      try {
+        const res = await wsRequest(req, timeoutMs);
+        if (res?.error) {
+          lastError = new Error(res.error.message || "proposal error");
+          continue;
+        }
+        const parsed = parseProposalToExecution(
+          {
+            proposal: res?.proposal,
+            barrierNum: candidate.barrierNum,
+            precision: candidate.precision,
+            barrier: candidate.barrier,
+            apiContractType,
+            symbolKey,
+          },
+          side,
+          candidate.precision
+        );
+        if (parsed) return parsed;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+  }
+
+  if (lastError) throw lastError;
+  return null;
 }
 async function findBestHighLowPlan(item, side, opts = {}) {
   const symbol = item?.symbol;
   if (!symbol) return null;
-
   const stake = getTradeStake();
   const fast = !!opts.fast;
-  const { coarse } = buildPayoutPerPointCandidates(item, side, fast ? "fast" : "full");
+  const { coarse } = buildBarrierCandidates(item, side, fast ? "fast" : "full");
   if (!coarse.length) return null;
 
   const timeoutMs = fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS;
-
-  const firstSettled = await Promise.allSettled(
-    coarse.map((ppp) => getHighLowProposalQuote(symbol, side, ppp, stake, timeoutMs))
-  );
-
-  const firstPass = firstSettled
+  const firstPass = (await Promise.allSettled(
+    coarse.map((candidate) => getHighLowProposalQuote(symbol, side, candidate, candidate?.precision || 0, stake, timeoutMs))
+  ))
     .filter((r) => r.status === "fulfilled" && r.value)
     .map((r) => r.value);
-
-  if (!firstPass.length) {
-    const firstErr = firstSettled.find((r) => r.status === "rejected");
-    if (firstErr && firstErr.reason) throw firstErr.reason;
-    return null;
-  }
+  if (!firstPass.length) return null;
 
   let best = firstPass.sort((a, b) => a.distance - b.distance)[0];
-  rememberExecutionBarrierHint(symbol, side, best);
-
+  rememberExecutionBarrierHint(symbol, side, best, best.precision || 0);
   if (fast) return best;
 
-  const fineCandidates = Array.from(
-    new Set(
-      AUTO_PRECALC_FINE_FACTORS
-        .map((factor) => roundTo(Math.max(Number(best.payoutPerPoint || 0) * factor, 1e-8), 6))
-        .filter((v) => Number.isFinite(v) && v > 0)
-    )
+  const fineCandidates = dedupeBarrierCandidates(
+    AUTO_PRECALC_FINE_FACTORS.map((factor) => makeBarrierCandidateFromAbsolute(side, Math.max(Math.abs(best.barrierNum) * factor, 1e-8)))
   );
 
   if (fineCandidates.length) {
-    const secondSettled = await Promise.allSettled(
-      fineCandidates.map((ppp) => getHighLowProposalQuote(symbol, side, ppp, stake, timeoutMs))
-    );
-
-    const secondPass = secondSettled
+    const secondPass = (await Promise.allSettled(
+      fineCandidates.map((candidate) => getHighLowProposalQuote(symbol, side, candidate, candidate?.precision || 0, stake, timeoutMs))
+    ))
       .filter((r) => r.status === "fulfilled" && r.value)
       .map((r) => r.value);
-
-    if (secondPass.length) {
-      best = secondPass.concat(firstPass).sort((a, b) => a.distance - b.distance)[0];
-    }
+    if (secondPass.length) best = secondPass.concat(firstPass).sort((a, b) => a.distance - b.distance)[0];
   }
 
-  rememberExecutionBarrierHint(symbol, side, best);
+  rememberExecutionBarrierHint(symbol, side, best, best.precision || 0);
   return best;
 }
 const executionBarrierHintCache = new Map();
@@ -698,11 +799,13 @@ function getExecutionHintKey(symbol, side) {
 function getExecutionBarrierHint(symbol, side) {
   return executionBarrierHintCache.get(getExecutionHintKey(symbol, side)) || null;
 }
-function rememberExecutionBarrierHint(symbol, side, plan) {
+function rememberExecutionBarrierHint(symbol, side, plan, precision = 3) {
   if (!symbol || !side || !plan) return;
   executionBarrierHintCache.set(getExecutionHintKey(symbol, side), {
-    ppp: Number(plan.payoutPerPoint || 0),
-    barrier: String(plan.barrier || ""),
+    barrierAbs: Math.abs(Number(plan.barrierNum || 0)),
+    barrierNum: Number(plan.barrierNum || 0),
+    barrier: String(plan.barrier || formatRelativeBarrier(plan.barrierNum, precision)),
+    precision: Math.max(0, Number(plan.precision ?? precision ?? 0)),
     updatedAt: Date.now(),
   });
 }
@@ -812,7 +915,6 @@ function getCachedExecutionPlan(item, side, maxAgeMs = AUTO_PRECALC_STALE_MS) {
 async function ensureExecutionPlanForTrade(item, side) {
   if (!item?.id) return null;
   const cache = getOrCreateExecutionPlan(item);
-
   let plan = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 2);
   if (plan) return plan;
 
@@ -853,11 +955,12 @@ async function ensureExecutionPlanForTrade(item, side) {
     throw e;
   }
 
+  cache.error ||= `Sin proposal válida para ${side === "CALL" ? "HIGHER" : "LOWER"}`;
   return null;
 }
 function formatExecutionPlanMini(plan) {
   if (!plan) return "…";
-  return `${plan.barrier || `PPP ${roundTo(plan.payoutPerPoint, 3)}`} · ${Math.round(plan.profitPct)}%`;
+  return `${plan.barrier} · ${Math.round(plan.profitPct)}%`;
 }
 function buildTradeButtonLabel(side, plan = null) {
   const base = side === "CALL" ? "🟢 COMPRA" : "🔴 VENTA";
@@ -3803,10 +3906,8 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
         plan = await ensureExecutionPlanForTrade(modalCurrentItem, side);
       }
       if (!plan?.proposalId || !Number.isFinite(plan.askPrice)) {
-        throw new Error(
-          (getOrCreateExecutionPlan(modalCurrentItem)?.error) ||
-          `No encontré proposal válida para ${side === "CALL" ? "HIGHER" : "LOWER"}`
-        );
+        const cachedErr = getOrCreateExecutionPlan(modalCurrentItem)?.error || "";
+        throw new Error(cachedErr || `No encontré proposal válida para ${side === "CALL" ? "HIGHER" : "LOWER"}`);
       }
 
       res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
@@ -3815,6 +3916,8 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
         ...tradeExtra,
         exec_mode: executionMode,
         contract_type: contractLabel,
+        api_contract_type: plan.apiContractType || contractLabel,
+        api_symbol_key: plan.symbolKey || "symbol",
         barrier: plan.barrier,
         target_return_pct: Math.round(plan.profitPct),
         proposal_id: plan.proposalId,
