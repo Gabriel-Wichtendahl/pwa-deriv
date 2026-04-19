@@ -63,9 +63,11 @@ const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_AUTO_120";
 const AUTO_TARGET_RETURN_PCT = 120;
 const AUTO_PRECALC_REFRESH_MS = 900;
 const AUTO_PRECALC_STALE_MS = 7000;
-const AUTO_PRECALC_COARSE_MULTS = [0.25, 0.5, 0.9, 1.5, 2.3];
-const AUTO_PRECALC_FINE_FACTORS = [0.9, 1.0, 1.1];
-const AUTO_PRECALC_FAST_MULTS = [0.5, 0.9, 1.5];
+// Búsqueda por presets de "pips" relativos (no por rango reciente de la vela),
+// porque en práctica los niveles útiles suelen estar mucho más lejos que el micro-rango del minuto.
+const AUTO_PRECALC_COARSE_PIPS = [60, 80, 100, 120, 150, 180, 200, 220, 250, 285, 320, 350, 400, 450, 500, 650, 800, 1000, 1200];
+const AUTO_PRECALC_FAST_PIPS = [120, 180, 220, 250, 285, 320, 350, 400, 500, 650, 800];
+const AUTO_PRECALC_FINE_FACTORS = [0.85, 0.92, 1.0, 1.08, 1.15];
 const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 2600;
 const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 5200;
 const AUTO_BARRIER_PIP_FAST = [80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500];
@@ -570,16 +572,32 @@ function getExecutionSearchRange(item) {
   return 0.1;
 }
 function buildBarrierCandidates(item, side, mode = "full") {
-  const range = getExecutionSearchRange(item);
   const precision = getPricePrecisionFromTicks(getSignalTicksForExecution(item), 3);
+  const unit = 10 ** -precision;
   const sign = side === "CALL" ? 1 : -1;
-  const source = mode === "fast" ? AUTO_PRECALC_FAST_MULTS : AUTO_PRECALC_COARSE_MULTS;
-  const coarse = [];
-  for (const mult of source) {
-    const raw = Math.max(range * mult, 10 ** -precision);
-    coarse.push(sign * roundTo(raw, precision));
-  }
-  return { precision, coarse: Array.from(new Set(coarse.filter((v) => Number.isFinite(v) && Math.abs(v) > 0))) };
+  const sourcePips = mode === "fast" ? AUTO_PRECALC_FAST_PIPS : AUTO_PRECALC_COARSE_PIPS;
+
+  const hint = getExecutionBarrierHint(item?.symbol, side);
+  const hintedPips = hint?.pips && Number.isFinite(Number(hint.pips)) ? [
+    Math.max(1, Math.round(Number(hint.pips) * 0.85)),
+    Math.max(1, Math.round(Number(hint.pips) * 0.92)),
+    Math.max(1, Math.round(Number(hint.pips))),
+    Math.max(1, Math.round(Number(hint.pips) * 1.08)),
+    Math.max(1, Math.round(Number(hint.pips) * 1.15)),
+  ] : [];
+
+  const mergedPips = Array.from(new Set([...hintedPips, ...sourcePips]))
+    .filter((p) => Number.isFinite(Number(p)) && Number(p) > 0)
+    .sort((a, b) => a - b);
+
+  const coarse = mergedPips
+    .map((pips) => sign * roundTo(Number(pips) * unit, precision))
+    .filter((v) => Number.isFinite(v) && Math.abs(v) >= unit);
+
+  return {
+    precision,
+    coarse: Array.from(new Set(coarse)),
+  };
 }
 function formatRelativeBarrier(value, precision = 3) {
   const n = Number(value || 0);
