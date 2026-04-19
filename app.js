@@ -61,10 +61,11 @@ const EXECUTION_MODE_KEY = "executionMode_v1";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_AUTO_120";
 const AUTO_TARGET_RETURN_PCT = 120;
-const AUTO_PRECALC_REFRESH_MS = 1400;
-const AUTO_PRECALC_STALE_MS = 2400;
-const AUTO_PRECALC_COARSE_MULTS = [0.2, 0.35, 0.55, 0.8, 1.1, 1.5, 2.1, 3.0];
-const AUTO_PRECALC_FINE_FACTORS = [0.75, 0.88, 1.0, 1.12, 1.25];
+const AUTO_PRECALC_REFRESH_MS = 900;
+const AUTO_PRECALC_STALE_MS = 7000;
+const AUTO_PRECALC_COARSE_MULTS = [0.25, 0.5, 0.9, 1.5, 2.3];
+const AUTO_PRECALC_FINE_FACTORS = [0.9, 1.0, 1.1];
+const AUTO_PRECALC_FAST_MULTS = [0.5, 0.9, 1.5];
 
 /* =========================
    Auto-open chart config
@@ -564,12 +565,13 @@ function getExecutionSearchRange(item) {
   if (Number.isFinite(lastQuote) && lastQuote > 0) return Math.max(lastQuote * 0.0025, 0.001);
   return 0.1;
 }
-function buildBarrierCandidates(item, side) {
+function buildBarrierCandidates(item, side, mode = "full") {
   const range = getExecutionSearchRange(item);
   const precision = getPricePrecisionFromTicks(getSignalTicksForExecution(item), 3);
   const sign = side === "CALL" ? 1 : -1;
+  const source = mode === "fast" ? AUTO_PRECALC_FAST_MULTS : AUTO_PRECALC_COARSE_MULTS;
   const coarse = [];
-  for (const mult of AUTO_PRECALC_COARSE_MULTS) {
+  for (const mult of source) {
     const raw = Math.max(range * mult, 10 ** -precision);
     coarse.push(sign * roundTo(raw, precision));
   }
@@ -618,11 +620,12 @@ async function getHighLowProposalQuote(symbol, side, barrierNum, precision, stak
   if (res?.error) throw new Error(res.error.message || "proposal error");
   return parseProposalToExecution({ proposal: res?.proposal, barrierNum }, side, precision);
 }
-async function findBestHighLowPlan(item, side) {
+async function findBestHighLowPlan(item, side, opts = {}) {
   const symbol = item?.symbol;
   if (!symbol) return null;
   const stake = getTradeStake();
-  const { precision, coarse } = buildBarrierCandidates(item, side);
+  const fast = !!opts.fast;
+  const { precision, coarse } = buildBarrierCandidates(item, side, fast ? "fast" : "full");
   if (!coarse.length) return null;
 
   const firstPass = (await Promise.allSettled(coarse.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake))))
@@ -631,6 +634,8 @@ async function findBestHighLowPlan(item, side) {
   if (!firstPass.length) return null;
 
   let best = firstPass.sort((a, b) => a.distance - b.distance)[0];
+  if (fast) return best;
+
   const fineCandidates = Array.from(new Set(AUTO_PRECALC_FINE_FACTORS.map((factor) => {
     const raw = Math.max(Math.abs(best.barrierNum) * factor, 10 ** -precision);
     return (side === "CALL" ? 1 : -1) * roundTo(raw, precision);
@@ -694,7 +699,7 @@ async function refreshExecutionPlanForSignal(item, force = false) {
     }
     try {
       await ensureAuthorized();
-      const [callPlan, putPlan] = await Promise.all([findBestHighLowPlan(item, "CALL"), findBestHighLowPlan(item, "PUT")]);
+      const [callPlan, putPlan] = await Promise.all([findBestHighLowPlan(item, "CALL", { fast: true }), findBestHighLowPlan(item, "PUT", { fast: true })]);
       cache.call = callPlan;
       cache.put = putPlan;
       cache.updatedAt = Date.now();
@@ -747,6 +752,41 @@ function getCachedExecutionPlan(item, side, maxAgeMs = AUTO_PRECALC_STALE_MS) {
   if (Date.now() - Number(plan.updatedAt || cache.updatedAt || 0) > maxAgeMs) return null;
   return plan;
 }
+async function ensureExecutionPlanForTrade(item, side) {
+  if (!item?.id) return null;
+  const cache = getOrCreateExecutionPlan(item);
+  let plan = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 2);
+  if (plan) return plan;
+
+  if (!getDerivToken()) throw new Error("Sin token DEMO");
+  if (!ws || ws.readyState !== 1) throw new Error("WS desconectado");
+  await ensureAuthorized();
+
+  const quick = await findBestHighLowPlan(item, side, { fast: true });
+  if (quick) {
+    if (side === "CALL") cache.call = quick;
+    else cache.put = quick;
+    cache.updatedAt = Date.now();
+    cache.error = "";
+    item.autoHighLow ||= {};
+    item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...quick };
+    item.autoHighLow.updatedAt = cache.updatedAt;
+    return quick;
+  }
+
+  const full = await findBestHighLowPlan(item, side, { fast: false });
+  if (full) {
+    if (side === "CALL") cache.call = full;
+    else cache.put = full;
+    cache.updatedAt = Date.now();
+    cache.error = "";
+    item.autoHighLow ||= {};
+    item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...full };
+    item.autoHighLow.updatedAt = cache.updatedAt;
+    return full;
+  }
+  return null;
+}
 function formatExecutionPlanMini(plan) {
   if (!plan) return "…";
   return `${plan.barrier} · ${Math.round(plan.profitPct)}%`;
@@ -765,19 +805,24 @@ function applyModalExecutionButtonUI(locked = false, candleClosed = false) {
   if (locked || candleClosed) return;
   if (!shouldUseAutoHighLowExecution()) return;
 
+  const canSearchNow = !!getDerivToken() && !!ws && ws.readyState === 1;
   const applyState = (btn, plan, sideLabel) => {
     if (!btn) return;
+    btn.style.filter = "";
+    btn.style.opacity = "";
     if (plan) {
       btn.disabled = false;
-      btn.style.filter = "";
-      btn.style.opacity = "";
       btn.title = `${sideLabel} listo | barrier ${plan.barrier} | retorno ${Math.round(plan.profitPct)}%`;
-    } else {
-      btn.disabled = true;
+      return;
+    }
+    btn.disabled = !canSearchNow;
+    if (!canSearchNow) {
       btn.style.filter = "grayscale(1) saturate(0.6)";
       btn.style.opacity = "0.55";
-      btn.title = "Precalculando barrier automático…";
+      btn.title = "Necesita token DEMO y conexión para buscar barrier";
+      return;
     }
+    btn.title = `${sideLabel} no está listo todavía. Si tocás, hago una búsqueda rápida y compro.`;
   };
   applyState(modalBuyCallBtn, callPlan, "HIGHER");
   applyState(modalBuyPutBtn, putPlan, "LOWER");
@@ -3673,13 +3718,13 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
 
     if (shouldUseAutoHighLowExecution() && modalCurrentItem?.id) {
       ensureSignalAutoPrecalc(modalCurrentItem);
-      let plan = getCachedExecutionPlan(modalCurrentItem, side);
+      let plan = getCachedExecutionPlan(modalCurrentItem, side, AUTO_PRECALC_STALE_MS * 2);
       if (!plan) {
-        const refreshed = await refreshExecutionPlanForSignal(modalCurrentItem, true);
-        plan = side === "CALL" ? refreshed?.call : refreshed?.put;
+        toast(`⏳ Buscando ${side === "CALL" ? "HIGHER" : "LOWER"} rápido…`, 1200);
+        plan = await ensureExecutionPlanForTrade(modalCurrentItem, side);
       }
       if (!plan?.proposalId || !Number.isFinite(plan.askPrice)) {
-        throw new Error(`Todavía no está lista la proposal ${side === "CALL" ? "HIGHER" : "LOWER"}`);
+        throw new Error(`No encontré barrier válido para ${side === "CALL" ? "HIGHER" : "LOWER"}`);
       }
 
       res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
