@@ -57,31 +57,25 @@ const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
 const DEFAULT_CURRENCY = "USD";
 
+const EXECUTION_MODE_KEY = "executionMode_v1";
+const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
+const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_AUTO_120";
+const AUTO_TARGET_RETURN_PCT = 120;
+const AUTO_PRECALC_REFRESH_MS = 900;
+const AUTO_PRECALC_STALE_MS = 7000;
+// En vez de adivinar un barrier, probamos payout_per_point.
+// Deriv calcula la barrera automáticamente para HIGHER/LOWER.
+const AUTO_PRECALC_COARSE_PPP = [0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8, 12, 20, 35, 50, 80, 120, 200];
+const AUTO_PRECALC_FAST_PPP = [0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1, 1.5, 2, 3, 5, 8, 12, 20, 35];
+const AUTO_PRECALC_FINE_FACTORS = [0.7, 0.85, 1.0, 1.15, 1.35];
+const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 2600;
+const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 5200;
+
 /* =========================
    Auto-open chart config
 ========================= */
 const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
-
-const SIGNAL_MODE_KEY = "signalMode_v2";
-const RECENT_CANDLES_KEY = "recentMinuteCandles_v1";
-
-const POLARITY_LOOKBACK = 50;
-const POLARITY_STORE_MAX = 80;
-const POLARITY_MIN_CANDLES = 18;
-const POLARITY_NEAR_FRAC_RANGE = 0.18;
-const POLARITY_ZONE_MAX_FRAC_RANGE = 0.28;
-const POLARITY_BREAK_FRAC_RANGE = 0.12;
-const POLARITY_REJECTION_RANGE_FRAC = 0.85;
-const POLARITY_REJECTION_BODY_FRAC = 0.28;
-const POLARITY_MOVE_AWAY_FRAC = 0.16;
-const POLARITY_MIN_USES_STRONG = 3;
-const POLARITY_ACTIVE_DIST_TOUCH_MULT = 1.15;
-const POLARITY_ACTIVE_DIST_BREAK_MULT = 1.55;
-const POLARITY_ACTIVE_ZONE_WIDTH_MULT = 2.0;
-const POLARITY_ONLY_MAX_LEVELS = 3;
-const POLARITY_ONLY_BORDER_FRAC = 0.14;
-const POLARITY_ONLY_RECENCY_WEIGHT = 0.10;
 
 /* =========================
    Disciplina
@@ -308,6 +302,8 @@ const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
+let executionMode = EXECUTION_MODE_RISE_FALL;
+const executionPlanCache = new Map();
 
 /* =========================
    Toast
@@ -410,8 +406,6 @@ let EVAL_SEC = 45;
 
 // ✅ NORMAL vs PATRÓN ESCALERA
 let stairMode = false;
-let signalMode = "NORMAL";
-let recentCandlesBySymbol = loadRecentCandlesStore();
 
 let history = loadHistory();
 migrateHistoryModesToStair();
@@ -471,6 +465,439 @@ function makeDerivTraderUrl(symbol) {
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+
+function loadExecutionMode() {
+  try {
+    const saved = localStorage.getItem(EXECUTION_MODE_KEY);
+    executionMode = saved === EXECUTION_MODE_HIGHLOW_AUTO ? EXECUTION_MODE_HIGHLOW_AUTO : EXECUTION_MODE_RISE_FALL;
+  } catch {
+    executionMode = EXECUTION_MODE_RISE_FALL;
+  }
+}
+function saveExecutionMode() {
+  try {
+    localStorage.setItem(EXECUTION_MODE_KEY, executionMode);
+  } catch {}
+}
+function shouldUseAutoHighLowExecution() {
+  return executionMode === EXECUTION_MODE_HIGHLOW_AUTO;
+}
+function getExecutionModeLabel() {
+  return shouldUseAutoHighLowExecution() ? `🎯 High/Low auto ${AUTO_TARGET_RETURN_PCT}%` : "↕️ Rise/Fall 1m";
+}
+function applyExecutionModeUI() {
+  const btn = pickEl("executionModeBtn");
+  if (!btn) return;
+  btn.textContent = getExecutionModeLabel();
+  btn.classList.toggle("active", shouldUseAutoHighLowExecution());
+  btn.title = shouldUseAutoHighLowExecution()
+    ? `Busca automáticamente HIGHER/LOWER cerca de ${AUTO_TARGET_RETURN_PCT}% y deja la compra lista.`
+    : "Usa Rise/Fall de 1 minuto como hasta ahora.";
+}
+function ensureExecutionModeButton() {
+  let btn = pickEl("executionModeBtn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+
+    btn = document.createElement("button");
+    btn.id = "executionModeBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.style.gridColumn = "1 / -1";
+    host.appendChild(btn);
+  }
+
+  btn.onclick = () => {
+    executionMode = shouldUseAutoHighLowExecution() ? EXECUTION_MODE_RISE_FALL : EXECUTION_MODE_HIGHLOW_AUTO;
+    saveExecutionMode();
+    applyExecutionModeUI();
+    if (shouldUseAutoHighLowExecution()) {
+      for (const it of history.slice(-12)) ensureSignalAutoPrecalc(it);
+    } else {
+      stopAllExecutionPlanLoops();
+    }
+    if (chartModal && !chartModal.classList.contains("hidden")) updateModalCandleStatusUI();
+    toast(`Ejecución: ${getExecutionModeLabel()}`, 1800);
+  };
+
+  applyExecutionModeUI();
+  return btn;
+}
+
+function roundTo(value, precision = 3) {
+  const p = Math.max(0, Number(precision || 0));
+  const f = 10 ** p;
+  return Math.round(Number(value || 0) * f) / f;
+}
+function getPricePrecisionFromTicks(ticks, fallback = 3) {
+  const pts = (Array.isArray(ticks) ? ticks : []).slice(-18);
+  let maxDec = 0;
+  for (const t of pts) {
+    const q = Number(t?.quote);
+    if (!Number.isFinite(q)) continue;
+    const s = String(q);
+    const dec = s.includes(".") ? s.split(".")[1].replace(/0+$/, "").length : 0;
+    if (dec > maxDec) maxDec = dec;
+  }
+  return Math.max(fallback, Math.min(6, maxDec || fallback));
+}
+function getSignalTicksForExecution(item) {
+  if (!item) return [];
+  const live = minuteData?.[item.minute]?.[item.symbol];
+  if (Array.isArray(live) && live.length >= 2) return live.slice();
+  if (Array.isArray(item.ticks) && item.ticks.length >= 2) return item.ticks.slice();
+  return [];
+}
+function buildPayoutPerPointCandidates(item, side, mode = "full") {
+  const source = mode === "fast" ? AUTO_PRECALC_FAST_PPP : AUTO_PRECALC_COARSE_PPP;
+  const hint = getExecutionBarrierHint(item?.symbol, side);
+
+  const hinted = [];
+  if (Number.isFinite(Number(hint?.ppp)) && Number(hint.ppp) > 0) {
+    const base = Number(hint.ppp);
+    for (const factor of [0.7, 0.85, 1, 1.15, 1.35]) {
+      hinted.push(roundTo(base * factor, 6));
+    }
+  }
+
+  const merged = Array.from(new Set([...hinted, ...source]))
+    .filter((v) => Number.isFinite(Number(v)) && Number(v) > 0)
+    .sort((a, b) => a - b);
+
+  return { coarse: merged };
+}
+function inferBarrierLabelFromProposal(proposal, fallbackPPP) {
+  const details = proposal?.contract_details;
+  const directBarrier = details?.barrier ?? proposal?.barrier;
+  if (Number.isFinite(Number(directBarrier))) return String(directBarrier);
+
+  const longcode = String(proposal?.longcode || "");
+  const m = longcode.match(/(?:higher|lower) than\s+([0-9]+(?:\.[0-9]+)?)/i);
+  if (m?.[1]) return m[1];
+
+  return `PPP ${roundTo(fallbackPPP, 4)}`;
+}
+function parseProposalToExecution(planRaw, side) {
+  const proposal = planRaw?.proposal;
+  const askPrice = Number(proposal?.ask_price);
+  const payout = Number(proposal?.payout);
+  const id = proposal?.id ? String(proposal.id) : "";
+  const payoutPerPoint = Number(planRaw?.payoutPerPoint);
+
+  if (!id || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) return null;
+
+  const profitPct = ((payout - askPrice) / askPrice) * 100;
+
+  return {
+    proposalId: id,
+    contractType: side === "CALL" ? "HIGHER" : "LOWER",
+    askPrice,
+    payout,
+    profitPct,
+    distance: Math.abs(profitPct - AUTO_TARGET_RETURN_PCT),
+    payoutPerPoint,
+    barrier: inferBarrierLabelFromProposal(proposal, payoutPerPoint),
+    longcode: proposal?.longcode ? String(proposal.longcode) : "",
+    updatedAt: Date.now(),
+  };
+}
+async function getHighLowProposalQuote(symbol, side, payoutPerPoint, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+  const req = {
+    proposal: 1,
+    amount: stake,
+    basis: "stake",
+    contract_type: side === "CALL" ? "HIGHER" : "LOWER",
+    currency: DEFAULT_CURRENCY,
+    duration: Number(DEFAULT_DURATION) || 1,
+    duration_unit: DEFAULT_DURATION_UNIT || "m",
+    payout_per_point: Number(payoutPerPoint),
+    symbol,
+  };
+
+  const res = await wsRequest(req, timeoutMs);
+  if (res?.error) throw new Error(res.error.message || "proposal error");
+
+  return parseProposalToExecution({ proposal: res?.proposal, payoutPerPoint }, side);
+}
+async function findBestHighLowPlan(item, side, opts = {}) {
+  const symbol = item?.symbol;
+  if (!symbol) return null;
+
+  const stake = getTradeStake();
+  const fast = !!opts.fast;
+  const { coarse } = buildPayoutPerPointCandidates(item, side, fast ? "fast" : "full");
+  if (!coarse.length) return null;
+
+  const timeoutMs = fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS;
+
+  const firstSettled = await Promise.allSettled(
+    coarse.map((ppp) => getHighLowProposalQuote(symbol, side, ppp, stake, timeoutMs))
+  );
+
+  const firstPass = firstSettled
+    .filter((r) => r.status === "fulfilled" && r.value)
+    .map((r) => r.value);
+
+  if (!firstPass.length) {
+    const firstErr = firstSettled.find((r) => r.status === "rejected");
+    if (firstErr && firstErr.reason) throw firstErr.reason;
+    return null;
+  }
+
+  let best = firstPass.sort((a, b) => a.distance - b.distance)[0];
+  rememberExecutionBarrierHint(symbol, side, best);
+
+  if (fast) return best;
+
+  const fineCandidates = Array.from(
+    new Set(
+      AUTO_PRECALC_FINE_FACTORS
+        .map((factor) => roundTo(Math.max(Number(best.payoutPerPoint || 0) * factor, 1e-8), 6))
+        .filter((v) => Number.isFinite(v) && v > 0)
+    )
+  );
+
+  if (fineCandidates.length) {
+    const secondSettled = await Promise.allSettled(
+      fineCandidates.map((ppp) => getHighLowProposalQuote(symbol, side, ppp, stake, timeoutMs))
+    );
+
+    const secondPass = secondSettled
+      .filter((r) => r.status === "fulfilled" && r.value)
+      .map((r) => r.value);
+
+    if (secondPass.length) {
+      best = secondPass.concat(firstPass).sort((a, b) => a.distance - b.distance)[0];
+    }
+  }
+
+  rememberExecutionBarrierHint(symbol, side, best);
+  return best;
+}
+const executionBarrierHintCache = new Map();
+function getExecutionHintKey(symbol, side) {
+  return `${String(symbol || "")}|${String(side || "")}`;
+}
+function getExecutionBarrierHint(symbol, side) {
+  return executionBarrierHintCache.get(getExecutionHintKey(symbol, side)) || null;
+}
+function rememberExecutionBarrierHint(symbol, side, plan) {
+  if (!symbol || !side || !plan) return;
+  executionBarrierHintCache.set(getExecutionHintKey(symbol, side), {
+    ppp: Number(plan.payoutPerPoint || 0),
+    barrier: String(plan.barrier || ""),
+    updatedAt: Date.now(),
+  });
+}
+
+function getOrCreateExecutionPlan(item) {
+  if (!item?.id) return null;
+  let cache = executionPlanCache.get(item.id);
+  if (!cache) {
+    cache = { item, call: null, put: null, updatedAt: 0, error: "", timer: null, running: null, active: false };
+    executionPlanCache.set(item.id, cache);
+  }
+  cache.item = item;
+  return cache;
+}
+function stopExecutionPlanLoop(itemId) {
+  const cache = executionPlanCache.get(String(itemId || ""));
+  if (!cache) return;
+  cache.active = false;
+  if (cache.timer) clearTimeout(cache.timer);
+  cache.timer = null;
+  cache.running = null;
+}
+function stopAllExecutionPlanLoops() {
+  for (const key of Array.from(executionPlanCache.keys())) stopExecutionPlanLoop(key);
+}
+function cleanupExecutionPlanCache() {
+  const nowMin = currentServerMinute();
+  for (const [key, cache] of executionPlanCache.entries()) {
+    const item = cache?.item;
+    const expired = !item || (typeof item.minute === "number" && item.minute < nowMin) || !!item?.trade?.badge;
+    if (expired) {
+      stopExecutionPlanLoop(key);
+      executionPlanCache.delete(key);
+    }
+  }
+}
+async function refreshExecutionPlanForSignal(item, force = false) {
+  if (!shouldUseAutoHighLowExecution() || !item?.id) return null;
+  const cache = getOrCreateExecutionPlan(item);
+  if (!cache) return null;
+  if (cache.running && !force) return cache.running;
+
+  cache.running = (async () => {
+    if (!getDerivToken()) {
+      cache.error = "Sin token DEMO";
+      return cache;
+    }
+    if (!ws || ws.readyState !== 1) {
+      cache.error = "WS desconectado";
+      return cache;
+    }
+    try {
+      await ensureAuthorized();
+      const [callPlan, putPlan] = await Promise.all([findBestHighLowPlan(item, "CALL", { fast: true }), findBestHighLowPlan(item, "PUT", { fast: true })]);
+      cache.call = callPlan;
+      cache.put = putPlan;
+      cache.updatedAt = Date.now();
+      cache.error = callPlan || putPlan ? "" : "Sin proposal válida";
+      item.autoHighLow = {
+        call: callPlan ? { ...callPlan } : null,
+        put: putPlan ? { ...putPlan } : null,
+        updatedAt: cache.updatedAt,
+      };
+      return cache;
+    } catch (e) {
+      cache.error = e?.message || String(e);
+      return cache;
+    } finally {
+      cache.running = null;
+      if (modalCurrentItem && item.id === modalCurrentItem.id) updateModalCandleStatusUI();
+    }
+  })();
+
+  return cache.running;
+}
+function ensureSignalAutoPrecalc(item) {
+  if (!shouldUseAutoHighLowExecution() || !item?.id) return;
+  if (!getDerivToken()) return;
+  const cache = getOrCreateExecutionPlan(item);
+  if (!cache || cache.active) return;
+  cache.active = true;
+
+  const loop = async () => {
+    if (!cache.active) return;
+    cleanupExecutionPlanCache();
+    const currentItem = findHistoryItemById(item.id) || item;
+    if (!currentItem || !isTradeEntryOpen(currentItem) || currentItem?.trade?.badge) {
+      stopExecutionPlanLoop(item.id);
+      return;
+    }
+    await refreshExecutionPlanForSignal(currentItem);
+    if (!cache.active) return;
+    cache.timer = setTimeout(loop, AUTO_PRECALC_REFRESH_MS);
+  };
+
+  void loop();
+}
+function getCachedExecutionPlan(item, side, maxAgeMs = AUTO_PRECALC_STALE_MS) {
+  if (!item?.id) return null;
+  const cache = executionPlanCache.get(item.id);
+  if (!cache) return null;
+  const plan = side === "CALL" ? cache.call : cache.put;
+  if (!plan) return null;
+  if (Date.now() - Number(plan.updatedAt || cache.updatedAt || 0) > maxAgeMs) return null;
+  return plan;
+}
+async function ensureExecutionPlanForTrade(item, side) {
+  if (!item?.id) return null;
+  const cache = getOrCreateExecutionPlan(item);
+
+  let plan = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 2);
+  if (plan) return plan;
+
+  if (!getDerivToken()) throw new Error("Sin token DEMO");
+  if (!ws || ws.readyState !== 1) throw new Error("WS desconectado");
+  await ensureAuthorized();
+
+  try {
+    const quick = await findBestHighLowPlan(item, side, { fast: true });
+    if (quick) {
+      if (side === "CALL") cache.call = quick;
+      else cache.put = quick;
+      cache.updatedAt = Date.now();
+      cache.error = "";
+      item.autoHighLow ||= {};
+      item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...quick };
+      item.autoHighLow.updatedAt = cache.updatedAt;
+      return quick;
+    }
+  } catch (e) {
+    cache.error = e?.message || String(e);
+  }
+
+  try {
+    const full = await findBestHighLowPlan(item, side, { fast: false });
+    if (full) {
+      if (side === "CALL") cache.call = full;
+      else cache.put = full;
+      cache.updatedAt = Date.now();
+      cache.error = "";
+      item.autoHighLow ||= {};
+      item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...full };
+      item.autoHighLow.updatedAt = cache.updatedAt;
+      return full;
+    }
+  } catch (e) {
+    cache.error = e?.message || String(e);
+    throw e;
+  }
+
+  return null;
+}
+function formatExecutionPlanMini(plan) {
+  if (!plan) return "…";
+  return `${plan.barrier || `PPP ${roundTo(plan.payoutPerPoint, 3)}`} · ${Math.round(plan.profitPct)}%`;
+}
+function buildTradeButtonLabel(side, plan = null) {
+  const base = side === "CALL" ? "🟢 COMPRA" : "🔴 VENTA";
+  if (!shouldUseAutoHighLowExecution()) return base;
+  return `${base} · ${formatExecutionPlanMini(plan)}`;
+}
+function applyModalExecutionButtonUI(locked = false, candleClosed = false) {
+  const callPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "CALL") : null;
+  const putPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "PUT") : null;
+  setTradeButtonBaseLabel(modalBuyCallBtn, buildTradeButtonLabel("CALL", callPlan));
+  setTradeButtonBaseLabel(modalBuyPutBtn, buildTradeButtonLabel("PUT", putPlan));
+
+  if (locked || candleClosed) return;
+  if (!shouldUseAutoHighLowExecution()) return;
+
+  const hasToken = !!getDerivToken();
+  const wsReady = !!ws && ws.readyState === 1;
+  const canSearchNow = hasToken && wsReady;
+
+  const applyState = (btn, plan, sideLabel) => {
+    if (!btn) return;
+    btn.style.filter = "";
+    btn.style.opacity = "";
+
+    // En AUTO HL los botones no deben quedar muertos solo porque el plan aún no terminó.
+    // Se permite tocar y el click handler hace búsqueda rápida/fallback si todavía no hay proposal lista.
+    btn.disabled = false;
+
+    if (plan) {
+      btn.title = `${sideLabel} listo | barrier ${plan.barrier} | retorno ${Math.round(plan.profitPct)}%`;
+      return;
+    }
+
+    if (!hasToken) {
+      btn.title = "No hay token DEMO guardado. Si tocás, te avisaré para guardarlo.";
+      return;
+    }
+
+    if (!wsReady) {
+      btn.title = "Conexión no lista todavía. Si tocás, intento refrescar apenas conecte.";
+      return;
+    }
+
+    btn.title = `${sideLabel} no está listo todavía. Si tocás, hago una búsqueda rápida y compro.`;
+  };
+  applyState(modalBuyCallBtn, callPlan, "HIGHER");
+  applyState(modalBuyPutBtn, putPlan, "LOWER");
+}
+function setTradeButtonBaseLabel(btn, label) {
+  if (!btn) return;
+  btn.dataset.baseLabel = label;
+  btn.textContent = label;
+}
 
 /* =========================
    Auto-open chart
@@ -694,69 +1121,6 @@ function saveHistory(arr) {
   } catch {}
 }
 
-
-function loadRecentCandlesStore() {
-  try {
-    const raw = localStorage.getItem(RECENT_CANDLES_KEY);
-    if (!raw) return {};
-    const obj = JSON.parse(raw);
-    const out = {};
-    for (const sym of Object.keys(obj || {})) {
-      const arr = Array.isArray(obj[sym]) ? obj[sym] : [];
-      out[sym] = arr
-        .map((c) => ({
-          minute: Number(c?.minute),
-          open: Number(c?.open),
-          high: Number(c?.high),
-          low: Number(c?.low),
-          close: Number(c?.close),
-        }))
-        .filter((c) =>
-          Number.isFinite(c.minute) &&
-          Number.isFinite(c.open) &&
-          Number.isFinite(c.high) &&
-          Number.isFinite(c.low) &&
-          Number.isFinite(c.close)
-        )
-        .sort((a, b) => a.minute - b.minute)
-        .slice(-POLARITY_STORE_MAX);
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-function saveRecentCandlesStore() {
-  try {
-    localStorage.setItem(RECENT_CANDLES_KEY, JSON.stringify(recentCandlesBySymbol || {}));
-  } catch {}
-}
-function upsertRecentMinuteCandle(symbol, candle) {
-  if (!symbol || !candle) return;
-  const safe = {
-    minute: Number(candle.minute),
-    open: Number(candle.open),
-    high: Number(candle.high),
-    low: Number(candle.low),
-    close: Number(candle.close),
-  };
-  if (
-    !Number.isFinite(safe.minute) ||
-    !Number.isFinite(safe.open) ||
-    !Number.isFinite(safe.high) ||
-    !Number.isFinite(safe.low) ||
-    !Number.isFinite(safe.close)
-  ) return;
-
-  recentCandlesBySymbol[symbol] ||= [];
-  const arr = recentCandlesBySymbol[symbol];
-  const idx = arr.findIndex((x) => Number(x?.minute) === safe.minute);
-  if (idx >= 0) arr[idx] = safe;
-  else arr.push(safe);
-  arr.sort((a, b) => a.minute - b.minute);
-  recentCandlesBySymbol[symbol] = arr.slice(-POLARITY_STORE_MAX);
-}
-
 /* =========================
    Helpers UI
 ========================= */
@@ -769,140 +1133,6 @@ function loadBool(key, fallback) {
 }
 function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
-}
-
-
-function isPolarityLevelsMode() {
-  return signalMode === "POLARIDAD_NIVELES";
-}
-function isNormalPolarityMode() {
-  return signalMode === "NORMAL_POLARIDAD";
-}
-function getSignalModeLabel(mode = signalMode) {
-  if (mode === "POLARIDAD_NIVELES") return "NIVELES POLARIDAD";
-  if (mode === "NORMAL_POLARIDAD") return "NORMAL + POLARIDAD";
-  return "NORMAL";
-}
-
-function isPurePolaritySignalItem(item = null) {
-  return String(item?.mode || "") === "NIVELES POLARIDAD";
-}
-function getItemPolarityLevels(item = null) {
-  return Array.isArray(item?.polarityLevels) && item.polarityLevels.length
-    ? item.polarityLevels.filter(Boolean)
-    : (item?.polarity ? [item.polarity].filter(Boolean) : []);
-}
-function getModalRenderableTicks(item = null) {
-  const target = item || modalCurrentItem;
-  if (!target) return [];
-  if (modalLive && isItemLiveMinute(target)) {
-    const liveTicks = minuteData?.[target.minute]?.[target.symbol];
-    if (Array.isArray(liveTicks) && liveTicks.length) return liveTicks;
-  }
-  return Array.isArray(target?.ticks) ? target.ticks : [];
-}
-function getPolarityTradeGate(item = null, ticksOverride = null) {
-  const target = item || modalCurrentItem;
-  if (!isPurePolaritySignalItem(target)) {
-    return { restricted: false, allowed: true, desiredSide: target?.direction || "", status: "LIBRE", reason: "" };
-  }
-
-  const desiredSide = String(target?.direction || "");
-  const desiredPolarityDir = desiredSide === "CALL" ? "bullish" : desiredSide === "PUT" ? "bearish" : "";
-  const levels = getItemPolarityLevels(target).filter((level) => String(level?.direction || "") === desiredPolarityDir);
-  const ticks = Array.isArray(ticksOverride) ? ticksOverride : getModalRenderableTicks(target);
-  const lastPrice = Number(ticks[ticks.length - 1]?.quote);
-
-  if (!levels.length || !Number.isFinite(lastPrice)) {
-    return {
-      restricted: true,
-      allowed: false,
-      desiredSide,
-      status: "SIN_NIVEL",
-      reason: "Sin nivel de polaridad operativo",
-      currentPrice: lastPrice,
-      level: null,
-    };
-  }
-
-  const evaluated = levels.map((level) => {
-    const zoneLow = Number(level?.zoneLow);
-    const zoneHigh = Number(level?.zoneHigh);
-    const zoneWidth = Math.max(1e-9, zoneHigh - zoneLow);
-    const nearTol = Math.max(Number(level?.nearTol || 0), zoneWidth * 0.30);
-    const inside = lastPrice >= zoneLow && lastPrice <= zoneHigh;
-    let behindNear = false;
-    let continuationSide = false;
-    let distance = 0;
-
-    if (desiredPolarityDir === "bullish") {
-      behindNear = lastPrice < zoneLow && zoneLow - lastPrice <= nearTol;
-      continuationSide = lastPrice > zoneHigh;
-      distance = inside ? 0 : lastPrice < zoneLow ? zoneLow - lastPrice : lastPrice - zoneHigh;
-    } else {
-      behindNear = lastPrice > zoneHigh && lastPrice - zoneHigh <= nearTol;
-      continuationSide = lastPrice < zoneLow;
-      distance = inside ? 0 : lastPrice > zoneHigh ? lastPrice - zoneHigh : zoneLow - lastPrice;
-    }
-
-    const allowed = inside || behindNear;
-    const stateRank = inside ? 3 : behindNear ? 2 : continuationSide ? 0 : 1;
-    const status = inside ? "EN_ZONA" : behindNear ? "CERCA_DETRAS" : continuationSide ? "CONTINUIDAD" : "LEJOS";
-    const score = stateRank * 100 + Math.min(Number(level?.uses || 0), 8) * 9 - distance / Math.max(zoneWidth, nearTol, 1e-9) * 24;
-
-    return {
-      ...level,
-      zoneWidth,
-      nearTol,
-      allowed,
-      inside,
-      behindNear,
-      continuationSide,
-      distance,
-      status,
-      score,
-      currentPrice: lastPrice,
-    };
-  }).sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
-
-  const bestAllowed = evaluated.find((x) => x.allowed) || null;
-  const best = bestAllowed || evaluated[0] || null;
-  const reason = bestAllowed
-    ? (bestAllowed.inside ? "Operable: precio dentro de zona" : "Operable: precio cerca detrás del nivel")
-    : best?.continuationSide
-      ? "Solo giros: el precio quedó del lado de continuidad"
-      : "Solo giros: esperá que vuelva a la zona o quede cerca detrás del nivel";
-
-  return {
-    restricted: true,
-    allowed: !!bestAllowed,
-    desiredSide,
-    status: bestAllowed ? (bestAllowed.inside ? "EN_ZONA" : "CERCA_DETRAS") : (best?.status || "FUERA"),
-    reason,
-    level: best,
-    currentPrice: lastPrice,
-    levels: evaluated,
-  };
-}
-function paintTradeButtonRuleDisabled(btn, title) {
-  if (!btn) return;
-  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
-  btn.disabled = true;
-  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
-  btn.style.filter = "grayscale(1) saturate(0.72)";
-  btn.style.opacity = "0.42";
-  btn.style.transform = "none";
-  btn.title = title || "No disponible";
-}
-function paintTradeButtonAllowed(btn, title) {
-  if (!btn) return;
-  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
-  btn.disabled = false;
-  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
-  btn.style.filter = "";
-  btn.style.opacity = "";
-  btn.style.transform = "";
-  btn.title = title || "Operar DEMO 1m";
 }
 
 function isHit(item) {
@@ -1381,18 +1611,8 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
 
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
   const quotes = pts.map((p) => p.quote);
-  const polarityLevels = Array.isArray(modalCurrentItem?.polarityLevels) && modalCurrentItem.polarityLevels.length
-    ? modalCurrentItem.polarityLevels.filter(Boolean)
-    : (modalCurrentItem?.polarity ? [modalCurrentItem.polarity] : []);
-  const polarityLevel = polarityLevels[0] || null;
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  for (const level of polarityLevels) {
-    if (Number.isFinite(level?.zoneLow) && Number.isFinite(level?.zoneHigh)) {
-      min = Math.min(min, Number(level.zoneLow));
-      max = Math.max(max, Number(level.zoneHigh));
-    }
-  }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
   const pad = range * 0.08;
@@ -2278,7 +2498,6 @@ function applyTheme(theme) {
 /* =========================
    Eval sec + ESCALERA mode
 ========================= */
-
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
   EVAL_SEC = [40, 45].includes(savedSec) ? savedSec : 45;
@@ -2302,52 +2521,34 @@ function applyTheme(theme) {
       })
   );
 
-  let savedMode = localStorage.getItem(SIGNAL_MODE_KEY);
-  if (savedMode === "ESCALERA") savedMode = "POLARIDAD_NIVELES";
-  if (savedMode === "NORMAL" || savedMode === "NORMAL_POLARIDAD" || savedMode === "POLARIDAD_NIVELES") {
-    signalMode = savedMode;
-  } else {
-    const hasStairKey = localStorage.getItem("stairMode") !== null;
-    stairMode = loadBool("stairMode", false);
-    if (!hasStairKey) {
-      stairMode = loadBool("giroMode", false) || loadBool("strongMode", false);
-      saveBool("stairMode", false);
-    }
-    signalMode = stairMode ? "POLARIDAD_NIVELES" : "NORMAL";
-    localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
+  // ✅ PATRÓN ESCALERA (compat: si venías usando GIRO, hereda ese estado una sola vez)
+  const hasStairKey = localStorage.getItem("stairMode") !== null;
+  stairMode = loadBool("stairMode", false);
+
+  if (!hasStairKey) {
+    stairMode = loadBool("giroMode", false) || loadBool("strongMode", false);
+    saveBool("stairMode", stairMode);
   }
 
   const paintMode = () => {
-    stairMode = false;
     if (!modeBtn) return;
-    modeBtn.classList.remove("active-strong");
-    if (signalMode === "POLARIDAD_NIVELES") {
-      modeBtn.textContent = "🟩 NIVELES POLARIDAD";
-      modeBtn.classList.add("active-strong");
-    } else if (signalMode === "NORMAL_POLARIDAD") {
-      modeBtn.textContent = "🟨 NORMAL + POLARIDAD";
-      modeBtn.classList.add("active-strong");
-    } else {
-      modeBtn.textContent = "🟦 Modo NORMAL";
-    }
+    modeBtn.textContent = stairMode ? "🟪 Patrón ESCALERA" : "🟦 Modo NORMAL";
+    modeBtn.classList.toggle("active-strong", stairMode);
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      const order = ["NORMAL", "NORMAL_POLARIDAD", "POLARIDAD_NIVELES"];
-      const idx = order.indexOf(signalMode);
-      signalMode = order[(idx + 1) % order.length];
-      stairMode = false;
-      localStorage.setItem(SIGNAL_MODE_KEY, signalMode);
-      saveBool("stairMode", false);
+      stairMode = !stairMode;
+      saveBool("stairMode", stairMode);
+
+      // compat vieja: apagamos GIRO / STRONG
       saveBool("giroMode", false);
       saveBool("strongMode", false);
+
       paintMode();
-      toast(`Modo: ${getSignalModeLabel(signalMode)}`, 1400);
     };
 })();
-
 
 /* =========================
    Sonido
@@ -2459,18 +2660,8 @@ function drawDerivLikeChart(canvas, ticks) {
   const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
   const quotes = pts.map((p) => p.quote);
-  const polarityLevels = Array.isArray(modalCurrentItem?.polarityLevels) && modalCurrentItem.polarityLevels.length
-    ? modalCurrentItem.polarityLevels.filter(Boolean)
-    : (modalCurrentItem?.polarity ? [modalCurrentItem.polarity] : []);
-  const polarityLevel = polarityLevels[0] || null;
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  for (const level of polarityLevels) {
-    if (Number.isFinite(level?.zoneLow) && Number.isFinite(level?.zoneHigh)) {
-      min = Math.min(min, Number(level.zoneLow));
-      max = Math.max(max, Number(level.zoneHigh));
-    }
-  }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
   const pad = range * 0.08;
@@ -2557,18 +2748,6 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.fillStyle = "rgba(251,191,36,0.96)";
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
-  }
-
-  if (polarityLevels.length) {
-    const currentPrice =
-      msNow != null ? Number(getPriceAtMs(pts, msNow)) : Number(pts[pts.length - 1]?.quote);
-    for (let i = polarityLevels.length - 1; i >= 0; i--) {
-      drawPolarityOverlay(ctx, w, h, xOf, yOf, polarityLevels[i], currentPrice, {
-        secondary: i !== 0,
-        index: i,
-        label: i === 0,
-      });
-    }
   }
 
   // área
@@ -2721,10 +2900,18 @@ function updateModalCandleStatusUI() {
 
   bar.style.display = "block";
 
+  const callPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "CALL") : null;
+  const putPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "PUT") : null;
+  setTradeButtonBaseLabel(modalBuyCallBtn, buildTradeButtonLabel("CALL", callPlan));
+  setTradeButtonBaseLabel(modalBuyPutBtn, buildTradeButtonLabel("PUT", putPlan));
+
   const isOpen = isTradeEntryOpen(modalCurrentItem);
   if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s`;
+    const autoTxt = shouldUseAutoHighLowExecution()
+      ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
+      : "";
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s${autoTxt}`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
@@ -2743,33 +2930,7 @@ function updateModalCandleStatusUI() {
 
   paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
   paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
-
-  if (!locked && !candleClosed && isPurePolaritySignalItem(modalCurrentItem)) {
-    const gate = getPolarityTradeGate(modalCurrentItem);
-    const desiredIsCall = String(gate.desiredSide || "") === "CALL";
-    const desiredBtn = desiredIsCall ? modalBuyCallBtn : modalBuyPutBtn;
-    const otherBtn = desiredIsCall ? modalBuyPutBtn : modalBuyCallBtn;
-    const desiredLabel = desiredIsCall ? "COMPRA" : "VENTA";
-
-    paintTradeButtonRuleDisabled(otherBtn, `Solo giros: en este modo solo ${desiredLabel}`);
-
-    if (gate.allowed) {
-      paintTradeButtonAllowed(desiredBtn, gate.reason || `Solo giros: ${desiredLabel} habilitada`);
-      const zoneTag = gate.status === "EN_ZONA" ? "EN ZONA" : "CERCA DETRÁS";
-      bar.textContent = `${isOpen ? "🟢 VELA ABIERTA" : "⚪ VELA CERRADA"} | SOLO GIROS · ${desiredLabel} · ${zoneTag}`;
-      bar.style.color = "#dcfce7";
-      bar.style.background = "rgba(22,163,74,.18)";
-      bar.style.borderColor = "rgba(34,197,94,.34)";
-      bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
-    } else {
-      paintTradeButtonRuleDisabled(desiredBtn, gate.reason || "Solo giros: esperá mejor proximidad al nivel");
-      bar.textContent = `${isOpen ? "🟡 VELA ABIERTA" : "⚪ VELA CERRADA"} | SOLO GIROS · BLOQUEADO`;
-      bar.style.color = "#fef3c7";
-      bar.style.background = "rgba(245,158,11,.18)";
-      bar.style.borderColor = "rgba(245,158,11,.34)";
-      bar.style.boxShadow = "0 0 0 1px rgba(245,158,11,.06) inset";
-    }
-  }
+  applyModalExecutionButtonUI(locked, candleClosed);
 }
 
 /* =========================
@@ -2806,10 +2967,9 @@ function requestModalDraw(force = false) {
       const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
       const dTag = disciplineTagText();
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      const pTag = it?.polarity
-        ? ` | ${it.polarity.direction === "bullish" ? "POL ALCISTA" : "POL BAJISTA"} · ${String(it.polarity.interaction || "TOQUE")} · x${Number(it.polarity.uses || 1)}`
-        : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${pTag}`;
+      const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
+      const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
     }
 
     updateModalCandleStatusUI();
@@ -3065,6 +3225,7 @@ function openChartModal(item) {
   chartModal.setAttribute("aria-hidden", "false");
 
   applyModalTradeButtonsLayout();
+  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
 
@@ -3606,15 +3767,6 @@ function assertEntryWindowOpen() {
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
   assertEntryWindowOpen();
-  if (isPurePolaritySignalItem(modalCurrentItem)) {
-    const gate = getPolarityTradeGate(modalCurrentItem);
-    if (String(side || "") !== String(gate.desiredSide || "")) {
-      throw new Error(`Solo giros: esta señal permite ${labelDir(gate.desiredSide || modalCurrentItem?.direction || side)}`);
-    }
-    if (!gate.allowed) {
-      throw new Error(gate.reason || "Solo se opera dentro de la zona o cerca detrás del nivel");
-    }
-  }
 
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
@@ -3626,23 +3778,52 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     const symbol =
       symbolOverride || (modalCurrentItem && modalCurrentItem.symbol) || (history.at(-1)?.symbol || "R_25");
     const stake = getTradeStake();
+    let res = null;
+    let contractLabel = side;
+    let tradeExtra = { side, symbol };
 
-    const res = await wsRequest(
-      {
-        buy: 1,
-        price: stake,
-        parameters: {
-          amount: stake,
-          basis: "stake",
-          contract_type: side,
-          currency: DEFAULT_CURRENCY,
-          duration: Number(DEFAULT_DURATION) || 1,
-          duration_unit: DEFAULT_DURATION_UNIT || "m",
-          symbol,
+    if (shouldUseAutoHighLowExecution() && modalCurrentItem?.id) {
+      ensureSignalAutoPrecalc(modalCurrentItem);
+      let plan = getCachedExecutionPlan(modalCurrentItem, side, AUTO_PRECALC_STALE_MS * 2);
+      if (!plan) {
+        toast(`⏳ Buscando ${side === "CALL" ? "HIGHER" : "LOWER"} rápido…`, 1200);
+        plan = await ensureExecutionPlanForTrade(modalCurrentItem, side);
+      }
+      if (!plan?.proposalId || !Number.isFinite(plan.askPrice)) {
+        throw new Error(
+          (getOrCreateExecutionPlan(modalCurrentItem)?.error) ||
+          `No encontré proposal válida para ${side === "CALL" ? "HIGHER" : "LOWER"}`
+        );
+      }
+
+      res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
+      contractLabel = plan.contractType || contractLabel;
+      tradeExtra = {
+        ...tradeExtra,
+        exec_mode: executionMode,
+        contract_type: contractLabel,
+        barrier: plan.barrier,
+        target_return_pct: Math.round(plan.profitPct),
+        proposal_id: plan.proposalId,
+      };
+    } else {
+      res = await wsRequest(
+        {
+          buy: 1,
+          price: stake,
+          parameters: {
+            amount: stake,
+            basis: "stake",
+            contract_type: side,
+            currency: DEFAULT_CURRENCY,
+            duration: Number(DEFAULT_DURATION) || 1,
+            duration_unit: DEFAULT_DURATION_UNIT || "m",
+            symbol,
+          },
         },
-      },
-      20000
-    );
+        20000
+      );
+    }
 
     if (res?.error) throw new Error(res.error.message || "buy error");
     if (!res?.buy) throw new Error("buy: respuesta inválida (sin buy)");
@@ -3651,14 +3832,14 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
 
     if (modalCurrentItem && modalCurrentItem.id) {
-      setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), side, symbol });
+      setTradeBadge(modalCurrentItem, "PENDING", { contract_id: String(cid), ...tradeExtra });
       linkContractToSignal(cid, modalCurrentItem.id);
     }
 
     subscribeContractOutcome(cid, true);
     scheduleOutcomeFallbackPoll(cid, 85000);
 
-    toast(`📌 Trade registrado. Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1600);
+    toast(`📌 Trade registrado (${contractLabel}). Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1800);
 
     updateDisciplineLockUI(false);
     return res;
@@ -3673,7 +3854,7 @@ if (modalBuyCallBtn) {
     modalBuyCallBtn.disabled = true;
     try {
       updateDisciplineLockUI(false);
-      toast("🟢 Enviando COMPRA…", 1200);
+      toast(shouldUseAutoHighLowExecution() ? "🟢 Enviando HIGHER…" : "🟢 Enviando COMPRA…", 1200);
 
       const r = await Promise.race([
         buyOneClick("CALL"),
@@ -3695,7 +3876,7 @@ if (modalBuyPutBtn) {
     modalBuyPutBtn.disabled = true;
     try {
       updateDisciplineLockUI(false);
-      toast("🔴 Enviando VENTA…", 1200);
+      toast(shouldUseAutoHighLowExecution() ? "🔴 Enviando LOWER…" : "🔴 Enviando VENTA…", 1200);
 
       const r = await Promise.race([
         buyOneClick("PUT"),
@@ -3819,7 +4000,6 @@ async function fetchFullMinuteTicks(symbol, minute) {
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
-
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter((it) => it.minute === minute);
   if (!items.length) return false;
@@ -3847,99 +4027,6 @@ async function hydrateSignalsFromDerivHistory(minute) {
   }
 
   return any;
-}
-
-function finalizeRecentMinuteCandleFromCache(symbol, minute) {
-  const ticks = minuteData?.[minute]?.[symbol] || [];
-  const oc = candleOC?.[minute]?.[symbol] || null;
-  if (!ticks.length && !oc) return null;
-
-  if (ticks.length) {
-    const qs = ticks.map((t) => Number(t.quote)).filter(Number.isFinite);
-    if (!qs.length) return null;
-    return {
-      minute: Number(minute),
-      open: Number(ticks[0].quote),
-      high: Math.max(...qs),
-      low: Math.min(...qs),
-      close: Number(ticks[ticks.length - 1].quote),
-    };
-  }
-
-  const open = Number(oc?.open);
-  const close = Number(oc?.close);
-  if (!Number.isFinite(open) || !Number.isFinite(close)) return null;
-  return {
-    minute: Number(minute),
-    open,
-    high: Math.max(open, close),
-    low: Math.min(open, close),
-    close,
-  };
-}
-function updateRecentCandlesFromMinute(minute) {
-  const syms = new Set([
-    ...Object.keys(candleOC?.[minute] || {}),
-    ...Object.keys(minuteData?.[minute] || {}),
-  ]);
-  let changed = false;
-  for (const symbol of syms) {
-    const candle = finalizeRecentMinuteCandleFromCache(symbol, minute);
-    if (!candle) continue;
-    upsertRecentMinuteCandle(symbol, candle);
-    changed = true;
-  }
-  if (changed) saveRecentCandlesStore();
-}
-async function fetchRecentMinuteCandles(symbol, count = POLARITY_LOOKBACK + 12) {
-  try {
-    const res = await wsRequest(
-      {
-        ticks_history: symbol,
-        end: "latest",
-        count,
-        style: "candles",
-        granularity: 60,
-        adjust_start_time: 1,
-      },
-      15000
-    );
-    const rows = Array.isArray(res?.candles)
-      ? res.candles
-      : Array.isArray(res?.history?.candles)
-      ? res.history.candles
-      : [];
-    return rows
-      .map((c) => ({
-        minute: Math.floor(Number(c?.epoch ?? c?.open_time ?? 0) / 60),
-        open: Number(c?.open),
-        high: Number(c?.high),
-        low: Number(c?.low),
-        close: Number(c?.close),
-      }))
-      .filter(
-        (c) =>
-          Number.isFinite(c.minute) &&
-          Number.isFinite(c.open) &&
-          Number.isFinite(c.high) &&
-          Number.isFinite(c.low) &&
-          Number.isFinite(c.close)
-      );
-  } catch {
-    return [];
-  }
-}
-async function backfillRecentCandlesOnBoot() {
-  try {
-    for (const symbol of SYMBOLS) {
-      const have = Array.isArray(recentCandlesBySymbol?.[symbol]) ? recentCandlesBySymbol[symbol].length : 0;
-      if (have >= POLARITY_LOOKBACK) continue;
-      const rows = await fetchRecentMinuteCandles(symbol);
-      if (!rows.length) continue;
-      for (const candle of rows) upsertRecentMinuteCandle(symbol, candle);
-    }
-    saveRecentCandlesStore();
-  } catch {}
 }
 
 /* =========================
@@ -4094,8 +4181,6 @@ function finalizeMinute(minute) {
   const oc = candleOC[minute];
   if (!oc) return;
 
-  updateRecentCandlesFromMinute(minute);
-
   const prevMinute = minute - 1;
 
   // 1) Resultado rápido (live) usando close(prevMinute) vs close(minute)
@@ -4207,6 +4292,7 @@ function onTick(tick) {
   if (minute > lastSeenMinute) {
     for (let m = lastSeenMinute; m < minute; m++) finalizeMinute(m);
     lastSeenMinute = minute;
+    cleanupExecutionPlanCache();
   }
 
   minuteData[minute] ||= {};
@@ -4244,7 +4330,8 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    if (!ok) scheduleRetry(minute);
+    // ✅ ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
+    if (!ok && !stairMode) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -4255,7 +4342,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + POLARIDAD)
+   Technical rules + Evaluation (NORMAL + ESCALERA)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -4320,438 +4407,6 @@ function oppositeAttackDepth(ticks30_45, dirSign, p30) {
   }
 }
 
-
-function candleRange(c) {
-  return Math.max(1e-9, Number(c?.high) - Number(c?.low));
-}
-function candleBody(c) {
-  return Math.abs(Number(c?.close) - Number(c?.open));
-}
-function avgRecentCandleRange(candles, endExclusive = candles.length, span = 12) {
-  const start = Math.max(0, endExclusive - span);
-  const slice = candles.slice(start, endExclusive);
-  if (!slice.length) return 0;
-  return slice.reduce((acc, c) => acc + candleRange(c), 0) / slice.length;
-}
-function zoneDistanceFromCandle(candle, zoneLow, zoneHigh) {
-  const low = Number(candle?.low);
-  const high = Number(candle?.high);
-  if (!Number.isFinite(low) || !Number.isFinite(high)) return Number.POSITIVE_INFINITY;
-  if (high < zoneLow) return zoneLow - high;
-  if (low > zoneHigh) return low - zoneHigh;
-  return 0;
-}
-function zoneDistanceFromPrice(price, zoneLow, zoneHigh) {
-  const p = Number(price);
-  if (!Number.isFinite(p)) return Number.POSITIVE_INFINITY;
-  if (p < zoneLow) return zoneLow - p;
-  if (p > zoneHigh) return p - zoneHigh;
-  return 0;
-}
-function getRecentClosedCandles(symbol, beforeMinute, lookback = POLARITY_LOOKBACK) {
-  const arr = Array.isArray(recentCandlesBySymbol?.[symbol]) ? recentCandlesBySymbol[symbol] : [];
-  return arr.filter((c) => Number(c.minute) < Number(beforeMinute)).slice(-lookback);
-}
-function detectDirectionalTrend(candles, idx, dir) {
-  const start = Math.max(0, idx - 4);
-  const prev = candles.slice(start, idx);
-  if (prev.length < 3) return false;
-  const first = Number(prev[0]?.close);
-  const last = Number(prev[prev.length - 1]?.close);
-  if (!Number.isFinite(first) || !Number.isFinite(last)) return false;
-  if (dir === "down") return last < first;
-  return last > first;
-}
-function buildMicroZoneFromSupport(candle, avgRange) {
-  const maxWidth = Math.max(avgRange * 0.06, Math.min(avgRange * POLARITY_ZONE_MAX_FRAC_RANGE, candleRange(candle) * 0.34));
-  const zoneLow = Number(candle.low);
-  const zoneHigh = zoneLow + maxWidth;
-  return { zoneLow, zoneHigh, center: (zoneLow + zoneHigh) / 2 };
-}
-function buildMicroZoneFromResistance(candle, avgRange) {
-  const maxWidth = Math.max(avgRange * 0.06, Math.min(avgRange * POLARITY_ZONE_MAX_FRAC_RANGE, candleRange(candle) * 0.34));
-  const zoneHigh = Number(candle.high);
-  const zoneLow = zoneHigh - maxWidth;
-  return { zoneLow, zoneHigh, center: (zoneLow + zoneHigh) / 2 };
-}
-function isBearishRejectionFromZone(candle, zoneLow, zoneHigh, avgRange, nearTol) {
-  const range = candleRange(candle);
-  const body = candleBody(candle);
-  const touched = zoneDistanceFromCandle(candle, zoneLow, zoneHigh) <= nearTol;
-  const traveled = Number(candle.close) <= zoneLow - avgRange * POLARITY_MOVE_AWAY_FRAC;
-  return (
-    touched &&
-    Number(candle.close) < Number(candle.open) &&
-    range >= avgRange * POLARITY_REJECTION_RANGE_FRAC &&
-    body >= avgRange * POLARITY_REJECTION_BODY_FRAC &&
-    traveled
-  );
-}
-function isBullishRejectionFromZone(candle, zoneLow, zoneHigh, avgRange, nearTol) {
-  const range = candleRange(candle);
-  const body = candleBody(candle);
-  const touched = zoneDistanceFromCandle(candle, zoneLow, zoneHigh) <= nearTol;
-  const traveled = Number(candle.close) >= zoneHigh + avgRange * POLARITY_MOVE_AWAY_FRAC;
-  return (
-    touched &&
-    Number(candle.close) > Number(candle.open) &&
-    range >= avgRange * POLARITY_REJECTION_RANGE_FRAC &&
-    body >= avgRange * POLARITY_REJECTION_BODY_FRAC &&
-    traveled
-  );
-}
-function countLevelUses(candles, zoneLow, zoneHigh, nearTol, direction) {
-  let uses = 0;
-  let cooling = false;
-  for (const candle of candles) {
-    const touched = zoneDistanceFromCandle(candle, zoneLow, zoneHigh) <= nearTol;
-    if (!touched) {
-      cooling = false;
-      continue;
-    }
-    const ok =
-      direction === "bearish"
-        ? Number(candle.close) < Number(candle.open)
-        : Number(candle.close) > Number(candle.open);
-    if (ok && !cooling) {
-      uses++;
-      cooling = true;
-    }
-  }
-  return uses;
-}
-function deriveCurrentInteractionFromTicks(ticks, level) {
-  const pts = Array.isArray(ticks) ? ticks : [];
-  if (!pts.length) return null;
-  const prices = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (!prices.length) return null;
-
-  const low = Math.min(...prices);
-  const high = Math.max(...prices);
-  const last = prices[prices.length - 1];
-  const zoneLow = Number(level.zoneLow);
-  const zoneHigh = Number(level.zoneHigh);
-  const nearTol = Number(level.nearTol || 0);
-  const breakTol = Number(level.breakTol || 0);
-  const zoneWidth = Math.max(1e-9, zoneHigh - zoneLow);
-  const currentDistance = zoneDistanceFromPrice(last, zoneLow, zoneHigh);
-  const activeTouchMaxDist = Math.max(nearTol * POLARITY_ACTIVE_DIST_TOUCH_MULT, zoneWidth * POLARITY_ACTIVE_ZONE_WIDTH_MULT);
-  const activeBreakMaxDist = Math.max(nearTol * POLARITY_ACTIVE_DIST_BREAK_MULT, zoneWidth * (POLARITY_ACTIVE_ZONE_WIDTH_MULT + 0.6));
-
-  const touch = high >= zoneLow && low <= zoneHigh;
-  const near = !touch && ((high < zoneLow && zoneLow - high <= nearTol) || (low > zoneHigh && low - zoneHigh <= nearTol));
-
-  if (level.direction === "bullish") {
-    if (last > zoneHigh + breakTol && low <= zoneHigh + nearTol && currentDistance <= activeBreakMaxDist) {
-      return { kind: "RUPTURA", rank: 3, distance: currentDistance, activeMaxDistance: activeBreakMaxDist };
-    }
-    if (touch && currentDistance <= activeTouchMaxDist) {
-      return { kind: "TOQUE", rank: 2, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
-    }
-    if (near && currentDistance <= activeTouchMaxDist) {
-      return { kind: "CERCA", rank: 1, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
-    }
-  } else {
-    if (last < zoneLow - breakTol && high >= zoneLow - nearTol && currentDistance <= activeBreakMaxDist) {
-      return { kind: "RUPTURA", rank: 3, distance: currentDistance, activeMaxDistance: activeBreakMaxDist };
-    }
-    if (touch && currentDistance <= activeTouchMaxDist) {
-      return { kind: "TOQUE", rank: 2, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
-    }
-    if (near && currentDistance <= activeTouchMaxDist) {
-      return { kind: "CERCA", rank: 1, distance: currentDistance, activeMaxDistance: activeTouchMaxDist };
-    }
-  }
-  return null;
-}
-function detectConfirmedPolarityLevels(symbol, beforeMinute) {
-  const candles = getRecentClosedCandles(symbol, beforeMinute, POLARITY_LOOKBACK);
-  if (candles.length < POLARITY_MIN_CANDLES) return [];
-
-  const levels = [];
-  for (let i = 4; i < candles.length - 4; i++) {
-    const candle = candles[i];
-    const avgRange = avgRecentCandleRange(candles, i, 12) || candleRange(candle);
-    const nearTol = avgRange * POLARITY_NEAR_FRAC_RANGE;
-    const breakTol = avgRange * POLARITY_BREAK_FRAC_RANGE;
-
-    const localLow = Number(candle.low) <= Math.min(Number(candles[i - 1]?.low), Number(candles[i + 1]?.low));
-    const localHigh = Number(candle.high) >= Math.max(Number(candles[i - 1]?.high), Number(candles[i + 1]?.high));
-
-    if (localLow && detectDirectionalTrend(candles, i, "down")) {
-      const zone = buildMicroZoneFromSupport(candle, avgRange);
-      let breakIdx = -1;
-      for (let j = i + 1; j < candles.length - 2; j++) {
-        if (Number(candles[j]?.close) < zone.zoneLow - breakTol) {
-          breakIdx = j;
-          break;
-        }
-      }
-      if (breakIdx > 0) {
-        for (let k = breakIdx + 1; k < candles.length - 1; k++) {
-          const retest = candles[k];
-          if (zoneDistanceFromCandle(retest, zone.zoneLow, zone.zoneHigh) > nearTol) continue;
-          const rejectNow = isBearishRejectionFromZone(retest, zone.zoneLow, zone.zoneHigh, avgRange, nearTol);
-          const rejectNext = candles[k + 1]
-            ? isBearishRejectionFromZone(candles[k + 1], zone.zoneLow, zone.zoneHigh, avgRange, nearTol)
-            : false;
-          if (rejectNow || rejectNext) {
-            const uses = countLevelUses(candles, zone.zoneLow, zone.zoneHigh, nearTol, "bearish");
-            levels.push({
-              direction: "bearish",
-              zoneLow: zone.zoneLow,
-              zoneHigh: zone.zoneHigh,
-              center: zone.center,
-              uses,
-              strengthLabel: uses >= 5 ? "muy fuerte" : uses >= POLARITY_MIN_USES_STRONG ? "fuerte" : "normal",
-              nearTol,
-              breakTol,
-              sourceMinute: candle.minute,
-              confirmedMinute: (rejectNow ? retest : candles[k + 1]).minute,
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    if (localHigh && detectDirectionalTrend(candles, i, "up")) {
-      const zone = buildMicroZoneFromResistance(candle, avgRange);
-      let breakIdx = -1;
-      for (let j = i + 1; j < candles.length - 2; j++) {
-        if (Number(candles[j]?.close) > zone.zoneHigh + breakTol) {
-          breakIdx = j;
-          break;
-        }
-      }
-      if (breakIdx > 0) {
-        for (let k = breakIdx + 1; k < candles.length - 1; k++) {
-          const retest = candles[k];
-          if (zoneDistanceFromCandle(retest, zone.zoneLow, zone.zoneHigh) > nearTol) continue;
-          const rejectNow = isBullishRejectionFromZone(retest, zone.zoneLow, zone.zoneHigh, avgRange, nearTol);
-          const rejectNext = candles[k + 1]
-            ? isBullishRejectionFromZone(candles[k + 1], zone.zoneLow, zone.zoneHigh, avgRange, nearTol)
-            : false;
-          if (rejectNow || rejectNext) {
-            const uses = countLevelUses(candles, zone.zoneLow, zone.zoneHigh, nearTol, "bullish");
-            levels.push({
-              direction: "bullish",
-              zoneLow: zone.zoneLow,
-              zoneHigh: zone.zoneHigh,
-              center: zone.center,
-              uses,
-              strengthLabel: uses >= 5 ? "muy fuerte" : uses >= POLARITY_MIN_USES_STRONG ? "fuerte" : "normal",
-              nearTol,
-              breakTol,
-              sourceMinute: candle.minute,
-              confirmedMinute: (rejectNow ? retest : candles[k + 1]).minute,
-            });
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // dedupe niveles muy cercanos quedándose con el más fuerte/reciente
-  levels.sort((a, b) => b.uses - a.uses || b.confirmedMinute - a.confirmedMinute);
-  const deduped = [];
-  for (const level of levels) {
-    const duplicate = deduped.some((x) => x.direction === level.direction && Math.abs(x.center - level.center) <= Math.max(x.nearTol, level.nearTol));
-    if (!duplicate) deduped.push(level);
-  }
-  return deduped.slice(0, 10);
-}
-function findPolarityContextForCandidate(candidate, direction, minute) {
-  const wanted = direction === "CALL" ? "bullish" : "bearish";
-  const levels = detectConfirmedPolarityLevels(candidate.symbol, minute).filter((level) => level.direction === wanted);
-  if (!levels.length) return null;
-
-  const enriched = levels
-    .map((level) => {
-      const interaction = deriveCurrentInteractionFromTicks(candidate.ticks || [], level);
-      if (!interaction) return null;
-      const recency = Math.max(0, minute - Number(level.confirmedMinute || minute));
-      const zoneWidth = Math.max(1e-9, Number(level.zoneHigh) - Number(level.zoneLow));
-      const normalizedDistance = Number(interaction.distance || 0) / Math.max(1e-9, Number(interaction.activeMaxDistance || zoneWidth));
-      const score =
-        interaction.rank * 100 +
-        Math.min(Number(level.uses || 0), 8) * 7 -
-        recency * 0.22 -
-        normalizedDistance * 120;
-      return {
-        ...level,
-        interaction: interaction.kind,
-        interactionRank: interaction.rank,
-        currentDistance: interaction.distance,
-        activeMaxDistance: interaction.activeMaxDistance,
-        normalizedDistance,
-        zoneWidth,
-        score,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      const distDiff = Number(a.normalizedDistance || 0) - Number(b.normalizedDistance || 0);
-      if (Math.abs(distDiff) > 0.08) return distDiff;
-      const rankDiff = Number(b.interactionRank || 0) - Number(a.interactionRank || 0);
-      if (rankDiff) return rankDiff;
-      const usesDiff = Number(b.uses || 0) - Number(a.uses || 0);
-      if (usesDiff) return usesDiff;
-      const recencyDiff = Number(b.confirmedMinute || 0) - Number(a.confirmedMinute || 0);
-      if (recencyDiff) return recencyDiff;
-      return Number(b.score || 0) - Number(a.score || 0);
-    });
-
-  const best = enriched[0] || null;
-  if (!best) return null;
-
-  const hardLimit = Math.max(Number(best.activeMaxDistance || 0), Number(best.zoneWidth || 0) * (POLARITY_ACTIVE_ZONE_WIDTH_MULT + 0.4));
-  if (!Number.isFinite(best.currentDistance) || best.currentDistance > hardLimit) return null;
-
-  return best;
-}
-function findPolarityInZoneContextsForCandidate(candidate, minute, limit = POLARITY_ONLY_MAX_LEVELS) {
-  const levels = detectConfirmedPolarityLevels(candidate.symbol, minute);
-  if (!levels.length) return [];
-
-  const ticks = Array.isArray(candidate?.ticks) ? candidate.ticks : [];
-  const lastPrice = Number(ticks[ticks.length - 1]?.quote);
-  if (!Number.isFinite(lastPrice)) return [];
-
-  const contexts = levels
-    .map((level) => {
-      const zoneLow = Number(level.zoneLow);
-      const zoneHigh = Number(level.zoneHigh);
-      const zoneWidth = Math.max(1e-9, zoneHigh - zoneLow);
-      const borderTol = Math.max(zoneWidth * POLARITY_ONLY_BORDER_FRAC, Number(level.nearTol || 0) * 0.08);
-      const inside = lastPrice >= zoneLow - borderTol && lastPrice <= zoneHigh + borderTol;
-      if (!inside) return null;
-
-      const interaction = lastPrice >= zoneLow && lastPrice <= zoneHigh ? "CIERRE EN ZONA" : "BORDE";
-      const distCenter = Math.abs(lastPrice - Number(level.center || (zoneLow + zoneHigh) / 2));
-      const recency = Math.max(0, minute - Number(level.confirmedMinute || minute));
-      const score =
-        Math.min(Number(level.uses || 0), 8) * 18 +
-        (interaction === "CIERRE EN ZONA" ? 100 : 82) -
-        (distCenter / zoneWidth) * 16 -
-        recency * POLARITY_ONLY_RECENCY_WEIGHT;
-
-      return {
-        ...level,
-        interaction,
-        interactionRank: interaction === "CIERRE EN ZONA" ? 4 : 3,
-        currentDistance: zoneDistanceFromPrice(lastPrice, zoneLow, zoneHigh),
-        activeMaxDistance: borderTol,
-        zoneWidth,
-        normalizedDistance: distCenter / zoneWidth,
-        score,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => {
-      const usesDiff = Number(b.uses || 0) - Number(a.uses || 0);
-      if (usesDiff) return usesDiff;
-      const centerDiff = Number(a.normalizedDistance || 0) - Number(b.normalizedDistance || 0);
-      if (Math.abs(centerDiff) > 0.02) return centerDiff;
-      const recencyDiff = Number(b.confirmedMinute || 0) - Number(a.confirmedMinute || 0);
-      if (recencyDiff) return recencyDiff;
-      return Number(b.score || 0) - Number(a.score || 0);
-    });
-
-  if (!contexts.length) return [];
-  const primary = contexts[0];
-  const sameDirection = contexts.filter((x) => x.direction === primary.direction);
-  return sameDirection.slice(0, limit);
-}
-function buildPolarityOnlySignalFromCandidates(candidates, minute) {
-  const signalCandidates = [];
-  for (const candidate of candidates) {
-    const levels = findPolarityInZoneContextsForCandidate(candidate, minute, POLARITY_ONLY_MAX_LEVELS);
-    if (!levels.length) continue;
-    const primary = levels[0];
-    const direction = primary.direction === "bullish" ? "CALL" : "PUT";
-    const score =
-      Number(primary.score || 0) +
-      Math.min(Number(primary.uses || 0), 8) * 6 +
-      Math.max(0, 22 - Number(primary.normalizedDistance || 0) * 18) +
-      Math.min(levels.length, POLARITY_ONLY_MAX_LEVELS) * 6 +
-      Math.abs(Number(candidate.move || 0)) / Math.max(Number(candidate.vol || 1e-9), 1e-9) * 1.8;
-    signalCandidates.push({
-      ...candidate,
-      direction,
-      polarity: primary,
-      polarityLevels: levels,
-      polarityScore: score,
-    });
-  }
-  signalCandidates.sort((a, b) => Number(b.polarityScore || 0) - Number(a.polarityScore || 0));
-  return signalCandidates[0] || null;
-}
-
-function formatPolarityStrength(level) {
-  const uses = Number(level?.uses || 0);
-  return uses >= POLARITY_MIN_USES_STRONG ? `Nivel ${level?.strengthLabel || "fuerte"} x${uses}` : `Nivel x${uses || 1}`;
-}
-function drawPolarityOverlay(ctx, w, h, xOf, yOf, level, currentPrice, opts = {}) {
-  if (!level) return;
-  const zoneLow = Number(level.zoneLow);
-  const zoneHigh = Number(level.zoneHigh);
-  if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) return;
-
-  const bullish = level.direction === "bullish";
-  const secondary = !!opts.secondary;
-  const shouldLabel = opts.label !== false;
-  const fill = bullish
-    ? (secondary ? "rgba(34,197,94,.06)" : "rgba(34,197,94,.11)")
-    : (secondary ? "rgba(239,68,68,.06)" : "rgba(239,68,68,.11)");
-  const stroke = bullish
-    ? (secondary ? "rgba(34,197,94,.54)" : "rgba(34,197,94,.88)")
-    : (secondary ? "rgba(239,68,68,.54)" : "rgba(239,68,68,.88)");
-  const soft = bullish
-    ? (secondary ? "rgba(34,197,94,.18)" : "rgba(34,197,94,.28)")
-    : (secondary ? "rgba(239,68,68,.18)" : "rgba(239,68,68,.28)");
-
-  const y1 = yOf(zoneHigh);
-  const y2 = yOf(zoneLow);
-  const top = Math.min(y1, y2);
-  const height = Math.max(6, Math.abs(y2 - y1));
-
-  ctx.save();
-  ctx.fillStyle = fill;
-  ctx.fillRect(10, top, w - 20, height);
-
-  ctx.setLineDash(secondary ? [4, 5] : [6, 4]);
-  ctx.strokeStyle = soft;
-  ctx.lineWidth = secondary ? 1.0 : 1.4;
-  ctx.strokeRect(10, top, w - 20, height);
-
-  ctx.setLineDash(secondary ? [5, 5] : [9, 5]);
-  ctx.strokeStyle = stroke;
-  ctx.lineWidth = secondary ? 1.3 : 2;
-  ctx.beginPath();
-  ctx.moveTo(10, yOf(level.center));
-  ctx.lineTo(w - 10, yOf(level.center));
-  ctx.stroke();
-  ctx.restore();
-
-  if (!shouldLabel) return;
-
-  const dist = zoneDistanceFromPrice(currentPrice, zoneLow, zoneHigh);
-  const dirTxt = bullish ? "POL ALCISTA" : "POL BAJISTA";
-  const meta = `${dirTxt} · ${String(level.interaction || "TOQUE")} · x${Number(level.uses || 1)} · dist ${dist.toFixed(3)}`;
-  const labelX = 16;
-  const labelY = Math.max(18, Math.min(h - 26, top - 10));
-
-  ctx.save();
-  ctx.font = "900 12px system-ui, sans-serif";
-  const tw = ctx.measureText(meta).width + 16;
-  ctx.fillStyle = "rgba(2,6,23,.72)";
-  ctx.fillRect(labelX - 6, labelY - 12, Math.min(tw, w - 24), 20);
-  ctx.fillStyle = stroke;
-  ctx.fillText(meta, labelX, labelY + 3);
-  ctx.restore();
-}
 const RULES_NORMAL = {
   scoreMin: 0.015,
   dirRatioMin_0_30: 0.52,
@@ -4963,10 +4618,9 @@ function detectStairPattern(candidate) {
   };
 }
 
-
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return false;
+  if (!data) return stairMode ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -4997,20 +4651,33 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
 
-  if (isPolarityLevelsMode()) {
-    const bestPolarity = buildPolarityOnlySignalFromCandidates(candidates, minute);
-    if (!bestPolarity) return true;
+  // ✅ MODO PATRÓN ESCALERA: solo señales si la forma coincide con escalera alcista/bajista
+  if (stairMode) {
+    const matches = [];
 
-    addSignal(minute, bestPolarity.symbol, bestPolarity.direction, bestPolarity.ticks, {
-      modeOverride: "NIVELES POLARIDAD",
-      polarity: bestPolarity.polarity,
-      polarityLevels: bestPolarity.polarityLevels,
-    });
+    for (const c of candidates) {
+      const match = detectStairPattern(c);
+      if (!match) continue;
+
+      matches.push({
+        ...c,
+        direction: match.direction,
+        quality: match.quality,
+      });
+    }
+
+    if (!matches.length) return true;
+
+    matches.sort((a, b) => b.quality - a.quality);
+    const bestMatch = matches[0];
+
+    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks);
     return true;
   }
 
+  // ---- NORMAL (igual que antes) ----
   candidates.sort((a, b) => b.score - a.score);
   const best = candidates[0];
   if (!best) return true;
@@ -5021,24 +4688,9 @@ function evaluateMinute(minute) {
   const ok = passesTechnicalFilters(best, best.vol, rules);
   if (!ok) return true;
 
-  const direction = best.move > 0 ? "CALL" : "PUT";
-
-  if (isNormalPolarityMode()) {
-    const polarity = findPolarityContextForCandidate(best, direction, minute);
-    if (!polarity) return true;
-
-    addSignal(minute, best.symbol, direction, best.ticks, {
-      modeOverride: "NORMAL + POLARIDAD",
-      polarity,
-      polarityLevels: [polarity],
-    });
-    return true;
-  }
-
-  addSignal(minute, best.symbol, direction, best.ticks);
+  addSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT", best.ticks);
   return true;
 }
-
 
 /* =========================
    Add signal
@@ -5046,9 +4698,9 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
-function addSignal(minute, symbol, direction, ticks, extra = null) {
+function addSignal(minute, symbol, direction, ticks) {
   if (areSignalsPaused()) return;
-  const modeLabel = extra?.modeOverride || getSignalModeLabel();
+  const modeLabel = stairMode ? "ESCALERA" : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
@@ -5062,8 +4714,6 @@ function addSignal(minute, symbol, direction, ticks, extra = null) {
     nextOutcome: "",
     minuteComplete: false,
     trade: null,
-    polarity: extra?.polarity ? { ...extra.polarity } : null,
-    polarityLevels: Array.isArray(extra?.polarityLevels) ? extra.polarityLevels.map((x) => ({ ...x })) : (extra?.polarity ? [{ ...extra.polarity }] : null),
   };
 
   if (history.some((x) => x.id === item.id)) return;
@@ -5076,6 +4726,7 @@ function addSignal(minute, symbol, direction, ticks, extra = null) {
 
   if (signalsEl) signalsEl.prepend(buildRow(item));
   updateRowChartBtn(item);
+  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
 
   if (soundEnabled && sound) {
     sound.currentTime = 0;
@@ -5126,11 +4777,6 @@ function connect() {
         rehydrateHistoryOnBoot();
       } catch {}
     }, 350);
-    setTimeout(() => {
-      try {
-        backfillRecentCandlesOnBoot();
-      } catch {}
-    }, 650);
 
     updateDisciplineLockUI(false);
     await resubscribePendingContracts();
@@ -5331,6 +4977,7 @@ loadLowPowerMode();
 loadAutoOpenChartSetting();
 loadDiscipline();
 loadTradeLinks();
+loadExecutionMode();
 
 renderHistory();
 updateTickHealthUI();
@@ -5341,6 +4988,8 @@ applyLowPowerModeUI();
 
 ensureAutoOpenChartButton();
 applyAutoOpenChartUI();
+ensureExecutionModeButton();
+applyExecutionModeUI();
 
 initWakeButton();
 initTokenAndStakeUI();
@@ -5356,152 +5005,4 @@ seedTradesJournalFromHistory();
 
 ensureInlineClearButtons();
 
-connect();function roundTo(value, precision = 3) {
-  const p = Math.max(0, Number(precision || 0));
-  const f = 10 ** p;
-  return Math.round(Number(value || 0) * f) / f;
-}
-function getPricePrecisionFromTicks(ticks, fallback = 3) {
-  const pts = (Array.isArray(ticks) ? ticks : []).slice(-18);
-  let maxDec = 0;
-  for (const t of pts) {
-    const q = Number(t?.quote);
-    if (!Number.isFinite(q)) continue;
-    const s = String(q);
-    const dec = s.includes(".") ? s.split(".")[1].replace(/0+$/, "").length : 0;
-    if (dec > maxDec) maxDec = dec;
-  }
-  return Math.max(fallback, Math.min(6, maxDec || fallback));
-}
-function getSignalTicksForExecution(item) {
-  if (!item) return [];
-  const live = minuteData?.[item.minute]?.[item.symbol];
-  if (Array.isArray(live) && live.length >= 2) return live.slice();
-  if (Array.isArray(item.ticks) && item.ticks.length >= 2) return item.ticks.slice();
-  return [];
-}
-function buildPayoutPerPointCandidates(item, side, mode = "full") {
-  const source = mode === "fast" ? AUTO_PRECALC_FAST_PPP : AUTO_PRECALC_COARSE_PPP;
-  const hint = getExecutionBarrierHint(item?.symbol, side);
-
-  const hinted = [];
-  if (Number.isFinite(Number(hint?.ppp)) && Number(hint.ppp) > 0) {
-    const base = Number(hint.ppp);
-    for (const factor of [0.7, 0.85, 1, 1.15, 1.35]) hinted.push(roundTo(base * factor, 6));
-  }
-
-  const merged = Array.from(new Set([...hinted, ...source]))
-    .filter((v) => Number.isFinite(Number(v)) && Number(v) > 0)
-    .sort((a, b) => a - b);
-
-  return { coarse: merged };
-}
-function inferBarrierLabelFromProposal(proposal, fallbackPPP) {
-  const details = proposal?.contract_details;
-  const directBarrier = details?.barrier ?? proposal?.barrier;
-  if (Number.isFinite(Number(directBarrier))) return String(directBarrier);
-
-  const longcode = String(proposal?.longcode || "");
-  const m = longcode.match(/(?:higher|lower) than\s+([0-9]+(?:\.[0-9]+)?)/i);
-  if (m?.[1]) return m[1];
-
-  return `PPP ${roundTo(fallbackPPP, 4)}`;
-}
-function parseProposalToExecution(planRaw, side) {
-  const proposal = planRaw?.proposal;
-  const askPrice = Number(proposal?.ask_price);
-  const payout = Number(proposal?.payout);
-  const id = proposal?.id ? String(proposal.id) : "";
-  const payoutPerPoint = Number(planRaw?.payoutPerPoint);
-  if (!id || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) return null;
-  const profitPct = ((payout - askPrice) / askPrice) * 100;
-  return {
-    proposalId: id,
-    contractType: side === "CALL" ? "HIGHER" : "LOWER",
-    askPrice,
-    payout,
-    profitPct,
-    distance: Math.abs(profitPct - AUTO_TARGET_RETURN_PCT),
-    payoutPerPoint,
-    barrier: inferBarrierLabelFromProposal(proposal, payoutPerPoint),
-    longcode: proposal?.longcode ? String(proposal.longcode) : "",
-    updatedAt: Date.now(),
-  };
-}
-async function getHighLowProposalQuote(symbol, side, payoutPerPoint, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
-  const req = {
-    proposal: 1,
-    amount: stake,
-    basis: "stake",
-    contract_type: side === "CALL" ? "HIGHER" : "LOWER",
-    currency: DEFAULT_CURRENCY,
-    duration: Number(DEFAULT_DURATION) || 1,
-    duration_unit: DEFAULT_DURATION_UNIT || "m",
-    payout_per_point: Number(payoutPerPoint),
-    symbol,
-  };
-  const res = await wsRequest(req, timeoutMs);
-  if (res?.error) throw new Error(res.error.message || "proposal error");
-  return parseProposalToExecution({ proposal: res?.proposal, payoutPerPoint }, side);
-}
-async function findBestHighLowPlan(item, side, opts = {}) {
-  const symbol = item?.symbol;
-  if (!symbol) return null;
-  const stake = getTradeStake();
-  const fast = !!opts.fast;
-  const { coarse } = buildPayoutPerPointCandidates(item, side, fast ? "fast" : "full");
-  if (!coarse.length) return null;
-
-  const timeoutMs = fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS;
-  const firstSettled = await Promise.allSettled(
-    coarse.map((ppp) => getHighLowProposalQuote(symbol, side, ppp, stake, timeoutMs))
-  );
-  const firstPass = firstSettled
-    .filter((r) => r.status === "fulfilled" && r.value)
-    .map((r) => r.value);
-  if (!firstPass.length) {
-    const firstErr = firstSettled.find((r) => r.status === "rejected");
-    if (firstErr && firstErr.reason) throw firstErr.reason;
-    return null;
-  }
-
-  let best = firstPass.sort((a, b) => a.distance - b.distance)[0];
-  rememberExecutionBarrierHint(symbol, side, best);
-  if (fast) return best;
-
-  const fineCandidates = Array.from(
-    new Set(
-      AUTO_PRECALC_FINE_FACTORS.map((factor) => roundTo(Math.max(Number(best.payoutPerPoint || 0) * factor, 1e-8), 6))
-        .filter((v) => Number.isFinite(v) && v > 0)
-    )
-  );
-
-  if (fineCandidates.length) {
-    const secondSettled = await Promise.allSettled(
-      fineCandidates.map((ppp) => getHighLowProposalQuote(symbol, side, ppp, stake, timeoutMs))
-    );
-    const secondPass = secondSettled
-      .filter((r) => r.status === "fulfilled" && r.value)
-      .map((r) => r.value);
-    if (secondPass.length) best = secondPass.concat(firstPass).sort((a, b) => a.distance - b.distance)[0];
-  }
-
-  rememberExecutionBarrierHint(symbol, side, best);
-  return best;
-}
-const executionBarrierHintCache = new Map();
-function getExecutionHintKey(symbol, side) {
-  return `${String(symbol || "")}|${String(side || "")}`;
-}
-function getExecutionBarrierHint(symbol, side) {
-  return executionBarrierHintCache.get(getExecutionHintKey(symbol, side)) || null;
-}
-function rememberExecutionBarrierHint(symbol, side, plan) {
-  if (!symbol || !side || !plan) return;
-  executionBarrierHintCache.set(getExecutionHintKey(symbol, side), {
-    ppp: Number(plan.payoutPerPoint || 0),
-    barrier: String(plan.barrier || ""),
-    updatedAt: Date.now(),
-  });
-}
-
+connect();
