@@ -66,6 +66,10 @@ const AUTO_PRECALC_STALE_MS = 7000;
 const AUTO_PRECALC_COARSE_MULTS = [0.25, 0.5, 0.9, 1.5, 2.3];
 const AUTO_PRECALC_FINE_FACTORS = [0.9, 1.0, 1.1];
 const AUTO_PRECALC_FAST_MULTS = [0.5, 0.9, 1.5];
+const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 2600;
+const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 5200;
+const AUTO_BARRIER_PIP_FAST = [80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500];
+const AUTO_BARRIER_PIP_FULL = [40, 60, 80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500, 3500, 5000, 8000];
 
 /* =========================
    Auto-open chart config
@@ -604,7 +608,7 @@ function parseProposalToExecution(planRaw, side, precision) {
     updatedAt: Date.now(),
   };
 }
-async function getHighLowProposalQuote(symbol, side, barrierNum, precision, stake) {
+async function getHighLowProposalQuote(symbol, side, barrierNum, precision, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
   const req = {
     proposal: 1,
     amount: stake,
@@ -616,7 +620,7 @@ async function getHighLowProposalQuote(symbol, side, barrierNum, precision, stak
     barrier: formatRelativeBarrier(barrierNum, precision),
     symbol,
   };
-  const res = await wsRequest(req, 12000);
+  const res = await wsRequest(req, timeoutMs);
   if (res?.error) throw new Error(res.error.message || "proposal error");
   return parseProposalToExecution({ proposal: res?.proposal, barrierNum }, side, precision);
 }
@@ -628,28 +632,58 @@ async function findBestHighLowPlan(item, side, opts = {}) {
   const { precision, coarse } = buildBarrierCandidates(item, side, fast ? "fast" : "full");
   if (!coarse.length) return null;
 
-  const firstPass = (await Promise.allSettled(coarse.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake))))
+  const timeoutMs = fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS;
+  const firstPass = (await Promise.allSettled(
+    coarse.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake, timeoutMs))
+  ))
     .filter((r) => r.status === "fulfilled" && r.value)
     .map((r) => r.value);
   if (!firstPass.length) return null;
 
   let best = firstPass.sort((a, b) => a.distance - b.distance)[0];
+  rememberExecutionBarrierHint(symbol, side, best, precision);
   if (fast) return best;
 
-  const fineCandidates = Array.from(new Set(AUTO_PRECALC_FINE_FACTORS.map((factor) => {
-    const raw = Math.max(Math.abs(best.barrierNum) * factor, 10 ** -precision);
-    return (side === "CALL" ? 1 : -1) * roundTo(raw, precision);
-  }).filter((v) => Number.isFinite(v) && Math.abs(v) > 0)));
+  const fineCandidates = Array.from(
+    new Set(
+      AUTO_PRECALC_FINE_FACTORS.map((factor) => {
+        const raw = Math.max(Math.abs(best.barrierNum) * factor, 10 ** -precision);
+        return (side === "CALL" ? 1 : -1) * roundTo(raw, precision);
+      }).filter((v) => Number.isFinite(v) && Math.abs(v) > 0)
+    )
+  );
 
   if (fineCandidates.length) {
-    const secondPass = (await Promise.allSettled(fineCandidates.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake))))
+    const secondPass = (await Promise.allSettled(
+      fineCandidates.map((barrierNum) => getHighLowProposalQuote(symbol, side, barrierNum, precision, stake, timeoutMs))
+    ))
       .filter((r) => r.status === "fulfilled" && r.value)
       .map((r) => r.value);
     if (secondPass.length) best = secondPass.concat(firstPass).sort((a, b) => a.distance - b.distance)[0];
   }
 
+  rememberExecutionBarrierHint(symbol, side, best, precision);
   return best;
 }
+const executionBarrierHintCache = new Map();
+function getExecutionHintKey(symbol, side) {
+  return `${String(symbol || "")}|${String(side || "")}`;
+}
+function getExecutionBarrierHint(symbol, side) {
+  return executionBarrierHintCache.get(getExecutionHintKey(symbol, side)) || null;
+}
+function rememberExecutionBarrierHint(symbol, side, plan, precision = 3) {
+  if (!symbol || !side || !plan) return;
+  const unit = 10 ** -Math.max(0, Number(precision || 0));
+  const pips = Math.max(1, Math.round(Math.abs(Number(plan.barrierNum || 0)) / unit));
+  executionBarrierHintCache.set(getExecutionHintKey(symbol, side), {
+    pips,
+    barrierNum: Number(plan.barrierNum || 0),
+    precision: Math.max(0, Number(precision || 0)),
+    updatedAt: Date.now(),
+  });
+}
+
 function getOrCreateExecutionPlan(item) {
   if (!item?.id) return null;
   let cache = executionPlanCache.get(item.id);
@@ -774,17 +808,7 @@ async function ensureExecutionPlanForTrade(item, side) {
     return quick;
   }
 
-  const full = await findBestHighLowPlan(item, side, { fast: false });
-  if (full) {
-    if (side === "CALL") cache.call = full;
-    else cache.put = full;
-    cache.updatedAt = Date.now();
-    cache.error = "";
-    item.autoHighLow ||= {};
-    item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...full };
-    item.autoHighLow.updatedAt = cache.updatedAt;
-    return full;
-  }
+  cache.error = `Sin proposal rápida para ${side === "CALL" ? "HIGHER" : "LOWER"}`;
   return null;
 }
 function formatExecutionPlanMini(plan) {
