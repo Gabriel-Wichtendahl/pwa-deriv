@@ -434,13 +434,19 @@ let modalDrawRaf = null;
 let modalLastDrawAt = 0;
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
-// Migración: FUERTE / ESCALERA / GIRO -> GIRO en history viejo
+// Mantener separados los modos históricos.
+// GIRO debe seguir siendo GIRO y ESCALERA/FUERTE no deben mezclarse con GIRO.
 function migrateHistoryModesToGiro() {
   try {
     let changed = false;
     for (const it of history || []) {
-      if (it && (it.mode === "FUERTE" || it.mode === "ESCALERA" || it.mode === "GIRO")) {
-        it.mode = "GIRO";
+      if (!it) continue;
+      if (!it.mode) continue;
+      // No convertir ESCALERA/FUERTE a GIRO.
+      // Solo normalizamos mayúsculas básicas si hace falta.
+      const m = String(it.mode).toUpperCase();
+      if (m !== it.mode) {
+        it.mode = m;
         changed = true;
       }
     }
@@ -1565,8 +1571,18 @@ function formatPracticeStats(stats) {
 }
 function normalizePracticeEntryMode(mode) {
   const m = String(mode || "").toUpperCase();
-  if (m === "ESCALERA" || m === "FUERTE") return "GIRO";
   return m || "NORMAL";
+}
+function isStrictGiroPracticeEntry(entry) {
+  if (!entry) return false;
+  const mode = normalizePracticeEntryMode(entry.mode);
+  const idText = `${String(entry.id || "")} ${String(entry.journal_id || "")}`.toUpperCase();
+  // Si el id o journal conservan ESCALERA/FUERTE, NO debe entrar en GIRO.
+  if (idText.includes("ESCALERA") || idText.includes("FUERTE")) return false;
+  if (mode === "GIRO") return true;
+  // fallback por si hubiera registros viejos sin mode pero con id GIRO
+  if (!mode || mode === "NORMAL") return idText.includes("GIRO");
+  return false;
 }
 function loadPracticeFilterMode() {
   try {
@@ -1641,7 +1657,7 @@ function getEligiblePracticeEntries() {
     if (!entry) return false;
     if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
     if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
-    if (shouldPracticeOnlyGiro() && normalizePracticeEntryMode(entry.mode) !== "GIRO") return false;
+    if (shouldPracticeOnlyGiro() && !isStrictGiroPracticeEntry(entry)) return false;
     return true;
   });
 }
@@ -3617,7 +3633,7 @@ function renderHistory() {
 
   for (const it of history || []) {
     if (!it.mode) it.mode = "NORMAL";
-    if (it.mode === "ESCALERA" || it.mode === "GIRO" || it.mode === "FUERTE") it.mode = "GIRO";
+    else it.mode = String(it.mode).toUpperCase();
   }
   saveHistory(history);
 
