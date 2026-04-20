@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo PATRÓN ESCALERA (ESTRICTO): evalúa SOLO en 40/45 (según config) — NORMAL queda igual
+// ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 40/45 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
@@ -16,7 +16,7 @@
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
 // ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
 // ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
-// ✅ FIX (este update): ESCALERA/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vía ticks_history
+// ✅ FIX (este update): GIRO/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vía ticks_history
 // ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
 // ✅ NUEVO: modal muestra "VELA ABIERTA | faltan XXs" y bloquea COMPRAR / VENDER cuando la vela ya cerró
 
@@ -406,11 +406,11 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 
-// ✅ NORMAL vs PATRÓN ESCALERA
+// ✅ NORMAL vs GIRO
 let stairMode = false;
 
 let history = loadHistory();
-migrateHistoryModesToStair();
+migrateHistoryModesToGiro();
 
 let minuteData = {};
 let lastEvaluatedMinute = null;
@@ -434,13 +434,13 @@ let modalDrawRaf = null;
 let modalLastDrawAt = 0;
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
-// Migración: FUERTE / GIRO -> ESCALERA en history viejo
-function migrateHistoryModesToStair() {
+// Migración: FUERTE / ESCALERA / GIRO -> GIRO en history viejo
+function migrateHistoryModesToGiro() {
   try {
     let changed = false;
     for (const it of history || []) {
-      if (it && (it.mode === "FUERTE" || it.mode === "GIRO")) {
-        it.mode = "ESCALERA";
+      if (it && (it.mode === "FUERTE" || it.mode === "ESCALERA" || it.mode === "GIRO")) {
+        it.mode = "GIRO";
         changed = true;
       }
     }
@@ -652,8 +652,6 @@ function parseProposalToExecution(planRaw, side, precision) {
   return {
     proposalId: id,
     contractType: side === "CALL" ? "HIGHER" : "LOWER",
-    apiContractType: String(planRaw?.apiContractType || (side === "CALL" ? "CALL" : "PUT")),
-    symbolKey: String(planRaw?.symbolKey || "symbol"),
     askPrice,
     payout,
     profitPct,
@@ -665,96 +663,26 @@ function parseProposalToExecution(planRaw, side, precision) {
     updatedAt: Date.now(),
   };
 }
-const autoHLContractsCache = new Map();
-
-function getAutoHLCacheKey(symbol) {
-  return String(symbol || "");
-}
-async function fetchContractsForSymbol(symbol) {
-  const key = getAutoHLCacheKey(symbol);
-  const cached = autoHLContractsCache.get(key);
-  if (cached && Date.now() - Number(cached.updatedAt || 0) < 5 * 60 * 1000) return cached.available;
-
-  const res = await wsRequest({ contracts_for: symbol }, 12000);
-  if (res?.error) throw new Error(res.error.message || "contracts_for error");
-
-  const available = Array.isArray(res?.contracts_for?.available) ? res.contracts_for.available : [];
-  autoHLContractsCache.set(key, { available, updatedAt: Date.now() });
-  return available;
-}
-async function getAutoHLContractTypeCandidates(symbol, side) {
-  const fallback = side === "CALL" ? ["CALL", "HIGHER"] : ["PUT", "LOWER"];
-  try {
-    const available = await fetchContractsForSymbol(symbol);
-    if (!Array.isArray(available) || !available.length) return fallback;
-
-    const preferredSentiment = side === "CALL" ? "up" : "down";
-    const bySentiment = available
-      .filter((item) => String(item?.sentiment || "").toLowerCase() === preferredSentiment)
-      .map((item) => String(item?.contract_type || "").toUpperCase())
-      .filter(Boolean);
-
-    const deduped = Array.from(new Set([...bySentiment, ...fallback]));
-    return deduped.length ? deduped : fallback;
-  } catch {
-    return fallback;
-  }
-}
 async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
   const candidate = typeof barrierCandidate === "object" && barrierCandidate
     ? barrierCandidate
     : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
   if (!candidate?.barrier) return null;
 
-  const contractTypes = await getAutoHLContractTypeCandidates(symbol, side);
-  const symbolVariants = [
-    ["underlying_symbol", symbol],
-    ["symbol", symbol],
-  ];
-
-  let lastError = null;
-
-  for (const apiContractType of contractTypes) {
-    for (const [symbolKey, symbolValue] of symbolVariants) {
-      const req = {
-        proposal: 1,
-        amount: stake,
-        basis: "stake",
-        contract_type: apiContractType,
-        currency: DEFAULT_CURRENCY,
-        duration: Number(DEFAULT_DURATION) || 1,
-        duration_unit: DEFAULT_DURATION_UNIT || "m",
-        barrier: candidate.barrier,
-        [symbolKey]: symbolValue,
-      };
-
-      try {
-        const res = await wsRequest(req, timeoutMs);
-        if (res?.error) {
-          lastError = new Error(res.error.message || "proposal error");
-          continue;
-        }
-        const parsed = parseProposalToExecution(
-          {
-            proposal: res?.proposal,
-            barrierNum: candidate.barrierNum,
-            precision: candidate.precision,
-            barrier: candidate.barrier,
-            apiContractType,
-            symbolKey,
-          },
-          side,
-          candidate.precision
-        );
-        if (parsed) return parsed;
-      } catch (e) {
-        lastError = e;
-      }
-    }
-  }
-
-  if (lastError) throw lastError;
-  return null;
+  const req = {
+    proposal: 1,
+    amount: stake,
+    basis: "stake",
+    contract_type: side === "CALL" ? "HIGHER" : "LOWER",
+    currency: DEFAULT_CURRENCY,
+    duration: Number(DEFAULT_DURATION) || 1,
+    duration_unit: DEFAULT_DURATION_UNIT || "m",
+    barrier: candidate.barrier,
+    symbol,
+  };
+  const res = await wsRequest(req, timeoutMs);
+  if (res?.error) throw new Error(res.error.message || "proposal error");
+  return parseProposalToExecution({ proposal: res?.proposal, barrierNum: candidate.barrierNum, precision: candidate.precision, barrier: candidate.barrier }, side, candidate.precision);
 }
 async function findBestHighLowPlan(item, side, opts = {}) {
   const symbol = item?.symbol;
@@ -922,40 +850,19 @@ async function ensureExecutionPlanForTrade(item, side) {
   if (!ws || ws.readyState !== 1) throw new Error("WS desconectado");
   await ensureAuthorized();
 
-  try {
-    const quick = await findBestHighLowPlan(item, side, { fast: true });
-    if (quick) {
-      if (side === "CALL") cache.call = quick;
-      else cache.put = quick;
-      cache.updatedAt = Date.now();
-      cache.error = "";
-      item.autoHighLow ||= {};
-      item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...quick };
-      item.autoHighLow.updatedAt = cache.updatedAt;
-      return quick;
-    }
-  } catch (e) {
-    cache.error = e?.message || String(e);
+  const quick = await findBestHighLowPlan(item, side, { fast: true });
+  if (quick) {
+    if (side === "CALL") cache.call = quick;
+    else cache.put = quick;
+    cache.updatedAt = Date.now();
+    cache.error = "";
+    item.autoHighLow ||= {};
+    item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...quick };
+    item.autoHighLow.updatedAt = cache.updatedAt;
+    return quick;
   }
 
-  try {
-    const full = await findBestHighLowPlan(item, side, { fast: false });
-    if (full) {
-      if (side === "CALL") cache.call = full;
-      else cache.put = full;
-      cache.updatedAt = Date.now();
-      cache.error = "";
-      item.autoHighLow ||= {};
-      item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...full };
-      item.autoHighLow.updatedAt = cache.updatedAt;
-      return full;
-    }
-  } catch (e) {
-    cache.error = e?.message || String(e);
-    throw e;
-  }
-
-  cache.error ||= `Sin proposal válida para ${side === "CALL" ? "HIGHER" : "LOWER"}`;
+  cache.error = `Sin proposal rápida para ${side === "CALL" ? "HIGHER" : "LOWER"}`;
   return null;
 }
 function formatExecutionPlanMini(plan) {
@@ -2612,7 +2519,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Eval sec + ESCALERA mode
+   Eval sec + GIRO mode
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
@@ -2637,18 +2544,18 @@ function applyTheme(theme) {
       })
   );
 
-  // ✅ PATRÓN ESCALERA (compat: si venías usando GIRO, hereda ese estado una sola vez)
-  const hasStairKey = localStorage.getItem("stairMode") !== null;
-  stairMode = loadBool("stairMode", false);
+  // ✅ GIRO (compat: si venías usando stairMode/strongMode, hereda ese estado una sola vez)
+  const hasGiroKey = localStorage.getItem("giroMode") !== null;
+  stairMode = loadBool("giroMode", false);
 
-  if (!hasStairKey) {
-    stairMode = loadBool("giroMode", false) || loadBool("strongMode", false);
-    saveBool("stairMode", stairMode);
+  if (!hasGiroKey) {
+    stairMode = loadBool("stairMode", false) || loadBool("strongMode", false);
+    saveBool("giroMode", stairMode);
   }
 
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.textContent = stairMode ? "🟪 Patrón ESCALERA" : "🟦 Modo NORMAL";
+    modeBtn.textContent = stairMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL";
     modeBtn.classList.toggle("active-strong", stairMode);
   };
   paintMode();
@@ -2656,13 +2563,14 @@ function applyTheme(theme) {
   if (modeBtn)
     modeBtn.onclick = () => {
       stairMode = !stairMode;
-      saveBool("stairMode", stairMode);
+      saveBool("giroMode", stairMode);
 
-      // compat vieja: apagamos GIRO / STRONG
-      saveBool("giroMode", false);
+      // compat vieja: apagamos ESCALERA / STRONG
+      saveBool("stairMode", false);
       saveBool("strongMode", false);
 
       paintMode();
+      toast(stairMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL", 1600);
     };
 })();
 
@@ -3630,7 +3538,7 @@ function renderHistory() {
 
   for (const it of history || []) {
     if (!it.mode) it.mode = "NORMAL";
-    if (it.mode === "GIRO" || it.mode === "FUERTE") it.mode = "ESCALERA";
+    if (it.mode === "ESCALERA" || it.mode === "GIRO" || it.mode === "FUERTE") it.mode = "GIRO";
   }
   saveHistory(history);
 
@@ -3906,8 +3814,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
         plan = await ensureExecutionPlanForTrade(modalCurrentItem, side);
       }
       if (!plan?.proposalId || !Number.isFinite(plan.askPrice)) {
-        const cachedErr = getOrCreateExecutionPlan(modalCurrentItem)?.error || "";
-        throw new Error(cachedErr || `No encontré proposal válida para ${side === "CALL" ? "HIGHER" : "LOWER"}`);
+        throw new Error(`No encontré barrier válido para ${side === "CALL" ? "HIGHER" : "LOWER"}`);
       }
 
       res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
@@ -3916,8 +3823,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
         ...tradeExtra,
         exec_mode: executionMode,
         contract_type: contractLabel,
-        api_contract_type: plan.apiContractType || contractLabel,
-        api_symbol_key: plan.symbolKey || "symbol",
         barrier: plan.barrier,
         target_return_pct: Math.round(plan.profitPct),
         proposal_id: plan.proposalId,
@@ -4310,7 +4215,7 @@ function finalizeMinute(minute) {
     if (out) liveOutcomeBySymbol[symbol] = out;
   }
 
-  // Aplica a TODAS las señales de prevMinute (NORMAL + ESCALERA) si todavía no tienen nextOutcome
+  // Aplica a TODAS las señales de prevMinute (NORMAL + GIRO) si todavía no tienen nextOutcome
   for (const it of history) {
     if (!it || it.nextOutcome) continue;
     if (it.minute !== prevMinute) continue;
@@ -4446,7 +4351,7 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    // ✅ ESTRICTO: en ESCALERA NO hay retry (solo eval en el segundo elegido)
+    // ✅ ESTRICTO: en GIRO NO hay retry (solo eval en el segundo elegido)
     if (!ok && !stairMode) scheduleRetry(minute);
   }
 }
@@ -4458,7 +4363,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + ESCALERA)
+   Technical rules + Evaluation (NORMAL + GIRO)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -4580,157 +4485,226 @@ function passesTechnicalFilters(best, vol, rules) {
 }
 
 /* =========================
-   Patrón ESCALERA
-   - CALL = escalera alcista
-   - PUT  = escalera bajista
+   GIRO
+   - PUT  = vela sigue verde, pero el vendedor ya gana mando interno
+   - CALL = vela sigue roja, pero el comprador ya gana mando interno
 ========================= */
-const RULES_STAIR = {
-  scoreMin: 0.016,
-  rangeScoreMin: 0.03,
-
-  dirRatioMinWhole: 0.56,
-
-  // avance sostenido
-  firstLegMinFracTotal: 0.34,
-  lateLegMinFracTotal: 0.18,
-
-  // cierre cerca del extremo
-  closeNearExtremeMaxFracRange: 0.20,
-
-  // pocas contras
-  maxRetraceFracTotal: 0.45,
-
-  // estructura “escalonada”
-  stepMinFracTotal: 0.06,
-  flatBandFracTotal: 0.02,
-  maxWeakAgainstFracTotal: 0.18,
-  maxWeakAgainstSteps: 1,
-  forwardCoverageMinFracTotal: 0.82,
-
-  // evita spike único dominante
-  maxSingleStepFracTotal: 0.72,
+const RULES_GIRO = {
+  minBodyFracRange: 0.12,
+  visibleDirRatioMin: 0.50,
+  visibleDirRatioMax: 0.68,
+  minLegsPerSide: 2,
+  strongOppLegFracRange: 0.22,
+  strongOppVsVisible: 0.85,
+  lateWindowMs: 15000,
+  lateOppVsVisible: 1.10,
+  lateOppMinFracRange: 0.12,
+  recoveryMaxFracOppAttack: 0.55,
+  noRebuildFracRange: 0.08,
+  scoreMin: 72,
 };
 
-function rangeScoreCalc(ticks, vol) {
-  if (!ticks || ticks.length < 3) return 0;
-  const qs = ticks.map((t) => t.quote);
-  const r = Math.max(...qs) - Math.min(...qs) || 0;
-  return r / (vol || 1e-9);
+function getAvgAbsStep(ticks) {
+  if (!ticks || ticks.length < 2) return 0;
+  let acc = 0;
+  let count = 0;
+  for (let i = 1; i < ticks.length; i++) {
+    const d = Math.abs(Number(ticks[i].quote) - Number(ticks[i - 1].quote));
+    if (!Number.isFinite(d)) continue;
+    acc += d;
+    count++;
+  }
+  return count ? acc / count : 0;
 }
 
-function buildStairCheckpoints(evalMs) {
-  return [...new Set([0, 10000, 20000, 30000, 40000, 50000, evalMs].filter((ms) => ms <= evalMs))].sort(
-    (a, b) => a - b
-  );
+function buildGiroLegs(ticks, noise) {
+  const pts = (ticks || []).slice().sort((a, b) => a.ms - b.ms);
+  if (pts.length < 2) return [];
+
+  const legs = [];
+  let curDir = 0;
+  let curSize = 0;
+  let legStartMs = pts[0].ms;
+  let legEndMs = pts[0].ms;
+
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i - 1];
+    const curr = pts[i];
+    const delta = Number(curr.quote) - Number(prev.quote);
+    const absDelta = Math.abs(delta);
+    if (!Number.isFinite(absDelta) || absDelta < noise * 0.35) continue;
+
+    const dir = Math.sign(delta);
+    if (!curDir) {
+      curDir = dir;
+      curSize = absDelta;
+      legStartMs = prev.ms;
+      legEndMs = curr.ms;
+      continue;
+    }
+
+    if (dir === curDir) {
+      curSize += absDelta;
+      legEndMs = curr.ms;
+      continue;
+    }
+
+    legs.push({ dir: curDir, size: curSize, startMs: legStartMs, endMs: legEndMs });
+    curDir = dir;
+    curSize = absDelta;
+    legStartMs = prev.ms;
+    legEndMs = curr.ms;
+  }
+
+  if (curDir && curSize > 0) legs.push({ dir: curDir, size: curSize, startMs: legStartMs, endMs: legEndMs });
+
+  return legs.filter((leg) => Number.isFinite(leg.size) && leg.size > 0);
 }
 
-function detectStairPattern(candidate) {
+function sumLegFlow(legs, dirSign, startMs = 0, endMs = Infinity) {
+  let acc = 0;
+  for (const leg of legs || []) {
+    if (leg.dir !== dirSign) continue;
+    if (leg.endMs < startMs || leg.startMs > endMs) continue;
+    acc += Number(leg.size || 0);
+  }
+  return acc;
+}
+
+function countLegs(legs, dirSign, startMs = 0, endMs = Infinity) {
+  let count = 0;
+  for (const leg of legs || []) {
+    if (leg.dir !== dirSign) continue;
+    if (leg.endMs < startMs || leg.startMs > endMs) continue;
+    count++;
+  }
+  return count;
+}
+
+function findStrongestLeg(legs, dirSign, startMs = 0, endMs = Infinity) {
+  let best = null;
+  for (const leg of legs || []) {
+    if (leg.dir !== dirSign) continue;
+    if (leg.endMs < startMs || leg.startMs > endMs) continue;
+    if (!best || Number(leg.size || 0) > Number(best.size || 0)) best = leg;
+  }
+  return best;
+}
+
+function maxQuoteBetween(ticks, startMs = 0, endMs = Infinity) {
+  const pts = (ticks || []).filter((t) => t.ms >= startMs && t.ms <= endMs);
+  if (!pts.length) return null;
+  return Math.max(...pts.map((t) => Number(t.quote)).filter(Number.isFinite));
+}
+
+function minQuoteBetween(ticks, startMs = 0, endMs = Infinity) {
+  const pts = (ticks || []).filter((t) => t.ms >= startMs && t.ms <= endMs);
+  if (!pts.length) return null;
+  return Math.min(...pts.map((t) => Number(t.quote)).filter(Number.isFinite));
+}
+
+function detectGiroPattern(candidate) {
   const ticks = candidate?.ticks || [];
   const evalMs = EVAL_SEC * 1000;
   if (ticks.length < 6) return null;
 
-  const p0 = getPriceAtMs(ticks, 0);
-  const p30 = getPriceAtMs(ticks, 30000);
-  const pE = getPriceAtMs(ticks, evalMs);
-  if (p0 == null || p30 == null || pE == null) return null;
-
-  const totalMove = pE - p0;
-  const dirSign = Math.sign(totalMove);
-  if (!dirSign) return null;
-
-  const absTotal = Math.abs(totalMove);
   const fullTicks = sliceTicks(ticks, 0, evalMs);
-  if (fullTicks.length < 4) return null;
+  if (fullTicks.length < 6) return null;
 
-  const qs = fullTicks.map((t) => t.quote);
-  const minP = Math.min(...qs);
-  const maxP = Math.max(...qs);
-  const range = maxP - minP;
+  const p0 = getPriceAtMs(fullTicks, 0);
+  const pE = getPriceAtMs(fullTicks, evalMs);
+  if (p0 == null || pE == null) return null;
+
+  const qs = fullTicks.map((t) => Number(t.quote)).filter(Number.isFinite);
+  if (qs.length < 4) return null;
+
+  const range = Math.max(...qs) - Math.min(...qs);
   if (!(range > 1e-12)) return null;
 
-  // 1) Direccionalidad general
-  const wholeDirRatio = directionalRatio(fullTicks, dirSign);
-  if (wholeDirRatio < RULES_STAIR.dirRatioMinWhole) return null;
+  const visibleBody = pE - p0;
+  const visibleDir = Math.sign(visibleBody);
+  if (!visibleDir) return null;
 
-  // 2) Tiene que avanzar tanto antes como después de los 30s
-  const firstLeg = (p30 - p0) * dirSign;
-  const lateLeg = (pE - p30) * dirSign;
-  if (firstLeg < absTotal * RULES_STAIR.firstLegMinFracTotal) return null;
-  if (lateLeg < absTotal * RULES_STAIR.lateLegMinFracTotal) return null;
+  const bodyFrac = Math.abs(visibleBody) / range;
+  if (bodyFrac < RULES_GIRO.minBodyFracRange) return null;
 
-  // 3) Cierra cerca del extremo
-  const closeToExtreme = dirSign > 0 ? maxP - pE : pE - minP;
-  if (closeToExtreme > range * RULES_STAIR.closeNearExtremeMaxFracRange) return null;
+  const signalDirection = visibleDir > 0 ? "PUT" : "CALL";
+  const oppositeDir = -visibleDir;
 
-  // 4) Retroceso total controlado
-  const retrace = maxRetraceAgainst(fullTicks, dirSign);
-  if (retrace > absTotal * RULES_STAIR.maxRetraceFracTotal) return null;
+  const dirRatioVisible = directionalRatio(fullTicks, visibleDir);
+  const avgStep = getAvgAbsStep(fullTicks);
+  const noise = Math.max(avgStep * 1.8, range * 0.025, 1e-6);
 
-  // 5) Movimiento con suficiente entidad
-  const score = absTotal / (candidate.vol || 1e-9);
-  if (score < RULES_STAIR.scoreMin) return null;
+  const legs = buildGiroLegs(fullTicks, noise);
+  if (legs.length < 4) return null;
 
-  const rangeScore = rangeScoreCalc(fullTicks, candidate.vol);
-  if (rangeScore < RULES_STAIR.rangeScoreMin) return null;
+  const visibleLegs = countLegs(legs, visibleDir);
+  const oppositeLegs = countLegs(legs, oppositeDir);
+  if (visibleLegs < RULES_GIRO.minLegsPerSide || oppositeLegs < RULES_GIRO.minLegsPerSide) return null;
 
-  // 6) Comportamiento escalonado por checkpoints
-  const checkpoints = buildStairCheckpoints(evalMs);
-  if (checkpoints.length < 4) return null;
+  const irregularVisible =
+    dirRatioVisible >= RULES_GIRO.visibleDirRatioMin &&
+    dirRatioVisible <= RULES_GIRO.visibleDirRatioMax;
 
-  const stepMoves = [];
-  for (let i = 1; i < checkpoints.length; i++) {
-    const a = getPriceAtMs(ticks, checkpoints[i - 1]);
-    const b = getPriceAtMs(ticks, checkpoints[i]);
-    if (a == null || b == null) return null;
-    stepMoves.push((b - a) * dirSign);
+  const strongestOpp = findStrongestLeg(legs, oppositeDir);
+  const strongestVisible = findStrongestLeg(legs, visibleDir);
+  if (!strongestOpp || !strongestVisible) return null;
+
+  const strongOpp =
+    strongestOpp.size >= range * RULES_GIRO.strongOppLegFracRange &&
+    strongestOpp.size >= strongestVisible.size * RULES_GIRO.strongOppVsVisible;
+
+  const lateStart = Math.max(0, evalMs - RULES_GIRO.lateWindowMs);
+  const lateOppFlow = sumLegFlow(legs, oppositeDir, lateStart, evalMs);
+  const lateVisibleFlow = sumLegFlow(legs, visibleDir, lateStart, evalMs);
+  const lateStrongestOpp = findStrongestLeg(legs, oppositeDir, lateStart, evalMs) || strongestOpp;
+
+  const lateFavoursOpp =
+    lateOppFlow > lateVisibleFlow * RULES_GIRO.lateOppVsVisible &&
+    lateOppFlow >= range * RULES_GIRO.lateOppMinFracRange;
+
+  if (!lateStrongestOpp) return null;
+
+  const recoveryAfterOpp = sumLegFlow(legs, visibleDir, lateStrongestOpp.endMs, evalMs);
+  const weakRecovery = recoveryAfterOpp <= lateStrongestOpp.size * RULES_GIRO.recoveryMaxFracOppAttack;
+
+  let noRebuild = false;
+  if (visibleDir > 0) {
+    const priorMax = maxQuoteBetween(fullTicks, 0, lateStrongestOpp.startMs);
+    const postMax = maxQuoteBetween(fullTicks, lateStrongestOpp.endMs, evalMs);
+    noRebuild =
+      Number.isFinite(priorMax) &&
+      Number.isFinite(postMax) &&
+      postMax <= priorMax + range * RULES_GIRO.noRebuildFracRange;
+  } else {
+    const priorMin = minQuoteBetween(fullTicks, 0, lateStrongestOpp.startMs);
+    const postMin = minQuoteBetween(fullTicks, lateStrongestOpp.endMs, evalMs);
+    noRebuild =
+      Number.isFinite(priorMin) &&
+      Number.isFinite(postMin) &&
+      postMin >= priorMin - range * RULES_GIRO.noRebuildFracRange;
   }
 
-  let strongForwardSteps = 0;
-  let weakAgainstSteps = 0;
-  let strongAgainstSteps = 0;
-  let positiveCoverage = 0;
-  let maxSingleStepAbs = 0;
+  let giroScore = 0;
+  giroScore += bodyFrac >= RULES_GIRO.minBodyFracRange ? 28 : 0;
+  giroScore += irregularVisible ? 18 : 0;
+  giroScore += strongOpp ? 22 : 0;
+  giroScore += lateFavoursOpp ? 18 : 0;
+  giroScore += weakRecovery ? 18 : 0;
+  giroScore += noRebuild ? 10 : 0;
 
-  for (const d of stepMoves) {
-    maxSingleStepAbs = Math.max(maxSingleStepAbs, Math.abs(d));
-
-    if (d >= absTotal * RULES_STAIR.stepMinFracTotal) {
-      strongForwardSteps++;
-      positiveCoverage += d;
-      continue;
-    }
-
-    if (d >= 0) {
-      positiveCoverage += d;
-      continue;
-    }
-
-    if (Math.abs(d) <= absTotal * RULES_STAIR.flatBandFracTotal) continue;
-
-    if (Math.abs(d) <= absTotal * RULES_STAIR.maxWeakAgainstFracTotal) {
-      weakAgainstSteps++;
-      continue;
-    }
-
-    strongAgainstSteps++;
-  }
-
-  if (strongAgainstSteps > 0) return null;
-  if (weakAgainstSteps > RULES_STAIR.maxWeakAgainstSteps) return null;
-  if (strongForwardSteps < Math.max(3, stepMoves.length - 1)) return null;
-  if (positiveCoverage < absTotal * RULES_STAIR.forwardCoverageMinFracTotal) return null;
-  if (maxSingleStepAbs > absTotal * RULES_STAIR.maxSingleStepFracTotal) return null;
+  if (giroScore < RULES_GIRO.scoreMin) return null;
 
   const quality =
-    wholeDirRatio * 100 +
-    (positiveCoverage / (absTotal || 1e-9)) * 30 +
-    (1 - closeToExtreme / range) * 18 -
-    weakAgainstSteps * 8 -
-    (maxSingleStepAbs / (absTotal || 1e-9)) * 12;
+    giroScore +
+    Math.min(20, (lateOppFlow / Math.max(lateVisibleFlow, 1e-9)) * 6) +
+    Math.min(16, (strongestOpp.size / Math.max(range, 1e-9)) * 10) -
+    Math.abs(dirRatioVisible - 0.59) * 20;
 
   return {
-    direction: dirSign > 0 ? "CALL" : "PUT",
+    direction: signalDirection,
     quality,
+    giroScore,
   };
 }
 
@@ -4755,13 +4729,11 @@ function evaluateMinute(minute) {
     vol = vol / Math.max(1, prices.length - 1);
 
     const score = rawMove / (vol || 1e-9);
-    const rScore = rangeScoreCalc(ticks, vol);
 
     candidates.push({
       symbol: sym,
       move,
       score,
-      rangeScore: rScore,
       ticks,
       vol,
     });
@@ -4769,24 +4741,25 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
 
-  // ✅ MODO PATRÓN ESCALERA: solo señales si la forma coincide con escalera alcista/bajista
+  // ✅ MODO GIRO: la vela conserva color al evaluar, pero el mando interno ya favorece al lado contrario
   if (stairMode) {
     const matches = [];
 
     for (const c of candidates) {
-      const match = detectStairPattern(c);
+      const match = detectGiroPattern(c);
       if (!match) continue;
 
       matches.push({
         ...c,
         direction: match.direction,
         quality: match.quality,
+        giroScore: match.giroScore,
       });
     }
 
     if (!matches.length) return true;
 
-    matches.sort((a, b) => b.quality - a.quality);
+    matches.sort((a, b) => b.quality - a.quality || b.giroScore - a.giroScore);
     const bestMatch = matches[0];
 
     addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks);
@@ -4816,7 +4789,7 @@ function fmtTimeUTC(minute) {
 }
 function addSignal(minute, symbol, direction, ticks) {
   if (areSignalsPaused()) return;
-  const modeLabel = stairMode ? "ESCALERA" : "NORMAL";
+  const modeLabel = stairMode ? "GIRO" : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
