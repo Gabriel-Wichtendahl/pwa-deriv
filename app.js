@@ -1577,12 +1577,10 @@ function isStrictGiroPracticeEntry(entry) {
   if (!entry) return false;
   const mode = normalizePracticeEntryMode(entry.mode);
   const idText = `${String(entry.id || "")} ${String(entry.journal_id || "")}`.toUpperCase();
-  // Si el id o journal conservan ESCALERA/FUERTE, NO debe entrar en GIRO.
-  if (idText.includes("ESCALERA") || idText.includes("FUERTE")) return false;
-  if (mode === "GIRO") return true;
-  // fallback por si hubiera registros viejos sin mode pero con id GIRO
-  if (!mode || mode === "NORMAL") return idText.includes("GIRO");
-  return false;
+  // Práctica GIRO debe aceptar SOLO operaciones guardadas explícitamente como GIRO.
+  // Si el registro conserva ESCALERA/FUERTE/NORMAL en id o journal, queda afuera.
+  if (idText.includes("ESCALERA") || idText.includes("FUERTE") || idText.includes("NORMAL")) return false;
+  return mode === "GIRO";
 }
 function loadPracticeFilterMode() {
   try {
@@ -2369,6 +2367,12 @@ function ensurePracticeReady() {
   paintPracticeSecButtons();
   ensurePracticeQueue();
   updatePracticePoolLabel();
+  if (shouldPracticeOnlyGiro() && practiceRound?.entry && !isStrictGiroPracticeEntry(practiceRound.entry)) {
+    cancelPracticeAnim();
+    practiceRound = null;
+    practiceChoiceHitZones = [];
+    resetPracticeSimilarState();
+  }
   if (!practiceRound) {
     resetPracticeSimilarState();
     const msgFiltro = shouldPracticeOnlyGiro() ? "Filtro activo: solo GIRO." : "Filtro activo: todos los modos.";
