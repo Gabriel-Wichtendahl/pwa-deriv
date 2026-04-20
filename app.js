@@ -1503,8 +1503,12 @@ function setActiveView(name) {
    Práctica
 ========================= */
 const PRACTICE_STATS_KEY = "practiceStats_v1";
+const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
+const PRACTICE_FILTER_ALL = "ALL";
+const PRACTICE_FILTER_GIRO = "GIRO";
 let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
+let practiceFilterMode = loadPracticeFilterMode();
 let practiceQueue = [];
 let practiceRound = null;
 let practiceRaf = null;
@@ -1559,6 +1563,74 @@ function formatPracticeStats(stats) {
   const pct = decided ? Math.round((Number(stats.itm || 0) / decided) * 100) : 0;
   return `ITM ${stats.itm} · OTM ${stats.otm} · PASAR ${stats.pass} · % ${pct} · TOTAL ${stats.total}`;
 }
+function normalizePracticeEntryMode(mode) {
+  const m = String(mode || "").toUpperCase();
+  if (m === "ESCALERA" || m === "FUERTE") return "GIRO";
+  return m || "NORMAL";
+}
+function loadPracticeFilterMode() {
+  try {
+    const saved = String(localStorage.getItem(PRACTICE_FILTER_KEY) || "").toUpperCase();
+    return saved === PRACTICE_FILTER_GIRO ? PRACTICE_FILTER_GIRO : PRACTICE_FILTER_ALL;
+  } catch {
+    return PRACTICE_FILTER_ALL;
+  }
+}
+function savePracticeFilterMode() {
+  try {
+    localStorage.setItem(PRACTICE_FILTER_KEY, practiceFilterMode === PRACTICE_FILTER_GIRO ? PRACTICE_FILTER_GIRO : PRACTICE_FILTER_ALL);
+  } catch {}
+}
+function shouldPracticeOnlyGiro() {
+  return practiceFilterMode === PRACTICE_FILTER_GIRO;
+}
+function applyPracticeFilterButtonUI() {
+  const btn = pickEl("practiceFilterBtn");
+  if (!btn) return;
+  const giroOnly = shouldPracticeOnlyGiro();
+  btn.textContent = giroOnly ? "🟥 Práctica GIRO" : "⚪ Práctica TODOS";
+  btn.classList.toggle("active", giroOnly);
+  btn.title = giroOnly
+    ? "Práctica filtrada solo a trades guardados en modo GIRO."
+    : "Práctica usando trades de todos los modos.";
+}
+function ensurePracticeFilterButton() {
+  let btn = pickEl("practiceFilterBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "practiceFilterBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.style.marginLeft = "8px";
+    btn.style.minHeight = "36px";
+    btn.style.padding = "8px 12px";
+
+    const anchor = practice45Btn || practice40Btn || practiceRoundLabelEl || practiceView || null;
+    if (anchor && anchor.parentElement) anchor.insertAdjacentElement("afterend", btn);
+    else if (practiceView) practiceView.prepend(btn);
+  }
+
+  btn.onclick = () => {
+    practiceFilterMode = shouldPracticeOnlyGiro() ? PRACTICE_FILTER_ALL : PRACTICE_FILTER_GIRO;
+    savePracticeFilterMode();
+
+    cancelPracticeAnim();
+    practiceQueue = [];
+    practiceRound = null;
+    practiceChoiceHitZones = [];
+    resetPracticeSimilarState();
+
+    applyPracticeFilterButtonUI();
+    ensurePracticeQueue();
+    updatePracticePoolLabel();
+
+    if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
+    toast(shouldPracticeOnlyGiro() ? "🟥 Práctica filtrada a GIRO" : "⚪ Práctica con todos los modos", 1800);
+  };
+
+  applyPracticeFilterButtonUI();
+  return btn;
+}
 function renderPracticeStats() {
   if (practiceSessionStatsEl) practiceSessionStatsEl.textContent = formatPracticeStats(practiceSessionStats);
   if (practiceAllStatsEl) practiceAllStatsEl.textContent = formatPracticeStats(practiceAllStats);
@@ -1569,6 +1641,7 @@ function getEligiblePracticeEntries() {
     if (!entry) return false;
     if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
     if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
+    if (shouldPracticeOnlyGiro() && normalizePracticeEntryMode(entry.mode) !== "GIRO") return false;
     return true;
   });
 }
@@ -1588,7 +1661,10 @@ function ensurePracticeQueue() {
 }
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
-  if (practicePoolLabelEl) practicePoolLabelEl.textContent = `Pool: ${practiceQueue.length}/${eligible}`;
+  if (practicePoolLabelEl) {
+    const tag = shouldPracticeOnlyGiro() ? "GIRO" : "TODOS";
+    practicePoolLabelEl.textContent = `Pool ${tag}: ${practiceQueue.length}/${eligible}`;
+  }
 }
 function paintPracticeSecButtons() {
   const active = EVAL_SEC;
@@ -2271,13 +2347,16 @@ function startPracticeRound(entry = null) {
   practiceRaf = requestAnimationFrame(practiceLoop);
 }
 function ensurePracticeReady() {
+  ensurePracticeFilterButton();
+  applyPracticeFilterButtonUI();
   renderPracticeStats();
   paintPracticeSecButtons();
   ensurePracticeQueue();
   updatePracticePoolLabel();
   if (!practiceRound) {
     resetPracticeSimilarState();
-    updatePracticeStatusText("Toca PASAR para empezar una ronda con trades aleatorios sin repetir. En Práctica, las señales quedan pausadas.");
+    const msgFiltro = shouldPracticeOnlyGiro() ? "Filtro activo: solo GIRO." : "Filtro activo: todos los modos.";
+    updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales quedan pausadas.`);
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
@@ -5093,5 +5172,7 @@ updateDisciplineLockUI(false);
 seedTradesJournalFromHistory();
 
 ensureInlineClearButtons();
+ensurePracticeFilterButton();
+applyPracticeFilterButtonUI();
 
 connect();
