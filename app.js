@@ -4690,28 +4690,28 @@ function passesTechnicalFilters(best, vol, rules) {
    - CALL = vela sigue roja, pero el comprador ya gana mando interno
 ========================= */
 const RULES_GIRO = {
-  // base parecida a NORMAL
-  wholeDirRatioMin: 0.50,
-  wholeDirRatioMax: 0.74,
-  bodyVsRangeMin: 0.18,
+  // base parecida a NORMAL, pero más flexible
+  wholeDirRatioMin: 0.47,
+  wholeDirRatioMax: 0.79,
+  bodyVsRangeMin: 0.14,
 
   // presión contraria en tramo final
-  lateOppRatioMin: 0.56,
-  lateAgainstMinFracTotal: 0.12,
-  last8AgainstMinFracTotal: 0.08,
+  lateOppRatioMin: 0.52,
+  lateAgainstMinFracTotal: 0.09,
+  last8AgainstMinFracTotal: 0.05,
 
-  // ataque contrario más profundo que en NORMAL
-  counterAttackMinFracTotal: 0.16,
-  counterAttackMaxFracTotal: 0.82,
+  // ataque contrario útil, pero no tan exigente
+  counterAttackMinFracTotal: 0.11,
+  counterAttackMaxFracTotal: 0.88,
 
-  // respuesta del lado dominante débil
-  responseVsAttackMax: 0.72,
+  // respuesta del lado dominante: seguimos pidiendo debilidad, pero menos estricta
+  responseVsAttackMax: 0.86,
 
-  // irregularidad de avances del lado dominante
-  irregularityMin: 0.22,
+  // irregularidad mínima más baja
+  irregularityMin: 0.14,
 
-  // no aceptar demasiado zigzag real
-  oppositeStepCountMax: 3,
+  // tolera un poco más de zigzag
+  oppositeStepCountMax: 4,
 };
 
 function segmentMoveSigned(ticks, aMs, bMs, dirSign) {
@@ -4770,7 +4770,7 @@ function detectGiroPattern(candidate) {
   if (ticks.length < 6) return null;
 
   // 1) base NORMAL primero
-  if (!passesTechnicalFilters(candidate, candidate.vol, RULES_NORMAL)) return null;
+  if (candidate.score < RULES_NORMAL.scoreMin * 0.9) return null;
 
   const p0 = getPriceAtMs(ticks, 0);
   const p30 = getPriceAtMs(ticks, 30000);
