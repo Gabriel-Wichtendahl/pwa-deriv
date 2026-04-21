@@ -528,8 +528,8 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 
-// ✅ NORMAL vs GIRO
-let stairMode = false;
+// Estado principal: NORMAL vs GIRO
+let giroMode = false;
 
 let history = loadHistory();
 migrateHistoryModesToGiro();
@@ -658,13 +658,6 @@ function ensureExecutionModeButton() {
   return btn;
 }
 
-function getSignalTicksForExecution(item) {
-  if (!item) return [];
-  const live = minuteData?.[item.minute]?.[item.symbol];
-  if (Array.isArray(live) && live.length >= 2) return live.slice();
-  if (Array.isArray(item.ticks) && item.ticks.length >= 2) return item.ticks.slice();
-  return [];
-}
 const AUTO_PRECALC_SCALE_FACTORS = [1, 0.1, 0.01, 0.001, 0.0001];
 
 function makeBarrierCandidateFromAbsolute(side, absValue) {
@@ -1373,18 +1366,6 @@ function cssEscape(s) {
 /* =========================
    NEXT helpers
 ========================= */
-function nextOutcomeToArrow(outcome) {
-  if (outcome === "up") return "⬆️";
-  if (outcome === "down") return "⬇️";
-  if (outcome === "flat") return "➖";
-  return "⏳";
-}
-function nextOutcomeToText(outcome) {
-  if (outcome === "up") return "ALCISTA";
-  if (outcome === "down") return "BAJISTA";
-  if (outcome === "flat") return "NEUTRA";
-  return "PENDIENTE";
-}
 function compareConsecutiveCloses(signalClose, nextClose) {
   const a = Number(signalClose);
   const b = Number(nextClose);
@@ -2820,7 +2801,7 @@ function applyTheme(theme) {
 })();
 
 /* =========================
-   Eval sec + GIRO mode
+   Eval sec + Modo GIRO
 ========================= */
 (function initEvalMode() {
   const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
@@ -2845,33 +2826,33 @@ function applyTheme(theme) {
       })
   );
 
-  // ✅ GIRO (compat: hereda estados viejos una sola vez)
+  // GIRO (mantiene compatibilidad con estados viejos una sola vez)
   const hasGiroKey = localStorage.getItem("giroMode") !== null;
-  stairMode = loadBool("giroMode", false);
+  giroMode = loadBool("giroMode", false);
 
   if (!hasGiroKey) {
-    stairMode = loadBool("stairMode", false) || loadBool("strongMode", false);
-    saveBool("giroMode", stairMode);
+    giroMode = loadBool("giroMode", false) || loadBool("strongMode", false);
+    saveBool("giroMode", giroMode);
   }
 
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.textContent = stairMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL";
-    modeBtn.classList.toggle("active-strong", stairMode);
+    modeBtn.textContent = giroMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL";
+    modeBtn.classList.toggle("active-strong", giroMode);
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      stairMode = !stairMode;
-      saveBool("giroMode", stairMode);
+      giroMode = !giroMode;
+      saveBool("giroMode", giroMode);
 
       // compat vieja: apagamos flags anteriores
-      saveBool("stairMode", false);
+      saveBool("giroMode", false);
       saveBool("strongMode", false);
 
       paintMode();
-      toast(stairMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL", 1600);
+      toast(giroMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL", 1600);
     };
 })();
 
@@ -3696,9 +3677,6 @@ function updateRowNextArrowOnRow(row, item) {
   }
 }
 
-function animateHitPop(item) {
-  return;
-}
 function animateFailShake(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -4687,8 +4665,8 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    // ✅ ESTRICTO: en GIRO NO hay retry (solo eval en el segundo elegido)
-    if (!ok && !stairMode) scheduleRetry(minute);
+    // En GIRO no hay retry: evalúa solo en el segundo elegido
+    if (!ok && !giroMode) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -4988,7 +4966,7 @@ function detectGiroPattern(candidate) {
 
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return stairMode ? true : false;
+  if (!data) return giroMode ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -5017,10 +4995,10 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
 
-  // ✅ MODO GIRO v2: base NORMAL + presión contraria real + respuesta débil del lado dominante
-  if (stairMode) {
+  // MODO GIRO v2: base NORMAL + presión contraria real + respuesta débil del lado dominante
+  if (giroMode) {
     const matches = [];
 
     for (const c of candidates) {
@@ -5067,7 +5045,7 @@ function fmtTimeUTC(minute) {
 }
 function addSignal(minute, symbol, direction, ticks) {
   if (areSignalsPaused()) return;
-  const modeLabel = stairMode ? "GIRO" : "NORMAL";
+  const modeLabel = giroMode ? "GIRO" : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
