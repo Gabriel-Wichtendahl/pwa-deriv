@@ -1676,6 +1676,7 @@ const PRACTICE_STATS_KEY = "practiceStats_v1";
 const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
+const PRACTICE_FILTER_GIRO_FLEX = "GIRO_FLEXIBLE";
 const PRACTICE_FILTER_NORMAL = "NORMAL";
 let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
@@ -1741,18 +1742,25 @@ function normalizePracticeEntryMode(mode) {
 function isStrictGiroPracticeEntry(entry) {
   if (!entry) return false;
   const mode = normalizePracticeEntryMode(entry.mode);
+  if (mode !== SIGNAL_MODE_GIRO) return false;
+
   const version = String(entry.mode_version || entry.giro_version || "");
+  return version === GIRO_LOGIC_VERSION;
+}
+function isStrictGiroFlexiblePracticeEntry(entry) {
+  if (!entry) return false;
+  const mode = normalizePracticeEntryMode(entry.mode);
+  if (mode !== SIGNAL_MODE_GIRO_FLEX) return false;
 
-  const isNewGiro = mode === SIGNAL_MODE_GIRO && version === GIRO_LOGIC_VERSION;
-  const isNewGiroFlex = mode === SIGNAL_MODE_GIRO_FLEX && version === GIRO_FLEX_LOGIC_VERSION;
-
-  return isNewGiro || isNewGiroFlex;
+  const version = String(entry.mode_version || entry.giro_version || "");
+  return version === GIRO_FLEX_LOGIC_VERSION;
 }
 
 function loadPracticeFilterMode() {
   try {
     const saved = String(localStorage.getItem(PRACTICE_FILTER_KEY) || "").toUpperCase();
-    if (saved === PRACTICE_FILTER_GIRO || saved === "GIRO_FLEXIBLE") return PRACTICE_FILTER_GIRO;
+    if (saved === PRACTICE_FILTER_GIRO) return PRACTICE_FILTER_GIRO;
+    if (saved === PRACTICE_FILTER_GIRO_FLEX) return PRACTICE_FILTER_GIRO_FLEX;
     if (saved === PRACTICE_FILTER_NORMAL) return PRACTICE_FILTER_NORMAL;
     return PRACTICE_FILTER_ALL;
   } catch {
@@ -1764,26 +1772,33 @@ function savePracticeFilterMode() {
     const safe =
       practiceFilterMode === PRACTICE_FILTER_GIRO
         ? PRACTICE_FILTER_GIRO
-        : practiceFilterMode === PRACTICE_FILTER_NORMAL
-          ? PRACTICE_FILTER_NORMAL
-          : PRACTICE_FILTER_ALL;
+        : practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX
+          ? PRACTICE_FILTER_GIRO_FLEX
+          : practiceFilterMode === PRACTICE_FILTER_NORMAL
+            ? PRACTICE_FILTER_NORMAL
+            : PRACTICE_FILTER_ALL;
     localStorage.setItem(PRACTICE_FILTER_KEY, safe);
   } catch {}
 }
 function shouldPracticeOnlyGiro() {
   return practiceFilterMode === PRACTICE_FILTER_GIRO;
 }
+function shouldPracticeOnlyGiroFlexible() {
+  return practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX;
+}
 function shouldPracticeOnlyNormal() {
   return practiceFilterMode === PRACTICE_FILTER_NORMAL;
 }
 function normalizePracticeFilterMode(mode) {
   const m = String(mode || "").toUpperCase();
-  if (m === PRACTICE_FILTER_GIRO || m === "GIRO_FLEXIBLE") return PRACTICE_FILTER_GIRO;
+  if (m === PRACTICE_FILTER_GIRO) return PRACTICE_FILTER_GIRO;
+  if (m === PRACTICE_FILTER_GIRO_FLEX) return PRACTICE_FILTER_GIRO_FLEX;
   if (m === PRACTICE_FILTER_NORMAL) return PRACTICE_FILTER_NORMAL;
   return PRACTICE_FILTER_ALL;
 }
 function getPracticeFilterTag() {
   if (shouldPracticeOnlyGiro()) return "GIRO";
+  if (shouldPracticeOnlyGiroFlexible()) return "GIRO FLEX";
   if (shouldPracticeOnlyNormal()) return "NORMAL";
   return "TODOS";
 }
@@ -1801,7 +1816,12 @@ function applyPracticeFilterButtonUI() {
   btn.classList.toggle("active", mode !== PRACTICE_FILTER_ALL);
   if (mode === PRACTICE_FILTER_GIRO) {
     btn.textContent = "🟥 Práctica GIRO";
-    btn.title = "Práctica filtrada a velas guardadas/operadas en modo GIRO y GIRO FLEXIBLE.";
+    btn.title = "Práctica filtrada solo a velas guardadas/operadas en modo GIRO.";
+    return;
+  }
+  if (mode === PRACTICE_FILTER_GIRO_FLEX) {
+    btn.textContent = "🟧 Práctica GIRO FLEX";
+    btn.title = "Práctica filtrada solo a velas guardadas/operadas en modo GIRO FLEXIBLE.";
     return;
   }
   if (mode === PRACTICE_FILTER_NORMAL) {
@@ -1833,8 +1853,10 @@ function ensurePracticeFilterButton() {
       practiceFilterMode === PRACTICE_FILTER_ALL
         ? PRACTICE_FILTER_GIRO
         : practiceFilterMode === PRACTICE_FILTER_GIRO
-          ? PRACTICE_FILTER_NORMAL
-          : PRACTICE_FILTER_ALL;
+          ? PRACTICE_FILTER_GIRO_FLEX
+          : practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX
+            ? PRACTICE_FILTER_NORMAL
+            : PRACTICE_FILTER_ALL;
     savePracticeFilterMode();
 
     cancelPracticeAnim();
@@ -1851,10 +1873,12 @@ function ensurePracticeFilterButton() {
 
     const tag =
       practiceFilterMode === PRACTICE_FILTER_GIRO
-        ? "🟥 Práctica filtrada a GIRO + GIRO FLEXIBLE"
-        : practiceFilterMode === PRACTICE_FILTER_NORMAL
-          ? "🟦 Práctica filtrada a NORMAL"
-          : "⚪ Práctica con todos los modos";
+        ? "🟥 Práctica filtrada a GIRO"
+        : practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX
+          ? "🟧 Práctica filtrada a GIRO FLEXIBLE"
+          : practiceFilterMode === PRACTICE_FILTER_NORMAL
+            ? "🟦 Práctica filtrada a NORMAL"
+            : "⚪ Práctica con todos los modos";
     toast(tag, 1800);
   };
 
@@ -1872,6 +1896,7 @@ function getEligiblePracticeEntries() {
     if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
     if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
     if (shouldPracticeOnlyGiro() && !isStrictGiroPracticeEntry(entry)) return false;
+    if (shouldPracticeOnlyGiroFlexible() && !isStrictGiroFlexiblePracticeEntry(entry)) return false;
     if (shouldPracticeOnlyNormal() && !isStrictNormalPracticeEntry(entry)) return false;
     return true;
   });
@@ -2914,329 +2939,6 @@ function applyTheme(theme) {
       toast(msg, 1600);
     };
 })();
-
-/* =========================
-   Tiempo server synced + modal helpers
-========================= */
-function serverNowMs() {
-  return Date.now() + (serverOffsetMs || 0);
-}
-function currentServerMinute() {
-  return Math.floor(serverNowMs() / 60000);
-}
-function isItemLiveMinute(item) {
-  if (!item) return false;
-  return Number(item.minute) === currentServerMinute();
-}
-function getCurrentMinuteRemainingSec() {
-  const now = serverNowMs();
-  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-    ? currentMinuteStartMs
-    : Math.floor(now / 60000) * 60000;
-
-  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
-  return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-}
-function getCurrent15sRangeLabel() {
-  const now = serverNowMs();
-  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-    ? currentMinuteStartMs
-    : Math.floor(now / 60000) * 60000;
-
-  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
-  const sec = Math.floor(msInMinute / 1000);
-
-  if (sec < 15) return "0-15s";
-  if (sec < 30) return "15-30s";
-  if (sec < 45) return "30-45s";
-  return "45-60s";
-}
-function isTradeEntryOpen(item) {
-  if (!item) return false;
-  return isItemLiveMinute(item);
-}
-function ensureModalCandleStatusBar() {
-  if (modalCandleStatusEl) return modalCandleStatusEl;
-
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-
-  if (!footer) return null;
-
-  let el = footer.querySelector(".candleStatusBar");
-  if (!el) {
-    el = document.createElement("div");
-    el.className = "candleStatusBar";
-    el.setAttribute("role", "status");
-    el.style.width = "100%";
-    el.style.boxSizing = "border-box";
-    el.style.margin = "0 0 10px 0";
-    el.style.padding = "12px 14px";
-    el.style.borderRadius = "14px";
-    el.style.border = "1px solid rgba(255,255,255,.14)";
-    el.style.fontWeight = "900";
-    el.style.fontSize = "14px";
-    el.style.letterSpacing = "0.3px";
-    el.style.textAlign = "center";
-    el.style.transition = "opacity .12s ease, transform .12s ease";
-    footer.prepend(el);
-  }
-
-  modalCandleStatusEl = el;
-  return modalCandleStatusEl;
-}
-function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
-  if (!btn) return;
-
-  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
-
-  if (locked) {
-    btn.disabled = true;
-    btn.textContent = `🔒 ${btn.dataset.baseLabel.replace(/^🔒\s*/g, "")}`;
-    btn.style.filter = "grayscale(1) saturate(0.7)";
-    btn.style.opacity = "0.48";
-    btn.style.transform = "none";
-    btn.title = `Bloqueado por disciplina. Falta ${fmtRemaining(remainMs)}`;
-    return;
-  }
-
-  if (candleClosed) {
-    btn.disabled = true;
-    btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
-    btn.style.filter = "grayscale(1) saturate(0.72)";
-    btn.style.opacity = "0.42";
-    btn.style.transform = "none";
-    btn.title = "La vela ya cerró";
-    return;
-  }
-
-  btn.disabled = false;
-  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
-  btn.style.filter = "";
-  btn.style.opacity = "";
-  btn.title = "Operar DEMO 1m";
-}
-function updateModalCandleStatusUI() {
-  const bar = ensureModalCandleStatusBar();
-  if (!bar) return;
-
-  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
-    bar.style.display = "none";
-    return;
-  }
-
-  bar.style.display = "block";
-
-  const callPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "CALL") : null;
-  const putPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "PUT") : null;
-  setTradeButtonBaseLabel(modalBuyCallBtn, buildTradeButtonLabel("CALL", callPlan));
-  setTradeButtonBaseLabel(modalBuyPutBtn, buildTradeButtonLabel("PUT", putPlan));
-
-  const isOpen = isTradeEntryOpen(modalCurrentItem);
-  if (isOpen) {
-    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
-    const autoTxt = shouldUseAutoHighLowExecution()
-      ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
-      : "";
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s${autoTxt}`;
-    bar.style.color = "#dcfce7";
-    bar.style.background = "rgba(22,163,74,.18)";
-    bar.style.borderColor = "rgba(34,197,94,.34)";
-    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
-  } else {
-    bar.textContent = "⚪ VELA CERRADA";
-    bar.style.color = "rgba(229,231,235,.95)";
-    bar.style.background = "rgba(107,114,128,.20)";
-    bar.style.borderColor = "rgba(156,163,175,.28)";
-    bar.style.boxShadow = "none";
-  }
-
-  const locked = isTradeLockedNow();
-  const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
-  const candleClosed = !isOpen;
-
-  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
-  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
-  applyModalExecutionButtonUI(locked, candleClosed);
-  applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
-}
-function updateModalLiveUI() {
-  if (!modalLiveBtn) return;
-  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
-  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
-}
-function requestModalDraw(force = false) {
-  if (!chartModal || chartModal.classList.contains("hidden")) return;
-  if (!modalCurrentItem) return;
-
-  const now = Date.now();
-  if (!force && now - modalLastDrawAt < MODAL_DRAW_MIN_INTERVAL_MS) return;
-  modalLastDrawAt = now;
-
-  if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
-  modalDrawRaf = requestAnimationFrame(() => {
-    const it = modalCurrentItem;
-    if (!it) return;
-
-    let ticks = it.ticks || [];
-    if (modalLive && isItemLiveMinute(it)) {
-      const liveTicks = minuteData?.[it.minute]?.[it.symbol];
-      if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
-    }
-
-    drawDerivLikeChart(minuteCanvas, ticks);
-
-    if (modalSub) {
-      const n = Array.isArray(ticks) ? ticks.length : 0;
-      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
-      const dTag = disciplineTagText();
-      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
-      const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
-    }
-
-    updateModalCandleStatusUI();
-  });
-}
-function applyModalTradeButtonsLayout() {
-  const bCall = modalBuyCallBtn;
-  const bPut = modalBuyPutBtn;
-  if (!bCall || !bPut) return;
-
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-
-  if (!footer) return;
-
-  const statusBar = ensureModalCandleStatusBar();
-
-  let row = footer.querySelector(".tradeRow");
-  if (!row) {
-    row = document.createElement("div");
-    row.className = "tradeRow";
-    footer.appendChild(row);
-  }
-
-  if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
-
-  row.style.display = "grid";
-  row.style.gridTemplateColumns = "minmax(0,1fr)";
-  row.style.gap = "10px";
-  row.style.alignItems = "stretch";
-  row.style.justifyContent = "stretch";
-  row.style.width = "100%";
-
-  if (bCall.parentElement !== row) row.appendChild(bCall);
-  if (bPut.parentElement !== row) row.appendChild(bPut);
-
-  const baseBtn = (b) => {
-    b.style.width = "100%";
-    b.style.flex = "0 0 auto";
-    b.style.minWidth = "0";
-    b.style.minHeight = "58px";
-    b.style.padding = "13px 14px";
-    b.style.fontWeight = "900";
-    b.style.letterSpacing = "0.25px";
-    b.style.borderRadius = "16px";
-    b.style.display = "flex";
-    b.style.alignItems = "center";
-    b.style.justifyContent = "center";
-    b.style.gap = "10px";
-    b.style.userSelect = "none";
-    b.style.touchAction = "manipulation";
-  };
-  baseBtn(bCall);
-  baseBtn(bPut);
-
-  bCall.style.borderColor = "rgba(34,197,94,.85)";
-  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20), inset 0 0 14px rgba(34,197,94,.08)";
-  bCall.style.background = "linear-gradient(180deg, rgba(34,197,94,.24), rgba(34,197,94,.14))";
-  bCall.style.color = "var(--text, #e5e7eb)";
-
-  bPut.style.borderColor = "rgba(239,68,68,.85)";
-  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18), inset 0 0 14px rgba(239,68,68,.07)";
-  bPut.style.background = "linear-gradient(180deg, rgba(239,68,68,.22), rgba(239,68,68,.14))";
-  bPut.style.color = "var(--text, #e5e7eb)";
-
-  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
-  if (w < 480) {
-    bCall.style.minHeight = "56px";
-    bPut.style.minHeight = "56px";
-    bCall.style.padding = "12px 10px";
-    bPut.style.padding = "12px 10px";
-  }
-
-  if (modalLiveBtn) {
-    modalLiveBtn.style.minHeight = "52px";
-    modalLiveBtn.style.width = "100%";
-    modalLiveBtn.style.marginTop = "10px";
-  }
-}
-function openChartModal(item) {
-  modalCurrentItem = item;
-  if (!chartModal || !modalTitle || !modalSub) return;
-
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
-
-  modalLive = isItemLiveMinute(item);
-  updateModalLiveUI();
-
-  chartModal.classList.remove("hidden");
-  chartModal.setAttribute("aria-hidden", "false");
-
-  applyModalTradeButtonsLayout();
-  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
-  updateDisciplineLockUI(false);
-  updateModalCandleStatusUI();
-
-  requestModalDraw(true);
-}
-function closeChartModal() {
-  if (!chartModal) return;
-  chartModal.classList.add("hidden");
-  chartModal.setAttribute("aria-hidden", "true");
-  modalCurrentItem = null;
-  modalLive = false;
-  updateModalLiveUI();
-  if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
-}
-if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
-if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    closeChartModal();
-    closeSettings();
-  }
-});
-
-function resubscribePendingContracts() {
-  return (async () => {
-    try {
-      if (!ws || ws.readyState !== 1) return;
-      const list = (disciplinePendingContracts || []).slice();
-      if (!list.length) return;
-
-      try {
-        await ensureAuthorized();
-      } catch {
-        toast("⚠️ No autorizado (token/login). No puedo rescatar pendientes.", 2200);
-        return;
-      }
-
-      for (const cid of list) {
-        subscribeContractOutcome(cid, true);
-        scheduleOutcomeFallbackPoll(cid, 20000);
-      }
-
-      toast(`🔁 Reenganche pendientes: ${list.length}`, 1400);
-    } catch {}
-  })();
-}
-
 if (modalOpenDerivBtn)
   modalOpenDerivBtn.onclick = () => {
     if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
@@ -5118,187 +4820,6 @@ if (practiceCanvas) {
 /* =========================
    Inicialización
 ========================= */
-
-/* =========================
-   Runtime helpers / disciplina hotfix
-========================= */
-var serverNowMs = globalThis.serverNowMs || function () {
-  return Date.now() + (serverOffsetMs || 0);
-};
-
-var currentServerMinute = globalThis.currentServerMinute || function () {
-  return Math.floor(serverNowMs() / 60000);
-};
-
-var isItemLiveMinute = globalThis.isItemLiveMinute || function (item) {
-  if (!item) return false;
-  return Number(item.minute) === currentServerMinute();
-};
-
-var getCurrentMinuteRemainingSec = globalThis.getCurrentMinuteRemainingSec || function () {
-  const now = serverNowMs();
-  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-    ? currentMinuteStartMs
-    : Math.floor(now / 60000) * 60000;
-
-  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
-  return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-};
-
-var getCurrent15sRangeLabel = globalThis.getCurrent15sRangeLabel || function () {
-  const now = serverNowMs();
-  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-    ? currentMinuteStartMs
-    : Math.floor(now / 60000) * 60000;
-
-  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
-  const sec = Math.floor(msInMinute / 1000);
-
-  if (sec < 15) return "0-15s";
-  if (sec < 30) return "15-30s";
-  if (sec < 45) return "30-45s";
-  return "45-60s";
-};
-
-var fmtRemaining = globalThis.fmtRemaining || function (ms) {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  const mm = m % 60;
-  if (h > 0) return `${h}h ${mm}m`;
-  return `${mm}m`;
-};
-
-var isTradeLockedNow = globalThis.isTradeLockedNow || function () {
-  const now = Date.now();
-  return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
-};
-
-var saveDiscipline = globalThis.saveDiscipline || function () {
-  try {
-    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
-    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
-    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
-    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
-    localStorage.setItem(DISCIPLINE_PENDING_CONTRACTS_KEY, JSON.stringify(disciplinePendingContracts || []));
-  } catch {}
-};
-
-var loadDiscipline = globalThis.loadDiscipline || function () {
-  try {
-    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
-    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
-    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
-    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
-
-    const raw = localStorage.getItem(DISCIPLINE_PENDING_CONTRACTS_KEY) || "[]";
-    const arr = JSON.parse(raw);
-    disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
-  } catch {
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    disciplineLockUntilMs = 0;
-    disciplinePendingContracts = [];
-  }
-};
-
-var addPendingContract = globalThis.addPendingContract || function (cid) {
-  if (!cid) return;
-  const s = String(cid);
-  if (!Array.isArray(disciplinePendingContracts)) disciplinePendingContracts = [];
-  if (!disciplinePendingContracts.includes(s)) {
-    disciplinePendingContracts.push(s);
-    saveDiscipline();
-  }
-};
-
-var removePendingContract = globalThis.removePendingContract || function (cid) {
-  if (!cid) return;
-  const s = String(cid);
-  disciplinePendingContracts = (disciplinePendingContracts || []).filter((x) => String(x) !== s);
-  saveDiscipline();
-};
-
-var disciplineTagText = globalThis.disciplineTagText || function () {
-  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
-    disciplineLockUntilMs = 0;
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-  }
-
-  if (isTradeLockedNow()) {
-    const remain = disciplineLockUntilMs - Date.now();
-    return `🔒 BLOQUEADO ${fmtRemaining(remain)} (${disciplineWins}W/${disciplineLosses}L)`;
-  }
-
-  const pend = (disciplinePendingContracts || []).length;
-  const pTxt = pend ? ` • Pendientes:${pend}` : "";
-  return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
-};
-
-var updateDisciplineLockUI = globalThis.updateDisciplineLockUI || function (forceToast) {
-  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
-    disciplineLockUntilMs = 0;
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-    if (forceToast && typeof toast === "function") toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
-  }
-
-  const locked = isTradeLockedNow();
-  const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
-  const candleClosed = !!modalCurrentItem && !isItemLiveMinute(modalCurrentItem);
-
-  if (typeof paintTradeButtonLocked === "function") {
-    paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
-    paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
-  }
-
-  if (chartModal && !chartModal.classList.contains("hidden")) {
-    if (typeof updateModalCandleStatusUI === "function") updateModalCandleStatusUI();
-    if (typeof requestModalDraw === "function") requestModalDraw(true);
-  }
-
-  if (forceToast && typeof toast === "function") toast(disciplineTagText(), 2200);
-};
-
-var startNewDisciplineWindowIfNeeded = globalThis.startNewDisciplineWindowIfNeeded || function () {
-  updateDisciplineLockUI(false);
-  const now = Date.now();
-  if (!disciplineWindowStartMs) {
-    disciplineWindowStartMs = now;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-  }
-};
-
-var applyDisciplineOutcome = globalThis.applyDisciplineOutcome || function (isWin) {
-  updateDisciplineLockUI(false);
-  if (isTradeLockedNow()) return;
-
-  if (isWin) disciplineWins += 1;
-  else disciplineLosses += 1;
-
-  saveDiscipline();
-
-  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
-    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
-    saveDiscipline();
-    updateDisciplineLockUI(true);
-    return;
-  }
-
-  if (typeof toast === "function") {
-    toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
-  }
-  updateDisciplineLockUI(false);
-};
-
 loadLowPowerMode();
 loadAutoOpenChartSetting();
 loadDiscipline();
