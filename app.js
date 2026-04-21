@@ -145,6 +145,132 @@ function saveTradesJournal(arr) {
 }
 let tradesJournal = loadTradesJournal();
 
+const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
+function loadPracticeSavedSignals() {
+  try {
+    const raw = localStorage.getItem(PRACTICE_SAVED_STORE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+function savePracticeSavedSignals(arr) {
+  try {
+    localStorage.setItem(PRACTICE_SAVED_STORE_KEY, JSON.stringify(Array.isArray(arr) ? arr : []));
+  } catch {}
+}
+let practiceSavedSignals = loadPracticeSavedSignals();
+
+function normalizePracticeSavedSignal(item) {
+  if (!item) return null;
+  const signalId = String(item.source_signal_id || item.id || "");
+  if (!signalId) return null;
+  return {
+    practice_id: String(item.practice_id || `SIG::${signalId}`),
+    source_signal_id: signalId,
+    saved_at: Number(item.saved_at || Date.now()),
+    id: signalId,
+    minute: Number(item.minute || 0),
+    time: String(item.time || ""),
+    symbol: String(item.symbol || ""),
+    direction: String(item.direction || ""),
+    mode: String(item.mode || "NORMAL").toUpperCase(),
+    nextOutcome: String(item.nextOutcome || ""),
+    minuteComplete: !!item.minuteComplete,
+    trade: item.trade && typeof item.trade === "object" ? { ...item.trade } : null,
+    ticks: Array.isArray(item.ticks) ? item.ticks : [],
+    source_type: "saved_signal",
+  };
+}
+function getPracticeEntryKey(entry) {
+  return String(entry?.practice_id || entry?.journal_id || entry?.id || "");
+}
+function findPracticeSavedSignalIndex(signalId) {
+  const sid = String(signalId || "");
+  return (practiceSavedSignals || []).findIndex((x) => String(x?.source_signal_id || x?.id || "") === sid);
+}
+function isSignalSavedForPractice(signalId) {
+  return findPracticeSavedSignalIndex(signalId) >= 0;
+}
+function buildPracticeSavedSnapshotFromItem(item) {
+  if (!item?.id) return null;
+  return normalizePracticeSavedSignal({
+    practice_id: `SIG::${String(item.id)}`,
+    source_signal_id: String(item.id),
+    saved_at: Date.now(),
+    id: String(item.id),
+    minute: item.minute,
+    time: item.time,
+    symbol: item.symbol,
+    direction: item.direction,
+    mode: item.mode || "NORMAL",
+    nextOutcome: item.nextOutcome || "",
+    minuteComplete: !!item.minuteComplete,
+    trade: item.trade || null,
+    ticks: Array.isArray(item.ticks) ? item.ticks : [],
+    source_type: "saved_signal",
+  });
+}
+function togglePracticeSavedSignal(item) {
+  if (!item?.id) return false;
+  const idx = findPracticeSavedSignalIndex(item.id);
+  if (idx >= 0) {
+    practiceSavedSignals.splice(idx, 1);
+    savePracticeSavedSignals(practiceSavedSignals);
+    return false;
+  }
+  const snap = buildPracticeSavedSnapshotFromItem(item);
+  if (!snap) return false;
+  practiceSavedSignals.unshift(snap);
+  savePracticeSavedSignals(practiceSavedSignals);
+  return true;
+}
+function getMergedPracticeEntries() {
+  const out = [];
+  const seenSignalIds = new Set();
+
+  for (const entry of tradesJournal || []) {
+    if (!entry) continue;
+    const signalId = String(entry.id || "");
+    out.push({
+      ...entry,
+      practice_id: String(entry.practice_id || entry.journal_id || `TR::${signalId || Date.now()}`),
+      source_type: "trade_journal",
+    });
+    if (signalId) seenSignalIds.add(signalId);
+  }
+
+  for (const raw of practiceSavedSignals || []) {
+    const saved = normalizePracticeSavedSignal(raw);
+    if (!saved) continue;
+    const signalId = String(saved.source_signal_id || saved.id || "");
+    if (signalId && seenSignalIds.has(signalId)) continue;
+
+    const live = signalId ? findHistoryItemById(signalId) : null;
+    const merged = live
+      ? normalizePracticeSavedSignal({
+          ...saved,
+          id: live.id,
+          minute: live.minute,
+          time: live.time,
+          symbol: live.symbol,
+          direction: live.direction,
+          mode: live.mode,
+          nextOutcome: live.nextOutcome || "",
+          minuteComplete: !!live.minuteComplete,
+          trade: live.trade || null,
+          ticks: Array.isArray(live.ticks) ? live.ticks : saved.ticks,
+        })
+      : saved;
+
+    if (merged) out.push(merged);
+  }
+
+  return out;
+}
+
 function makeJournalIdFromSignal(it) {
   const cid = it?.trade?.contract_id ? String(it.trade.contract_id) : "";
   return `${String(it.id || "")}::${cid}`.slice(0, 220);
@@ -1605,6 +1731,7 @@ const PRACTICE_STATS_KEY = "practiceStats_v1";
 const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
+const PRACTICE_FILTER_NORMAL = "NORMAL";
 let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
 let practiceFilterMode = loadPracticeFilterMode();
@@ -1675,31 +1802,69 @@ function isStrictGiroPracticeEntry(entry) {
   if (idText.includes("ESCALERA") || idText.includes("FUERTE") || idText.includes("NORMAL")) return false;
   return mode === "GIRO";
 }
+
 function loadPracticeFilterMode() {
   try {
     const saved = String(localStorage.getItem(PRACTICE_FILTER_KEY) || "").toUpperCase();
-    return saved === PRACTICE_FILTER_GIRO ? PRACTICE_FILTER_GIRO : PRACTICE_FILTER_ALL;
+    if (saved === PRACTICE_FILTER_GIRO) return PRACTICE_FILTER_GIRO;
+    if (saved === PRACTICE_FILTER_NORMAL) return PRACTICE_FILTER_NORMAL;
+    return PRACTICE_FILTER_ALL;
   } catch {
     return PRACTICE_FILTER_ALL;
   }
 }
 function savePracticeFilterMode() {
   try {
-    localStorage.setItem(PRACTICE_FILTER_KEY, practiceFilterMode === PRACTICE_FILTER_GIRO ? PRACTICE_FILTER_GIRO : PRACTICE_FILTER_ALL);
+    const safe =
+      practiceFilterMode === PRACTICE_FILTER_GIRO
+        ? PRACTICE_FILTER_GIRO
+        : practiceFilterMode === PRACTICE_FILTER_NORMAL
+          ? PRACTICE_FILTER_NORMAL
+          : PRACTICE_FILTER_ALL;
+    localStorage.setItem(PRACTICE_FILTER_KEY, safe);
   } catch {}
 }
 function shouldPracticeOnlyGiro() {
   return practiceFilterMode === PRACTICE_FILTER_GIRO;
 }
+function shouldPracticeOnlyNormal() {
+  return practiceFilterMode === PRACTICE_FILTER_NORMAL;
+}
+function normalizePracticeFilterMode(mode) {
+  const m = String(mode || "").toUpperCase();
+  if (m === PRACTICE_FILTER_GIRO) return PRACTICE_FILTER_GIRO;
+  if (m === PRACTICE_FILTER_NORMAL) return PRACTICE_FILTER_NORMAL;
+  return PRACTICE_FILTER_ALL;
+}
+function getPracticeFilterTag() {
+  if (shouldPracticeOnlyGiro()) return "GIRO";
+  if (shouldPracticeOnlyNormal()) return "NORMAL";
+  return "TODOS";
+}
+function isStrictNormalPracticeEntry(entry) {
+  if (!entry) return false;
+  const mode = normalizePracticeEntryMode(entry.mode);
+  const idText = `${String(entry.id || "")} ${String(entry.journal_id || "")} ${String(entry.practice_id || "")}`.toUpperCase();
+  if (idText.includes("GIRO") || idText.includes("ESCALERA") || idText.includes("FUERTE")) return false;
+  return mode === "NORMAL";
+}
 function applyPracticeFilterButtonUI() {
   const btn = pickEl("practiceFilterBtn");
   if (!btn) return;
-  const giroOnly = shouldPracticeOnlyGiro();
-  btn.textContent = giroOnly ? "🟥 Práctica GIRO" : "⚪ Práctica TODOS";
-  btn.classList.toggle("active", giroOnly);
-  btn.title = giroOnly
-    ? "Práctica filtrada solo a trades guardados en modo GIRO."
-    : "Práctica usando trades de todos los modos.";
+  const mode = normalizePracticeFilterMode(practiceFilterMode);
+  btn.classList.toggle("active", mode !== PRACTICE_FILTER_ALL);
+  if (mode === PRACTICE_FILTER_GIRO) {
+    btn.textContent = "🟥 Práctica GIRO";
+    btn.title = "Práctica filtrada solo a velas guardadas/operadas en modo GIRO.";
+    return;
+  }
+  if (mode === PRACTICE_FILTER_NORMAL) {
+    btn.textContent = "🟦 Práctica NORMAL";
+    btn.title = "Práctica filtrada solo a velas guardadas/operadas en modo NORMAL.";
+    return;
+  }
+  btn.textContent = "⚪ Práctica TODOS";
+  btn.title = "Práctica usando velas de todos los modos.";
 }
 function ensurePracticeFilterButton() {
   let btn = pickEl("practiceFilterBtn");
@@ -1718,7 +1883,12 @@ function ensurePracticeFilterButton() {
   }
 
   btn.onclick = () => {
-    practiceFilterMode = shouldPracticeOnlyGiro() ? PRACTICE_FILTER_ALL : PRACTICE_FILTER_GIRO;
+    practiceFilterMode =
+      practiceFilterMode === PRACTICE_FILTER_ALL
+        ? PRACTICE_FILTER_GIRO
+        : practiceFilterMode === PRACTICE_FILTER_GIRO
+          ? PRACTICE_FILTER_NORMAL
+          : PRACTICE_FILTER_ALL;
     savePracticeFilterMode();
 
     cancelPracticeAnim();
@@ -1732,7 +1902,14 @@ function ensurePracticeFilterButton() {
     updatePracticePoolLabel();
 
     if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
-    toast(shouldPracticeOnlyGiro() ? "🟥 Práctica filtrada a GIRO" : "⚪ Práctica con todos los modos", 1800);
+
+    const tag =
+      practiceFilterMode === PRACTICE_FILTER_GIRO
+        ? "🟥 Práctica filtrada a GIRO"
+        : practiceFilterMode === PRACTICE_FILTER_NORMAL
+          ? "🟦 Práctica filtrada a NORMAL"
+          : "⚪ Práctica con todos los modos";
+    toast(tag, 1800);
   };
 
   applyPracticeFilterButtonUI();
@@ -1744,11 +1921,12 @@ function renderPracticeStats() {
   updateCounter("practice");
 }
 function getEligiblePracticeEntries() {
-  return (tradesJournal || []).filter((entry) => {
+  return getMergedPracticeEntries().filter((entry) => {
     if (!entry) return false;
     if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
     if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
     if (shouldPracticeOnlyGiro() && !isStrictGiroPracticeEntry(entry)) return false;
+    if (shouldPracticeOnlyNormal() && !isStrictNormalPracticeEntry(entry)) return false;
     return true;
   });
 }
@@ -1761,7 +1939,7 @@ function shuffleArray(arr) {
   return out;
 }
 function ensurePracticeQueue() {
-  const eligibleIds = new Set(getEligiblePracticeEntries().map((x) => String(x.journal_id || x.id || "")));
+  const eligibleIds = new Set(getEligiblePracticeEntries().map((x) => getPracticeEntryKey(x)));
   practiceQueue = practiceQueue.filter((id) => eligibleIds.has(String(id)));
   if (practiceQueue.length) return;
   practiceQueue = shuffleArray(Array.from(eligibleIds));
@@ -1769,8 +1947,7 @@ function ensurePracticeQueue() {
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
   if (practicePoolLabelEl) {
-    const tag = shouldPracticeOnlyGiro() ? "GIRO" : "TODOS";
-    practicePoolLabelEl.textContent = `Pool ${tag}: ${practiceQueue.length}/${eligible}`;
+    practicePoolLabelEl.textContent = `Pool ${getPracticeFilterTag()}: ${practiceQueue.length}/${eligible}`;
   }
 }
 function paintPracticeSecButtons() {
@@ -2330,7 +2507,7 @@ function pullNextPracticeEntry() {
   if (!practiceQueue.length) return null;
   const nextId = String(practiceQueue.shift());
   updatePracticePoolLabel();
-  return getEligiblePracticeEntries().find((x) => String(x.journal_id || x.id || "") === nextId) || null;
+  return getEligiblePracticeEntries().find((x) => getPracticeEntryKey(x) === nextId) || null;
 }
 function getOutcomeLabel(outcome) {
   return outcome === "up" ? "ALCISTA" : outcome === "down" ? "BAJISTA" : "NEUTRA";
@@ -2468,7 +2645,11 @@ function ensurePracticeReady() {
   }
   if (!practiceRound) {
     resetPracticeSimilarState();
-    const msgFiltro = shouldPracticeOnlyGiro() ? "Filtro activo: solo GIRO." : "Filtro activo: todos los modos.";
+    const msgFiltro = shouldPracticeOnlyGiro()
+      ? "Filtro activo: solo GIRO."
+      : shouldPracticeOnlyNormal()
+        ? "Filtro activo: solo NORMAL."
+        : "Filtro activo: todos los modos.";
     updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales quedan pausadas.`);
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
     setPracticePassButtonMode("NEXT");
@@ -3651,13 +3832,15 @@ function buildRow(item, opts = {}) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
+  const savedForPractice = isSignalSavedForPractice(item.id);
   const actionsHtml = opts.hideActions
     ? ""
     : `
     <div class="row-actions">
       <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
       <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
-      <input class="row-comment" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
+      <button class="savePracticeBtn ${savedForPractice ? "selected" : ""}" type="button" title="${savedForPractice ? "Quitar del pool de práctica" : "Guardar en el pool de práctica del modo correspondiente"}">💾</button>
+      <input class="row-comment" style="max-width:118px; min-width:90px;" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
     </div>
   `;
 
@@ -3714,10 +3897,36 @@ function buildRow(item, opts = {}) {
         btn.classList.add("selected");
 
         saveHistory(history);
-      
+
         row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
       };
     });
+
+    const savePracticeBtn = row.querySelector(".savePracticeBtn");
+    if (savePracticeBtn) {
+      const refreshSaveBtn = (saved) => {
+        savePracticeBtn.classList.toggle("selected", !!saved);
+        savePracticeBtn.title = saved
+          ? `Quitar del pool de práctica (${normalizePracticeEntryMode(item.mode)})`
+          : `Guardar en el pool de práctica ${normalizePracticeEntryMode(item.mode)}`;
+      };
+      refreshSaveBtn(savedForPractice);
+
+      savePracticeBtn.onclick = (e) => {
+        e.stopPropagation();
+        const saved = togglePracticeSavedSignal(item);
+        refreshSaveBtn(saved);
+        ensurePracticeQueue();
+        updatePracticePoolLabel();
+        if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
+        toast(
+          saved
+            ? `💾 Guardada para práctica ${normalizePracticeEntryMode(item.mode)}`
+            : "🗑️ Quitada del pool de práctica",
+          1700
+        );
+      };
+    }
 
     const input = row.querySelector(".row-comment");
     input.addEventListener("blur", () => {
