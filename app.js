@@ -4563,7 +4563,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + GIRO)
+   Technical rules + Evaluation (NORMAL + GIRO v2)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -4690,117 +4690,78 @@ function passesTechnicalFilters(best, vol, rules) {
    - CALL = vela sigue roja, pero el comprador ya gana mando interno
 ========================= */
 const RULES_GIRO = {
-  minBodyFracRange: 0.12,
-  visibleDirRatioMin: 0.50,
-  visibleDirRatioMax: 0.68,
-  minLegsPerSide: 2,
-  strongOppLegFracRange: 0.22,
-  strongOppVsVisible: 0.85,
-  lateWindowMs: 15000,
-  lateOppVsVisible: 1.10,
-  lateOppMinFracRange: 0.12,
-  recoveryMaxFracOppAttack: 0.55,
-  noRebuildFracRange: 0.08,
-  scoreMin: 72,
+  // base parecida a NORMAL
+  wholeDirRatioMin: 0.50,
+  wholeDirRatioMax: 0.74,
+  bodyVsRangeMin: 0.18,
+
+  // presión contraria en tramo final
+  lateOppRatioMin: 0.56,
+  lateAgainstMinFracTotal: 0.12,
+  last8AgainstMinFracTotal: 0.08,
+
+  // ataque contrario más profundo que en NORMAL
+  counterAttackMinFracTotal: 0.16,
+  counterAttackMaxFracTotal: 0.82,
+
+  // respuesta del lado dominante débil
+  responseVsAttackMax: 0.72,
+
+  // irregularidad de avances del lado dominante
+  irregularityMin: 0.22,
+
+  // no aceptar demasiado zigzag real
+  oppositeStepCountMax: 3,
 };
 
-function getAvgAbsStep(ticks) {
-  if (!ticks || ticks.length < 2) return 0;
-  let acc = 0;
-  let count = 0;
-  for (let i = 1; i < ticks.length; i++) {
-    const d = Math.abs(Number(ticks[i].quote) - Number(ticks[i - 1].quote));
-    if (!Number.isFinite(d)) continue;
-    acc += d;
-    count++;
-  }
-  return count ? acc / count : 0;
+function segmentMoveSigned(ticks, aMs, bMs, dirSign) {
+  const a = getPriceAtMs(ticks, aMs);
+  const b = getPriceAtMs(ticks, bMs);
+  if (a == null || b == null) return 0;
+  return (b - a) * dirSign;
 }
 
-function buildGiroLegs(ticks, noise) {
-  const pts = (ticks || []).slice().sort((a, b) => a.ms - b.ms);
-  if (pts.length < 2) return [];
+function coeffVar(arr) {
+  const vals = (arr || []).filter((x) => Number.isFinite(x) && x > 0);
+  if (vals.length < 2) return 0;
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+  if (!mean) return 0;
+  const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+  return Math.sqrt(variance) / mean;
+}
 
-  const legs = [];
-  let curDir = 0;
-  let curSize = 0;
-  let legStartMs = pts[0].ms;
-  let legEndMs = pts[0].ms;
+function buildGiroCheckpoints(evalMs) {
+  return [...new Set([0, 8000, 16000, 24000, 30000, 35000, 40000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+}
 
-  for (let i = 1; i < pts.length; i++) {
-    const prev = pts[i - 1];
-    const curr = pts[i];
-    const delta = Number(curr.quote) - Number(prev.quote);
-    const absDelta = Math.abs(delta);
-    if (!Number.isFinite(absDelta) || absDelta < noise * 0.35) continue;
+function computeWeakResponseAfterCounter(ticks, dirSign, fromMs, toMs) {
+  const pts = sliceTicks(ticks, fromMs, toMs);
+  if (!pts.length) return { attack: 0, response: 0, ratio: 999 };
 
-    const dir = Math.sign(delta);
-    if (!curDir) {
-      curDir = dir;
-      curSize = absDelta;
-      legStartMs = prev.ms;
-      legEndMs = curr.ms;
-      continue;
-    }
+  const pStart = getPriceAtMs(ticks, fromMs);
+  const pEnd = getPriceAtMs(ticks, toMs);
+  if (pStart == null || pEnd == null) return { attack: 0, response: 0, ratio: 999 };
 
-    if (dir === curDir) {
-      curSize += absDelta;
-      legEndMs = curr.ms;
-      continue;
-    }
+  let attack = 0;
+  let response = 0;
 
-    legs.push({ dir: curDir, size: curSize, startMs: legStartMs, endMs: legEndMs });
-    curDir = dir;
-    curSize = absDelta;
-    legStartMs = prev.ms;
-    legEndMs = curr.ms;
+  if (dirSign > 0) {
+    let minLate = pStart;
+    for (const t of pts) minLate = Math.min(minLate, t.quote);
+    attack = Math.max(0, pStart - minLate);
+    response = Math.max(0, pEnd - minLate);
+  } else {
+    let maxLate = pStart;
+    for (const t of pts) maxLate = Math.max(maxLate, t.quote);
+    attack = Math.max(0, maxLate - pStart);
+    response = Math.max(0, maxLate - pEnd);
   }
 
-  if (curDir && curSize > 0) legs.push({ dir: curDir, size: curSize, startMs: legStartMs, endMs: legEndMs });
-
-  return legs.filter((leg) => Number.isFinite(leg.size) && leg.size > 0);
-}
-
-function sumLegFlow(legs, dirSign, startMs = 0, endMs = Infinity) {
-  let acc = 0;
-  for (const leg of legs || []) {
-    if (leg.dir !== dirSign) continue;
-    if (leg.endMs < startMs || leg.startMs > endMs) continue;
-    acc += Number(leg.size || 0);
-  }
-  return acc;
-}
-
-function countLegs(legs, dirSign, startMs = 0, endMs = Infinity) {
-  let count = 0;
-  for (const leg of legs || []) {
-    if (leg.dir !== dirSign) continue;
-    if (leg.endMs < startMs || leg.startMs > endMs) continue;
-    count++;
-  }
-  return count;
-}
-
-function findStrongestLeg(legs, dirSign, startMs = 0, endMs = Infinity) {
-  let best = null;
-  for (const leg of legs || []) {
-    if (leg.dir !== dirSign) continue;
-    if (leg.endMs < startMs || leg.startMs > endMs) continue;
-    if (!best || Number(leg.size || 0) > Number(best.size || 0)) best = leg;
-  }
-  return best;
-}
-
-function maxQuoteBetween(ticks, startMs = 0, endMs = Infinity) {
-  const pts = (ticks || []).filter((t) => t.ms >= startMs && t.ms <= endMs);
-  if (!pts.length) return null;
-  return Math.max(...pts.map((t) => Number(t.quote)).filter(Number.isFinite));
-}
-
-function minQuoteBetween(ticks, startMs = 0, endMs = Infinity) {
-  const pts = (ticks || []).filter((t) => t.ms >= startMs && t.ms <= endMs);
-  if (!pts.length) return null;
-  return Math.min(...pts.map((t) => Number(t.quote)).filter(Number.isFinite));
+  return {
+    attack,
+    response,
+    ratio: attack > 1e-12 ? response / attack : 999,
+  };
 }
 
 function detectGiroPattern(candidate) {
@@ -4808,103 +4769,90 @@ function detectGiroPattern(candidate) {
   const evalMs = EVAL_SEC * 1000;
   if (ticks.length < 6) return null;
 
+  // 1) base NORMAL primero
+  if (!passesTechnicalFilters(candidate, candidate.vol, RULES_NORMAL)) return null;
+
+  const p0 = getPriceAtMs(ticks, 0);
+  const p30 = getPriceAtMs(ticks, 30000);
+  const pE = getPriceAtMs(ticks, evalMs);
+  if (p0 == null || p30 == null || pE == null) return null;
+
+  const totalMove = pE - p0;
+  const dirSign = Math.sign(totalMove);
+  if (!dirSign) return null;
+
+  const absTotal = Math.abs(totalMove);
   const fullTicks = sliceTicks(ticks, 0, evalMs);
-  if (fullTicks.length < 6) return null;
+  if (fullTicks.length < 4) return null;
 
-  const p0 = getPriceAtMs(fullTicks, 0);
-  const pE = getPriceAtMs(fullTicks, evalMs);
-  if (p0 == null || pE == null) return null;
+  const qs = fullTicks.map((t) => t.quote);
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = Math.max(1e-12, maxP - minP);
 
-  const qs = fullTicks.map((t) => Number(t.quote)).filter(Number.isFinite);
-  if (qs.length < 4) return null;
+  // color/cuerpo actual debe seguir siendo del lado dominante
+  const bodyVsRange = absTotal / range;
+  if (bodyVsRange < RULES_GIRO.bodyVsRangeMin) return null;
 
-  const range = Math.max(...qs) - Math.min(...qs);
-  if (!(range > 1e-12)) return null;
+  const wholeDirRatio = directionalRatio(fullTicks, dirSign);
+  if (wholeDirRatio < RULES_GIRO.wholeDirRatioMin) return null;
+  if (wholeDirRatio > RULES_GIRO.wholeDirRatioMax) return null;
 
-  const visibleBody = pE - p0;
-  const visibleDir = Math.sign(visibleBody);
-  if (!visibleDir) return null;
+  // 2) presión contraria al final
+  const lateStartMs = Math.max(0, evalMs - 12000);
+  const last8StartMs = Math.max(0, evalMs - 8000);
 
-  const bodyFrac = Math.abs(visibleBody) / range;
-  if (bodyFrac < RULES_GIRO.minBodyFracRange) return null;
+  const lateTicks = sliceTicks(ticks, lateStartMs, evalMs);
+  const lateOppRatio = directionalRatio(lateTicks, -dirSign);
 
-  const signalDirection = visibleDir > 0 ? "PUT" : "CALL";
-  const oppositeDir = -visibleDir;
+  const lateAgainstMove = segmentMoveSigned(ticks, lateStartMs, evalMs, -dirSign);
+  const last8AgainstMove = segmentMoveSigned(ticks, last8StartMs, evalMs, -dirSign);
 
-  const dirRatioVisible = directionalRatio(fullTicks, visibleDir);
-  const avgStep = getAvgAbsStep(fullTicks);
-  const noise = Math.max(avgStep * 1.8, range * 0.025, 1e-6);
+  if (lateOppRatio < RULES_GIRO.lateOppRatioMin) return null;
+  if (lateAgainstMove < absTotal * RULES_GIRO.lateAgainstMinFracTotal) return null;
+  if (last8AgainstMove < absTotal * RULES_GIRO.last8AgainstMinFracTotal) return null;
 
-  const legs = buildGiroLegs(fullTicks, noise);
-  if (legs.length < 4) return null;
+  // 3) ataque contrario profundo, pero sin destruir toda la vela
+  const attackFrom30 = oppositeAttackDepth(sliceTicks(ticks, 30000, evalMs), dirSign, p30);
+  if (attackFrom30 < absTotal * RULES_GIRO.counterAttackMinFracTotal) return null;
+  if (attackFrom30 > absTotal * RULES_GIRO.counterAttackMaxFracTotal) return null;
 
-  const visibleLegs = countLegs(legs, visibleDir);
-  const oppositeLegs = countLegs(legs, oppositeDir);
-  if (visibleLegs < RULES_GIRO.minLegsPerSide || oppositeLegs < RULES_GIRO.minLegsPerSide) return null;
+  // 4) respuesta del lado dominante floja
+  const weakResp = computeWeakResponseAfterCounter(ticks, dirSign, 30000, evalMs);
+  if (weakResp.ratio > RULES_GIRO.responseVsAttackMax) return null;
 
-  const irregularVisible =
-    dirRatioVisible >= RULES_GIRO.visibleDirRatioMin &&
-    dirRatioVisible <= RULES_GIRO.visibleDirRatioMax;
-
-  const strongestOpp = findStrongestLeg(legs, oppositeDir);
-  const strongestVisible = findStrongestLeg(legs, visibleDir);
-  if (!strongestOpp || !strongestVisible) return null;
-
-  const strongOpp =
-    strongestOpp.size >= range * RULES_GIRO.strongOppLegFracRange &&
-    strongestOpp.size >= strongestVisible.size * RULES_GIRO.strongOppVsVisible;
-
-  const lateStart = Math.max(0, evalMs - RULES_GIRO.lateWindowMs);
-  const lateOppFlow = sumLegFlow(legs, oppositeDir, lateStart, evalMs);
-  const lateVisibleFlow = sumLegFlow(legs, visibleDir, lateStart, evalMs);
-  const lateStrongestOpp = findStrongestLeg(legs, oppositeDir, lateStart, evalMs) || strongestOpp;
-
-  const lateFavoursOpp =
-    lateOppFlow > lateVisibleFlow * RULES_GIRO.lateOppVsVisible &&
-    lateOppFlow >= range * RULES_GIRO.lateOppMinFracRange;
-
-  if (!lateStrongestOpp) return null;
-
-  const recoveryAfterOpp = sumLegFlow(legs, visibleDir, lateStrongestOpp.endMs, evalMs);
-  const weakRecovery = recoveryAfterOpp <= lateStrongestOpp.size * RULES_GIRO.recoveryMaxFracOppAttack;
-
-  let noRebuild = false;
-  if (visibleDir > 0) {
-    const priorMax = maxQuoteBetween(fullTicks, 0, lateStrongestOpp.startMs);
-    const postMax = maxQuoteBetween(fullTicks, lateStrongestOpp.endMs, evalMs);
-    noRebuild =
-      Number.isFinite(priorMax) &&
-      Number.isFinite(postMax) &&
-      postMax <= priorMax + range * RULES_GIRO.noRebuildFracRange;
-  } else {
-    const priorMin = minQuoteBetween(fullTicks, 0, lateStrongestOpp.startMs);
-    const postMin = minQuoteBetween(fullTicks, lateStrongestOpp.endMs, evalMs);
-    noRebuild =
-      Number.isFinite(priorMin) &&
-      Number.isFinite(postMin) &&
-      postMin >= priorMin - range * RULES_GIRO.noRebuildFracRange;
+  // 5) avances irregulares del lado dominante
+  const cps = buildGiroCheckpoints(evalMs);
+  const stepMoves = [];
+  for (let i = 1; i < cps.length; i++) {
+    const a = getPriceAtMs(ticks, cps[i - 1]);
+    const b = getPriceAtMs(ticks, cps[i]);
+    if (a == null || b == null) return null;
+    stepMoves.push(b - a);
   }
 
-  let giroScore = 0;
-  giroScore += bodyFrac >= RULES_GIRO.minBodyFracRange ? 28 : 0;
-  giroScore += irregularVisible ? 18 : 0;
-  giroScore += strongOpp ? 22 : 0;
-  giroScore += lateFavoursOpp ? 18 : 0;
-  giroScore += weakRecovery ? 18 : 0;
-  giroScore += noRebuild ? 10 : 0;
+  const dominantSteps = [];
+  let oppositeStepCount = 0;
 
-  if (giroScore < RULES_GIRO.scoreMin) return null;
+  for (const raw of stepMoves) {
+    if (Math.abs(raw) < 1e-12) continue;
+    if (Math.sign(raw) === dirSign) dominantSteps.push(Math.abs(raw));
+    else oppositeStepCount++;
+  }
 
-  const quality =
-    giroScore +
-    Math.min(20, (lateOppFlow / Math.max(lateVisibleFlow, 1e-9)) * 6) +
-    Math.min(16, (strongestOpp.size / Math.max(range, 1e-9)) * 10) -
-    Math.abs(dirRatioVisible - 0.59) * 20;
+  const irregularity = coeffVar(dominantSteps);
+  if (irregularity < RULES_GIRO.irregularityMin) return null;
+  if (oppositeStepCount > RULES_GIRO.oppositeStepCountMax) return null;
 
+  // señal de giro = operar EN CONTRA del color actual
   return {
-    direction: signalDirection,
-    quality,
-    giroScore,
+    direction: dirSign > 0 ? "PUT" : "CALL",
+    quality:
+      (lateOppRatio * 100) +
+      (attackFrom30 / (absTotal || 1e-9)) * 28 +
+      (1 - Math.min(1, weakResp.ratio)) * 24 +
+      irregularity * 18 -
+      oppositeStepCount * 4,
   };
 }
 
@@ -4941,7 +4889,7 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return stairMode ? true : false;
 
-  // ✅ MODO GIRO: la vela conserva color al evaluar, pero el mando interno ya favorece al lado contrario
+  // ✅ MODO GIRO v2: base NORMAL + presión contraria real + respuesta débil del lado dominante
   if (stairMode) {
     const matches = [];
 
