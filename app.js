@@ -3907,8 +3907,31 @@ function buildRow(item, opts = {}) {
       const refreshSaveBtn = (saved) => {
         savePracticeBtn.classList.toggle("selected", !!saved);
         savePracticeBtn.title = saved
-          ? `Quitar del pool de práctica (${normalizePracticeEntryMode(item.mode)})`
+          ? `Ya guardada en práctica (${normalizePracticeEntryMode(item.mode)})`
           : `Guardar en el pool de práctica ${normalizePracticeEntryMode(item.mode)}`;
+
+        savePracticeBtn.style.transition = "box-shadow .18s ease, border-color .18s ease, background .18s ease, transform .18s ease, opacity .18s ease";
+        savePracticeBtn.style.borderRadius = "12px";
+        savePracticeBtn.style.minWidth = "40px";
+        savePracticeBtn.style.fontWeight = "900";
+
+        if (saved) {
+          savePracticeBtn.style.opacity = "1";
+          savePracticeBtn.style.color = "#ecfeff";
+          savePracticeBtn.style.borderColor = "rgba(34,211,238,.92)";
+          savePracticeBtn.style.background = "linear-gradient(180deg, rgba(20,184,166,.28), rgba(34,197,94,.18))";
+          savePracticeBtn.style.boxShadow = "0 0 0 1px rgba(34,211,238,.22) inset, 0 0 14px rgba(34,211,238,.50), 0 0 24px rgba(34,197,94,.26)";
+          savePracticeBtn.style.transform = "translateY(-1px)";
+          savePracticeBtn.setAttribute("aria-pressed", "true");
+        } else {
+          savePracticeBtn.style.opacity = "0.92";
+          savePracticeBtn.style.color = "";
+          savePracticeBtn.style.borderColor = "";
+          savePracticeBtn.style.background = "";
+          savePracticeBtn.style.boxShadow = "";
+          savePracticeBtn.style.transform = "";
+          savePracticeBtn.setAttribute("aria-pressed", "false");
+        }
       };
       refreshSaveBtn(savedForPractice);
 
