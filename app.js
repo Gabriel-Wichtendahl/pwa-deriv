@@ -153,19 +153,10 @@ function saveTradesJournal(arr) {
 }
 let tradesJournal = loadTradesJournal();
 
-const SIGNAL_MODE_KEY = "signalMode_v1";
-const SIGNAL_MODE_NORMAL = "NORMAL";
-const SIGNAL_MODE_GIRO = "GIRO";
-const SIGNAL_MODE_GIRO_FLEX = "GIRO_FLEXIBLE";
-
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
-const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_20260421";
 
 function getModeVersion(mode) {
-  const m = String(mode || "").toUpperCase();
-  if (m === SIGNAL_MODE_GIRO) return GIRO_LOGIC_VERSION;
-  if (m === SIGNAL_MODE_GIRO_FLEX) return GIRO_FLEX_LOGIC_VERSION;
-  return "";
+  return String(mode || "").toUpperCase() === "GIRO" ? GIRO_LOGIC_VERSION : "";
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -558,7 +549,7 @@ let vibrateEnabled = true;
 let EVAL_SEC = 45;
 
 // Estado principal: NORMAL vs GIRO
-let currentSignalMode = SIGNAL_MODE_NORMAL;
+let giroMode = false;
 
 let history = loadHistory();
 migrateHistoryModesToGiro();
@@ -1075,9 +1066,7 @@ function getItemCurrentBodyPrice(item) {
 }
 function getGiroAllowedTradeSide(item) {
   const mode = String(item?.mode || '').toUpperCase();
-  if (mode !== SIGNAL_MODE_GIRO && mode !== SIGNAL_MODE_GIRO_FLEX) {
-    return { active: false, allowedSide: null, bodyDir: 0, open: null, current: null };
-  }
+  if (mode !== 'GIRO') return { active: false, allowedSide: null, bodyDir: 0, open: null, current: null };
 
   const open = getItemMinuteOpenPrice(item);
   const current = getItemCurrentBodyPrice(item);
@@ -1676,7 +1665,6 @@ const PRACTICE_STATS_KEY = "practiceStats_v1";
 const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
-const PRACTICE_FILTER_GIRO_FLEX = "GIRO_FLEXIBLE";
 const PRACTICE_FILTER_NORMAL = "NORMAL";
 let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
@@ -1742,25 +1730,16 @@ function normalizePracticeEntryMode(mode) {
 function isStrictGiroPracticeEntry(entry) {
   if (!entry) return false;
   const mode = normalizePracticeEntryMode(entry.mode);
-  if (mode !== SIGNAL_MODE_GIRO) return false;
+  if (mode !== "GIRO") return false;
 
   const version = String(entry.mode_version || entry.giro_version || "");
   return version === GIRO_LOGIC_VERSION;
-}
-function isStrictGiroFlexiblePracticeEntry(entry) {
-  if (!entry) return false;
-  const mode = normalizePracticeEntryMode(entry.mode);
-  if (mode !== SIGNAL_MODE_GIRO_FLEX) return false;
-
-  const version = String(entry.mode_version || entry.giro_version || "");
-  return version === GIRO_FLEX_LOGIC_VERSION;
 }
 
 function loadPracticeFilterMode() {
   try {
     const saved = String(localStorage.getItem(PRACTICE_FILTER_KEY) || "").toUpperCase();
     if (saved === PRACTICE_FILTER_GIRO) return PRACTICE_FILTER_GIRO;
-    if (saved === PRACTICE_FILTER_GIRO_FLEX) return PRACTICE_FILTER_GIRO_FLEX;
     if (saved === PRACTICE_FILTER_NORMAL) return PRACTICE_FILTER_NORMAL;
     return PRACTICE_FILTER_ALL;
   } catch {
@@ -1772,19 +1751,14 @@ function savePracticeFilterMode() {
     const safe =
       practiceFilterMode === PRACTICE_FILTER_GIRO
         ? PRACTICE_FILTER_GIRO
-        : practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX
-          ? PRACTICE_FILTER_GIRO_FLEX
-          : practiceFilterMode === PRACTICE_FILTER_NORMAL
-            ? PRACTICE_FILTER_NORMAL
-            : PRACTICE_FILTER_ALL;
+        : practiceFilterMode === PRACTICE_FILTER_NORMAL
+          ? PRACTICE_FILTER_NORMAL
+          : PRACTICE_FILTER_ALL;
     localStorage.setItem(PRACTICE_FILTER_KEY, safe);
   } catch {}
 }
 function shouldPracticeOnlyGiro() {
   return practiceFilterMode === PRACTICE_FILTER_GIRO;
-}
-function shouldPracticeOnlyGiroFlexible() {
-  return practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX;
 }
 function shouldPracticeOnlyNormal() {
   return practiceFilterMode === PRACTICE_FILTER_NORMAL;
@@ -1792,13 +1766,11 @@ function shouldPracticeOnlyNormal() {
 function normalizePracticeFilterMode(mode) {
   const m = String(mode || "").toUpperCase();
   if (m === PRACTICE_FILTER_GIRO) return PRACTICE_FILTER_GIRO;
-  if (m === PRACTICE_FILTER_GIRO_FLEX) return PRACTICE_FILTER_GIRO_FLEX;
   if (m === PRACTICE_FILTER_NORMAL) return PRACTICE_FILTER_NORMAL;
   return PRACTICE_FILTER_ALL;
 }
 function getPracticeFilterTag() {
   if (shouldPracticeOnlyGiro()) return "GIRO";
-  if (shouldPracticeOnlyGiroFlexible()) return "GIRO FLEX";
   if (shouldPracticeOnlyNormal()) return "NORMAL";
   return "TODOS";
 }
@@ -1817,11 +1789,6 @@ function applyPracticeFilterButtonUI() {
   if (mode === PRACTICE_FILTER_GIRO) {
     btn.textContent = "🟥 Práctica GIRO";
     btn.title = "Práctica filtrada solo a velas guardadas/operadas en modo GIRO.";
-    return;
-  }
-  if (mode === PRACTICE_FILTER_GIRO_FLEX) {
-    btn.textContent = "🟧 Práctica GIRO FLEX";
-    btn.title = "Práctica filtrada solo a velas guardadas/operadas en modo GIRO FLEXIBLE.";
     return;
   }
   if (mode === PRACTICE_FILTER_NORMAL) {
@@ -1853,10 +1820,8 @@ function ensurePracticeFilterButton() {
       practiceFilterMode === PRACTICE_FILTER_ALL
         ? PRACTICE_FILTER_GIRO
         : practiceFilterMode === PRACTICE_FILTER_GIRO
-          ? PRACTICE_FILTER_GIRO_FLEX
-          : practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX
-            ? PRACTICE_FILTER_NORMAL
-            : PRACTICE_FILTER_ALL;
+          ? PRACTICE_FILTER_NORMAL
+          : PRACTICE_FILTER_ALL;
     savePracticeFilterMode();
 
     cancelPracticeAnim();
@@ -1874,11 +1839,9 @@ function ensurePracticeFilterButton() {
     const tag =
       practiceFilterMode === PRACTICE_FILTER_GIRO
         ? "🟥 Práctica filtrada a GIRO"
-        : practiceFilterMode === PRACTICE_FILTER_GIRO_FLEX
-          ? "🟧 Práctica filtrada a GIRO FLEXIBLE"
-          : practiceFilterMode === PRACTICE_FILTER_NORMAL
-            ? "🟦 Práctica filtrada a NORMAL"
-            : "⚪ Práctica con todos los modos";
+        : practiceFilterMode === PRACTICE_FILTER_NORMAL
+          ? "🟦 Práctica filtrada a NORMAL"
+          : "⚪ Práctica con todos los modos";
     toast(tag, 1800);
   };
 
@@ -1896,7 +1859,6 @@ function getEligiblePracticeEntries() {
     if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
     if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
     if (shouldPracticeOnlyGiro() && !isStrictGiroPracticeEntry(entry)) return false;
-    if (shouldPracticeOnlyGiroFlexible() && !isStrictGiroFlexiblePracticeEntry(entry)) return false;
     if (shouldPracticeOnlyNormal() && !isStrictNormalPracticeEntry(entry)) return false;
     return true;
   });
@@ -2886,59 +2848,729 @@ function applyTheme(theme) {
       })
   );
 
-  // Selector de modo de señales: NORMAL -> GIRO -> GIRO FLEXIBLE
-  const savedModeRaw = String(localStorage.getItem(SIGNAL_MODE_KEY) || "").toUpperCase();
-  if (savedModeRaw === SIGNAL_MODE_GIRO || savedModeRaw === SIGNAL_MODE_GIRO_FLEX || savedModeRaw === SIGNAL_MODE_NORMAL) {
-    currentSignalMode = savedModeRaw;
-  } else {
-    const legacyGiro = loadBool("giroMode", false) || loadBool("strongMode", false);
-    currentSignalMode = legacyGiro ? SIGNAL_MODE_GIRO : SIGNAL_MODE_NORMAL;
-    localStorage.setItem(SIGNAL_MODE_KEY, currentSignalMode);
+  // GIRO (mantiene compatibilidad con estados viejos una sola vez)
+  const hasGiroKey = localStorage.getItem("giroMode") !== null;
+  giroMode = loadBool("giroMode", false);
+
+  if (!hasGiroKey) {
+    giroMode = loadBool("giroMode", false) || loadBool("strongMode", false);
+    saveBool("giroMode", giroMode);
   }
 
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.classList.toggle("active-strong", currentSignalMode !== SIGNAL_MODE_NORMAL);
-    if (currentSignalMode === SIGNAL_MODE_GIRO) {
-      modeBtn.textContent = "🟥 Modo GIRO";
-      modeBtn.title = "Señales de giro actuales";
-      return;
-    }
-    if (currentSignalMode === SIGNAL_MODE_GIRO_FLEX) {
-      modeBtn.textContent = "🟧 Modo GIRO FLEXIBLE";
-      modeBtn.title = "Señales de giro más flexibles para comparar";
-      return;
-    }
-    modeBtn.textContent = "🟦 Modo NORMAL";
-    modeBtn.title = "Señales de continuidad";
+    modeBtn.textContent = giroMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL";
+    modeBtn.classList.toggle("active-strong", giroMode);
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      currentSignalMode =
-        currentSignalMode === SIGNAL_MODE_NORMAL
-          ? SIGNAL_MODE_GIRO
-          : currentSignalMode === SIGNAL_MODE_GIRO
-            ? SIGNAL_MODE_GIRO_FLEX
-            : SIGNAL_MODE_NORMAL;
-
-      localStorage.setItem(SIGNAL_MODE_KEY, currentSignalMode);
+      giroMode = !giroMode;
+      saveBool("giroMode", giroMode);
 
       // compat vieja: apagamos flags anteriores
       saveBool("giroMode", false);
       saveBool("strongMode", false);
 
       paintMode();
-      const msg =
-        currentSignalMode === SIGNAL_MODE_GIRO
-          ? "🟥 Modo GIRO"
-          : currentSignalMode === SIGNAL_MODE_GIRO_FLEX
-            ? "🟧 Modo GIRO FLEXIBLE"
-            : "🟦 Modo NORMAL";
-      toast(msg, 1600);
+      toast(giroMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL", 1600);
     };
 })();
+
+/* =========================
+   Sonido
+========================= */
+(function initSoundToggle() {
+  soundEnabled = loadBool("soundEnabled", false);
+  setBtnActive(soundBtn, soundEnabled);
+  if (soundBtn) soundBtn.textContent = soundEnabled ? "🔊 Sonido ON" : "🔇 Sonido OFF";
+  if (!soundBtn || !sound) return;
+
+  soundBtn.onclick = async () => {
+    if (!soundEnabled) {
+      try {
+        sound.muted = false;
+        sound.volume = 1;
+        sound.currentTime = 0;
+        await sound.play();
+        sound.pause();
+        soundEnabled = true;
+        saveBool("soundEnabled", true);
+        setBtnActive(soundBtn, true);
+        soundBtn.textContent = "🔊 Sonido ON";
+      } catch {
+        alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
+      }
+      return;
+    }
+    soundEnabled = false;
+    saveBool("soundEnabled", false);
+    setBtnActive(soundBtn, false);
+    soundBtn.textContent = "🔇 Sonido OFF";
+  };
+})();
+
+/* =========================
+   Vibración
+========================= */
+(function initVibrationToggle() {
+  vibrateEnabled = loadBool("vibrateEnabled", true);
+  if (!vibrateBtn) return;
+  setBtnActive(vibrateBtn, vibrateEnabled);
+  vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
+
+  vibrateBtn.onclick = () => {
+    vibrateEnabled = !vibrateEnabled;
+    saveBool("vibrateEnabled", vibrateEnabled);
+    setBtnActive(vibrateBtn, vibrateEnabled);
+    vibrateBtn.textContent = vibrateEnabled ? "📳 Vibración ON" : "📳 Vibración OFF";
+    if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([80]);
+  };
+})();
+
+/* =========================
+   Copy feedback
+========================= */
+
+/* =========================
+   Notifications
+========================= */
+if ("Notification" in window && Notification.permission === "default") {
+  Notification.requestPermission().catch(() => {});
+}
+function showNotification(symbol, direction, modeLabel) {
+  if (!("Notification" in window)) return;
+  if (Notification.permission !== "granted") return;
+
+  navigator.serviceWorker.getRegistration().then((reg) => {
+    if (!reg) return;
+    reg.showNotification("📈 Deriv Signal", {
+      body: `${symbol} – ${labelDir(direction)} – [${modeLabel || "NORMAL"}]`,
+      icon: "icon-192.png",
+      badge: "icon-192.png",
+      tag: "deriv-signal",
+      renotify: true,
+      requireInteraction: true,
+      silent: false,
+      vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
+      data: { url: makeDerivTraderUrl(symbol), symbol, direction },
+    });
+  });
+}
+
+/* =========================
+   Canvas chart
+========================= */
+function drawDerivLikeChart(canvas, ticks) {
+  if (!canvas) return;
+
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
+
+  if (!ticks || ticks.length < 2) return;
+
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+
+  const quotes = pts.map((p) => p.quote);
+  let min = Math.min(...quotes);
+  let max = Math.max(...quotes);
+  let range = max - min;
+  if (range < 1e-9) range = 1e-9;
+  const pad = range * 0.08;
+  min -= pad;
+  max += pad;
+
+  const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
+  const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
+
+  const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
+    : null;
+
+  const segments = [
+    { start: 0, end: 15000, label: "0s" },
+    { start: 15000, end: 30000, label: "15s" },
+    { start: 30000, end: 45000, label: "30s" },
+    { start: 45000, end: 60000, label: "45s" },
+  ];
+
+  // sombreado por tramo
+  for (const seg of segments) {
+    const x1 = xOf(seg.start);
+    const x2 = xOf(seg.end);
+
+    let fill = "rgba(255,255,255,0.03)";
+    if (msNow != null) {
+      if (msNow >= seg.end) fill = "rgba(34,211,238,0.10)";
+      else if (msNow >= seg.start && msNow < seg.end) fill = "rgba(251,191,36,0.10)";
+      else fill = "rgba(255,255,255,0.025)";
+    }
+
+    ctx.fillStyle = fill;
+    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
+  }
+
+  // grilla horizontal
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) {
+    const y = (h / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // líneas verticales punteadas 0/15/30/45
+  const guideMarks = [0, 15000, 30000, 45000];
+  for (const ms of guideMarks) {
+    const x = xOf(ms);
+
+    ctx.save();
+    ctx.setLineDash([5, 5]);
+    ctx.strokeStyle = ms === 30000 ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.26)";
+    ctx.lineWidth = ms === 30000 ? 1.8 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    const label = ms === 0 ? "0s" : ms === 15000 ? "15s" : ms === 30000 ? "30s" : "45s";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(label, Math.min(w - 26, x + 4), h - 6);
+  }
+
+  // línea de “ahora” en live
+  if (msNow != null) {
+    const xNow = xOf(msNow);
+    ctx.save();
+    ctx.setLineDash([2, 4]);
+    ctx.strokeStyle = "rgba(251,191,36,0.95)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(xNow, 8);
+    ctx.lineTo(xNow, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.fillStyle = "rgba(251,191,36,0.96)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("ahora", Math.min(w - 34, xNow + 4), 20);
+  }
+
+  // área
+  ctx.beginPath();
+  ctx.moveTo(xOf(pts[0].ms), h - 20);
+  for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
+  ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
+  ctx.closePath();
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.85)";
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // línea principal
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = xOf(p.ms);
+    const y = yOf(p.quote);
+    if (!i) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // último punto
+  const lx = xOf(pts[pts.length - 1].ms);
+  const ly = yOf(pts[pts.length - 1].quote);
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+/* =========================
+   Tiempo server synced
+========================= */
+function serverNowMs() {
+  return Date.now() + (serverOffsetMs || 0);
+}
+function currentServerMinute() {
+  return Math.floor(serverNowMs() / 60000);
+}
+function isItemLiveMinute(item) {
+  if (!item) return false;
+  return item.minute === currentServerMinute();
+}
+
+function getCurrentMinuteRemainingSec() {
+  const now = serverNowMs();
+  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+    ? currentMinuteStartMs
+    : Math.floor(now / 60000) * 60000;
+
+  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
+  return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+}
+function isTradeEntryOpen(item) {
+  if (!item) return false;
+  return isItemLiveMinute(item);
+}
+function ensureModalCandleStatusBar() {
+  if (modalCandleStatusEl) return modalCandleStatusEl;
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return null;
+
+  let el = footer.querySelector(".candleStatusBar");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "candleStatusBar";
+    el.setAttribute("role", "status");
+    el.style.width = "100%";
+    el.style.boxSizing = "border-box";
+    el.style.margin = "0 0 10px 0";
+    el.style.padding = "12px 14px";
+    el.style.borderRadius = "14px";
+    el.style.border = "1px solid rgba(255,255,255,.14)";
+    el.style.fontWeight = "900";
+    el.style.fontSize = "14px";
+    el.style.letterSpacing = "0.3px";
+    el.style.textAlign = "center";
+    el.style.transition = "opacity .12s ease, transform .12s ease";
+    footer.prepend(el);
+  }
+
+  modalCandleStatusEl = el;
+  return modalCandleStatusEl;
+}
+function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
+  if (!btn) return;
+
+  if (!btn.dataset.baseLabel) btn.dataset.baseLabel = btn.textContent || "";
+
+  if (locked) {
+    btn.disabled = true;
+    btn.textContent = `🔒 ${btn.dataset.baseLabel.replace(/^🔒\s*/g, "")}`;
+    btn.style.filter = "grayscale(1) saturate(0.7)";
+    btn.style.opacity = "0.48";
+    btn.style.transform = "none";
+    btn.title = `Bloqueado por disciplina. Falta ${fmtRemaining(remainMs)}`;
+    return;
+  }
+
+  if (candleClosed) {
+    btn.disabled = true;
+    btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+    btn.style.filter = "grayscale(1) saturate(0.72)";
+    btn.style.opacity = "0.42";
+    btn.style.transform = "none";
+    btn.title = "La vela ya cerró";
+    return;
+  }
+
+  btn.disabled = false;
+  btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
+  btn.style.filter = "";
+  btn.style.opacity = "";
+  btn.title = "Operar DEMO 1m";
+}
+function updateModalCandleStatusUI() {
+  const bar = ensureModalCandleStatusBar();
+  if (!bar) return;
+
+  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
+    bar.style.display = "none";
+    return;
+  }
+
+  bar.style.display = "block";
+
+  const callPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "CALL") : null;
+  const putPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "PUT") : null;
+  setTradeButtonBaseLabel(modalBuyCallBtn, buildTradeButtonLabel("CALL", callPlan));
+  setTradeButtonBaseLabel(modalBuyPutBtn, buildTradeButtonLabel("PUT", putPlan));
+
+  const isOpen = isTradeEntryOpen(modalCurrentItem);
+  if (isOpen) {
+    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
+    const autoTxt = shouldUseAutoHighLowExecution()
+      ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
+      : "";
+    const giroState = getGiroAllowedTradeSide(modalCurrentItem);
+    let giroTxt = "";
+    if (giroState.active) {
+      if (giroState.bodyDir > 0) giroTxt = " | SOLO GIRO: habilitada VENTA";
+      else if (giroState.bodyDir < 0) giroTxt = " | SOLO GIRO: habilitada COMPRA";
+      else giroTxt = " | SOLO GIRO: esperando definición";
+    }
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s${autoTxt}${giroTxt}`;
+    bar.style.color = "#dcfce7";
+    bar.style.background = "rgba(22,163,74,.18)";
+    bar.style.borderColor = "rgba(34,197,94,.34)";
+    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
+  } else {
+    bar.textContent = "⚪ VELA CERRADA";
+    bar.style.color = "rgba(229,231,235,.95)";
+    bar.style.background = "rgba(107,114,128,.20)";
+    bar.style.borderColor = "rgba(156,163,175,.28)";
+    bar.style.boxShadow = "none";
+  }
+
+  const locked = isTradeLockedNow();
+  const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
+  const candleClosed = !isOpen;
+
+  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
+  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+  applyModalExecutionButtonUI(locked, candleClosed);
+  applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
+}
+
+/* =========================
+   LIVE modal draw
+========================= */
+function updateModalLiveUI() {
+  if (!modalLiveBtn) return;
+  modalLiveBtn.setAttribute("aria-pressed", modalLive ? "true" : "false");
+  modalLiveBtn.textContent = modalLive ? "📡 LIVE ON" : "📡 LIVE OFF";
+}
+function requestModalDraw(force = false) {
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (!modalCurrentItem) return;
+
+  const now = Date.now();
+  if (!force && now - modalLastDrawAt < MODAL_DRAW_MIN_INTERVAL_MS) return;
+  modalLastDrawAt = now;
+
+  if (modalDrawRaf) cancelAnimationFrame(modalDrawRaf);
+  modalDrawRaf = requestAnimationFrame(() => {
+    const it = modalCurrentItem;
+    if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
+
+    let ticks = it.ticks || [];
+    if (modalLive && isItemLiveMinute(it)) {
+      const liveTicks = minuteData?.[it.minute]?.[it.symbol];
+      if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
+    }
+
+    drawDerivLikeChart(minuteCanvas, ticks);
+
+    if (modalSub) {
+      const n = Array.isArray(ticks) ? ticks.length : 0;
+      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
+      const dTag = disciplineTagText();
+      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
+      const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
+      const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
+      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
+    }
+
+    updateModalCandleStatusUI();
+  });
+}
+
+/* =========================
+   Layout botones modal
+========================= */
+function applyModalTradeButtonsLayout() {
+  const bCall = modalBuyCallBtn;
+  const bPut = modalBuyPutBtn;
+  if (!bCall || !bPut) return;
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return;
+
+  const statusBar = ensureModalCandleStatusBar();
+
+  let row = footer.querySelector(".tradeRow");
+  if (!row) {
+    row = document.createElement("div");
+    row.className = "tradeRow";
+    footer.appendChild(row);
+  }
+
+  if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
+
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "minmax(0,1fr)";
+  row.style.gap = "10px";
+  row.style.alignItems = "stretch";
+  row.style.justifyContent = "stretch";
+  row.style.width = "100%";
+
+  if (bCall.parentElement !== row) row.appendChild(bCall);
+  if (bPut.parentElement !== row) row.appendChild(bPut);
+
+  const baseBtn = (b) => {
+    b.style.width = "100%";
+    b.style.flex = "0 0 auto";
+    b.style.minWidth = "0";
+    b.style.minHeight = "58px";
+    b.style.padding = "13px 14px";
+    b.style.fontWeight = "900";
+    b.style.letterSpacing = "0.25px";
+    b.style.borderRadius = "16px";
+    b.style.display = "flex";
+    b.style.alignItems = "center";
+    b.style.justifyContent = "center";
+    b.style.gap = "10px";
+    b.style.userSelect = "none";
+    b.style.touchAction = "manipulation";
+  };
+  baseBtn(bCall);
+  baseBtn(bPut);
+
+  bCall.style.borderColor = "rgba(34,197,94,.85)";
+  bCall.style.boxShadow = "0 0 18px rgba(34,197,94,.20), inset 0 0 14px rgba(34,197,94,.08)";
+  bCall.style.background = "linear-gradient(180deg, rgba(34,197,94,.24), rgba(34,197,94,.14))";
+  bCall.style.color = "var(--text, #e5e7eb)";
+
+  bPut.style.borderColor = "rgba(239,68,68,.85)";
+  bPut.style.boxShadow = "0 0 18px rgba(239,68,68,.18), inset 0 0 14px rgba(239,68,68,.07)";
+  bPut.style.background = "linear-gradient(180deg, rgba(239,68,68,.22), rgba(239,68,68,.14))";
+  bPut.style.color = "var(--text, #e5e7eb)";
+
+  const w = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+  if (w < 480) {
+    bCall.style.minHeight = "56px";
+    bPut.style.minHeight = "56px";
+    bCall.style.padding = "12px 10px";
+    bPut.style.padding = "12px 10px";
+  }
+
+  if (modalLiveBtn) {
+    modalLiveBtn.style.minHeight = "52px";
+    modalLiveBtn.style.width = "100%";
+    modalLiveBtn.style.marginTop = "10px";
+  }
+}
+
+/* =========================
+   Disciplina (persistencia + UI)
+========================= */
+function loadDiscipline() {
+  try {
+    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
+    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
+    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
+    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
+
+    const raw = localStorage.getItem(DISCIPLINE_PENDING_CONTRACTS_KEY) || "[]";
+    const arr = JSON.parse(raw);
+    disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
+  } catch {
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    disciplineLockUntilMs = 0;
+    disciplinePendingContracts = [];
+  }
+}
+function saveDiscipline() {
+  try {
+    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
+    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
+    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
+    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
+    localStorage.setItem(DISCIPLINE_PENDING_CONTRACTS_KEY, JSON.stringify(disciplinePendingContracts || []));
+  } catch {}
+}
+function addPendingContract(cid) {
+  if (!cid) return;
+  const s = String(cid);
+  if (!disciplinePendingContracts.includes(s)) {
+    disciplinePendingContracts.push(s);
+    saveDiscipline();
+  }
+}
+function removePendingContract(cid) {
+  if (!cid) return;
+  const s = String(cid);
+  const next = (disciplinePendingContracts || []).filter((x) => String(x) !== s);
+  disciplinePendingContracts = next;
+  saveDiscipline();
+}
+function isTradeLockedNow() {
+  const now = Date.now();
+  return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
+}
+function fmtRemaining(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h > 0) return `${h}h ${mm}m`;
+  return `${mm}m`;
+}
+function disciplineTagText() {
+  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+  }
+
+  if (isTradeLockedNow()) {
+    const remain = disciplineLockUntilMs - Date.now();
+    return `🔒 BLOQUEADO ${fmtRemaining(remain)} (${disciplineWins}W/${disciplineLosses}L)`;
+  }
+
+  const pend = (disciplinePendingContracts || []).length;
+  const pTxt = pend ? ` • Pendientes:${pend}` : "";
+  return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
+}
+function updateDisciplineLockUI(forceToast = false) {
+  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    if (forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
+  }
+
+  const locked = isTradeLockedNow();
+  const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
+  const candleClosed = !!modalCurrentItem && !isTradeEntryOpen(modalCurrentItem);
+
+  paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
+  paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+
+  if (chartModal && !chartModal.classList.contains("hidden")) {
+    updateModalCandleStatusUI();
+    requestModalDraw(true);
+  }
+  if (forceToast) toast(disciplineTagText(), 2200);
+}
+function startNewDisciplineWindowIfNeeded() {
+  updateDisciplineLockUI(false);
+
+  const now = Date.now();
+  if (!disciplineWindowStartMs) {
+    disciplineWindowStartMs = now;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+  }
+}
+function applyDisciplineOutcome(isWin) {
+  updateDisciplineLockUI(false);
+  if (isTradeLockedNow()) return;
+
+  if (isWin) disciplineWins += 1;
+  else disciplineLosses += 1;
+
+  saveDiscipline();
+
+  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
+    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
+    saveDiscipline();
+    updateDisciplineLockUI(true);
+    return;
+  }
+
+  toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
+  updateDisciplineLockUI(false);
+}
+
+/* =========================
+   Rescate pendientes
+========================= */
+async function resubscribePendingContracts() {
+  try {
+    if (!ws || ws.readyState !== 1) return;
+    const list = (disciplinePendingContracts || []).slice();
+    if (!list.length) return;
+
+    try {
+      await ensureAuthorized();
+    } catch {
+      toast("⚠️ No autorizado (token/login). No puedo rescatar pendientes.", 2200);
+      return;
+    }
+
+    for (const cid of list) {
+      subscribeContractOutcome(cid, true);
+      scheduleOutcomeFallbackPoll(cid, 20000);
+    }
+
+    toast(`🔁 Reenganche pendientes: ${list.length}`, 1400);
+  } catch {}
+}
+
+/* =========================
+   Chart modal
+========================= */
+function openChartModal(item) {
+  modalCurrentItem = item;
+  if (!chartModal || !modalTitle || !modalSub) return;
+
+  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
+
+  modalLive = isItemLiveMinute(item);
+  updateModalLiveUI();
+
+  chartModal.classList.remove("hidden");
+  chartModal.setAttribute("aria-hidden", "false");
+
+  applyModalTradeButtonsLayout();
+  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
+  updateDisciplineLockUI(false);
+  updateModalCandleStatusUI();
+
+  requestModalDraw(true);
+}
+function closeChartModal() {
+  if (!chartModal) return;
+  chartModal.classList.add("hidden");
+  chartModal.setAttribute("aria-hidden", "true");
+  modalCurrentItem = null;
+  modalLive = false;
+  updateModalLiveUI();
+  if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
+}
+if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
+if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeChartModal();
+    closeSettings();
+  }
+});
 if (modalOpenDerivBtn)
   modalOpenDerivBtn.onclick = () => {
     if (modalCurrentItem) window.location.href = makeDerivTraderUrl(modalCurrentItem.symbol);
@@ -4056,7 +4688,7 @@ function onTick(tick) {
     const ok = evaluateMinute(minute);
 
     // En GIRO no hay retry: evalúa solo en el segundo elegido
-    if (!ok && currentSignalMode === SIGNAL_MODE_NORMAL) scheduleRetry(minute);
+    if (!ok && !giroMode) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -4218,31 +4850,6 @@ const RULES_GIRO = {
   minOppStepsSecondHalf: 2,
 };
 
-const RULES_GIRO_FLEX = {
-  baseScoreMin: 0.0088,
-  bodyVsRangeMin: 0.06,
-  wholeDirRatioMin: 0.34,
-  wholeDirRatioMax: 0.86,
-
-  leadMoveMinFracRange: 0.24,
-  earlyDriveMinFracTotal: 0.11,
-
-  lateOppRatioMin: 0.38,
-  lateAgainstMinFracTotal: 0.025,
-  last8AgainstMinFracTotal: 0.012,
-
-  counterAttackMinFracTotal: 0.035,
-  counterAttackMaxFracTotal: 1.02,
-
-  responseVsAttackMax: 1.34,
-  reclaimFromExtremeMinFracRange: 0.03,
-
-  irregularityMin: 0.06,
-  oppositeLateControlMin: 0.42,
-  dominantReduceMax: 1.28,
-  minOppStepsSecondHalf: 1,
-};
-
 function segmentMoveSigned(ticks, aMs, bMs, dirSign) {
   const a = getPriceAtMs(ticks, aMs);
   const b = getPriceAtMs(ticks, bMs);
@@ -4350,11 +4957,11 @@ function buildStepStrengthSummary(stepMoves, dirSign, splitIndex) {
   };
 }
 
-function detectGiroPatternWithRules(candidate, rules) {
+function detectGiroPattern(candidate) {
   const ticks = candidate?.ticks || [];
   const evalMs = EVAL_SEC * 1000;
   if (ticks.length < 6) return null;
-  if (candidate.score < rules.baseScoreMin) return null;
+  if (candidate.score < RULES_GIRO.baseScoreMin) return null;
 
   const p0 = getPriceAtMs(ticks, 0);
   const p15 = getPriceAtMs(ticks, 15000);
@@ -4377,21 +4984,21 @@ function detectGiroPatternWithRules(candidate, rules) {
 
   // 1) la vela todavía mantiene su color al momento de la señal
   const bodyVsRange = absTotal / range;
-  if (bodyVsRange < rules.bodyVsRangeMin) return null;
+  if (bodyVsRange < RULES_GIRO.bodyVsRangeMin) return null;
 
   // 2) hubo avance real del lado dominante, pero no debe ser una continuidad demasiado limpia
   const wholeDirRatio = directionalRatio(fullTicks, dirSign);
-  if (wholeDirRatio < rules.wholeDirRatioMin) return null;
-  if (wholeDirRatio > rules.wholeDirRatioMax) return null;
+  if (wholeDirRatio < RULES_GIRO.wholeDirRatioMin) return null;
+  if (wholeDirRatio > RULES_GIRO.wholeDirRatioMax) return null;
 
   const leadMove = getDirectionalLeadFromStart(p0, minP, maxP, dirSign);
-  if (leadMove < range * rules.leadMoveMinFracRange) return null;
+  if (leadMove < range * RULES_GIRO.leadMoveMinFracRange) return null;
 
   const earlyDrive = Math.max(
     segmentMoveSigned(ticks, 0, 15000, dirSign),
     segmentMoveSigned(ticks, 0, 30000, dirSign)
   );
-  if (earlyDrive < absTotal * rules.earlyDriveMinFracTotal) return null;
+  if (earlyDrive < absTotal * RULES_GIRO.earlyDriveMinFracTotal) return null;
 
   // 3) presión contraria al final: el grupo opuesto ya empieza a tomar control interno
   const lateStartMs = Math.max(0, evalMs - 14000);
@@ -4401,25 +5008,25 @@ function detectGiroPatternWithRules(candidate, rules) {
   const lateAgainstMove = segmentMoveSigned(ticks, lateStartMs, evalMs, -dirSign);
   const last8AgainstMove = segmentMoveSigned(ticks, last8StartMs, evalMs, -dirSign);
 
-  if (lateOppRatio < rules.lateOppRatioMin) return null;
-  if (lateAgainstMove < absTotal * rules.lateAgainstMinFracTotal) return null;
-  if (last8AgainstMove < absTotal * rules.last8AgainstMinFracTotal) return null;
+  if (lateOppRatio < RULES_GIRO.lateOppRatioMin) return null;
+  if (lateAgainstMove < absTotal * RULES_GIRO.lateAgainstMinFracTotal) return null;
+  if (last8AgainstMove < absTotal * RULES_GIRO.last8AgainstMinFracTotal) return null;
 
   // 4) ataque contrario con recorrido, pero sin destruir del todo el color actual
   const counterAnchorMs = Math.max(12000, Math.min(30000, evalMs - 12000));
   const counterAnchorPrice = getPriceAtMs(ticks, counterAnchorMs);
   if (counterAnchorPrice == null) return null;
   const attackFromAnchor = oppositeAttackDepth(sliceTicks(ticks, counterAnchorMs, evalMs), dirSign, counterAnchorPrice);
-  if (attackFromAnchor < absTotal * rules.counterAttackMinFracTotal) return null;
-  if (attackFromAnchor > absTotal * rules.counterAttackMaxFracTotal) return null;
+  if (attackFromAnchor < absTotal * RULES_GIRO.counterAttackMinFracTotal) return null;
+  if (attackFromAnchor > absTotal * RULES_GIRO.counterAttackMaxFracTotal) return null;
 
   // 5) la respuesta del dominante es más débil que ese ataque contrario
   const weakResp = computeWeakResponseAfterCounter(ticks, dirSign, counterAnchorMs, evalMs);
-  if (weakResp.ratio > rules.responseVsAttackMax) return null;
+  if (weakResp.ratio > RULES_GIRO.responseVsAttackMax) return null;
 
   // 6) el cierre ya queda relativamente lejos del extremo a favor del dominante
   const reclaimFromExtreme = getReclaimFromExtremeToClose(pE, minP, maxP, dirSign);
-  if (reclaimFromExtreme < range * rules.reclaimFromExtremeMinFracRange) return null;
+  if (reclaimFromExtreme < range * RULES_GIRO.reclaimFromExtremeMinFracRange) return null;
 
   // 7) el avance dominante tiene que ser irregular y el tramo final debe quedar más pesado del lado contrario
   const cps = buildGiroCheckpoints(evalMs);
@@ -4436,10 +5043,10 @@ function detectGiroPatternWithRules(candidate, rules) {
   const irregularity = coeffVar(summary.dominantSteps);
   const dominantReduce = summary.firstDomAvg > 1e-12 ? summary.lastDomAvg / summary.firstDomAvg : 999;
 
-  if (irregularity < rules.irregularityMin) return null;
-  if (summary.oppositeLateControl < rules.oppositeLateControlMin) return null;
-  if (dominantReduce > rules.dominantReduceMax) return null;
-  if (summary.oppositeStepsLate.length < rules.minOppStepsSecondHalf) return null;
+  if (irregularity < RULES_GIRO.irregularityMin) return null;
+  if (summary.oppositeLateControl < RULES_GIRO.oppositeLateControlMin) return null;
+  if (dominantReduce > RULES_GIRO.dominantReduceMax) return null;
+  if (summary.oppositeStepsLate.length < RULES_GIRO.minOppStepsSecondHalf) return null;
 
   const quality =
     lateOppRatio * 100 +
@@ -4457,18 +5064,9 @@ function detectGiroPatternWithRules(candidate, rules) {
   };
 }
 
-
-function detectGiroPattern(candidate) {
-  return detectGiroPatternWithRules(candidate, RULES_GIRO);
-}
-
-function detectGiroFlexiblePattern(candidate) {
-  return detectGiroPatternWithRules(candidate, RULES_GIRO_FLEX);
-}
-
 function evaluateMinute(minute) {
   const data = minuteData[minute];
-  if (!data) return currentSignalMode !== SIGNAL_MODE_NORMAL ? true : false;
+  if (!data) return giroMode ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -4497,9 +5095,9 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return currentSignalMode !== SIGNAL_MODE_NORMAL ? true : false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
 
-  // MODO GIRO: base NORMAL + presión contraria real + respuesta débil del lado dominante
+  // MODO GIRO v2: base NORMAL + presión contraria real + respuesta débil del lado dominante
   if (giroMode) {
     const matches = [];
 
@@ -4547,7 +5145,7 @@ function fmtTimeUTC(minute) {
 }
 function addSignal(minute, symbol, direction, ticks) {
   if (areSignalsPaused()) return;
-  const modeLabel = currentSignalMode;
+  const modeLabel = giroMode ? "GIRO" : "NORMAL";
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeLabel}`,
     minute,
