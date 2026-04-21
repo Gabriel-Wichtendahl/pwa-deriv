@@ -70,8 +70,6 @@ const AUTO_PRECALC_FAST_PIPS = [120, 180, 220, 250, 285, 320, 350, 400, 500, 650
 const AUTO_PRECALC_FINE_FACTORS = [0.85, 0.92, 1.0, 1.08, 1.15];
 const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 2600;
 const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 5200;
-const AUTO_BARRIER_PIP_FAST = [80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500];
-const AUTO_BARRIER_PIP_FULL = [40, 60, 80, 120, 180, 250, 350, 500, 800, 1200, 1800, 2500, 3500, 5000, 8000];
 
 /* =========================
    Auto-open chart config
@@ -381,7 +379,6 @@ const vibrateBtn = $("vibrateBtn");
 const wakeBtn = $("wakeBtn");
 const themeBtn = $("themeBtn");
 const clearHistoryBtn = $("clearHistoryBtn"); // si existe, lo ocultamos
-const copyBtn = $("copyFeedback");
 
 const practiceView = $("practiceView");
 const practiceCanvas = $("practiceCanvas");
@@ -407,7 +404,6 @@ const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
 
 // Tabs existentes (del HTML)
-const tabs = qsAll(".tab[data-view]");
 const signalsView = $("signalsView");
 const feedbackView = $("feedbackView"); // compat
 
@@ -561,7 +557,7 @@ let modalLastDrawAt = 0;
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
 // Mantener separados los modos históricos.
-// GIRO debe seguir siendo GIRO y ESCALERA/FUERTE no deben mezclarse con GIRO.
+// GIRO debe seguir siendo GIRO y los modos viejos no deben mezclarse con GIRO.
 function migrateHistoryModesToGiro() {
   try {
     let changed = false;
@@ -662,46 +658,12 @@ function ensureExecutionModeButton() {
   return btn;
 }
 
-function roundTo(value, precision = 3) {
-  const p = Math.max(0, Number(precision || 0));
-  const f = 10 ** p;
-  return Math.round(Number(value || 0) * f) / f;
-}
-function getPricePrecisionFromTicks(ticks, fallback = 3) {
-  const pts = (Array.isArray(ticks) ? ticks : []).slice(-18);
-  let maxDec = 0;
-  for (const t of pts) {
-    const q = Number(t?.quote);
-    if (!Number.isFinite(q)) continue;
-    const s = String(q);
-    const dec = s.includes(".") ? s.split(".")[1].replace(/0+$/, "").length : 0;
-    if (dec > maxDec) maxDec = dec;
-  }
-  return Math.max(fallback, Math.min(6, maxDec || fallback));
-}
 function getSignalTicksForExecution(item) {
   if (!item) return [];
   const live = minuteData?.[item.minute]?.[item.symbol];
   if (Array.isArray(live) && live.length >= 2) return live.slice();
   if (Array.isArray(item.ticks) && item.ticks.length >= 2) return item.ticks.slice();
   return [];
-}
-function getExecutionSearchRange(item) {
-  const pts = getSignalTicksForExecution(item).sort((a, b) => a.ms - b.ms);
-  if (pts.length >= 2) {
-    const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-    if (qs.length >= 2) {
-      const range = Math.max(...qs) - Math.min(...qs);
-      const first = Number(pts[0].quote);
-      const last = Number(pts[pts.length - 1].quote);
-      const move = Math.abs(last - first);
-      const avgStep = qs.length > 1 ? qs.slice(1).reduce((acc, q, idx) => acc + Math.abs(q - qs[idx]), 0) / Math.max(1, qs.length - 1) : 0;
-      return Math.max(range, move * 1.2, avgStep * 10, 0.001);
-    }
-  }
-  const lastQuote = Number(lastQuoteBySymbol?.[item?.symbol]);
-  if (Number.isFinite(lastQuote) && lastQuote > 0) return Math.max(lastQuote * 0.0025, 0.001);
-  return 0.1;
 }
 const AUTO_PRECALC_SCALE_FACTORS = [1, 0.1, 0.01, 0.001, 0.0001];
 
@@ -722,10 +684,6 @@ function makeBarrierCandidateFromAbsolute(side, absValue) {
   const barrierNum = sign * raw;
   const barrier = `${sign > 0 ? "+" : "-"}${raw.toFixed(precision)}`;
   return { barrierNum, precision, barrier };
-}
-function makeBarrierCandidateFromPlan(plan) {
-  if (!plan) return null;
-  return makeBarrierCandidateFromAbsolute(plan.barrierNum >= 0 ? "CALL" : "PUT", Math.abs(Number(plan.barrierNum || 0)));
 }
 function dedupeBarrierCandidates(candidates) {
   const out = [];
@@ -1017,7 +975,6 @@ function applyModalExecutionButtonUI(locked = false, candleClosed = false) {
 
   const hasToken = !!getDerivToken();
   const wsReady = !!ws && ws.readyState === 1;
-  const canSearchNow = hasToken && wsReady;
 
   const applyState = (btn, plan, sideLabel) => {
     if (!btn) return;
@@ -1383,13 +1340,6 @@ function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
 
-function isHit(item) {
-  if (!item || !item.nextOutcome) return false;
-  return (
-    (item.direction === "CALL" && item.nextOutcome === "up") ||
-    (item.direction === "PUT" && item.nextOutcome === "down")
-  );
-}
 function areSignalsPaused(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
   return activeView === "practice";
@@ -1443,24 +1393,6 @@ function compareConsecutiveCloses(signalClose, nextClose) {
   if (b > a) return "up";
   if (b < a) return "down";
   return "flat";
-}
-function rebuildFeedbackFromHistory() {
-  if (!feedbackEl) return;
-  let text = "";
-  for (const it of history) {
-    const vote = it.vote || "";
-    const comment = it.comment || "";
-    if (!vote && !comment) continue;
-
-    const modeLabel = it.mode || "NORMAL";
-    const out = it.nextOutcome || "";
-    const outArrow = nextOutcomeToArrow(out);
-    const outText = nextOutcomeToText(out);
-
-    const tradeBadge = it?.trade?.badge ? ` | TRADE: ${it.trade.badge}` : "";
-    text += `${it.time} | ${it.symbol} | ${labelDir(it.direction)} | [${modeLabel}] | ${vote} | NEXT: ${outArrow} ${outText}${tradeBadge} | ${comment}\n`;
-  }
-  feedbackEl.value = text;
 }
 
 /* =========================
@@ -2176,9 +2108,6 @@ function setPracticeDecisionState(disabled, selected = "") {
     btn.classList.toggle("selected", !isNextBtn && selected === key);
   });
 }
-function getPracticeActiveMarks() {
-  return practiceRound?.segmentMarks || freshPracticeSegmentMarks();
-}
 function togglePracticeSegmentMark(segIndex, choice) {
   if (!practiceRound || !Array.isArray(practiceRound.segmentMarks)) return;
   if (practiceRound.finished) return;
@@ -2666,7 +2595,6 @@ function ensurePracticeReady() {
   }
 }
 
-
 /* =========================
    Settings modal (solo engranaje)
 ========================= */
@@ -2917,7 +2845,7 @@ function applyTheme(theme) {
       })
   );
 
-  // ✅ GIRO (compat: si venías usando stairMode/strongMode, hereda ese estado una sola vez)
+  // ✅ GIRO (compat: hereda estados viejos una sola vez)
   const hasGiroKey = localStorage.getItem("giroMode") !== null;
   stairMode = loadBool("giroMode", false);
 
@@ -2938,7 +2866,7 @@ function applyTheme(theme) {
       stairMode = !stairMode;
       saveBool("giroMode", stairMode);
 
-      // compat vieja: apagamos ESCALERA / STRONG
+      // compat vieja: apagamos flags anteriores
       saveBool("stairMode", false);
       saveBool("strongMode", false);
 
@@ -3205,20 +3133,6 @@ function getCurrentMinuteRemainingSec() {
 
   const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
   return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
-}
-function getCurrent15sRangeLabel() {
-  const now = serverNowMs();
-  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-    ? currentMinuteStartMs
-    : Math.floor(now / 60000) * 60000;
-
-  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
-  const sec = Math.floor(msInMinute / 1000);
-
-  if (sec < 15) return "0-15s";
-  if (sec < 30) return "15-30s";
-  if (sec < 45) return "30-45s";
-  return "45-60s";
 }
 function isTradeEntryOpen(item) {
   if (!item) return false;
@@ -3694,9 +3608,6 @@ function updateRowTradeBadge(item) {
   if (!row) return;
   updateRowTradeBadgeOnRow(row, item);
 }
-function updateRowHitIcon(item) {
-  return false;
-}
 function updateRowNextArrow(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -3784,9 +3695,6 @@ function updateRowNextArrowOnRow(row, item) {
     el.title = "Próxima vela: esperando…";
   }
 }
-function updateRowHitIconOnRow(row, item) {
-  return;
-}
 
 function animateHitPop(item) {
   return;
@@ -3807,17 +3715,13 @@ function setNextOutcome(item, outcome) {
   saveHistory(history);
 
   updateRowNextArrow(item);
-  const ok = updateRowHitIcon(item);
   updateCounter();
 
   try {
     upsertTradeJournalFromSignal(item);
   } catch {}
 
-  if (prevOutcome !== outcome) {
-    if (ok) animateHitPop(item);
-    else animateFailShake(item);
-  }
+  if (prevOutcome !== outcome) animateFailShake(item);
 }
 
 /* =========================
@@ -5362,7 +5266,6 @@ document.addEventListener("visibilitychange", () => {
     }
   }
 });
-
 
 if (practice40Btn) {
   practice40Btn.onclick = () => {
