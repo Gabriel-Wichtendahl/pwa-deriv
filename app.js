@@ -928,6 +928,99 @@ function setTradeButtonBaseLabel(btn, label) {
   btn.textContent = label;
 }
 
+function getItemMinuteOpenPrice(item) {
+  if (!item) return null;
+
+  const liveTicks = minuteData?.[item.minute]?.[item.symbol];
+  if (Array.isArray(liveTicks) && liveTicks.length) {
+    const q = Number(liveTicks[0]?.quote);
+    if (Number.isFinite(q)) return q;
+  }
+
+  const ocOpen = Number(candleOC?.[item.minute]?.[item.symbol]?.open);
+  if (Number.isFinite(ocOpen)) return ocOpen;
+
+  const pts = (Array.isArray(item.ticks) ? item.ticks : []).slice().sort((a, b) => a.ms - b.ms);
+  if (pts.length) {
+    const q = Number(pts[0]?.quote);
+    if (Number.isFinite(q)) return q;
+  }
+
+  return null;
+}
+function getItemCurrentBodyPrice(item) {
+  if (!item) return null;
+
+  const liveTicks = minuteData?.[item.minute]?.[item.symbol];
+  if (Array.isArray(liveTicks) && liveTicks.length) {
+    const q = Number(liveTicks[liveTicks.length - 1]?.quote);
+    if (Number.isFinite(q)) return q;
+  }
+
+  const ocClose = Number(candleOC?.[item.minute]?.[item.symbol]?.close);
+  if (Number.isFinite(ocClose)) return ocClose;
+
+  const pts = (Array.isArray(item.ticks) ? item.ticks : []).slice().sort((a, b) => a.ms - b.ms);
+  if (pts.length) {
+    const q = Number(pts[pts.length - 1]?.quote);
+    if (Number.isFinite(q)) return q;
+  }
+
+  return null;
+}
+function getGiroAllowedTradeSide(item) {
+  const mode = String(item?.mode || '').toUpperCase();
+  if (mode !== 'GIRO') return { active: false, allowedSide: null, bodyDir: 0, open: null, current: null };
+
+  const open = getItemMinuteOpenPrice(item);
+  const current = getItemCurrentBodyPrice(item);
+  if (!Number.isFinite(open) || !Number.isFinite(current)) {
+    return { active: true, allowedSide: null, bodyDir: 0, open, current };
+  }
+
+  const bodyDir = current > open ? 1 : current < open ? -1 : 0;
+  const allowedSide = bodyDir > 0 ? 'PUT' : bodyDir < 0 ? 'CALL' : null;
+  return { active: true, allowedSide, bodyDir, open, current };
+}
+function paintGiroOnlyButtonState(btn, enabled, reason) {
+  if (!btn) return;
+
+  btn.style.transform = 'none';
+  if (enabled) {
+    btn.disabled = false;
+    btn.style.filter = '';
+    btn.style.opacity = '';
+    if (reason) btn.title = reason;
+    return;
+  }
+
+  btn.disabled = true;
+  btn.style.filter = 'grayscale(1) saturate(0.65)';
+  btn.style.opacity = '0.38';
+  if (reason) btn.title = reason;
+}
+function applyGiroOnlyTradeButtons(item, locked = false, candleClosed = false) {
+  const giroState = getGiroAllowedTradeSide(item);
+  if (!giroState.active) return;
+  if (locked || candleClosed) return;
+
+  const { allowedSide, bodyDir } = giroState;
+
+  if (!allowedSide || bodyDir === 0) {
+    paintGiroOnlyButtonState(modalBuyCallBtn, false, 'Modo GIRO: esperá definición del cuerpo para operar solo el giro.');
+    paintGiroOnlyButtonState(modalBuyPutBtn, false, 'Modo GIRO: esperá definición del cuerpo para operar solo el giro.');
+    return;
+  }
+
+  const bullish = bodyDir > 0;
+  const giroMsg = bullish
+    ? 'Modo GIRO: vela alcista ahora mismo. Solo habilitada VENTA para buscar el giro.'
+    : 'Modo GIRO: vela bajista ahora mismo. Solo habilitada COMPRA para buscar el giro.';
+
+  paintGiroOnlyButtonState(modalBuyCallBtn, allowedSide === 'CALL', giroMsg);
+  paintGiroOnlyButtonState(modalBuyPutBtn, allowedSide === 'PUT', giroMsg);
+}
+
 /* =========================
    Auto-open chart
 ========================= */
@@ -3034,7 +3127,14 @@ function updateModalCandleStatusUI() {
     const autoTxt = shouldUseAutoHighLowExecution()
       ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
       : "";
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s${autoTxt}`;
+    const giroState = getGiroAllowedTradeSide(modalCurrentItem);
+    let giroTxt = "";
+    if (giroState.active) {
+      if (giroState.bodyDir > 0) giroTxt = " | SOLO GIRO: habilitada VENTA";
+      else if (giroState.bodyDir < 0) giroTxt = " | SOLO GIRO: habilitada COMPRA";
+      else giroTxt = " | SOLO GIRO: esperando definición";
+    }
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s${autoTxt}${giroTxt}`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
@@ -3054,6 +3154,7 @@ function updateModalCandleStatusUI() {
   paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
   paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
   applyModalExecutionButtonUI(locked, candleClosed);
+  applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
 }
 
 /* =========================
@@ -5195,4 +5296,4 @@ ensureInlineClearButtons();
 ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
 
-connect(); 
+connect();
