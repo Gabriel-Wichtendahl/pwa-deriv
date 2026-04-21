@@ -4795,6 +4795,187 @@ if (practiceCanvas) {
 /* =========================
    Inicialización
 ========================= */
+
+/* =========================
+   Runtime helpers / disciplina hotfix
+========================= */
+var serverNowMs = globalThis.serverNowMs || function () {
+  return Date.now() + (serverOffsetMs || 0);
+};
+
+var currentServerMinute = globalThis.currentServerMinute || function () {
+  return Math.floor(serverNowMs() / 60000);
+};
+
+var isItemLiveMinute = globalThis.isItemLiveMinute || function (item) {
+  if (!item) return false;
+  return Number(item.minute) === currentServerMinute();
+};
+
+var getCurrentMinuteRemainingSec = globalThis.getCurrentMinuteRemainingSec || function () {
+  const now = serverNowMs();
+  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+    ? currentMinuteStartMs
+    : Math.floor(now / 60000) * 60000;
+
+  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
+  return 60 - Math.max(0, Math.min(59, Math.floor(msInMinute / 1000)));
+};
+
+var getCurrent15sRangeLabel = globalThis.getCurrent15sRangeLabel || function () {
+  const now = serverNowMs();
+  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+    ? currentMinuteStartMs
+    : Math.floor(now / 60000) * 60000;
+
+  const msInMinute = ((now - minuteStart) % 60000 + 60000) % 60000;
+  const sec = Math.floor(msInMinute / 1000);
+
+  if (sec < 15) return "0-15s";
+  if (sec < 30) return "15-30s";
+  if (sec < 45) return "30-45s";
+  return "45-60s";
+};
+
+var fmtRemaining = globalThis.fmtRemaining || function (ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(s / 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h > 0) return `${h}h ${mm}m`;
+  return `${mm}m`;
+};
+
+var isTradeLockedNow = globalThis.isTradeLockedNow || function () {
+  const now = Date.now();
+  return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
+};
+
+var saveDiscipline = globalThis.saveDiscipline || function () {
+  try {
+    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
+    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
+    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
+    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
+    localStorage.setItem(DISCIPLINE_PENDING_CONTRACTS_KEY, JSON.stringify(disciplinePendingContracts || []));
+  } catch {}
+};
+
+var loadDiscipline = globalThis.loadDiscipline || function () {
+  try {
+    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
+    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
+    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
+    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
+
+    const raw = localStorage.getItem(DISCIPLINE_PENDING_CONTRACTS_KEY) || "[]";
+    const arr = JSON.parse(raw);
+    disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
+  } catch {
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    disciplineLockUntilMs = 0;
+    disciplinePendingContracts = [];
+  }
+};
+
+var addPendingContract = globalThis.addPendingContract || function (cid) {
+  if (!cid) return;
+  const s = String(cid);
+  if (!Array.isArray(disciplinePendingContracts)) disciplinePendingContracts = [];
+  if (!disciplinePendingContracts.includes(s)) {
+    disciplinePendingContracts.push(s);
+    saveDiscipline();
+  }
+};
+
+var removePendingContract = globalThis.removePendingContract || function (cid) {
+  if (!cid) return;
+  const s = String(cid);
+  disciplinePendingContracts = (disciplinePendingContracts || []).filter((x) => String(x) !== s);
+  saveDiscipline();
+};
+
+var disciplineTagText = globalThis.disciplineTagText || function () {
+  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+  }
+
+  if (isTradeLockedNow()) {
+    const remain = disciplineLockUntilMs - Date.now();
+    return `🔒 BLOQUEADO ${fmtRemaining(remain)} (${disciplineWins}W/${disciplineLosses}L)`;
+  }
+
+  const pend = (disciplinePendingContracts || []).length;
+  const pTxt = pend ? ` • Pendientes:${pend}` : "";
+  return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
+};
+
+var updateDisciplineLockUI = globalThis.updateDisciplineLockUI || function (forceToast) {
+  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    if (forceToast && typeof toast === "function") toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
+  }
+
+  const locked = isTradeLockedNow();
+  const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
+  const candleClosed = !!modalCurrentItem && !isItemLiveMinute(modalCurrentItem);
+
+  if (typeof paintTradeButtonLocked === "function") {
+    paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
+    paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+  }
+
+  if (chartModal && !chartModal.classList.contains("hidden")) {
+    if (typeof updateModalCandleStatusUI === "function") updateModalCandleStatusUI();
+    if (typeof requestModalDraw === "function") requestModalDraw(true);
+  }
+
+  if (forceToast && typeof toast === "function") toast(disciplineTagText(), 2200);
+};
+
+var startNewDisciplineWindowIfNeeded = globalThis.startNewDisciplineWindowIfNeeded || function () {
+  updateDisciplineLockUI(false);
+  const now = Date.now();
+  if (!disciplineWindowStartMs) {
+    disciplineWindowStartMs = now;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+  }
+};
+
+var applyDisciplineOutcome = globalThis.applyDisciplineOutcome || function (isWin) {
+  updateDisciplineLockUI(false);
+  if (isTradeLockedNow()) return;
+
+  if (isWin) disciplineWins += 1;
+  else disciplineLosses += 1;
+
+  saveDiscipline();
+
+  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
+    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
+    saveDiscipline();
+    updateDisciplineLockUI(true);
+    return;
+  }
+
+  if (typeof toast === "function") {
+    toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
+  }
+  updateDisciplineLockUI(false);
+};
+
 loadLowPowerMode();
 loadAutoOpenChartSetting();
 loadDiscipline();
