@@ -2,25 +2,35 @@
 // ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 40/45 (según config) — NORMAL queda igual
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
-// ✅ FIX Disciplina: feedback visual (candado + “polarizado”) + contador visible + auto-unlock con reset
+// ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
 // ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
 // ✅ FIX NUEVO: si proposal_open_contract no manda is_sold, fallback poll y cuenta igual
 // ✅ FIX CRÍTICO: al reconectar, autoriza antes de reenganchar pendientes
 // ✅ NUEVO: cada señal muestra badge del trade: ⏳ TRADE / 🎯 ITM / 💥 OTM
-// ✅ NUEVO: pestañas: Señales | Trades | Feedback (sin pestaña Configuración; queda SOLO el engranaje)
+// ✅ NUEVO: pestañas: Señales | Trades | Práctica (Configuración queda SOLO en el engranaje)
 // ✅ NUEVO: separar historial:
-//    - Señales: STORE_KEY (borrado independiente)
-//    - Trades (journal estudio): TRADES_STORE_KEY (borrado independiente)
+//    - Señales: STORE_KEY
+//    - Trades (journal estudio): TRADES_STORE_KEY
 // ✅ NUEVO: Exportar Trades (journal) desde Configuración
 // ✅ FIX IMPORTANTE (NEXT): la próxima vela (NEXT) se calcula por CIERRE de la vela siguiente vs CIERRE de la vela de señal
 // ✅ FIX UI Trades: se ve igual que Señales y SIN voto/comentario en Trades
-// ✅ NUEVO UX: botones de borrar por pestaña (Señales/Trades) en la UI, NO en el modal Config
-// ✅ FIX (este update): el botón 🗑️ Borrar Trades ya NO desaparece (tradesActions fijo + render limpia solo tradesList)
-// ✅ FIX (este update): GIRO/NORMAL ya no calculan NEXT por color; confirman con close(signal) vs close(next) vía ticks_history
-// ✅ FIX (este update): evita crash "Cannot read properties of null (reading 'ticks')" en requestModalDraw (race al cerrar modal)
-// ✅ NUEVO: modal muestra "VELA ABIERTA | faltan XXs" y bloquea COMPRAR / VENDER cuando la vela ya cerró
+// ✅ NUEVO UX: botones de borrar por pestaña en la UI, no en el modal Config
+// ✅ NUEVO: guardar señales manualmente al pool de práctica con botón 💾
+// ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
 
 "use strict";
+
+/*
+  Mapa rápido de módulos:
+  1) Config y estado global
+  2) Persistencia y journal
+  3) UI general / modales / tabs
+  4) Práctica
+  5) Trading demo + AUTO HL
+  6) Deriv WS + ticks_history
+  7) Evaluación NORMAL / GIRO
+  8) Inicialización
+*/
 
 /* =========================
    Config
@@ -353,7 +363,7 @@ function setTradeBadge(item, badge /* 'PENDING'|'ITM'|'OTM'|'' */, extra = {}) {
 }
 
 /* =========================
-   DOM helpers
+   UI base / DOM helpers
 ========================= */
 const $ = (id) => document.getElementById(id);
 const qsAll = (sel) => Array.from(document.querySelectorAll(sel));
@@ -1301,7 +1311,7 @@ function initWakeButton() {
 }
 
 /* =========================
-   Persistencia (history señales)
+   Persistencia: señales
 ========================= */
 function loadHistory() {
   try {
@@ -3932,7 +3942,7 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
 }
 
 /* =========================
-   DEMO 1-click trade + tracking outcome
+   Trading demo + tracking de outcome
 ========================= */
 function getDerivToken() {
   try {
@@ -5098,7 +5108,7 @@ function addSignal(minute, symbol, direction, ticks) {
 }
 
 /* =========================
-   WebSocket
+   WebSocket Deriv
 ========================= */
 function connect() {
   try {
@@ -5315,7 +5325,7 @@ if (practiceCanvas) {
 }
 
 /* =========================
-   Start
+   Inicialización
 ========================= */
 loadLowPowerMode();
 loadAutoOpenChartSetting();
