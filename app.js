@@ -153,6 +153,12 @@ function saveTradesJournal(arr) {
 }
 let tradesJournal = loadTradesJournal();
 
+const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
+
+function getModeVersion(mode) {
+  return String(mode || "").toUpperCase() === "GIRO" ? GIRO_LOGIC_VERSION : "";
+}
+
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
 function loadPracticeSavedSignals() {
   try {
@@ -185,6 +191,7 @@ function normalizePracticeSavedSignal(item) {
     symbol: String(item.symbol || ""),
     direction: String(item.direction || ""),
     mode: String(item.mode || "NORMAL").toUpperCase(),
+    mode_version: String(item.mode_version || item.giro_version || getModeVersion(item.mode || "NORMAL") || ""),
     nextOutcome: String(item.nextOutcome || ""),
     minuteComplete: !!item.minuteComplete,
     trade: item.trade && typeof item.trade === "object" ? { ...item.trade } : null,
@@ -214,6 +221,7 @@ function buildPracticeSavedSnapshotFromItem(item) {
     symbol: item.symbol,
     direction: item.direction,
     mode: item.mode || "NORMAL",
+    mode_version: item.mode_version || getModeVersion(item.mode || "NORMAL") || "",
     nextOutcome: item.nextOutcome || "",
     minuteComplete: !!item.minuteComplete,
     trade: item.trade || null,
@@ -266,6 +274,7 @@ function getMergedPracticeEntries() {
           symbol: live.symbol,
           direction: live.direction,
           mode: live.mode,
+          mode_version: live.mode_version || saved.mode_version || getModeVersion(live.mode || "NORMAL") || "",
           nextOutcome: live.nextOutcome || "",
           minuteComplete: !!live.minuteComplete,
           trade: live.trade || null,
@@ -301,6 +310,7 @@ function upsertTradeJournalFromSignal(it) {
     symbol: it.symbol,
     direction: it.direction,
     mode: it.mode,
+    mode_version: it.mode_version || getModeVersion(it.mode || "NORMAL") || "",
 
     nextOutcome: it.nextOutcome || "",
     minuteComplete: !!it.minuteComplete,
@@ -1450,6 +1460,7 @@ function renderTradesView() {
         symbol: entry.symbol,
         direction: entry.direction,
         mode: entry.mode || "NORMAL",
+        mode_version: entry.mode_version || getModeVersion(entry.mode || "NORMAL") || "",
         vote: "",
         comment: "",
         ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
@@ -1719,11 +1730,10 @@ function normalizePracticeEntryMode(mode) {
 function isStrictGiroPracticeEntry(entry) {
   if (!entry) return false;
   const mode = normalizePracticeEntryMode(entry.mode);
-  const idText = `${String(entry.id || "")} ${String(entry.journal_id || "")}`.toUpperCase();
-  // Práctica GIRO debe aceptar SOLO operaciones guardadas explícitamente como GIRO.
-  // Si el registro conserva ESCALERA/FUERTE/NORMAL en id o journal, queda afuera.
-  if (idText.includes("ESCALERA") || idText.includes("FUERTE") || idText.includes("NORMAL")) return false;
-  return mode === "GIRO";
+  if (mode !== "GIRO") return false;
+
+  const version = String(entry.mode_version || entry.giro_version || "");
+  return version === GIRO_LOGIC_VERSION;
 }
 
 function loadPracticeFilterMode() {
@@ -2643,6 +2653,7 @@ function buildExportPayloadVoted() {
       symbol: it.symbol,
       direction: it.direction,
       mode: it.mode,
+      mode_version: it.mode_version || getModeVersion(it.mode || "NORMAL") || "",
       vote: it.vote,
       comment: it.comment || "",
       nextOutcome: it.nextOutcome || "",
@@ -2714,6 +2725,7 @@ function buildExportPayloadTrades() {
       symbol: t.symbol,
       direction: t.direction,
       mode: t.mode,
+      mode_version: t.mode_version || getModeVersion(t.mode || "NORMAL") || "",
       nextOutcome: t.nextOutcome || "",
       trade: t.trade || null,
       ticks: Array.isArray(t.ticks) ? t.ticks : [],
@@ -4814,22 +4826,28 @@ function passesTechnicalFilters(best, vol, rules) {
    - CALL = vela sigue roja, pero el comprador ya gana mando interno
 ========================= */
 const RULES_GIRO = {
-  wholeDirRatioMin: 0.44,
-  wholeDirRatioMax: 0.83,
-  bodyVsRangeMin: 0.10,
+  baseScoreMin: 0.0105,
+  bodyVsRangeMin: 0.08,
+  wholeDirRatioMin: 0.38,
+  wholeDirRatioMax: 0.82,
 
-  lateOppRatioMin: 0.49,
-  lateAgainstMinFracTotal: 0.07,
-  last8AgainstMinFracTotal: 0.03,
+  leadMoveMinFracRange: 0.30,
+  earlyDriveMinFracTotal: 0.16,
 
-  counterAttackMinFracTotal: 0.08,
-  counterAttackMaxFracTotal: 0.92,
+  lateOppRatioMin: 0.42,
+  lateAgainstMinFracTotal: 0.04,
+  last8AgainstMinFracTotal: 0.02,
 
-  responseVsAttackMax: 0.96,
+  counterAttackMinFracTotal: 0.05,
+  counterAttackMaxFracTotal: 0.98,
 
-  irregularityMin: 0.08,
+  responseVsAttackMax: 1.18,
+  reclaimFromExtremeMinFracRange: 0.05,
 
-  oppositeStepCountMax: 5,
+  irregularityMin: 0.09,
+  oppositeLateControlMin: 0.52,
+  dominantReduceMax: 1.12,
+  minOppStepsSecondHalf: 2,
 };
 
 function segmentMoveSigned(ticks, aMs, bMs, dirSign) {
@@ -4849,7 +4867,7 @@ function coeffVar(arr) {
 }
 
 function buildGiroCheckpoints(evalMs) {
-  return [...new Set([0, 8000, 16000, 24000, 30000, 35000, 40000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+  return [...new Set([0, 7000, 14000, 21000, 28000, 35000, 40000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
 }
 
 function computeWeakResponseAfterCounter(ticks, dirSign, fromMs, toMs) {
@@ -4882,24 +4900,79 @@ function computeWeakResponseAfterCounter(ticks, dirSign, fromMs, toMs) {
   };
 }
 
+function average(nums) {
+  const vals = (nums || []).filter((x) => Number.isFinite(x));
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+}
+
+function getDirectionalLeadFromStart(p0, minP, maxP, dirSign) {
+  return dirSign > 0 ? Math.max(0, maxP - p0) : Math.max(0, p0 - minP);
+}
+
+function getReclaimFromExtremeToClose(pClose, minP, maxP, dirSign) {
+  return dirSign > 0 ? Math.max(0, maxP - pClose) : Math.max(0, pClose - minP);
+}
+
+function buildStepStrengthSummary(stepMoves, dirSign, splitIndex) {
+  const dominantSteps = [];
+  const dominantStepsLate = [];
+  const dominantStepsEarly = [];
+  const oppositeStepsLate = [];
+  let oppositeLateSum = 0;
+  let dominantLateSum = 0;
+
+  for (let i = 0; i < stepMoves.length; i++) {
+    const raw = Number(stepMoves[i] || 0);
+    if (!Number.isFinite(raw) || Math.abs(raw) < 1e-12) continue;
+    const abs = Math.abs(raw);
+    const isDominant = Math.sign(raw) === dirSign;
+    const isLate = i >= splitIndex;
+
+    if (isDominant) {
+      dominantSteps.push(abs);
+      if (isLate) {
+        dominantStepsLate.push(abs);
+        dominantLateSum += abs;
+      } else {
+        dominantStepsEarly.push(abs);
+      }
+    } else if (isLate) {
+      oppositeStepsLate.push(abs);
+      oppositeLateSum += abs;
+    }
+  }
+
+  const firstDomAvg = average(dominantStepsEarly.slice(0, 2).length ? dominantStepsEarly.slice(0, 2) : dominantSteps.slice(0, 2));
+  const lastDomAvg = average(dominantStepsLate.slice(-2).length ? dominantStepsLate.slice(-2) : dominantSteps.slice(-2));
+  const oppositeLateControl = oppositeLateSum / (dominantLateSum + 1e-12);
+
+  return {
+    dominantSteps,
+    dominantStepsEarly,
+    dominantStepsLate,
+    oppositeStepsLate,
+    firstDomAvg,
+    lastDomAvg,
+    oppositeLateControl,
+  };
+}
+
 function detectGiroPattern(candidate) {
   const ticks = candidate?.ticks || [];
   const evalMs = EVAL_SEC * 1000;
   if (ticks.length < 6) return null;
-
-  // 1) base NORMAL primero
-  if (candidate.score < RULES_NORMAL.scoreMin * 0.72) return null;
+  if (candidate.score < RULES_GIRO.baseScoreMin) return null;
 
   const p0 = getPriceAtMs(ticks, 0);
+  const p15 = getPriceAtMs(ticks, 15000);
   const p30 = getPriceAtMs(ticks, 30000);
   const pE = getPriceAtMs(ticks, evalMs);
-  if (p0 == null || p30 == null || pE == null) return null;
+  if (p0 == null || p15 == null || p30 == null || pE == null) return null;
 
   const totalMove = pE - p0;
   const dirSign = Math.sign(totalMove);
   if (!dirSign) return null;
 
-  const absTotal = Math.abs(totalMove);
   const fullTicks = sliceTicks(ticks, 0, evalMs);
   if (fullTicks.length < 4) return null;
 
@@ -4907,22 +4980,31 @@ function detectGiroPattern(candidate) {
   const minP = Math.min(...qs);
   const maxP = Math.max(...qs);
   const range = Math.max(1e-12, maxP - minP);
+  const absTotal = Math.abs(totalMove);
 
-  // color/cuerpo actual debe seguir siendo del lado dominante
+  // 1) la vela todavía mantiene su color al momento de la señal
   const bodyVsRange = absTotal / range;
   if (bodyVsRange < RULES_GIRO.bodyVsRangeMin) return null;
 
+  // 2) hubo avance real del lado dominante, pero no debe ser una continuidad demasiado limpia
   const wholeDirRatio = directionalRatio(fullTicks, dirSign);
   if (wholeDirRatio < RULES_GIRO.wholeDirRatioMin) return null;
   if (wholeDirRatio > RULES_GIRO.wholeDirRatioMax) return null;
 
-  // 2) presión contraria al final
-  const lateStartMs = Math.max(0, evalMs - 12000);
-  const last8StartMs = Math.max(0, evalMs - 8000);
+  const leadMove = getDirectionalLeadFromStart(p0, minP, maxP, dirSign);
+  if (leadMove < range * RULES_GIRO.leadMoveMinFracRange) return null;
 
+  const earlyDrive = Math.max(
+    segmentMoveSigned(ticks, 0, 15000, dirSign),
+    segmentMoveSigned(ticks, 0, 30000, dirSign)
+  );
+  if (earlyDrive < absTotal * RULES_GIRO.earlyDriveMinFracTotal) return null;
+
+  // 3) presión contraria al final: el grupo opuesto ya empieza a tomar control interno
+  const lateStartMs = Math.max(0, evalMs - 14000);
+  const last8StartMs = Math.max(0, evalMs - 8000);
   const lateTicks = sliceTicks(ticks, lateStartMs, evalMs);
   const lateOppRatio = directionalRatio(lateTicks, -dirSign);
-
   const lateAgainstMove = segmentMoveSigned(ticks, lateStartMs, evalMs, -dirSign);
   const last8AgainstMove = segmentMoveSigned(ticks, last8StartMs, evalMs, -dirSign);
 
@@ -4930,16 +5012,23 @@ function detectGiroPattern(candidate) {
   if (lateAgainstMove < absTotal * RULES_GIRO.lateAgainstMinFracTotal) return null;
   if (last8AgainstMove < absTotal * RULES_GIRO.last8AgainstMinFracTotal) return null;
 
-  // 3) ataque contrario profundo, pero sin destruir toda la vela
-  const attackFrom30 = oppositeAttackDepth(sliceTicks(ticks, 30000, evalMs), dirSign, p30);
-  if (attackFrom30 < absTotal * RULES_GIRO.counterAttackMinFracTotal) return null;
-  if (attackFrom30 > absTotal * RULES_GIRO.counterAttackMaxFracTotal) return null;
+  // 4) ataque contrario con recorrido, pero sin destruir del todo el color actual
+  const counterAnchorMs = Math.max(12000, Math.min(30000, evalMs - 12000));
+  const counterAnchorPrice = getPriceAtMs(ticks, counterAnchorMs);
+  if (counterAnchorPrice == null) return null;
+  const attackFromAnchor = oppositeAttackDepth(sliceTicks(ticks, counterAnchorMs, evalMs), dirSign, counterAnchorPrice);
+  if (attackFromAnchor < absTotal * RULES_GIRO.counterAttackMinFracTotal) return null;
+  if (attackFromAnchor > absTotal * RULES_GIRO.counterAttackMaxFracTotal) return null;
 
-  // 4) respuesta del lado dominante floja
-  const weakResp = computeWeakResponseAfterCounter(ticks, dirSign, 30000, evalMs);
+  // 5) la respuesta del dominante es más débil que ese ataque contrario
+  const weakResp = computeWeakResponseAfterCounter(ticks, dirSign, counterAnchorMs, evalMs);
   if (weakResp.ratio > RULES_GIRO.responseVsAttackMax) return null;
 
-  // 5) avances irregulares del lado dominante
+  // 6) el cierre ya queda relativamente lejos del extremo a favor del dominante
+  const reclaimFromExtreme = getReclaimFromExtremeToClose(pE, minP, maxP, dirSign);
+  if (reclaimFromExtreme < range * RULES_GIRO.reclaimFromExtremeMinFracRange) return null;
+
+  // 7) el avance dominante tiene que ser irregular y el tramo final debe quedar más pesado del lado contrario
   const cps = buildGiroCheckpoints(evalMs);
   const stepMoves = [];
   for (let i = 1; i < cps.length; i++) {
@@ -4949,28 +5038,29 @@ function detectGiroPattern(candidate) {
     stepMoves.push(b - a);
   }
 
-  const dominantSteps = [];
-  let oppositeStepCount = 0;
+  const splitIndex = Math.max(1, Math.floor(stepMoves.length / 2));
+  const summary = buildStepStrengthSummary(stepMoves, dirSign, splitIndex);
+  const irregularity = coeffVar(summary.dominantSteps);
+  const dominantReduce = summary.firstDomAvg > 1e-12 ? summary.lastDomAvg / summary.firstDomAvg : 999;
 
-  for (const raw of stepMoves) {
-    if (Math.abs(raw) < 1e-12) continue;
-    if (Math.sign(raw) === dirSign) dominantSteps.push(Math.abs(raw));
-    else oppositeStepCount++;
-  }
-
-  const irregularity = coeffVar(dominantSteps);
   if (irregularity < RULES_GIRO.irregularityMin) return null;
-  if (oppositeStepCount > RULES_GIRO.oppositeStepCountMax) return null;
+  if (summary.oppositeLateControl < RULES_GIRO.oppositeLateControlMin) return null;
+  if (dominantReduce > RULES_GIRO.dominantReduceMax) return null;
+  if (summary.oppositeStepsLate.length < RULES_GIRO.minOppStepsSecondHalf) return null;
 
-  // señal de giro = operar EN CONTRA del color actual
+  const quality =
+    lateOppRatio * 100 +
+    (attackFromAnchor / (absTotal || 1e-9)) * 24 +
+    (1 - Math.min(1.35, weakResp.ratio)) * 22 +
+    Math.min(1.4, summary.oppositeLateControl) * 18 +
+    irregularity * 16 +
+    (reclaimFromExtreme / range) * 12 -
+    Math.max(0, dominantReduce - 1) * 10;
+
   return {
     direction: dirSign > 0 ? "PUT" : "CALL",
-    quality:
-      (lateOppRatio * 100) +
-      (attackFrom30 / (absTotal || 1e-9)) * 28 +
-      (1 - Math.min(1, weakResp.ratio)) * 24 +
-      irregularity * 18 -
-      oppositeStepCount * 4,
+    quality,
+    giroScore: quality,
   };
 }
 
@@ -5063,6 +5153,7 @@ function addSignal(minute, symbol, direction, ticks) {
     symbol,
     direction,
     mode: modeLabel,
+    mode_version: getModeVersion(modeLabel),
     vote: "",
     comment: "",
     ticks: Array.isArray(ticks) ? ticks.slice() : [],
