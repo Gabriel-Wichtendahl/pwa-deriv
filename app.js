@@ -153,10 +153,60 @@ function saveTradesJournal(arr) {
 }
 let tradesJournal = loadTradesJournal();
 
-const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
+const MODE_NORMAL = "NORMAL";
+const MODE_GIRO = "GIRO";
+const MODE_GIRO_FLEX = "GIRO FLEX";
+const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
+const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
+const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
+
+function normalizeSignalMode(mode) {
+  const m = String(mode || "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (m === MODE_GIRO || m === "MODO GIRO") return MODE_GIRO;
+  if (m === MODE_GIRO_FLEX || m === "GIRO FLEXIBLE" || m === "MODO GIRO FLEX" || m === "MODO GIRO FLEXIBLE") return MODE_GIRO_FLEX;
+  return MODE_NORMAL;
+}
+function isGiroFamilyMode(mode) {
+  const m = normalizeSignalMode(mode);
+  return m === MODE_GIRO || m === MODE_GIRO_FLEX;
+}
 function getModeVersion(mode) {
-  return String(mode || "").toUpperCase() === "GIRO" ? GIRO_LOGIC_VERSION : "";
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_GIRO) return GIRO_LOGIC_VERSION;
+  if (m === MODE_GIRO_FLEX) return GIRO_FLEX_LOGIC_VERSION;
+  return "";
+}
+function loadAnalysisMode() {
+  try {
+    const saved = localStorage.getItem(ANALYSIS_MODE_KEY);
+    if (saved != null) return normalizeSignalMode(saved);
+
+    const legacyGiro = loadBool("giroMode", false) || loadBool("strongMode", false);
+    return legacyGiro ? MODE_GIRO : MODE_NORMAL;
+  } catch {
+    return MODE_NORMAL;
+  }
+}
+function saveAnalysisMode(mode) {
+  const safe = normalizeSignalMode(mode);
+  try {
+    localStorage.setItem(ANALYSIS_MODE_KEY, safe);
+    saveBool("giroMode", safe !== MODE_NORMAL);
+    saveBool("strongMode", false);
+  } catch {}
+}
+function getModeBtnLabel(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_GIRO) return "🟥 Modo GIRO";
+  if (m === MODE_GIRO_FLEX) return "🟧 Modo GIRO FLEX";
+  return "🟦 Modo NORMAL";
+}
+function nextSignalMode(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_NORMAL) return MODE_GIRO;
+  if (m === MODE_GIRO) return MODE_GIRO_FLEX;
+  return MODE_NORMAL;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -190,7 +240,7 @@ function normalizePracticeSavedSignal(item) {
     time: String(item.time || ""),
     symbol: String(item.symbol || ""),
     direction: String(item.direction || ""),
-    mode: String(item.mode || "NORMAL").toUpperCase(),
+    mode: normalizeSignalMode(item.mode || MODE_NORMAL),
     mode_version: String(item.mode_version || item.giro_version || getModeVersion(item.mode || "NORMAL") || ""),
     nextOutcome: String(item.nextOutcome || ""),
     minuteComplete: !!item.minuteComplete,
@@ -548,8 +598,8 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 
-// Estado principal: NORMAL vs GIRO
-let giroMode = false;
+// Estado principal: NORMAL vs GIRO vs GIRO FLEX
+let signalMode = MODE_NORMAL;
 
 let history = loadHistory();
 migrateHistoryModesToGiro();
@@ -586,7 +636,9 @@ function migrateHistoryModesToGiro() {
       if (!it.mode) continue;
       // No convertir ESCALERA/FUERTE a GIRO.
       // Solo normalizamos mayúsculas básicas si hace falta.
-      const m = String(it.mode).toUpperCase();
+      const raw = String(it.mode || "");
+      const normalizedFamily = normalizeSignalMode(raw);
+      const m = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(raw) ? normalizedFamily : raw.toUpperCase();
       if (m !== it.mode) {
         it.mode = m;
         changed = true;
@@ -1065,18 +1117,18 @@ function getItemCurrentBodyPrice(item) {
   return null;
 }
 function getGiroAllowedTradeSide(item) {
-  const mode = String(item?.mode || '').toUpperCase();
-  if (mode !== 'GIRO') return { active: false, allowedSide: null, bodyDir: 0, open: null, current: null };
+  const mode = normalizeSignalMode(item?.mode);
+  if (!isGiroFamilyMode(mode)) return { active: false, allowedSide: null, bodyDir: 0, open: null, current: null, mode };
 
   const open = getItemMinuteOpenPrice(item);
   const current = getItemCurrentBodyPrice(item);
   if (!Number.isFinite(open) || !Number.isFinite(current)) {
-    return { active: true, allowedSide: null, bodyDir: 0, open, current };
+    return { active: true, allowedSide: null, bodyDir: 0, open, current, mode };
   }
 
   const bodyDir = current > open ? 1 : current < open ? -1 : 0;
   const allowedSide = bodyDir > 0 ? 'PUT' : bodyDir < 0 ? 'CALL' : null;
-  return { active: true, allowedSide, bodyDir, open, current };
+  return { active: true, allowedSide, bodyDir, open, current, mode };
 }
 function paintGiroOnlyButtonState(btn, enabled, reason) {
   if (!btn) return;
@@ -1730,10 +1782,11 @@ function normalizePracticeEntryMode(mode) {
 function isStrictGiroPracticeEntry(entry) {
   if (!entry) return false;
   const mode = normalizePracticeEntryMode(entry.mode);
-  if (mode !== "GIRO") return false;
-
   const version = String(entry.mode_version || entry.giro_version || "");
-  return version === GIRO_LOGIC_VERSION;
+
+  if (mode === MODE_GIRO) return version === GIRO_LOGIC_VERSION;
+  if (mode === MODE_GIRO_FLEX) return version === GIRO_FLEX_LOGIC_VERSION;
+  return false;
 }
 
 function loadPracticeFilterMode() {
@@ -2848,33 +2901,25 @@ function applyTheme(theme) {
       })
   );
 
-  // GIRO (mantiene compatibilidad con estados viejos una sola vez)
-  const hasGiroKey = localStorage.getItem("giroMode") !== null;
-  giroMode = loadBool("giroMode", false);
-
-  if (!hasGiroKey) {
-    giroMode = loadBool("giroMode", false) || loadBool("strongMode", false);
-    saveBool("giroMode", giroMode);
-  }
+  signalMode = loadAnalysisMode();
+  saveAnalysisMode(signalMode);
 
   const paintMode = () => {
     if (!modeBtn) return;
-    modeBtn.textContent = giroMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL";
-    modeBtn.classList.toggle("active-strong", giroMode);
+    const isSpecial = signalMode !== MODE_NORMAL;
+    modeBtn.textContent = getModeBtnLabel(signalMode);
+    modeBtn.classList.toggle("active-strong", isSpecial);
+    modeBtn.classList.toggle("active", isSpecial);
+    modeBtn.title = "Tocá para alternar entre NORMAL, GIRO y GIRO FLEX.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      giroMode = !giroMode;
-      saveBool("giroMode", giroMode);
-
-      // compat vieja: apagamos flags anteriores
-      saveBool("giroMode", false);
-      saveBool("strongMode", false);
-
+      signalMode = nextSignalMode(signalMode);
+      saveAnalysisMode(signalMode);
       paintMode();
-      toast(giroMode ? "🟥 Modo GIRO" : "🟦 Modo NORMAL", 1600);
+      toast(getModeBtnLabel(signalMode), 1600);
     };
 })();
 
@@ -3874,7 +3919,11 @@ function renderHistory() {
 
   for (const it of history || []) {
     if (!it.mode) it.mode = "NORMAL";
-    else it.mode = String(it.mode).toUpperCase();
+    else {
+      const rawMode = String(it.mode || "");
+      const normalizedFamily = normalizeSignalMode(rawMode);
+      it.mode = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(rawMode) ? normalizedFamily : rawMode.toUpperCase();
+    }
   }
   saveHistory(history);
 
@@ -4687,8 +4736,8 @@ function onTick(tick) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
 
-    // En GIRO no hay retry: evalúa solo en el segundo elegido
-    if (!ok && !giroMode) scheduleRetry(minute);
+    // En GIRO / GIRO FLEX no hay retry: evalúan solo en el segundo elegido
+    if (!ok && signalMode === MODE_NORMAL) scheduleRetry(minute);
   }
 }
 function scheduleRetry(minute) {
@@ -4848,6 +4897,33 @@ const RULES_GIRO = {
   oppositeLateControlMin: 0.52,
   dominantReduceMax: 1.12,
   minOppStepsSecondHalf: 2,
+  qualityBias: 1.0,
+};
+
+const RULES_GIRO_FLEX = {
+  baseScoreMin: 0.0088,
+  bodyVsRangeMin: 0.06,
+  wholeDirRatioMin: 0.34,
+  wholeDirRatioMax: 0.86,
+
+  leadMoveMinFracRange: 0.24,
+  earlyDriveMinFracTotal: 0.12,
+
+  lateOppRatioMin: 0.38,
+  lateAgainstMinFracTotal: 0.03,
+  last8AgainstMinFracTotal: 0.012,
+
+  counterAttackMinFracTotal: 0.035,
+  counterAttackMaxFracTotal: 1.08,
+
+  responseVsAttackMax: 1.32,
+  reclaimFromExtremeMinFracRange: 0.035,
+
+  irregularityMin: 0.055,
+  oppositeLateControlMin: 0.42,
+  dominantReduceMax: 1.26,
+  minOppStepsSecondHalf: 1,
+  qualityBias: 0.92,
 };
 
 function segmentMoveSigned(ticks, aMs, bMs, dirSign) {
@@ -4957,11 +5033,11 @@ function buildStepStrengthSummary(stepMoves, dirSign, splitIndex) {
   };
 }
 
-function detectGiroPattern(candidate) {
+function detectGiroPatternWithRules(candidate, rules) {
   const ticks = candidate?.ticks || [];
   const evalMs = EVAL_SEC * 1000;
   if (ticks.length < 6) return null;
-  if (candidate.score < RULES_GIRO.baseScoreMin) return null;
+  if (candidate.score < rules.baseScoreMin) return null;
 
   const p0 = getPriceAtMs(ticks, 0);
   const p15 = getPriceAtMs(ticks, 15000);
@@ -4982,25 +5058,22 @@ function detectGiroPattern(candidate) {
   const range = Math.max(1e-12, maxP - minP);
   const absTotal = Math.abs(totalMove);
 
-  // 1) la vela todavía mantiene su color al momento de la señal
   const bodyVsRange = absTotal / range;
-  if (bodyVsRange < RULES_GIRO.bodyVsRangeMin) return null;
+  if (bodyVsRange < rules.bodyVsRangeMin) return null;
 
-  // 2) hubo avance real del lado dominante, pero no debe ser una continuidad demasiado limpia
   const wholeDirRatio = directionalRatio(fullTicks, dirSign);
-  if (wholeDirRatio < RULES_GIRO.wholeDirRatioMin) return null;
-  if (wholeDirRatio > RULES_GIRO.wholeDirRatioMax) return null;
+  if (wholeDirRatio < rules.wholeDirRatioMin) return null;
+  if (wholeDirRatio > rules.wholeDirRatioMax) return null;
 
   const leadMove = getDirectionalLeadFromStart(p0, minP, maxP, dirSign);
-  if (leadMove < range * RULES_GIRO.leadMoveMinFracRange) return null;
+  if (leadMove < range * rules.leadMoveMinFracRange) return null;
 
   const earlyDrive = Math.max(
     segmentMoveSigned(ticks, 0, 15000, dirSign),
     segmentMoveSigned(ticks, 0, 30000, dirSign)
   );
-  if (earlyDrive < absTotal * RULES_GIRO.earlyDriveMinFracTotal) return null;
+  if (earlyDrive < absTotal * rules.earlyDriveMinFracTotal) return null;
 
-  // 3) presión contraria al final: el grupo opuesto ya empieza a tomar control interno
   const lateStartMs = Math.max(0, evalMs - 14000);
   const last8StartMs = Math.max(0, evalMs - 8000);
   const lateTicks = sliceTicks(ticks, lateStartMs, evalMs);
@@ -5008,27 +5081,23 @@ function detectGiroPattern(candidate) {
   const lateAgainstMove = segmentMoveSigned(ticks, lateStartMs, evalMs, -dirSign);
   const last8AgainstMove = segmentMoveSigned(ticks, last8StartMs, evalMs, -dirSign);
 
-  if (lateOppRatio < RULES_GIRO.lateOppRatioMin) return null;
-  if (lateAgainstMove < absTotal * RULES_GIRO.lateAgainstMinFracTotal) return null;
-  if (last8AgainstMove < absTotal * RULES_GIRO.last8AgainstMinFracTotal) return null;
+  if (lateOppRatio < rules.lateOppRatioMin) return null;
+  if (lateAgainstMove < absTotal * rules.lateAgainstMinFracTotal) return null;
+  if (last8AgainstMove < absTotal * rules.last8AgainstMinFracTotal) return null;
 
-  // 4) ataque contrario con recorrido, pero sin destruir del todo el color actual
   const counterAnchorMs = Math.max(12000, Math.min(30000, evalMs - 12000));
   const counterAnchorPrice = getPriceAtMs(ticks, counterAnchorMs);
   if (counterAnchorPrice == null) return null;
   const attackFromAnchor = oppositeAttackDepth(sliceTicks(ticks, counterAnchorMs, evalMs), dirSign, counterAnchorPrice);
-  if (attackFromAnchor < absTotal * RULES_GIRO.counterAttackMinFracTotal) return null;
-  if (attackFromAnchor > absTotal * RULES_GIRO.counterAttackMaxFracTotal) return null;
+  if (attackFromAnchor < absTotal * rules.counterAttackMinFracTotal) return null;
+  if (attackFromAnchor > absTotal * rules.counterAttackMaxFracTotal) return null;
 
-  // 5) la respuesta del dominante es más débil que ese ataque contrario
   const weakResp = computeWeakResponseAfterCounter(ticks, dirSign, counterAnchorMs, evalMs);
-  if (weakResp.ratio > RULES_GIRO.responseVsAttackMax) return null;
+  if (weakResp.ratio > rules.responseVsAttackMax) return null;
 
-  // 6) el cierre ya queda relativamente lejos del extremo a favor del dominante
   const reclaimFromExtreme = getReclaimFromExtremeToClose(pE, minP, maxP, dirSign);
-  if (reclaimFromExtreme < range * RULES_GIRO.reclaimFromExtremeMinFracRange) return null;
+  if (reclaimFromExtreme < range * rules.reclaimFromExtremeMinFracRange) return null;
 
-  // 7) el avance dominante tiene que ser irregular y el tramo final debe quedar más pesado del lado contrario
   const cps = buildGiroCheckpoints(evalMs);
   const stepMoves = [];
   for (let i = 1; i < cps.length; i++) {
@@ -5043,10 +5112,10 @@ function detectGiroPattern(candidate) {
   const irregularity = coeffVar(summary.dominantSteps);
   const dominantReduce = summary.firstDomAvg > 1e-12 ? summary.lastDomAvg / summary.firstDomAvg : 999;
 
-  if (irregularity < RULES_GIRO.irregularityMin) return null;
-  if (summary.oppositeLateControl < RULES_GIRO.oppositeLateControlMin) return null;
-  if (dominantReduce > RULES_GIRO.dominantReduceMax) return null;
-  if (summary.oppositeStepsLate.length < RULES_GIRO.minOppStepsSecondHalf) return null;
+  if (irregularity < rules.irregularityMin) return null;
+  if (summary.oppositeLateControl < rules.oppositeLateControlMin) return null;
+  if (dominantReduce > rules.dominantReduceMax) return null;
+  if (summary.oppositeStepsLate.length < rules.minOppStepsSecondHalf) return null;
 
   const quality =
     lateOppRatio * 100 +
@@ -5059,14 +5128,23 @@ function detectGiroPattern(candidate) {
 
   return {
     direction: dirSign > 0 ? "PUT" : "CALL",
-    quality,
+    quality: quality * Number(rules.qualityBias || 1),
     giroScore: quality,
   };
 }
 
+function detectGiroPattern(candidate) {
+  return detectGiroPatternWithRules(candidate, RULES_GIRO);
+}
+
+function detectGiroFlexiblePattern(candidate) {
+  return detectGiroPatternWithRules(candidate, RULES_GIRO_FLEX);
+}
+
 function evaluateMinute(minute) {
+  const strictLikeMode = signalMode !== MODE_NORMAL;
   const data = minuteData[minute];
-  if (!data) return giroMode ? true : false;
+  if (!data) return strictLikeMode ? true : false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -5095,14 +5173,13 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return giroMode ? true : false;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return strictLikeMode ? true : false;
 
-  // MODO GIRO v2: base NORMAL + presión contraria real + respuesta débil del lado dominante
-  if (giroMode) {
+  if (signalMode === MODE_GIRO || signalMode === MODE_GIRO_FLEX) {
     const matches = [];
 
     for (const c of candidates) {
-      const match = detectGiroPattern(c);
+      const match = signalMode === MODE_GIRO_FLEX ? detectGiroFlexiblePattern(c) : detectGiroPattern(c);
       if (!match) continue;
 
       matches.push({
@@ -5145,9 +5222,10 @@ function fmtTimeUTC(minute) {
 }
 function addSignal(minute, symbol, direction, ticks) {
   if (areSignalsPaused()) return;
-  const modeLabel = giroMode ? "GIRO" : "NORMAL";
+  const modeLabel = normalizeSignalMode(signalMode);
+  const modeId = modeLabel.replace(/\s+/g, "_");
   const item = {
-    id: `${minute}-${symbol}-${direction}-${modeLabel}`,
+    id: `${minute}-${symbol}-${direction}-${modeId}`,
     minute,
     time: fmtTimeUTC(minute),
     symbol,
