@@ -678,12 +678,40 @@ const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 function getTokenInputEl() {
   return pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
 }
+function getTokenLabelEl() {
+  const input = getTokenInputEl();
+  if (!input) return null;
+  return document.querySelector(`label[for="${input.id}"]`);
+}
+function getStakeInputEl() {
+  return pickEl("stakeInput", "tradeStakeInput", "stakeUsdInput");
+}
+function getStakeLabelEl() {
+  const input = getStakeInputEl();
+  if (!input) return null;
+  return document.querySelector(`label[for="${input.id}"]`);
+}
 function syncTokenInputWithCurrentAccount() {
   const tokenInput = getTokenInputEl();
+  const tokenLabel = getTokenLabelEl();
+  if (tokenLabel) tokenLabel.textContent = `Token ${getTradingAccountLabel()} Deriv`;
   if (!tokenInput) return;
   tokenInput.value = getDerivToken() || "";
-  tokenInput.placeholder = `Token ${getTradingAccountLabel()}`;
+  tokenInput.placeholder = `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
   tokenInput.title = `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
+}
+function syncStakeInputWithCurrentAccount() {
+  const stakeInput = getStakeInputEl();
+  const stakeLabel = getStakeLabelEl();
+  if (stakeLabel) stakeLabel.textContent = `Stake (USD) ${getTradingAccountLabel()}`;
+  if (!stakeInput) return;
+  stakeInput.value = Number(getTradeStake()).toFixed(2);
+  stakeInput.placeholder = Number(DEFAULT_STAKE).toFixed(2);
+  stakeInput.title = `Stake en USD para la cuenta ${getTradingAccountLabel()}`;
+}
+function syncAccountScopedSettingsUI() {
+  syncTokenInputWithCurrentAccount();
+  syncStakeInputWithCurrentAccount();
 }
 function ensureTradingAccountButton() {
   let btn = pickEl("tradingAccountBtn");
@@ -707,7 +735,7 @@ function ensureTradingAccountButton() {
     saveTradingAccountMode();
     loadDiscipline();
     resetAuthState();
-    syncTokenInputWithCurrentAccount();
+    syncAccountScopedSettingsUI();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
     updateDisciplineLockUI(false);
@@ -736,13 +764,18 @@ function applyTradingAccountUI() {
 }
 function ensureTradingAccountBanner() {
   let el = document.getElementById("tradingAccountBanner");
-  if (el) return el;
+  const host =
+    (settingsModal && settingsModal.querySelector(".settingsBody")) ||
+    document.body;
+  if (el) {
+    if (el.parentElement !== host) host.prepend(el);
+    return el;
+  }
   el = document.createElement("div");
   el.id = "tradingAccountBanner";
-  el.style.position = "sticky";
-  el.style.top = "0";
-  el.style.zIndex = "9999";
-  el.style.margin = "0 0 10px 0";
+  el.style.position = "relative";
+  el.style.zIndex = "1";
+  el.style.margin = "0 0 12px 0";
   el.style.padding = "12px 14px";
   el.style.borderRadius = "14px";
   el.style.fontWeight = "900";
@@ -751,7 +784,7 @@ function ensureTradingAccountBanner() {
   el.style.textAlign = "center";
   el.style.border = "1px solid rgba(255,255,255,.14)";
   el.style.backdropFilter = "blur(6px)";
-  document.body.prepend(el);
+  host.prepend(el);
   return el;
 }
 function applyTradingAccountBannerUI() {
@@ -4499,7 +4532,7 @@ function initTokenAndStakeUI() {
   const tokenSaveBtn = pickEl("tokenSaveBtn", "saveTokenBtn", "btnSaveToken");
   const tokenClearBtn = pickEl("tokenClearBtn", "deleteTokenBtn", "btnClearToken", "btnDeleteToken");
 
-  if (tokenInput) syncTokenInputWithCurrentAccount();
+  syncAccountScopedSettingsUI();
 
   if (tokenSaveBtn && tokenInput) {
     tokenSaveBtn.onclick = () => {
@@ -4507,7 +4540,7 @@ function initTokenAndStakeUI() {
       if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
       resetAuthState();
-      syncTokenInputWithCurrentAccount();
+      syncAccountScopedSettingsUI();
       toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
       alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
     };
@@ -4517,7 +4550,7 @@ function initTokenAndStakeUI() {
     tokenClearBtn.onclick = () => {
       clearDerivToken();
       resetAuthState();
-      syncTokenInputWithCurrentAccount();
+      syncAccountScopedSettingsUI();
       toast(`🗑️ Token ${getTradingAccountLabel()} borrado ✓`, 1600);
       alert(`🗑️ Token ${getTradingAccountLabel()} borrado.`);
     };
@@ -4527,10 +4560,7 @@ function initTokenAndStakeUI() {
   const stakeSaveBtn = pickEl("stakeSaveBtn", "saveStakeBtn", "btnSaveStake");
   const stakeDefaultBtn = pickEl("stakeDefaultBtn", "defaultStakeBtn", "btnDefaultStake");
 
-  if (stakeInput) {
-    const cur = getTradeStake();
-    if (!stakeInput.value) stakeInput.value = Number(cur).toFixed(2);
-  }
+  if (stakeInput) syncStakeInputWithCurrentAccount();
 
   if (stakeSaveBtn && stakeInput) {
     stakeSaveBtn.onclick = () => {
@@ -4538,19 +4568,19 @@ function initTokenAndStakeUI() {
       if (!Number.isFinite(n) || n <= 0) return alert("Stake inválido.");
       const ok = setTradeStake(n);
       if (!ok) return alert("No se pudo guardar el stake.");
-      stakeInput.value = Number(getTradeStake()).toFixed(2);
-      toast("💾 Stake guardado ✓", 1600);
-      alert(`✅ Stake guardado: ${Number(getTradeStake()).toFixed(2)} USD`);
+      syncStakeInputWithCurrentAccount();
+      toast(`💾 Stake ${getTradingAccountLabel()} guardado ✓`, 1600);
+      alert(`✅ Stake ${getTradingAccountLabel()} guardado: ${Number(getTradeStake()).toFixed(2)} USD`);
     };
   }
 
   if (stakeDefaultBtn && stakeInput) {
     stakeDefaultBtn.onclick = () => {
       clearTradeStake();
-      stakeInput.value = Number(DEFAULT_STAKE).toFixed(2);
       setTradeStake(DEFAULT_STAKE);
-      toast("↩️ Stake default ✓", 1600);
-      alert(`↩️ Stake default: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
+      syncStakeInputWithCurrentAccount();
+      toast(`↩️ Stake default ${getTradingAccountLabel()} ✓`, 1600);
+      alert(`↩️ Stake default ${getTradingAccountLabel()}: ${Number(DEFAULT_STAKE).toFixed(2)} USD`);
     };
   }
 }
