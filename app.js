@@ -57,9 +57,13 @@ const TRADES_STORE_KEY = "derivTradesJournal_v1";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
-   DEMO Trade config
+   Trade account config
 ========================= */
-const DERIV_TOKEN_KEY = "derivDemoToken_v1"; // SOLO demo
+const ACCOUNT_MODE_KEY = "derivTradingAccountMode_v1";
+const ACCOUNT_MODE_DEMO = "demo";
+const ACCOUNT_MODE_REAL = "real";
+const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
+const DERIV_TOKEN_REAL_KEY = "derivRealToken_v1";
 const TRADE_STAKE_KEY = "tradeStake_v1";
 
 const DEFAULT_STAKE = 1; // USD
@@ -86,6 +90,7 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 5200;
 ========================= */
 const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
+let activeTradingAccount = ACCOUNT_MODE_DEMO;
 
 /* =========================
    Disciplina
@@ -665,9 +670,100 @@ const CHART_ICON_SVG = `<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
 function makeDerivTraderUrl(symbol) {
   const u = new URL(DERIV_DTRADER_TEMPLATE);
   u.searchParams.set("symbol", symbol);
+  u.searchParams.set("account", getTradingAccountQueryValue());
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+
+function getTokenInputEl() {
+  return pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
+}
+function syncTokenInputWithCurrentAccount() {
+  const tokenInput = getTokenInputEl();
+  if (!tokenInput) return;
+  tokenInput.value = getDerivToken() || "";
+  tokenInput.placeholder = `Token ${getTradingAccountLabel()}`;
+  tokenInput.title = `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
+}
+function ensureTradingAccountButton() {
+  let btn = pickEl("tradingAccountBtn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+
+    btn = document.createElement("button");
+    btn.id = "tradingAccountBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.style.gridColumn = "1 / -1";
+    host.prepend(btn);
+  }
+
+  btn.onclick = () => {
+    activeTradingAccount = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_DEMO : ACCOUNT_MODE_REAL;
+    saveTradingAccountMode();
+    resetAuthState();
+    syncTokenInputWithCurrentAccount();
+    applyTradingAccountUI();
+    applyTradingAccountBannerUI();
+    if (chartModal && !chartModal.classList.contains("hidden")) {
+      if (modalCurrentItem) {
+        modalTitle.textContent = `${modalCurrentItem.symbol} – ${labelDir(modalCurrentItem.direction)} | [${modalCurrentItem.mode || "NORMAL"}] | ${getTradeScopeText()}`;
+      }
+      updateModalCandleStatusUI();
+      requestModalDraw(true);
+    }
+    toast(`${getTradeScopeText()} activada`, 1800);
+  };
+
+  applyTradingAccountUI();
+  return btn;
+}
+function applyTradingAccountUI() {
+  const btn = pickEl("tradingAccountBtn");
+  if (!btn) return;
+  const isReal = activeTradingAccount === ACCOUNT_MODE_REAL;
+  btn.textContent = isReal ? "🔴 Cuenta REAL" : "🟢 Cuenta DEMO";
+  btn.classList.toggle("active", isReal);
+  btn.title = isReal
+    ? "Estás configurando y operando con la cuenta REAL"
+    : "Estás configurando y operando con la cuenta DEMO";
+}
+function ensureTradingAccountBanner() {
+  let el = document.getElementById("tradingAccountBanner");
+  if (el) return el;
+  el = document.createElement("div");
+  el.id = "tradingAccountBanner";
+  el.style.position = "sticky";
+  el.style.top = "0";
+  el.style.zIndex = "9999";
+  el.style.margin = "0 0 10px 0";
+  el.style.padding = "12px 14px";
+  el.style.borderRadius = "14px";
+  el.style.fontWeight = "900";
+  el.style.fontSize = "14px";
+  el.style.letterSpacing = "0.3px";
+  el.style.textAlign = "center";
+  el.style.border = "1px solid rgba(255,255,255,.14)";
+  el.style.backdropFilter = "blur(6px)";
+  document.body.prepend(el);
+  return el;
+}
+function applyTradingAccountBannerUI() {
+  const el = ensureTradingAccountBanner();
+  if (!el) return;
+  const isReal = activeTradingAccount === ACCOUNT_MODE_REAL;
+  el.style.display = isReal ? "block" : "none";
+  if (!isReal) return;
+  el.textContent = "🔴 CUENTA REAL ACTIVA — revisá stake, token y modo antes de operar";
+  el.style.color = "#fecaca";
+  el.style.background = "rgba(127,29,29,.85)";
+  el.style.borderColor = "rgba(248,113,113,.45)";
+  el.style.boxShadow = "0 8px 24px rgba(127,29,29,.22)";
+}
 
 function loadExecutionMode() {
   try {
@@ -934,7 +1030,7 @@ async function refreshExecutionPlanForSignal(item, force = false) {
 
   cache.running = (async () => {
     if (!getDerivToken()) {
-      cache.error = "Sin token DEMO";
+      cache.error = `Sin token ${getTradingAccountLabel()}`;
       return cache;
     }
     if (!ws || ws.readyState !== 1) {
@@ -1002,7 +1098,7 @@ async function ensureExecutionPlanForTrade(item, side) {
   let plan = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 2);
   if (plan) return plan;
 
-  if (!getDerivToken()) throw new Error("Sin token DEMO");
+  if (!getDerivToken()) throw new Error(`Sin token ${getTradingAccountLabel()}`);
   if (!ws || ws.readyState !== 1) throw new Error("WS desconectado");
   await ensureAuthorized();
 
@@ -1057,7 +1153,7 @@ function applyModalExecutionButtonUI(locked = false, candleClosed = false) {
     }
 
     if (!hasToken) {
-      btn.title = "No hay token DEMO guardado. Si tocás, te avisaré para guardarlo.";
+      btn.title = `No hay token ${getTradingAccountLabel()} guardado. Si tocás, te avisaré para guardarlo.`;
       return;
     }
 
@@ -1434,6 +1530,38 @@ function escapeHtml(str) {
 }
 function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
+}
+
+function getTradingAccountLabel() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL ? "REAL" : "DEMO";
+}
+function getTradingAccountIcon() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL ? "🔴" : "🟢";
+}
+function getTradingAccountTokenKey() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL ? DERIV_TOKEN_REAL_KEY : DERIV_TOKEN_DEMO_KEY;
+}
+function loadTradingAccountMode() {
+  try {
+    const saved = String(localStorage.getItem(ACCOUNT_MODE_KEY) || "").toLowerCase();
+    activeTradingAccount = saved === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
+  } catch {
+    activeTradingAccount = ACCOUNT_MODE_DEMO;
+  }
+}
+function saveTradingAccountMode() {
+  try {
+    localStorage.setItem(ACCOUNT_MODE_KEY, activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO);
+  } catch {}
+}
+function getTradingAccountQueryValue() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL ? "real" : "demo";
+}
+function getTradeScopeText() {
+  return `${getTradingAccountIcon()} ${getTradingAccountLabel()}`;
+}
+function getTradeExecutionTitle() {
+  return `Operar ${getTradingAccountLabel()} 1m`;
 }
 
 function getSignalEvalButtons() {
@@ -3275,7 +3403,7 @@ function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false)
   btn.textContent = btn.dataset.baseLabel.replace(/^🔒\s*/g, "");
   btn.style.filter = "";
   btn.style.opacity = "";
-  btn.title = "Operar DEMO 1m";
+  btn.title = getTradeExecutionTitle();
 }
 function updateModalCandleStatusUI() {
   const bar = ensureModalCandleStatusBar();
@@ -3312,7 +3440,7 @@ function updateModalCandleStatusUI() {
     bar.style.borderColor = "rgba(34,197,94,.34)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
   } else {
-    bar.textContent = "⚪ VELA CERRADA";
+    bar.textContent = `${getTradeScopeText()} | VELA CERRADA`;
     bar.style.color = "rgba(229,231,235,.95)";
     bar.style.background = "rgba(107,114,128,.20)";
     bar.style.borderColor = "rgba(156,163,175,.28)";
@@ -3365,7 +3493,7 @@ function requestModalDraw(force = false) {
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
       const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
       const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      modalSub.textContent = `${it.time} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
+      modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
     }
 
     updateModalCandleStatusUI();
@@ -3612,7 +3740,7 @@ function openChartModal(item) {
   modalCurrentItem = item;
   if (!chartModal || !modalTitle || !modalSub) return;
 
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}]`;
+  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}] | ${getTradeScopeText()}`;
 
   modalLive = isItemLiveMinute(item);
   updateModalLiveUI();
@@ -4032,23 +4160,23 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
 }
 
 /* =========================
-   Trading demo + tracking de outcome
+   Trading account + tracking de outcome
 ========================= */
 function getDerivToken() {
   try {
-    return localStorage.getItem(DERIV_TOKEN_KEY) || "";
+    return localStorage.getItem(getTradingAccountTokenKey()) || "";
   } catch {
     return "";
   }
 }
 function setDerivToken(t) {
   try {
-    localStorage.setItem(DERIV_TOKEN_KEY, t || "");
+    localStorage.setItem(getTradingAccountTokenKey(), t || "");
   } catch {}
 }
 function clearDerivToken() {
   try {
-    localStorage.removeItem(DERIV_TOKEN_KEY);
+    localStorage.removeItem(getTradingAccountTokenKey());
   } catch {}
 }
 
@@ -4171,7 +4299,7 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
 async function ensureAuthorized() {
   const token = getDerivToken();
-  if (!token) throw new Error("Sin token DEMO (cargalo en Configuración)");
+  if (!token) throw new Error(`Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
 
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
@@ -4274,7 +4402,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     subscribeContractOutcome(cid, true);
     scheduleOutcomeFallbackPoll(cid, 85000);
 
-    toast(`📌 Trade registrado (${contractLabel}). Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1800);
+    toast(`📌 ${getTradingAccountLabel()} trade registrado (${contractLabel}). Esperando resultado… (${disciplineWins}W/${disciplineLosses}L)`, 1800);
 
     updateDisciplineLockUI(false);
     return res;
@@ -4297,7 +4425,7 @@ if (modalBuyCallBtn) {
       ]);
 
       const cid = r?.buy?.contract_id || "";
-      toast(`🟢 COMPRADO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
+      toast(`🟢 ${getTradingAccountLabel()} COMPRADO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
       toast(`⚠️ Error COMPRA: ${e?.message || e}`, 2400);
     } finally {
@@ -4319,7 +4447,7 @@ if (modalBuyPutBtn) {
       ]);
 
       const cid = r?.buy?.contract_id || "";
-      toast(`🔴 VENDIDO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
+      toast(`🔴 ${getTradingAccountLabel()} VENDIDO ✓ ${cid ? "ID: " + cid : ""}`, 1800);
     } catch (e) {
       toast(`⚠️ Error VENTA: ${e?.message || e}`, 2400);
     } finally {
@@ -4333,23 +4461,24 @@ if (modalBuyPutBtn) {
    Config UI: Token + Stake
 ========================= */
 function initTokenAndStakeUI() {
+  ensureTradingAccountButton();
+  applyTradingAccountUI();
+  applyTradingAccountBannerUI();
   const tokenInput = pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
   const tokenSaveBtn = pickEl("tokenSaveBtn", "saveTokenBtn", "btnSaveToken");
   const tokenClearBtn = pickEl("tokenClearBtn", "deleteTokenBtn", "btnClearToken", "btnDeleteToken");
 
-  if (tokenInput) {
-    const cur = getDerivToken();
-    if (cur && !tokenInput.value) tokenInput.value = cur;
-  }
+  if (tokenInput) syncTokenInputWithCurrentAccount();
 
   if (tokenSaveBtn && tokenInput) {
     tokenSaveBtn.onclick = () => {
       const v = String(tokenInput.value || "").trim();
-      if (!v) return alert("Pegá un token DEMO primero.");
+      if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
       resetAuthState();
-      toast("💾 Token guardado ✓", 1600);
-      alert("✅ Token DEMO guardado.");
+      syncTokenInputWithCurrentAccount();
+      toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
+      alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
     };
   }
 
@@ -4357,9 +4486,9 @@ function initTokenAndStakeUI() {
     tokenClearBtn.onclick = () => {
       clearDerivToken();
       resetAuthState();
-      if (tokenInput) tokenInput.value = "";
-      toast("🗑️ Token borrado ✓", 1600);
-      alert("🗑️ Token DEMO borrado.");
+      syncTokenInputWithCurrentAccount();
+      toast(`🗑️ Token ${getTradingAccountLabel()} borrado ✓`, 1600);
+      alert(`🗑️ Token ${getTradingAccountLabel()} borrado.`);
     };
   }
 
@@ -5525,6 +5654,7 @@ if (practiceCanvas) {
 ========================= */
 loadLowPowerMode();
 loadAutoOpenChartSetting();
+loadTradingAccountMode();
 loadDiscipline();
 loadTradeLinks();
 loadExecutionMode();
@@ -5541,6 +5671,9 @@ applyAutoOpenChartUI();
 ensureExecutionModeButton();
 applyExecutionModeUI();
 
+ensureTradingAccountButton();
+applyTradingAccountUI();
+applyTradingAccountBannerUI();
 initWakeButton();
 initTokenAndStakeUI();
 
