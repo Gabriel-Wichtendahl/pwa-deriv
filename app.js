@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo GIRO / GIRO FLEX: señales con 35/40/45s (según config) — Práctica sigue en 40/45
+// ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
@@ -1434,6 +1434,30 @@ function escapeHtml(str) {
 }
 function cssEscape(s) {
   return String(s).replace(/"/g, '\\"');
+}
+
+function getSignalEvalButtons() {
+  return qsAll(".evalBtn");
+}
+function ensureSignal35EvalButton() {
+  const existing = document.querySelector('.evalBtn[data-sec="35"]');
+  if (existing) return existing;
+
+  const btn40 = document.querySelector('.evalBtn[data-sec="40"]');
+  const btn45 = document.querySelector('.evalBtn[data-sec="45"]');
+  const host = (btn40 && btn40.parentElement) || (btn45 && btn45.parentElement) || null;
+  if (!host) return null;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "evalBtn";
+  btn.dataset.sec = "35";
+  btn.textContent = "35s";
+
+  if (btn40) host.insertBefore(btn, btn40);
+  else host.appendChild(btn);
+
+  return btn;
 }
 
 /* =========================
@@ -2882,8 +2906,8 @@ function applyTheme(theme) {
 (function initEvalMode() {
   ensureSignal35EvalButton();
 
-  const savedSignalSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
-  EVAL_SEC = [35, 40, 45].includes(savedSignalSec) ? savedSignalSec : 45;
+  const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
+  EVAL_SEC = [35, 40, 45].includes(savedSec) ? savedSec : 45;
 
   const savedPracticeSec = parseInt(localStorage.getItem("practiceEvalSec") || "45", 10);
   PRACTICE_EVAL_SEC = [40, 45].includes(savedPracticeSec) ? savedPracticeSec : 45;
