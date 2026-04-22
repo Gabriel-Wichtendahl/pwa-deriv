@@ -1,7 +1,7 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
-// ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
+// ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
 // ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
 // ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
 // ✅ FIX NUEVO: si proposal_open_contract no manda is_sold, fallback poll y cuenta igual
@@ -705,10 +705,12 @@ function ensureTradingAccountButton() {
   btn.onclick = () => {
     activeTradingAccount = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_DEMO : ACCOUNT_MODE_REAL;
     saveTradingAccountMode();
+    loadDiscipline();
     resetAuthState();
     syncTokenInputWithCurrentAccount();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
+    updateDisciplineLockUI(false);
     if (chartModal && !chartModal.classList.contains("hidden")) {
       if (modalCurrentItem) {
         modalTitle.textContent = `${modalCurrentItem.symbol} – ${labelDir(modalCurrentItem.direction)} | [${modalCurrentItem.mode || "NORMAL"}] | ${getTradeScopeText()}`;
@@ -3582,31 +3584,48 @@ function applyModalTradeButtonsLayout() {
 /* =========================
    Disciplina (persistencia + UI)
 ========================= */
+function getScopedDisciplineStorageKey(baseKey) {
+  const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
+  return `${baseKey}_${scope}`;
+}
+function resetDisciplineStateInMemory() {
+  disciplineWindowStartMs = 0;
+  disciplineWins = 0;
+  disciplineLosses = 0;
+  disciplineLockUntilMs = 0;
+  disciplinePendingContracts = [];
+}
+function readScopedDisciplineValue(baseKey, fallback = "0") {
+  try {
+    const scopedKey = getScopedDisciplineStorageKey(baseKey);
+    let raw = localStorage.getItem(scopedKey);
+    if (raw === null && activeTradingAccount === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(baseKey);
+    return raw === null ? fallback : raw;
+  } catch {
+    return fallback;
+  }
+}
 function loadDiscipline() {
   try {
-    disciplineWindowStartMs = Number(localStorage.getItem(DISCIPLINE_WINDOW_START_KEY) || "0") || 0;
-    disciplineWins = Number(localStorage.getItem(DISCIPLINE_WINS_KEY) || "0") || 0;
-    disciplineLosses = Number(localStorage.getItem(DISCIPLINE_LOSSES_KEY) || "0") || 0;
-    disciplineLockUntilMs = Number(localStorage.getItem(DISCIPLINE_LOCK_UNTIL_KEY) || "0") || 0;
+    disciplineWindowStartMs = Number(readScopedDisciplineValue(DISCIPLINE_WINDOW_START_KEY, "0")) || 0;
+    disciplineWins = Number(readScopedDisciplineValue(DISCIPLINE_WINS_KEY, "0")) || 0;
+    disciplineLosses = Number(readScopedDisciplineValue(DISCIPLINE_LOSSES_KEY, "0")) || 0;
+    disciplineLockUntilMs = Number(readScopedDisciplineValue(DISCIPLINE_LOCK_UNTIL_KEY, "0")) || 0;
 
-    const raw = localStorage.getItem(DISCIPLINE_PENDING_CONTRACTS_KEY) || "[]";
+    const raw = readScopedDisciplineValue(DISCIPLINE_PENDING_CONTRACTS_KEY, "[]");
     const arr = JSON.parse(raw);
     disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
   } catch {
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    disciplineLockUntilMs = 0;
-    disciplinePendingContracts = [];
+    resetDisciplineStateInMemory();
   }
 }
 function saveDiscipline() {
   try {
-    localStorage.setItem(DISCIPLINE_WINDOW_START_KEY, String(disciplineWindowStartMs || 0));
-    localStorage.setItem(DISCIPLINE_WINS_KEY, String(disciplineWins || 0));
-    localStorage.setItem(DISCIPLINE_LOSSES_KEY, String(disciplineLosses || 0));
-    localStorage.setItem(DISCIPLINE_LOCK_UNTIL_KEY, String(disciplineLockUntilMs || 0));
-    localStorage.setItem(DISCIPLINE_PENDING_CONTRACTS_KEY, JSON.stringify(disciplinePendingContracts || []));
+    localStorage.setItem(getScopedDisciplineStorageKey(DISCIPLINE_WINDOW_START_KEY), String(disciplineWindowStartMs || 0));
+    localStorage.setItem(getScopedDisciplineStorageKey(DISCIPLINE_WINS_KEY), String(disciplineWins || 0));
+    localStorage.setItem(getScopedDisciplineStorageKey(DISCIPLINE_LOSSES_KEY), String(disciplineLosses || 0));
+    localStorage.setItem(getScopedDisciplineStorageKey(DISCIPLINE_LOCK_UNTIL_KEY), String(disciplineLockUntilMs || 0));
+    localStorage.setItem(getScopedDisciplineStorageKey(DISCIPLINE_PENDING_CONTRACTS_KEY), JSON.stringify(disciplinePendingContracts || []));
   } catch {}
 }
 function addPendingContract(cid) {
@@ -3624,7 +3643,11 @@ function removePendingContract(cid) {
   disciplinePendingContracts = next;
   saveDiscipline();
 }
+function isDisciplineBypassedForCurrentAccount() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL;
+}
 function isTradeLockedNow() {
+  if (isDisciplineBypassedForCurrentAccount()) return false;
   const now = Date.now();
   return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
 }
@@ -3637,6 +3660,12 @@ function fmtRemaining(ms) {
   return `${mm}m`;
 }
 function disciplineTagText() {
+  if (isDisciplineBypassedForCurrentAccount()) {
+    const pend = (disciplinePendingContracts || []).length;
+    const pTxt = pend ? ` • Pendientes:${pend}` : "";
+    return `Disciplina REAL: libre para pruebas${pTxt}`;
+  }
+
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
     disciplineLockUntilMs = 0;
     disciplineWindowStartMs = 0;
@@ -3655,7 +3684,7 @@ function disciplineTagText() {
   return `Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS}W • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES}L${pTxt}`;
 }
 function updateDisciplineLockUI(forceToast = false) {
-  if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+  if (!isDisciplineBypassedForCurrentAccount() && disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
     disciplineLockUntilMs = 0;
     disciplineWindowStartMs = 0;
     disciplineWins = 0;
@@ -3679,6 +3708,7 @@ function updateDisciplineLockUI(forceToast = false) {
 }
 function startNewDisciplineWindowIfNeeded() {
   updateDisciplineLockUI(false);
+  if (isDisciplineBypassedForCurrentAccount()) return;
 
   const now = Date.now();
   if (!disciplineWindowStartMs) {
@@ -3690,6 +3720,7 @@ function startNewDisciplineWindowIfNeeded() {
 }
 function applyDisciplineOutcome(isWin) {
   updateDisciplineLockUI(false);
+  if (isDisciplineBypassedForCurrentAccount()) return;
   if (isTradeLockedNow()) return;
 
   if (isWin) disciplineWins += 1;
