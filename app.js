@@ -1,5 +1,5 @@
 // app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
-// ✅ Modo GIRO (ESTRICTO): evalúa SOLO en 40/45 (según config) — NORMAL queda igual
+// ✅ Modo GIRO / GIRO FLEX: señales con 35/40/45s (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina (DEMO): 3 ITM (ganadas) o 2 OTM (perdidas) -> bloquea operar 1h
 // ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
@@ -597,6 +597,7 @@ let soundEnabled = false;
 let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
+let PRACTICE_EVAL_SEC = 45;
 
 // Estado principal: NORMAL vs GIRO vs GIRO FLEX
 let signalMode = MODE_NORMAL;
@@ -1937,7 +1938,7 @@ function updatePracticePoolLabel() {
   }
 }
 function paintPracticeSecButtons() {
-  const active = EVAL_SEC;
+  const active = PRACTICE_EVAL_SEC;
   [practice40Btn, practice45Btn].forEach((btn) => {
     if (!btn) return;
     const sec = Number(btn.dataset.sec || 0);
@@ -2593,9 +2594,9 @@ function startPracticeRound(entry = null) {
   practiceRound = {
     entry: chosen,
     ticks: normalizePracticeTicks(chosen.ticks),
-    cutoffMs: EVAL_SEC * 1000,
+    cutoffMs: PRACTICE_EVAL_SEC * 1000,
     startTs: 0,
-    replayMs: EVAL_SEC * 1000,
+    replayMs: PRACTICE_EVAL_SEC * 1000,
     answer: null,
     finished: false,
     segmentMarks: freshPracticeSegmentMarks(),
@@ -2879,25 +2880,29 @@ function applyTheme(theme) {
    Eval sec + Modo GIRO
 ========================= */
 (function initEvalMode() {
-  const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
-  EVAL_SEC = [40, 45].includes(savedSec) ? savedSec : 45;
+  ensureSignal35EvalButton();
+
+  const savedSignalSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
+  EVAL_SEC = [35, 40, 45].includes(savedSignalSec) ? savedSignalSec : 45;
+
+  const savedPracticeSec = parseInt(localStorage.getItem("practiceEvalSec") || "45", 10);
+  PRACTICE_EVAL_SEC = [40, 45].includes(savedPracticeSec) ? savedPracticeSec : 45;
 
   const paintEval = () =>
-    evalBtns.forEach((b) => {
+    getSignalEvalButtons().forEach((b) => {
       const sec = parseInt(b.dataset.sec || "0", 10);
       b.classList.toggle("active", sec === EVAL_SEC);
     });
   paintEval();
   try { paintPracticeSecButtons(); } catch {}
 
-  evalBtns.forEach(
+  getSignalEvalButtons().forEach(
     (b) =>
       (b.onclick = () => {
         const v = parseInt(b.dataset.sec || "45", 10);
-        EVAL_SEC = [40, 45].includes(v) ? v : 45;
+        EVAL_SEC = [35, 40, 45].includes(v) ? v : 45;
         localStorage.setItem("evalSec", String(EVAL_SEC));
         paintEval();
-        try { paintPracticeSecButtons(); } catch {}
       })
   );
 
@@ -5426,9 +5431,8 @@ document.addEventListener("visibilitychange", () => {
 
 if (practice40Btn) {
   practice40Btn.onclick = () => {
-    EVAL_SEC = 40;
-    localStorage.setItem("evalSec", "40");
-    qsAll(".evalBtn").forEach((b) => b.classList.toggle("active", Number(b.dataset.sec || 0) === 40));
+    PRACTICE_EVAL_SEC = 40;
+    localStorage.setItem("practiceEvalSec", "40");
     paintPracticeSecButtons();
     if (practiceRound && !practiceRound.finished) startPracticeRound(practiceRound.entry);
     else ensurePracticeReady();
@@ -5436,9 +5440,8 @@ if (practice40Btn) {
 }
 if (practice45Btn) {
   practice45Btn.onclick = () => {
-    EVAL_SEC = 45;
-    localStorage.setItem("evalSec", "45");
-    qsAll(".evalBtn").forEach((b) => b.classList.toggle("active", Number(b.dataset.sec || 0) === 45));
+    PRACTICE_EVAL_SEC = 45;
+    localStorage.setItem("practiceEvalSec", "45");
     paintPracticeSecButtons();
     if (practiceRound && !practiceRound.finished) startPracticeRound(practiceRound.entry);
     else ensurePracticeReady();
