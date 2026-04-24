@@ -3387,14 +3387,99 @@ function applyTheme(theme) {
 ========================= */
 
 /* =========================
+   Notification deep link helpers
+========================= */
+function makePwaSignalUrl(item = null) {
+  try {
+    const url = new URL(window.location.href);
+    url.hash = "";
+    url.searchParams.set("view", "signals");
+    if (item?.id) url.searchParams.set("openSignal", String(item.id));
+    url.searchParams.set("openChart", "1");
+    return url.toString();
+  } catch {
+    return "./";
+  }
+}
+
+function openSignalFromNotification(signalId = "") {
+  const targetId = String(signalId || "");
+
+  const tryOpen = () => {
+    let item = targetId ? findHistoryItemById(targetId) : null;
+    if (!item && history && history.length) item = history[history.length - 1];
+    if (!item) return false;
+
+    try {
+      setActiveView("signals");
+    } catch {}
+
+    try {
+      const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+      if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch {}
+
+    try {
+      openChartModal(item);
+      if (isItemLiveMinute(item)) {
+        modalLive = true;
+        updateModalLiveUI();
+        requestModalDraw(true);
+      }
+    } catch {}
+
+    return true;
+  };
+
+  if (tryOpen()) return;
+
+  let attempts = 0;
+  const timer = setInterval(() => {
+    attempts += 1;
+    if (tryOpen() || attempts >= 12) clearInterval(timer);
+  }, 250);
+}
+
+function initNotificationOpenRouting() {
+  try {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.addEventListener("message", (event) => {
+        const data = event?.data || {};
+        if (data.type !== "OPEN_SIGNAL_FROM_NOTIFICATION") return;
+        openSignalFromNotification(data.signalId || "");
+      });
+    }
+
+    const params = new URLSearchParams(window.location.search || "");
+    const shouldOpen = params.get("openChart") === "1";
+    const signalId = params.get("openSignal") || "";
+    if (shouldOpen) {
+      setTimeout(() => openSignalFromNotification(signalId), 350);
+
+      try {
+        params.delete("openChart");
+        params.delete("openSignal");
+        params.delete("view");
+        const clean = `${location.pathname}${params.toString() ? "?" + params.toString() : ""}${location.hash || ""}`;
+        history.replaceState(null, "", clean);
+      } catch {}
+    }
+  } catch {}
+}
+
+
+/* =========================
    Notifications
 ========================= */
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
 }
-function showNotification(symbol, direction, modeLabel) {
+function showNotification(symbol, direction, modeLabel, item = null) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
+
+  const signalId = item?.id ? String(item.id) : "";
+  const pwaUrl = makePwaSignalUrl(item);
 
   navigator.serviceWorker.getRegistration().then((reg) => {
     if (!reg) return;
@@ -3402,12 +3487,19 @@ function showNotification(symbol, direction, modeLabel) {
       body: `${symbol} – ${labelDir(direction)} – [${modeLabel || "NORMAL"}]`,
       icon: "icon-192.png",
       badge: "icon-192.png",
-      tag: "deriv-signal",
+      tag: signalId ? `deriv-signal-${signalId}` : "deriv-signal",
       renotify: true,
       requireInteraction: true,
       silent: false,
       vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
-      data: { url: makeDerivTraderUrl(symbol), symbol, direction },
+      data: {
+        type: "OPEN_SIGNAL_FROM_NOTIFICATION",
+        url: pwaUrl,
+        signalId,
+        symbol,
+        direction,
+        mode: modeLabel || "NORMAL",
+      },
     });
   });
 }
@@ -5910,7 +6002,7 @@ function addSignal(minute, symbol, direction, ticks) {
   }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
-  showNotification(symbol, direction, modeLabel);
+  showNotification(symbol, direction, modeLabel, item);
 
   if (shouldAutoOpenChartNow()) {
     requestAnimationFrame(() => {
@@ -6166,6 +6258,7 @@ loadTradeLinks();
 loadExecutionMode();
 
 renderHistory();
+initNotificationOpenRouting();
 updateTickHealthUI();
 updateCountdownUI();
 
@@ -6196,4 +6289,4 @@ ensureInlineClearButtons();
 ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
 
-connect();  
+connect();
