@@ -20,11 +20,13 @@
     <h2 id="status" class="status">Conectando…</h2>
 
     <div class="topStatus">
-      <div id="tickHealth" class="pill">Último tick: —</div>
-
-      <div id="countdown" class="pill countdownPill" aria-label="Cuenta regresiva del minuto">
-        <span class="countRing" aria-hidden="true"></span>
-        <span id="countdownText" class="countText">⏱️ 60</span>
+      <div class="pill combinedStatusPill" aria-label="Estado de ticks y cuenta regresiva">
+        <span id="tickHealth" class="tickHealthInline">Último tick: —</span>
+        <span class="statusDivider" aria-hidden="true"></span>
+        <span id="countdown" class="countdownPill" aria-label="Cuenta regresiva del minuto">
+          <span class="countRing" aria-hidden="true"></span>
+          <span id="countdownText" class="countText">⏱️ 60</span>
+        </span>
       </div>
     </div>
 
@@ -126,12 +128,12 @@
       <div class="modalFooter">
         <div id="modalCandleStatus" class="candleStatusBar" role="status">—</div>
 
-        <button id="modalOpenDerivBtn" class="btn btnPrimary openDerivBtn" type="button">Abrir Deriv</button>
-
         <div class="tradeRow">
           <button id="modalBuyCallBtn" class="btn" type="button">🟢 COMPRAR</button>
           <button id="modalBuyPutBtn" class="btn" type="button">🔴 VENDER</button>
         </div>
+
+        <button id="modalOpenDerivBtn" class="btn btnPrimary openDerivBtn" type="button">Abrir Deriv</button>
       </div>
     </div>
   </div>
