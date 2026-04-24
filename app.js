@@ -17,6 +17,7 @@
 // ✅ NUEVO UX: botones de borrar por pestaña en la UI, no en el modal Config
 // ✅ NUEVO: guardar señales manualmente al pool de práctica con botón 💾
 // ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
+// ✅ NUEVO: Práctica con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
 
 "use strict";
 
@@ -1914,6 +1915,12 @@ let practiceRound = null;
 let practiceRaf = null;
 let practiceChoiceHitZones = [];
 let practiceSimilarResults = [];
+let practiceConfirmPanelEl = null;
+let practiceConfirmCountEl = null;
+let practiceConfirmBtnEl = null;
+let practiceConfirmUndoBtnEl = null;
+let practiceConfirmHintEl = null;
+const PRACTICE_CONFIRM_MIN = 3;
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
   { start: 15000, end: 30000, label: "15s" },
@@ -2089,6 +2096,174 @@ function ensurePracticeFilterButton() {
   applyPracticeFilterButtonUI();
   return btn;
 }
+function getPracticeConfirmationCount() {
+  return Array.isArray(practiceRound?.confirmations) ? practiceRound.confirmations.length : 0;
+}
+function hasPracticeMinimumConfirmations() {
+  return getPracticeConfirmationCount() >= PRACTICE_CONFIRM_MIN;
+}
+function ensurePracticeConfirmationControls() {
+  if (practiceConfirmPanelEl && practiceConfirmPanelEl.isConnected) return practiceConfirmPanelEl;
+  if (!practiceView) return null;
+
+  const panel = document.createElement("div");
+  panel.id = "practiceConfirmPanel";
+  panel.style.width = "100%";
+  panel.style.boxSizing = "border-box";
+  panel.style.margin = "12px 0 10px 0";
+  panel.style.padding = "12px";
+  panel.style.borderRadius = "18px";
+  panel.style.border = "1px solid rgba(255,255,255,.14)";
+  panel.style.background = "linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035))";
+  panel.style.boxShadow = "0 12px 28px rgba(0,0,0,.20), inset 0 0 0 1px rgba(255,255,255,.045)";
+
+  const top = document.createElement("div");
+  top.style.display = "flex";
+  top.style.alignItems = "center";
+  top.style.justifyContent = "space-between";
+  top.style.gap = "10px";
+  top.style.marginBottom = "10px";
+
+  const count = document.createElement("div");
+  count.id = "practiceConfirmCount";
+  count.style.fontWeight = "950";
+  count.style.letterSpacing = ".25px";
+  count.style.fontSize = "15px";
+  count.style.padding = "8px 10px";
+  count.style.borderRadius = "999px";
+  count.style.border = "1px solid rgba(255,255,255,.14)";
+  count.style.background = "rgba(0,0,0,.16)";
+
+  const hint = document.createElement("div");
+  hint.id = "practiceConfirmHint";
+  hint.style.flex = "1";
+  hint.style.textAlign = "right";
+  hint.style.fontSize = "12px";
+  hint.style.fontWeight = "800";
+  hint.style.opacity = ".86";
+
+  top.appendChild(count);
+  top.appendChild(hint);
+
+  const row = document.createElement("div");
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "minmax(0, 1fr) auto";
+  row.style.gap = "10px";
+  row.style.alignItems = "stretch";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.id = "practiceConfirmBtn";
+  confirmBtn.type = "button";
+  confirmBtn.className = "btn";
+  confirmBtn.textContent = "➕ CONFIRMACIÓN";
+  confirmBtn.style.minHeight = "52px";
+  confirmBtn.style.borderRadius = "16px";
+  confirmBtn.style.fontWeight = "950";
+  confirmBtn.style.fontSize = "15px";
+  confirmBtn.style.letterSpacing = ".35px";
+  confirmBtn.style.border = "1px solid rgba(251,191,36,.55)";
+  confirmBtn.style.background = "linear-gradient(180deg, rgba(251,191,36,.26), rgba(251,191,36,.10))";
+  confirmBtn.style.boxShadow = "0 0 20px rgba(251,191,36,.16), inset 0 0 16px rgba(251,191,36,.08)";
+  confirmBtn.style.touchAction = "manipulation";
+
+  const undoBtn = document.createElement("button");
+  undoBtn.id = "practiceConfirmUndoBtn";
+  undoBtn.type = "button";
+  undoBtn.className = "btn btnGhost";
+  undoBtn.textContent = "↩️";
+  undoBtn.title = "Quitar última confirmación";
+  undoBtn.style.minHeight = "52px";
+  undoBtn.style.minWidth = "58px";
+  undoBtn.style.borderRadius = "16px";
+  undoBtn.style.fontWeight = "950";
+  undoBtn.style.fontSize = "18px";
+  undoBtn.style.touchAction = "manipulation";
+
+  row.appendChild(confirmBtn);
+  row.appendChild(undoBtn);
+  panel.appendChild(top);
+  panel.appendChild(row);
+
+  const anchor = practiceCanvas || practiceRoundLabelEl || practiceView.firstElementChild;
+  if (anchor && anchor.parentElement) anchor.insertAdjacentElement("afterend", panel);
+  else practiceView.prepend(panel);
+
+  practiceConfirmPanelEl = panel;
+  practiceConfirmCountEl = count;
+  practiceConfirmBtnEl = confirmBtn;
+  practiceConfirmUndoBtnEl = undoBtn;
+  practiceConfirmHintEl = hint;
+
+  confirmBtn.onclick = () => addPracticeConfirmation();
+  undoBtn.onclick = () => removePracticeConfirmation();
+
+  updatePracticeConfirmationUI();
+  return panel;
+}
+function getPracticeConfirmationMs() {
+  if (!practiceRound) return 0;
+  const ms = Number(practiceRound.replayMs ?? practiceRound.cutoffMs ?? 0);
+  return Math.max(0, Math.min(60000, ms));
+}
+function addPracticeConfirmation() {
+  if (!practiceRound || practiceRound.finished) return;
+  practiceRound.confirmations ||= [];
+  practiceRound.confirmations.push({ ms: getPracticeConfirmationMs(), at: Date.now() });
+  updatePracticeConfirmationUI();
+  redrawPracticeRoundChart();
+  if (hasPracticeMinimumConfirmations()) {
+    updatePracticeResult("✅ 3 confirmaciones marcadas. Operación habilitada si tu lectura lo justifica.", "is-itm");
+  } else {
+    const faltan = PRACTICE_CONFIRM_MIN - getPracticeConfirmationCount();
+    updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}. Si no hay 3 claras, PASAR.`, "is-pass");
+  }
+}
+function removePracticeConfirmation() {
+  if (!practiceRound || practiceRound.finished) return;
+  practiceRound.confirmations ||= [];
+  practiceRound.confirmations.pop();
+  updatePracticeConfirmationUI();
+  redrawPracticeRoundChart();
+}
+function updatePracticeConfirmationUI() {
+  ensurePracticeConfirmationControls();
+  const n = getPracticeConfirmationCount();
+  const ok = n >= PRACTICE_CONFIRM_MIN;
+
+  if (practiceConfirmCountEl) {
+    practiceConfirmCountEl.textContent = `Confirmaciones: ${Math.min(n, PRACTICE_CONFIRM_MIN)}/${PRACTICE_CONFIRM_MIN}${n > PRACTICE_CONFIRM_MIN ? ` +${n - PRACTICE_CONFIRM_MIN}` : ""}`;
+    practiceConfirmCountEl.style.color = ok ? "#dcfce7" : "rgba(255,255,255,.92)";
+    practiceConfirmCountEl.style.borderColor = ok ? "rgba(34,197,94,.48)" : "rgba(255,255,255,.14)";
+    practiceConfirmCountEl.style.background = ok ? "rgba(22,163,74,.18)" : "rgba(0,0,0,.16)";
+    practiceConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(34,197,94,.16)" : "none";
+  }
+  if (practiceConfirmHintEl) {
+    practiceConfirmHintEl.textContent = ok ? "Operación válida por disciplina" : "Mínimo 3 para operar";
+    practiceConfirmHintEl.style.color = ok ? "#bbf7d0" : "rgba(255,255,255,.70)";
+  }
+  if (practiceConfirmBtnEl) {
+    practiceConfirmBtnEl.disabled = !practiceRound || !!practiceRound.finished;
+    practiceConfirmBtnEl.style.opacity = practiceConfirmBtnEl.disabled ? ".45" : "1";
+  }
+  if (practiceConfirmUndoBtnEl) {
+    practiceConfirmUndoBtnEl.disabled = !practiceRound || !!practiceRound.finished || n <= 0;
+    practiceConfirmUndoBtnEl.style.opacity = practiceConfirmUndoBtnEl.disabled ? ".42" : "1";
+  }
+
+  if (practiceRound && !practiceRound.finished && !practiceRound.answer) {
+    setPracticeDecisionState(false);
+  }
+}
+function setPracticeConfirmationControlsVisible(show) {
+  ensurePracticeConfirmationControls();
+  if (practiceConfirmPanelEl) practiceConfirmPanelEl.style.display = show ? "block" : "none";
+}
+function redrawPracticeRoundChart() {
+  if (!practiceRound || !practiceCanvas) return;
+  const ms = practiceRound.finished ? 60000 : (practiceRound.replayMs || practiceRound.cutoffMs || 0);
+  const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, ms);
+  drawPracticeChart(practiceCanvas, visibleTicks, ms, practiceRound.segmentMarks);
+}
 function renderPracticeStats() {
   if (practiceSessionStatsEl) practiceSessionStatsEl.textContent = formatPracticeStats(practiceSessionStats);
   if (practiceAllStatsEl) practiceAllStatsEl.textContent = formatPracticeStats(practiceAllStats);
@@ -2210,19 +2385,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
     const downY = Math.max(upY + 40, (h - 28) * 0.60);
     const hitW = Math.min(50, Math.max(38, visibleWidth - 6));
 
-    arrowZones.push({
-      segIndex: idx,
-      centerX,
-      upY,
-      downY,
-      upSelected: mark === "up",
-      downSelected: mark === "down",
-    });
-
-    practiceChoiceHitZones.push(
-      { segIndex: idx, choice: "up", x: centerX - hitW / 2, y: upY - 22, w: hitW, h: 34 },
-      { segIndex: idx, choice: "down", x: centerX - hitW / 2, y: downY - 22, w: hitW, h: 34 }
-    );
+    // Confirmaciones manuales reemplazan las flechas por tramo.
   }
 
   ctx.globalAlpha = 0.22;
@@ -2296,31 +2459,6 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   });
   ctx.stroke();
 
-  for (const zone of arrowZones) {
-    ctx.save();
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = "900 30px system-ui, sans-serif";
-
-    ctx.save();
-    ctx.translate(zone.centerX, zone.upY);
-    ctx.scale(1.18, 1);
-    ctx.globalAlpha = zone.upSelected ? 0.88 : 0.34;
-    ctx.fillStyle = zone.upSelected ? "rgba(34,197,94,0.96)" : "rgba(34,197,94,0.82)";
-    ctx.fillText("⬆", 0, 0);
-    ctx.restore();
-
-    ctx.save();
-    ctx.translate(zone.centerX, zone.downY);
-    ctx.scale(1.18, 1);
-    ctx.globalAlpha = zone.downSelected ? 0.88 : 0.34;
-    ctx.fillStyle = zone.downSelected ? "rgba(239,68,68,0.96)" : "rgba(239,68,68,0.82)";
-    ctx.fillText("⬇", 0, 0);
-    ctx.restore();
-
-    ctx.restore();
-  }
-
   const lx = xOf(pts[pts.length - 1].ms);
   const ly = yOf(pts[pts.length - 1].quote);
   ctx.globalAlpha = 0.9;
@@ -2329,6 +2467,45 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
+
+  const confirmMarks = Array.isArray(practiceRound?.confirmations) ? practiceRound.confirmations : [];
+  const visibleReplay = Number.isFinite(Number(replayMs)) ? Number(replayMs) : 60000;
+  if (confirmMarks.length) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "900 13px system-ui, sans-serif";
+    confirmMarks.forEach((mark, idx) => {
+      const ms = Math.max(0, Math.min(60000, Number(mark?.ms ?? 0)));
+      if (ms > visibleReplay) return;
+      const x = xOf(ms);
+      const q = Number(getPriceAtMs(pts, ms));
+      const yBase = Number.isFinite(q) ? yOf(q) : h * 0.5;
+      const y = Math.max(24, Math.min(h - 34, yBase - 22));
+
+      ctx.beginPath();
+      ctx.fillStyle = "rgba(251,191,36,.94)";
+      ctx.strokeStyle = "rgba(0,0,0,.42)";
+      ctx.lineWidth = 2;
+      ctx.arc(x, y, 13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(17,24,39,.96)";
+      ctx.fillText(String(idx + 1), x, y + 0.5);
+
+      ctx.save();
+      ctx.setLineDash([3, 5]);
+      ctx.strokeStyle = "rgba(251,191,36,.50)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x, y + 14);
+      ctx.lineTo(x, h - 22);
+      ctx.stroke();
+      ctx.restore();
+    });
+    ctx.restore();
+  }
 }
 function setPracticePassButtonMode(mode = "PASS") {
   if (!practicePassBtn) return;
@@ -2338,6 +2515,13 @@ function setPracticePassButtonMode(mode = "PASS") {
   practicePassBtn.classList.toggle("is-next", isNext);
 }
 function setPracticeDecisionState(disabled, selected = "") {
+  const confirmationLocked =
+    !disabled &&
+    !!practiceRound &&
+    !practiceRound.finished &&
+    !practiceRound.answer &&
+    !hasPracticeMinimumConfirmations();
+
   const map = [
     [practiceCallBtn, "CALL"],
     [practicePutBtn, "PUT"],
@@ -2346,8 +2530,19 @@ function setPracticeDecisionState(disabled, selected = "") {
   map.forEach(([btn, key]) => {
     if (!btn) return;
     const isNextBtn = btn === practicePassBtn && btn.dataset.mode === "NEXT";
-    btn.disabled = isNextBtn ? false : !!disabled;
+    const isTradeBtn = key === "CALL" || key === "PUT";
+    btn.disabled = isNextBtn ? false : !!disabled || (isTradeBtn && confirmationLocked);
     btn.classList.toggle("selected", !isNextBtn && selected === key);
+
+    if (isTradeBtn && confirmationLocked) {
+      btn.style.filter = "grayscale(1) saturate(.65)";
+      btn.style.opacity = ".44";
+      btn.title = `Necesitas ${PRACTICE_CONFIRM_MIN} confirmaciones para operar. PASAR siempre está permitido.`;
+    } else if (isTradeBtn && !disabled) {
+      btn.style.filter = "";
+      btn.style.opacity = "";
+      btn.title = "Práctica: operar con disciplina";
+    }
   });
 }
 function togglePracticeSegmentMark(segIndex, choice) {
@@ -2721,13 +2916,15 @@ function finalizePracticeRound(answer = null) {
 
   const fullTicks = buildPracticeVisibleTicks(round.ticks, 60000);
   drawPracticeChart(practiceCanvas, fullTicks, 60000, round.segmentMarks);
+  updatePracticeConfirmationUI();
   setPracticeDecisionState(true, round.answer);
 
+  const confirmText = ` | Confirmaciones: ${getPracticeConfirmationCount()}/${PRACTICE_CONFIRM_MIN}`;
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
   if (resultType === "ITM") {
-    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | Próxima vela: ${outcomeText}`, "is-itm");
+    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
   } else if (resultType === "OTM") {
-    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"} | Próxima vela: ${outcomeText}`, "is-otm");
+    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
   } else {
     updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
   }
@@ -2752,7 +2949,7 @@ function practiceLoop(ts) {
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
   const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "—";
-  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | decisión: ${picked}`);
+  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | confirmaciones: ${getPracticeConfirmationCount()}/${PRACTICE_CONFIRM_MIN} | decisión: ${picked}`);
 
   if (replayMs >= 60000) {
     finalizePracticeRound(practiceRound.answer || "PASS");
@@ -2772,6 +2969,7 @@ function startPracticeRound(entry = null) {
       ctx.clearRect(0, 0, practiceCanvas.width, practiceCanvas.height);
       practiceChoiceHitZones = [];
     }
+    setPracticeConfirmationControlsVisible(false);
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
     return;
@@ -2786,6 +2984,7 @@ function startPracticeRound(entry = null) {
     replayMs: PRACTICE_EVAL_SEC * 1000,
     answer: null,
     finished: false,
+    confirmations: [],
     segmentMarks: freshPracticeSegmentMarks(),
   };
 
@@ -2793,7 +2992,9 @@ function startPracticeRound(entry = null) {
     practiceRoundLabelEl.textContent = `${chosen.symbol} | ${chosen.mode || "NORMAL"} | ${chosen.time}`;
   }
   updatePracticePoolLabel();
-  updatePracticeResult("Elige COMPRA, VENTA o PASAR antes de que termine la vela.");
+  setPracticeConfirmationControlsVisible(true);
+  updatePracticeConfirmationUI();
+  updatePracticeResult(`Marca ${PRACTICE_CONFIRM_MIN} confirmaciones claras para habilitar COMPRA / VENTA. PASAR siempre vale.`, "is-pass");
   setPracticePassButtonMode("PASS");
   setPracticeDecisionState(false);
 
@@ -2822,18 +3023,24 @@ function ensurePracticeReady() {
         ? "Filtro activo: solo NORMAL."
         : "Filtro activo: todos los modos.";
     updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales quedan pausadas.`);
+    setPracticeConfirmationControlsVisible(false);
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
   } else if (practiceRound.finished) {
     if (getEligiblePracticeEntries().length > 1) setPracticeSimilarButtonVisible(true);
+    setPracticeConfirmationControlsVisible(true);
+    updatePracticeConfirmationUI();
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true, practiceRound.answer || "");
     drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000, practiceRound.segmentMarks);
     redrawPracticeSimilarCanvases();
   } else {
     resetPracticeSimilarState();
+    setPracticeConfirmationControlsVisible(true);
+    updatePracticeConfirmationUI();
     setPracticePassButtonMode("PASS");
+    setPracticeDecisionState(false);
   }
 }
 
@@ -5664,6 +5871,12 @@ if (practice45Btn) {
 if (practiceCallBtn) {
   practiceCallBtn.onclick = () => {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
+    if (!hasPracticeMinimumConfirmations()) {
+      const faltan = PRACTICE_CONFIRM_MIN - getPracticeConfirmationCount();
+      updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}. Si no hay 3 claras, PASAR.`, "is-pass");
+      toast("Primero marcá 3 confirmaciones", 1400);
+      return;
+    }
     practiceRound.answer = "CALL";
     setPracticeDecisionState(true, "CALL");
     updatePracticeResult("🟢 COMPRA elegida. Esperando cierre de la vela…", "is-pass");
@@ -5672,6 +5885,12 @@ if (practiceCallBtn) {
 if (practicePutBtn) {
   practicePutBtn.onclick = () => {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
+    if (!hasPracticeMinimumConfirmations()) {
+      const faltan = PRACTICE_CONFIRM_MIN - getPracticeConfirmationCount();
+      updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}. Si no hay 3 claras, PASAR.`, "is-pass");
+      toast("Primero marcá 3 confirmaciones", 1400);
+      return;
+    }
     practiceRound.answer = "PUT";
     setPracticeDecisionState(true, "PUT");
     updatePracticeResult("🔴 VENTA elegida. Esperando cierre de la vela…", "is-pass");
