@@ -2468,44 +2468,8 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  const confirmMarks = Array.isArray(practiceRound?.confirmations) ? practiceRound.confirmations : [];
-  const visibleReplay = Number.isFinite(Number(replayMs)) ? Number(replayMs) : 60000;
-  if (confirmMarks.length) {
-    ctx.save();
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = "900 13px system-ui, sans-serif";
-    confirmMarks.forEach((mark, idx) => {
-      const ms = Math.max(0, Math.min(60000, Number(mark?.ms ?? 0)));
-      if (ms > visibleReplay) return;
-      const x = xOf(ms);
-      const q = Number(getPriceAtMs(pts, ms));
-      const yBase = Number.isFinite(q) ? yOf(q) : h * 0.5;
-      const y = Math.max(24, Math.min(h - 34, yBase - 22));
+  // Confirmaciones: se mantienen en el panel 0/3, pero ya no se dibujan sobre el gráfico.
 
-      ctx.beginPath();
-      ctx.fillStyle = "rgba(251,191,36,.94)";
-      ctx.strokeStyle = "rgba(0,0,0,.42)";
-      ctx.lineWidth = 2;
-      ctx.arc(x, y, 13, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = "rgba(17,24,39,.96)";
-      ctx.fillText(String(idx + 1), x, y + 0.5);
-
-      ctx.save();
-      ctx.setLineDash([3, 5]);
-      ctx.strokeStyle = "rgba(251,191,36,.50)";
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(x, y + 14);
-      ctx.lineTo(x, h - 22);
-      ctx.stroke();
-      ctx.restore();
-    });
-    ctx.restore();
-  }
 }
 function setPracticePassButtonMode(mode = "PASS") {
   if (!practicePassBtn) return;
@@ -2571,8 +2535,45 @@ function updatePracticeResult(text, cls = "") {
   practiceResultEl.classList.remove("is-itm", "is-otm", "is-pass");
   if (cls) practiceResultEl.classList.add(cls);
 }
+function ensurePracticeSimilarBelowPut() {
+  if (!practiceSimilarBtn || !practicePutBtn) return;
+
+  let wrap = document.getElementById("practicePutSimilarWrap");
+  if (!wrap) {
+    const parent = practicePutBtn.parentElement;
+    if (!parent) return;
+
+    wrap = document.createElement("div");
+    wrap.id = "practicePutSimilarWrap";
+    wrap.style.display = "flex";
+    wrap.style.flexDirection = "column";
+    wrap.style.gap = "8px";
+    wrap.style.width = "100%";
+    wrap.style.minWidth = "0";
+    wrap.style.alignItems = "stretch";
+
+    parent.insertBefore(wrap, practicePutBtn);
+    wrap.appendChild(practicePutBtn);
+  }
+
+  if (practiceSimilarBtn.parentElement !== wrap) wrap.appendChild(practiceSimilarBtn);
+
+  practicePutBtn.style.width = "100%";
+
+  practiceSimilarBtn.style.width = "100%";
+  practiceSimilarBtn.style.minHeight = "42px";
+  practiceSimilarBtn.style.borderRadius = "14px";
+  practiceSimilarBtn.style.fontWeight = "900";
+  practiceSimilarBtn.style.fontSize = "13px";
+  practiceSimilarBtn.style.letterSpacing = ".15px";
+  practiceSimilarBtn.style.border = "1px solid rgba(255,255,255,.16)";
+  practiceSimilarBtn.style.background = "linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.035))";
+  practiceSimilarBtn.style.boxShadow = "inset 0 0 0 1px rgba(255,255,255,.035)";
+}
+
 function setPracticeSimilarButtonVisible(show) {
   if (!practiceSimilarBtn) return;
+  ensurePracticeSimilarBelowPut();
   practiceSimilarBtn.classList.toggle("hidden", !show);
 }
 function hidePracticeSimilarPanel() {
@@ -3005,6 +3006,7 @@ function startPracticeRound(entry = null) {
 function ensurePracticeReady() {
   ensurePracticeFilterButton();
   applyPracticeFilterButtonUI();
+  ensurePracticeSimilarBelowPut();
   renderPracticeStats();
   paintPracticeSecButtons();
   ensurePracticeQueue();
