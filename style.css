@@ -1235,3 +1235,75 @@ body.light .settingsModalHeader{
     grid-template-columns:1fr;
   }
 }
+
+/* =========================
+   Ajuste compacto: Último tick + contador en un solo recuadro
+========================= */
+.topStatus{
+  display:block;
+  margin-bottom:10px;
+}
+
+.combinedStatusPill{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  min-height:38px;
+  padding:7px 12px;
+}
+
+.tickHealthInline{
+  flex:1 1 auto;
+  min-width:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-variant-numeric:tabular-nums;
+}
+
+.statusDivider{
+  flex:0 0 auto;
+  width:1px;
+  align-self:stretch;
+  min-height:20px;
+  background:rgba(148,163,184,.28);
+}
+
+.combinedStatusPill #countdown{
+  flex:0 0 auto;
+  min-width:88px;
+  padding:0 0 0 34px;
+  border:0;
+  background:transparent;
+  backdrop-filter:none;
+  box-shadow:none;
+}
+
+.combinedStatusPill #countdown::before{
+  left:18px;
+}
+
+.combinedStatusPill #countdown::after{
+  left:6px;
+}
+
+.openDerivBtn{
+  order:10;
+  margin-top:2px;
+}
+
+@media (max-width:480px){
+  .combinedStatusPill{
+    width:100%;
+  }
+
+  .combinedStatusPill #countdown{
+    width:auto;
+  }
+
+  .statusDivider{
+    display:block;
+  }
+}
