@@ -6196,4 +6196,4 @@ ensureInlineClearButtons();
 ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
 
-connect();
+connect();  
