@@ -513,17 +513,40 @@ let executionMode = EXECUTION_MODE_RISE_FALL;
 const executionPlanCache = new Map();
 
 /* =========================
-   Toast
+   Status + Toast
+   - setStatus() = estado permanente de la app
+   - toast() = aviso corto que vuelve SIEMPRE al último estado real
 ========================= */
 let toastTimer = null;
+let appStatusText = statusEl?.textContent || "Conectando…";
+
+function setStatus(msg) {
+  try {
+    appStatusText = String(msg || "");
+    if (!toastTimer && statusEl) statusEl.textContent = appStatusText;
+  } catch {}
+}
+
+function restoreStatusAfterToast(expectedText) {
+  try {
+    if (!statusEl) return;
+    if (!expectedText || statusEl.textContent === expectedText) {
+      statusEl.textContent = appStatusText || "Conectado – Analizando";
+    }
+  } catch {}
+}
+
 function toast(msg, ms = 1600) {
   try {
     if (!statusEl) return;
-    const prev = statusEl.textContent || "";
-    statusEl.textContent = msg;
+
+    const text = String(msg || "");
+    statusEl.textContent = text;
+
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
-      if (statusEl.textContent === msg) statusEl.textContent = prev;
+      toastTimer = null;
+      restoreStatusAfterToast(text);
     }, ms);
   } catch {}
 }
@@ -534,7 +557,7 @@ function toast(msg, ms = 1600) {
 (function initVisibleDebug() {
   const show = (msg) => {
     try {
-      if (statusEl) statusEl.textContent = msg;
+      setStatus(msg);
     } catch {}
   };
 
@@ -5225,16 +5248,16 @@ let lastStatusBeforeRehydrate = "";
 function setRehydrateStatus(text) {
   if (!statusEl) return;
   if (!rehydrateRunning) {
-    lastStatusBeforeRehydrate = statusEl.textContent || "";
+    lastStatusBeforeRehydrate = appStatusText || statusEl.textContent || "";
     rehydrateRunning = true;
   }
-  statusEl.textContent = text;
+  setStatus(text);
 }
 function clearRehydrateStatus() {
   if (!statusEl) return;
   if (!rehydrateRunning) return;
   rehydrateRunning = false;
-  statusEl.textContent = lastStatusBeforeRehydrate || "Conectado – Analizando";
+  setStatus(lastStatusBeforeRehydrate || "Conectado – Analizando");
 }
 
 /* =========================
@@ -5410,6 +5433,7 @@ function finalizeMinute(minute) {
    Tick flow
 ========================= */
 function onTick(tick) {
+  if (appStatusText === "Conectado – Suscribiendo…") setStatus("Conectado – Analizando");
   const epochMs = Math.round(Number(tick.epoch) * 1000);
 
   lastTickLocalNowMs = Date.now();
@@ -6025,10 +6049,10 @@ function addSignal(minute, symbol, direction, ticks) {
 ========================= */
 function connect() {
   try {
-    if (statusEl) statusEl.textContent = "Conectando…";
+    setStatus("Conectando…");
     ws = new WebSocket(WS_URL);
   } catch {
-    if (statusEl) statusEl.textContent = "Error WS – no se pudo iniciar";
+    setStatus("Error WS – no se pudo iniciar");
     return;
   }
 
@@ -6037,7 +6061,7 @@ function connect() {
       resetAuthState();
     } catch {}
 
-    if (statusEl) statusEl.textContent = "Conectado – Suscribiendo…";
+    setStatus("Conectado – Suscribiendo…");
     SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
 
     setTimeout(() => {
@@ -6109,17 +6133,17 @@ function connect() {
       }
 
       if (data?.error) {
-        if (statusEl) statusEl.textContent = `⚠️ WS error: ${data.error.message || "unknown"}`;
+        setStatus(`⚠️ WS error: ${data.error.message || "unknown"}`);
       }
 
       if (data.tick) onTick(data.tick);
     } catch (err) {
-      if (statusEl) statusEl.textContent = `❌ Parse WS: ${err?.message || err}`;
+      setStatus(`❌ Parse WS: ${err?.message || err}`);
     }
   };
 
   ws.onerror = () => {
-    if (statusEl) statusEl.textContent = "Error WS – reconectando…";
+    setStatus("Error WS – reconectando…");
   };
 
   ws.onclose = (ev) => {
@@ -6137,7 +6161,7 @@ function connect() {
 
     const code = ev?.code || 0;
     const reason = ev?.reason || "";
-    if (statusEl) statusEl.textContent = `Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`;
+    setStatus(`Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`);
 
     if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
     setTimeout(connect, 1500);
