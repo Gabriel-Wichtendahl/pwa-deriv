@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals (network-first core + notificaciones abren PWA) */
+/* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v8-notif-pwa-1";
+const CACHE = "deriv-assets-v8-notif-pwa-2";
 
 const ASSETS = [
   "./",
@@ -66,15 +66,16 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-/* ✅ Click notificación: abre la PWA y pide abrir la señal/gráfico */
+/* ✅ Click notificación:
+   - Si la PWA ya está abierta: enfoca y manda mensaje SIN recargar.
+   - Si no está abierta: abre una ventana nueva con ?openSignal=...&openChart=1.
+*/
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
   const data = event.notification?.data || {};
   const signalId = data.signalId || "";
 
-  // El app.js actualizado manda data.url apuntando a la PWA con ?openSignal=...&openChart=1.
-  // Si no viene url, caemos al scope de la PWA.
   const targetUrl = new URL(data.url || self.registration.scope, self.location.origin).toString();
   const target = new URL(targetUrl);
 
@@ -84,39 +85,39 @@ self.addEventListener("notificationclick", (event) => {
       includeUncontrolled: true
     });
 
-    // Primero intenta reutilizar una ventana ya abierta de la PWA.
     for (const client of allClients) {
       try {
         const clientUrl = new URL(client.url);
 
         const sameOrigin = clientUrl.origin === target.origin;
-        const samePath =
-          clientUrl.pathname.replace(/\/$/, "") === target.pathname.replace(/\/$/, "") ||
-          clientUrl.pathname.endsWith("/index.html");
 
-        if (sameOrigin && samePath) {
+        const normalizedClientPath = clientUrl.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
+        const normalizedTargetPath = target.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
+
+        const samePwa =
+          sameOrigin &&
+          (
+            normalizedClientPath === normalizedTargetPath ||
+            clientUrl.pathname.endsWith("/index.html")
+          );
+
+        if (samePwa) {
+          // IMPORTANTE:
+          // No hacemos client.navigate(targetUrl) cuando la app ya está abierta,
+          // porque recarga la PWA y se pierden los ticks vivos del gráfico.
           await client.focus();
 
-          // Si la PWA ya está abierta, le mandamos el ID de la señal para que abra el modal.
           client.postMessage({
             type: "OPEN_SIGNAL_FROM_NOTIFICATION",
             signalId,
             url: targetUrl
           });
 
-          // Además navegamos con query por si el mensaje no llega en algún Android.
-          if ("navigate" in client) {
-            try {
-              await client.navigate(targetUrl);
-            } catch {}
-          }
-
           return;
         }
       } catch {}
     }
 
-    // Si no hay PWA abierta, abre una nueva con los parámetros para abrir la señal.
     await clients.openWindow(targetUrl);
   })());
 });
