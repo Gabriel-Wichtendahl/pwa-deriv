@@ -17,7 +17,7 @@
 // ✅ NUEVO UX: botones de borrar por pestaña en la UI, no en el modal Config
 // ✅ NUEVO: guardar señales manualmente al pool de práctica con botón 💾
 // ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
-// ✅ NUEVO: Práctica con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
+// ✅ NUEVO: Práctica y Señales con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
 
 "use strict";
 
@@ -502,6 +502,13 @@ const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
+let signalConfirmPanelEl = null;
+let signalConfirmCountEl = null;
+let signalConfirmBtnEl = null;
+let signalConfirmUndoBtnEl = null;
+let signalConfirmHintEl = null;
+const SIGNAL_CONFIRM_MIN = 3;
+
 let executionMode = EXECUTION_MODE_RISE_FALL;
 const executionPlanCache = new Map();
 
@@ -3618,6 +3625,210 @@ function ensureModalCandleStatusBar() {
   modalCandleStatusEl = el;
   return modalCandleStatusEl;
 }
+function getSignalConfirmationCount(item = modalCurrentItem) {
+  return Array.isArray(item?.signalConfirmations) ? item.signalConfirmations.length : 0;
+}
+function hasSignalMinimumConfirmations(item = modalCurrentItem) {
+  return getSignalConfirmationCount(item) >= SIGNAL_CONFIRM_MIN;
+}
+function ensureSignalConfirmationControls() {
+  if (signalConfirmPanelEl && signalConfirmPanelEl.isConnected) return signalConfirmPanelEl;
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+
+  if (!footer) return null;
+
+  const panel = document.createElement("div");
+  panel.id = "signalConfirmPanel";
+  panel.style.width = "100%";
+  panel.style.boxSizing = "border-box";
+  panel.style.margin = "0 0 10px 0";
+  panel.style.padding = "12px";
+  panel.style.borderRadius = "18px";
+  panel.style.border = "1px solid rgba(255,255,255,.14)";
+  panel.style.background = "linear-gradient(180deg, rgba(251,191,36,.105), rgba(255,255,255,.035))";
+  panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.18), inset 0 0 0 1px rgba(251,191,36,.045)";
+
+  const top = document.createElement("div");
+  top.style.display = "flex";
+  top.style.alignItems = "center";
+  top.style.justifyContent = "space-between";
+  top.style.gap = "10px";
+  top.style.marginBottom = "10px";
+
+  const count = document.createElement("div");
+  count.id = "signalConfirmCount";
+  count.style.fontWeight = "950";
+  count.style.letterSpacing = ".25px";
+  count.style.fontSize = "15px";
+  count.style.padding = "8px 10px";
+  count.style.borderRadius = "999px";
+  count.style.border = "1px solid rgba(255,255,255,.14)";
+  count.style.background = "rgba(0,0,0,.16)";
+  count.style.whiteSpace = "nowrap";
+
+  const hint = document.createElement("div");
+  hint.id = "signalConfirmHint";
+  hint.style.flex = "1";
+  hint.style.textAlign = "right";
+  hint.style.fontSize = "12px";
+  hint.style.fontWeight = "850";
+  hint.style.opacity = ".90";
+  hint.style.lineHeight = "1.25";
+
+  top.appendChild(count);
+  top.appendChild(hint);
+
+  const row = document.createElement("div");
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "minmax(0, 1fr) auto";
+  row.style.gap = "10px";
+  row.style.alignItems = "stretch";
+
+  const confirmBtn = document.createElement("button");
+  confirmBtn.id = "signalConfirmBtn";
+  confirmBtn.type = "button";
+  confirmBtn.className = "btn";
+  confirmBtn.textContent = "➕ CONFIRMACIÓN";
+  confirmBtn.style.minHeight = "52px";
+  confirmBtn.style.borderRadius = "16px";
+  confirmBtn.style.fontWeight = "950";
+  confirmBtn.style.fontSize = "15px";
+  confirmBtn.style.letterSpacing = ".35px";
+  confirmBtn.style.border = "1px solid rgba(251,191,36,.58)";
+  confirmBtn.style.background = "linear-gradient(180deg, rgba(251,191,36,.28), rgba(251,191,36,.10))";
+  confirmBtn.style.boxShadow = "0 0 20px rgba(251,191,36,.16), inset 0 0 16px rgba(251,191,36,.08)";
+  confirmBtn.style.touchAction = "manipulation";
+
+  const undoBtn = document.createElement("button");
+  undoBtn.id = "signalConfirmUndoBtn";
+  undoBtn.type = "button";
+  undoBtn.className = "btn btnGhost";
+  undoBtn.textContent = "↩️";
+  undoBtn.title = "Quitar última confirmación";
+  undoBtn.style.minHeight = "52px";
+  undoBtn.style.minWidth = "58px";
+  undoBtn.style.borderRadius = "16px";
+  undoBtn.style.fontWeight = "950";
+  undoBtn.style.fontSize = "18px";
+  undoBtn.style.touchAction = "manipulation";
+
+  row.appendChild(confirmBtn);
+  row.appendChild(undoBtn);
+  panel.appendChild(top);
+  panel.appendChild(row);
+
+  const statusBar = ensureModalCandleStatusBar();
+  const tradeRow = footer.querySelector(".tradeRow");
+  if (statusBar && statusBar.parentElement === footer) {
+    statusBar.insertAdjacentElement("afterend", panel);
+  } else if (tradeRow) {
+    footer.insertBefore(panel, tradeRow);
+  } else {
+    footer.prepend(panel);
+  }
+
+  signalConfirmPanelEl = panel;
+  signalConfirmCountEl = count;
+  signalConfirmBtnEl = confirmBtn;
+  signalConfirmUndoBtnEl = undoBtn;
+  signalConfirmHintEl = hint;
+
+  confirmBtn.onclick = () => addSignalConfirmation();
+  undoBtn.onclick = () => removeSignalConfirmation();
+
+  updateSignalConfirmationUI();
+  return panel;
+}
+function getSignalConfirmationMs() {
+  if (!modalCurrentItem) return 0;
+  const now = serverNowMs();
+  const minuteStart = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+    ? currentMinuteStartMs
+    : Math.floor(now / 60000) * 60000;
+  return Math.max(0, Math.min(60000, now - minuteStart));
+}
+function addSignalConfirmation() {
+  if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
+  modalCurrentItem.signalConfirmations ||= [];
+  modalCurrentItem.signalConfirmations.push({ ms: getSignalConfirmationMs(), at: Date.now() });
+  saveHistory(history);
+  updateSignalConfirmationUI();
+  updateModalCandleStatusUI();
+
+  if (hasSignalMinimumConfirmations()) {
+    toast("✅ 3 confirmaciones: operación habilitada", 1400);
+  } else {
+    const faltan = SIGNAL_CONFIRM_MIN - getSignalConfirmationCount();
+    toast(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}`, 1200);
+  }
+}
+function removeSignalConfirmation() {
+  if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
+  modalCurrentItem.signalConfirmations ||= [];
+  modalCurrentItem.signalConfirmations.pop();
+  saveHistory(history);
+  updateSignalConfirmationUI();
+  updateModalCandleStatusUI();
+}
+function updateSignalConfirmationUI() {
+  ensureSignalConfirmationControls();
+
+  const hasItem = !!modalCurrentItem;
+  const isOpen = hasItem && isTradeEntryOpen(modalCurrentItem);
+  const n = getSignalConfirmationCount();
+  const ok = n >= SIGNAL_CONFIRM_MIN;
+
+  if (signalConfirmCountEl) {
+    signalConfirmCountEl.textContent = `Confirmaciones: ${Math.min(n, SIGNAL_CONFIRM_MIN)}/${SIGNAL_CONFIRM_MIN}${n > SIGNAL_CONFIRM_MIN ? ` +${n - SIGNAL_CONFIRM_MIN}` : ""}`;
+    signalConfirmCountEl.style.color = ok ? "#dcfce7" : "rgba(255,255,255,.92)";
+    signalConfirmCountEl.style.borderColor = ok ? "rgba(34,197,94,.48)" : "rgba(251,191,36,.28)";
+    signalConfirmCountEl.style.background = ok ? "rgba(22,163,74,.18)" : "rgba(0,0,0,.16)";
+    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(34,197,94,.16)" : "none";
+  }
+  if (signalConfirmHintEl) {
+    const scope = getTradeScopeText ? getTradeScopeText() : "";
+    signalConfirmHintEl.textContent = ok
+      ? `Operación válida por disciplina${scope ? " · " + scope : ""}`
+      : `Mínimo 3 para operar${scope ? " · " + scope : ""}`;
+    signalConfirmHintEl.style.color = ok ? "#bbf7d0" : "rgba(255,255,255,.72)";
+  }
+  if (signalConfirmBtnEl) {
+    signalConfirmBtnEl.disabled = !hasItem || !isOpen;
+    signalConfirmBtnEl.style.opacity = signalConfirmBtnEl.disabled ? ".45" : "1";
+  }
+  if (signalConfirmUndoBtnEl) {
+    signalConfirmUndoBtnEl.disabled = !hasItem || !isOpen || n <= 0;
+    signalConfirmUndoBtnEl.style.opacity = signalConfirmUndoBtnEl.disabled ? ".42" : "1";
+  }
+}
+function setSignalConfirmationControlsVisible(show) {
+  ensureSignalConfirmationControls();
+  if (signalConfirmPanelEl) signalConfirmPanelEl.style.display = show ? "block" : "none";
+}
+function applySignalConfirmationTradeGate(locked = false, candleClosed = false) {
+  if (!modalCurrentItem) return;
+  updateSignalConfirmationUI();
+
+  if (locked || candleClosed) return;
+  if (hasSignalMinimumConfirmations()) return;
+
+  const faltan = Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount());
+  const msg = `Necesitas ${SIGNAL_CONFIRM_MIN} confirmaciones para operar. Faltan ${faltan}.`;
+
+  paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
+  paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
+}
+function assertSignalMinimumConfirmations() {
+  if (!modalCurrentItem) return;
+  if (!hasSignalMinimumConfirmations(modalCurrentItem)) {
+    const faltan = Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount(modalCurrentItem));
+    throw new Error(`Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} para operar`);
+  }
+}
+
 function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
   if (!btn) return;
 
@@ -3655,6 +3866,7 @@ function updateModalCandleStatusUI() {
 
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
+    setSignalConfirmationControlsVisible(false);
     return;
   }
 
@@ -3697,8 +3909,12 @@ function updateModalCandleStatusUI() {
 
   paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
   paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
+  setSignalConfirmationControlsVisible(true);
+  updateSignalConfirmationUI();
+
   applyModalExecutionButtonUI(locked, candleClosed);
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
+  applySignalConfirmationTradeGate(locked, candleClosed);
 }
 
 /* =========================
@@ -3737,7 +3953,8 @@ function requestModalDraw(force = false) {
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
       const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
       const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
+      const confTag = ` | CONF:${getSignalConfirmationCount(it)}/${SIGNAL_CONFIRM_MIN}`;
+      modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${confTag}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}`;
     }
 
     updateModalCandleStatusUI();
@@ -3768,6 +3985,7 @@ function applyModalTradeButtonsLayout() {
   }
 
   if (statusBar && statusBar.parentElement !== footer) footer.prepend(statusBar);
+  ensureSignalConfirmationControls();
 
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0,1fr)";
@@ -4021,7 +4239,10 @@ function openChartModal(item) {
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
+  item.signalConfirmations ||= [];
   applyModalTradeButtonsLayout();
+  setSignalConfirmationControlsVisible(true);
+  updateSignalConfirmationUI();
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
@@ -4036,6 +4257,7 @@ function closeChartModal() {
   modalLive = false;
   updateModalLiveUI();
   if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
+  setSignalConfirmationControlsVisible(false);
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
@@ -4606,6 +4828,7 @@ function assertEntryWindowOpen() {
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
   assertEntryWindowOpen();
+  assertSignalMinimumConfirmations();
 
   if (tradeInFlight) throw new Error("Operación en curso");
   tradeInFlight = true;
@@ -5666,6 +5889,7 @@ function addSignal(minute, symbol, direction, ticks) {
     nextOutcome: "",
     minuteComplete: false,
     trade: null,
+    signalConfirmations: [],
   };
 
   if (history.some((x) => x.id === item.id)) return;
