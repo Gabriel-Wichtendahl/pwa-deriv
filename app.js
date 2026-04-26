@@ -2313,7 +2313,9 @@ let practiceChoiceHitZones = [];
 let practiceSimilarResults = [];
 let practiceConfirmPanelEl = null;
 let practiceConfirmCountEl = null;
-let practiceConfirmBtnEl = null;
+let practiceConfirmBtnEl = null; // compat: apunta al botón de confirmación COMPRA
+let practiceConfirmBuyBtnEl = null;
+let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 const PRACTICE_CONFIRM_MIN = 3;
@@ -2493,11 +2495,53 @@ function ensurePracticeFilterButton() {
   applyPracticeFilterButtonUI();
   return btn;
 }
-function getPracticeConfirmationCount() {
-  return Array.isArray(practiceRound?.confirmations) ? practiceRound.confirmations.length : 0;
+function normalizePracticeConfirmationSide(side) {
+  const s = String(side || "").toUpperCase();
+  if (s === "CALL" || s === "BUY" || s === "COMPRA") return "CALL";
+  if (s === "PUT" || s === "SELL" || s === "VENTA") return "PUT";
+  return "";
 }
-function hasPracticeMinimumConfirmations() {
-  return getPracticeConfirmationCount() >= PRACTICE_CONFIRM_MIN;
+function getPracticeConfirmationEvents() {
+  return Array.isArray(practiceRound?.confirmations) ? practiceRound.confirmations : [];
+}
+function getPracticeConfirmationScore() {
+  return getPracticeConfirmationEvents().reduce((acc, ev) => {
+    const side = normalizePracticeConfirmationSide(ev?.side);
+    if (side === "CALL") return acc + 1;
+    if (side === "PUT") return acc - 1;
+    return acc;
+  }, 0);
+}
+function getPracticeConfirmationCount(side = null) {
+  const wanted = normalizePracticeConfirmationSide(side);
+  if (wanted) return getPracticeConfirmationEvents().filter((ev) => normalizePracticeConfirmationSide(ev?.side) === wanted).length;
+  return Math.abs(getPracticeConfirmationScore());
+}
+function getPracticeNetBuyPoints() {
+  return Math.max(0, getPracticeConfirmationScore());
+}
+function getPracticeNetSellPoints() {
+  return Math.max(0, -getPracticeConfirmationScore());
+}
+function getPracticeEnabledTradeSide() {
+  const score = getPracticeConfirmationScore();
+  if (score >= PRACTICE_CONFIRM_MIN) return "CALL";
+  if (score <= -PRACTICE_CONFIRM_MIN) return "PUT";
+  return "";
+}
+function hasPracticeMinimumConfirmations(side = null) {
+  const wanted = normalizePracticeConfirmationSide(side);
+  const enabled = getPracticeEnabledTradeSide();
+  return wanted ? enabled === wanted : !!enabled;
+}
+function getPracticeConfirmationStatusText() {
+  return `COMPRA ${getPracticeNetBuyPoints()}/${PRACTICE_CONFIRM_MIN} · VENTA ${getPracticeNetSellPoints()}/${PRACTICE_CONFIRM_MIN}`;
+}
+function getPracticeMissingConfirmations(side) {
+  const wanted = normalizePracticeConfirmationSide(side);
+  if (wanted === "CALL") return Math.max(0, PRACTICE_CONFIRM_MIN - getPracticeNetBuyPoints());
+  if (wanted === "PUT") return Math.max(0, PRACTICE_CONFIRM_MIN - getPracticeNetSellPoints());
+  return Math.max(0, PRACTICE_CONFIRM_MIN - Math.max(getPracticeNetBuyPoints(), getPracticeNetSellPoints()));
 }
 function ensurePracticeConfirmationControls() {
   if (practiceConfirmPanelEl && practiceConfirmPanelEl.isConnected) return practiceConfirmPanelEl;
@@ -2530,6 +2574,7 @@ function ensurePracticeConfirmationControls() {
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(255,255,255,.14)";
   count.style.background = "rgba(0,0,0,.16)";
+  count.style.whiteSpace = "nowrap";
 
   const hint = document.createElement("div");
   hint.id = "practiceConfirmHint";
@@ -2538,30 +2583,48 @@ function ensurePracticeConfirmationControls() {
   hint.style.fontSize = "12px";
   hint.style.fontWeight = "800";
   hint.style.opacity = ".86";
+  hint.style.lineHeight = "1.25";
 
   top.appendChild(count);
   top.appendChild(hint);
 
   const row = document.createElement("div");
   row.style.display = "grid";
-  row.style.gridTemplateColumns = "minmax(0, 1fr) auto";
+  row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
   row.style.gap = "10px";
   row.style.alignItems = "stretch";
 
-  const confirmBtn = document.createElement("button");
-  confirmBtn.id = "practiceConfirmBtn";
-  confirmBtn.type = "button";
-  confirmBtn.className = "btn";
-  confirmBtn.textContent = "➕ CONFIRMACIÓN";
-  confirmBtn.style.minHeight = "52px";
-  confirmBtn.style.borderRadius = "16px";
-  confirmBtn.style.fontWeight = "950";
-  confirmBtn.style.fontSize = "15px";
-  confirmBtn.style.letterSpacing = ".35px";
-  confirmBtn.style.border = "1px solid rgba(251,191,36,.55)";
-  confirmBtn.style.background = "linear-gradient(180deg, rgba(251,191,36,.26), rgba(251,191,36,.10))";
-  confirmBtn.style.boxShadow = "0 0 20px rgba(251,191,36,.16), inset 0 0 16px rgba(251,191,36,.08)";
-  confirmBtn.style.touchAction = "manipulation";
+  const buyBtn = document.createElement("button");
+  buyBtn.id = "practiceConfirmBuyBtn";
+  buyBtn.type = "button";
+  buyBtn.className = "btn";
+  buyBtn.textContent = "🟢 + COMPRA";
+  buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
+  buyBtn.style.minHeight = "52px";
+  buyBtn.style.borderRadius = "16px";
+  buyBtn.style.fontWeight = "950";
+  buyBtn.style.fontSize = "14px";
+  buyBtn.style.letterSpacing = ".25px";
+  buyBtn.style.border = "1px solid rgba(34,197,94,.62)";
+  buyBtn.style.background = "linear-gradient(180deg, rgba(34,197,94,.26), rgba(34,197,94,.10))";
+  buyBtn.style.boxShadow = "0 0 18px rgba(34,197,94,.14), inset 0 0 14px rgba(34,197,94,.07)";
+  buyBtn.style.touchAction = "manipulation";
+
+  const sellBtn = document.createElement("button");
+  sellBtn.id = "practiceConfirmSellBtn";
+  sellBtn.type = "button";
+  sellBtn.className = "btn";
+  sellBtn.textContent = "🔴 + VENTA";
+  sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
+  sellBtn.style.minHeight = "52px";
+  sellBtn.style.borderRadius = "16px";
+  sellBtn.style.fontWeight = "950";
+  sellBtn.style.fontSize = "14px";
+  sellBtn.style.letterSpacing = ".25px";
+  sellBtn.style.border = "1px solid rgba(239,68,68,.62)";
+  sellBtn.style.background = "linear-gradient(180deg, rgba(239,68,68,.24), rgba(239,68,68,.10))";
+  sellBtn.style.boxShadow = "0 0 18px rgba(239,68,68,.13), inset 0 0 14px rgba(239,68,68,.07)";
+  sellBtn.style.touchAction = "manipulation";
 
   const undoBtn = document.createElement("button");
   undoBtn.id = "practiceConfirmUndoBtn";
@@ -2576,7 +2639,8 @@ function ensurePracticeConfirmationControls() {
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
 
-  row.appendChild(confirmBtn);
+  row.appendChild(buyBtn);
+  row.appendChild(sellBtn);
   row.appendChild(undoBtn);
   panel.appendChild(top);
   panel.appendChild(row);
@@ -2587,11 +2651,14 @@ function ensurePracticeConfirmationControls() {
 
   practiceConfirmPanelEl = panel;
   practiceConfirmCountEl = count;
-  practiceConfirmBtnEl = confirmBtn;
+  practiceConfirmBtnEl = buyBtn;
+  practiceConfirmBuyBtnEl = buyBtn;
+  practiceConfirmSellBtnEl = sellBtn;
   practiceConfirmUndoBtnEl = undoBtn;
   practiceConfirmHintEl = hint;
 
-  confirmBtn.onclick = () => addPracticeConfirmation();
+  buyBtn.onclick = () => addPracticeConfirmation("CALL");
+  sellBtn.onclick = () => addPracticeConfirmation("PUT");
   undoBtn.onclick = () => removePracticeConfirmation();
 
   updatePracticeConfirmationUI();
@@ -2602,17 +2669,22 @@ function getPracticeConfirmationMs() {
   const ms = Number(practiceRound.replayMs ?? practiceRound.cutoffMs ?? 0);
   return Math.max(0, Math.min(60000, ms));
 }
-function addPracticeConfirmation() {
+function addPracticeConfirmation(side = "CALL") {
   if (!practiceRound || practiceRound.finished) return;
+  const safeSide = normalizePracticeConfirmationSide(side);
+  if (!safeSide) return;
   practiceRound.confirmations ||= [];
-  practiceRound.confirmations.push({ ms: getPracticeConfirmationMs(), at: Date.now() });
+  practiceRound.confirmations.push({ side: safeSide, ms: getPracticeConfirmationMs(), at: Date.now() });
   updatePracticeConfirmationUI();
   redrawPracticeRoundChart();
-  if (hasPracticeMinimumConfirmations()) {
-    updatePracticeResult("✅ 3 confirmaciones marcadas. Operación habilitada si tu lectura lo justifica.", "is-itm");
+
+  const enabled = getPracticeEnabledTradeSide();
+  if (enabled === "CALL") {
+    updatePracticeResult(`✅ COMPRA habilitada por confirmaciones: ${getPracticeConfirmationStatusText()}`, "is-itm");
+  } else if (enabled === "PUT") {
+    updatePracticeResult(`✅ VENTA habilitada por confirmaciones: ${getPracticeConfirmationStatusText()}`, "is-otm");
   } else {
-    const faltan = PRACTICE_CONFIRM_MIN - getPracticeConfirmationCount();
-    updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}. Si no hay 3 claras, PASAR.`, "is-pass");
+    updatePracticeResult(`🧠 ${getPracticeConfirmationStatusText()}. Si no llega a 3 para un lado, PASAR.`, "is-pass");
   }
 }
 function removePracticeConfirmation() {
@@ -2624,26 +2696,49 @@ function removePracticeConfirmation() {
 }
 function updatePracticeConfirmationUI() {
   ensurePracticeConfirmationControls();
-  const n = getPracticeConfirmationCount();
-  const ok = n >= PRACTICE_CONFIRM_MIN;
+  const totalEvents = getPracticeConfirmationEvents().length;
+  const score = getPracticeConfirmationScore();
+  const enabled = getPracticeEnabledTradeSide();
+  const ok = !!enabled;
+  const buyPts = getPracticeNetBuyPoints();
+  const sellPts = getPracticeNetSellPoints();
 
   if (practiceConfirmCountEl) {
-    practiceConfirmCountEl.textContent = `Confirmaciones: ${Math.min(n, PRACTICE_CONFIRM_MIN)}/${PRACTICE_CONFIRM_MIN}${n > PRACTICE_CONFIRM_MIN ? ` +${n - PRACTICE_CONFIRM_MIN}` : ""}`;
-    practiceConfirmCountEl.style.color = ok ? "#dcfce7" : "rgba(255,255,255,.92)";
-    practiceConfirmCountEl.style.borderColor = ok ? "rgba(34,197,94,.48)" : "rgba(255,255,255,.14)";
-    practiceConfirmCountEl.style.background = ok ? "rgba(22,163,74,.18)" : "rgba(0,0,0,.16)";
-    practiceConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(34,197,94,.16)" : "none";
+    practiceConfirmCountEl.textContent = getPracticeConfirmationStatusText();
+    practiceConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
+    practiceConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.52)" : enabled === "PUT" ? "rgba(239,68,68,.52)" : "rgba(255,255,255,.14)";
+    practiceConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.18)" : enabled === "PUT" ? "rgba(127,29,29,.22)" : "rgba(0,0,0,.16)";
+    practiceConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(255,255,255,.10)" : "none";
   }
   if (practiceConfirmHintEl) {
-    practiceConfirmHintEl.textContent = ok ? "Operación válida por disciplina" : "Mínimo 3 para operar";
-    practiceConfirmHintEl.style.color = ok ? "#bbf7d0" : "rgba(255,255,255,.70)";
+    if (enabled === "CALL") {
+      practiceConfirmHintEl.textContent = "Solo COMPRA habilitada";
+      practiceConfirmHintEl.style.color = "#bbf7d0";
+    } else if (enabled === "PUT") {
+      practiceConfirmHintEl.textContent = "Solo VENTA habilitada";
+      practiceConfirmHintEl.style.color = "#fecaca";
+    } else {
+      practiceConfirmHintEl.textContent = score === 0 ? "Mínimo 3 netas para un lado" : `Neto ${score > 0 ? "+" : ""}${score}`;
+      practiceConfirmHintEl.style.color = "rgba(255,255,255,.70)";
+    }
   }
-  if (practiceConfirmBtnEl) {
-    practiceConfirmBtnEl.disabled = !practiceRound || !!practiceRound.finished;
-    practiceConfirmBtnEl.style.opacity = practiceConfirmBtnEl.disabled ? ".45" : "1";
+
+  const controlsDisabled = !practiceRound || !!practiceRound.finished;
+  [practiceConfirmBuyBtnEl, practiceConfirmSellBtnEl].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = controlsDisabled;
+    btn.style.opacity = btn.disabled ? ".45" : "1";
+  });
+  if (practiceConfirmBuyBtnEl) {
+    practiceConfirmBuyBtnEl.textContent = `🟢 + COMPRA ${buyPts}/${PRACTICE_CONFIRM_MIN}`;
+    practiceConfirmBuyBtnEl.style.transform = enabled === "CALL" ? "translateY(-1px)" : "none";
+  }
+  if (practiceConfirmSellBtnEl) {
+    practiceConfirmSellBtnEl.textContent = `🔴 + VENTA ${sellPts}/${PRACTICE_CONFIRM_MIN}`;
+    practiceConfirmSellBtnEl.style.transform = enabled === "PUT" ? "translateY(-1px)" : "none";
   }
   if (practiceConfirmUndoBtnEl) {
-    practiceConfirmUndoBtnEl.disabled = !practiceRound || !!practiceRound.finished || n <= 0;
+    practiceConfirmUndoBtnEl.disabled = controlsDisabled || totalEvents <= 0;
     practiceConfirmUndoBtnEl.style.opacity = practiceConfirmUndoBtnEl.disabled ? ".42" : "1";
   }
 
@@ -2928,13 +3023,6 @@ function setPracticePassButtonMode(mode = "PASS") {
   practicePassBtn.classList.toggle("is-next", isNext);
 }
 function setPracticeDecisionState(disabled, selected = "") {
-  const confirmationLocked =
-    !disabled &&
-    !!practiceRound &&
-    !practiceRound.finished &&
-    !practiceRound.answer &&
-    !hasPracticeMinimumConfirmations();
-
   const map = [
     [practiceCallBtn, "CALL"],
     [practicePutBtn, "PUT"],
@@ -2944,17 +3032,26 @@ function setPracticeDecisionState(disabled, selected = "") {
     if (!btn) return;
     const isNextBtn = btn === practicePassBtn && btn.dataset.mode === "NEXT";
     const isTradeBtn = key === "CALL" || key === "PUT";
-    btn.disabled = isNextBtn ? false : !!disabled || (isTradeBtn && confirmationLocked);
+    const sideLocked =
+      !disabled &&
+      !!practiceRound &&
+      !practiceRound.finished &&
+      !practiceRound.answer &&
+      isTradeBtn &&
+      !hasPracticeMinimumConfirmations(key);
+
+    btn.disabled = isNextBtn ? false : !!disabled || sideLocked;
     btn.classList.toggle("selected", !isNextBtn && selected === key);
 
-    if (isTradeBtn && confirmationLocked) {
+    if (isTradeBtn && sideLocked) {
+      const faltan = getPracticeMissingConfirmations(key);
       btn.style.filter = "grayscale(1) saturate(.65)";
       btn.style.opacity = ".44";
-      btn.title = `Necesitas ${PRACTICE_CONFIRM_MIN} confirmaciones para operar. PASAR siempre está permitido.`;
+      btn.title = `Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} neta${faltan === 1 ? "" : "s"} para ${key === "CALL" ? "COMPRA" : "VENTA"}.`;
     } else if (isTradeBtn && !disabled) {
       btn.style.filter = "";
       btn.style.opacity = "";
-      btn.title = "Práctica: operar con disciplina";
+      btn.title = key === "CALL" ? "COMPRA habilitada por confirmaciones" : "VENTA habilitada por confirmaciones";
     }
   });
 }
@@ -3378,7 +3475,7 @@ function finalizePracticeRound(answer = null) {
   updatePracticeConfirmationUI();
   setPracticeDecisionState(true, round.answer);
 
-  const confirmText = ` | Confirmaciones: ${getPracticeConfirmationCount()}/${PRACTICE_CONFIRM_MIN}`;
+  const confirmText = ` | ${getPracticeConfirmationStatusText()}`;
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
   if (resultType === "ITM") {
     updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
@@ -3408,7 +3505,7 @@ function practiceLoop(ts) {
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
   const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "—";
-  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | confirmaciones: ${getPracticeConfirmationCount()}/${PRACTICE_CONFIRM_MIN} | decisión: ${picked}`);
+  updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | ${getPracticeConfirmationStatusText()} | decisión: ${picked}`);
 
   if (replayMs >= 60000) {
     finalizePracticeRound(practiceRound.answer || "PASS");
@@ -3453,7 +3550,7 @@ function startPracticeRound(entry = null) {
   updatePracticePoolLabel();
   setPracticeConfirmationControlsVisible(true);
   updatePracticeConfirmationUI();
-  updatePracticeResult(`Marca ${PRACTICE_CONFIRM_MIN} confirmaciones claras para habilitar COMPRA / VENTA. PASAR siempre vale.`, "is-pass");
+  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. PASAR siempre vale.`, "is-pass");
   setPracticePassButtonMode("PASS");
   setPracticeDecisionState(false);
 
@@ -6704,10 +6801,10 @@ if (practice45Btn) {
 if (practiceCallBtn) {
   practiceCallBtn.onclick = () => {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
-    if (!hasPracticeMinimumConfirmations()) {
-      const faltan = PRACTICE_CONFIRM_MIN - getPracticeConfirmationCount();
-      updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}. Si no hay 3 claras, PASAR.`, "is-pass");
-      toast("Primero marcá 3 confirmaciones", 1400);
+    if (!hasPracticeMinimumConfirmations("CALL")) {
+      const faltan = getPracticeMissingConfirmations("CALL");
+      updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} neta${faltan === 1 ? "" : "s"} para COMPRA. ${getPracticeConfirmationStatusText()}`, "is-pass");
+      toast("Primero marcá 3 confirmaciones netas para COMPRA", 1500);
       return;
     }
     practiceRound.answer = "CALL";
@@ -6718,10 +6815,10 @@ if (practiceCallBtn) {
 if (practicePutBtn) {
   practicePutBtn.onclick = () => {
     if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
-    if (!hasPracticeMinimumConfirmations()) {
-      const faltan = PRACTICE_CONFIRM_MIN - getPracticeConfirmationCount();
-      updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}. Si no hay 3 claras, PASAR.`, "is-pass");
-      toast("Primero marcá 3 confirmaciones", 1400);
+    if (!hasPracticeMinimumConfirmations("PUT")) {
+      const faltan = getPracticeMissingConfirmations("PUT");
+      updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} neta${faltan === 1 ? "" : "s"} para VENTA. ${getPracticeConfirmationStatusText()}`, "is-pass");
+      toast("Primero marcá 3 confirmaciones netas para VENTA", 1500);
       return;
     }
     practiceRound.answer = "PUT";
