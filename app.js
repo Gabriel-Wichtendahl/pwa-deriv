@@ -2151,6 +2151,7 @@ function clearTradesOnly() {
   tradesJournal = [];
   saveTradesJournal(tradesJournal);
   practiceQueue = [];
+  clearPracticeQueueState();
   practiceRound = null;
   resetPracticeSimilarState();
   try {
@@ -2273,7 +2274,7 @@ function setActiveView(name) {
   updatePerViewClearButtonsVisibility(name);
 }
 
-(function initTabs() {
+function initTabs() {
   removeSettingsTabIfExists();
   ensureTradesTab();
   ensureTradesView();
@@ -2283,13 +2284,14 @@ function setActiveView(name) {
   const saved = localStorage.getItem("activeView") || "signals";
   const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
   setActiveView(initial);
-})();
+}
 
 /* =========================
    Práctica
 ========================= */
 const PRACTICE_STATS_KEY = "practiceStats_v1";
 const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
+const PRACTICE_POOL_STATE_KEY = "practicePoolState_v2";
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
 const PRACTICE_FILTER_NORMAL = "NORMAL";
@@ -2460,12 +2462,13 @@ function ensurePracticeFilterButton() {
 
     cancelPracticeAnim();
     practiceQueue = [];
+    clearPracticeQueueState(practiceFilterMode);
     practiceRound = null;
     practiceChoiceHitZones = [];
     resetPracticeSimilarState();
 
     applyPracticeFilterButtonUI();
-    ensurePracticeQueue();
+    ensurePracticeQueue({ forceNew: true });
     updatePracticePoolLabel();
 
     if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
@@ -2673,11 +2676,63 @@ function shuffleArray(arr) {
   }
   return out;
 }
-function ensurePracticeQueue() {
-  const eligibleIds = new Set(getEligiblePracticeEntries().map((x) => getPracticeEntryKey(x)));
-  practiceQueue = practiceQueue.filter((id) => eligibleIds.has(String(id)));
-  if (practiceQueue.length) return;
-  practiceQueue = shuffleArray(Array.from(eligibleIds));
+function getPracticePoolStorageKey(mode = practiceFilterMode) {
+  return `${PRACTICE_POOL_STATE_KEY}_${normalizePracticeFilterMode(mode)}`;
+}
+function loadPracticeQueueState(eligibleIds) {
+  try {
+    const raw = localStorage.getItem(getPracticePoolStorageKey());
+    if (!raw) return null;
+    const state = JSON.parse(raw);
+    const savedMode = normalizePracticeFilterMode(state?.filterMode || PRACTICE_FILTER_ALL);
+    if (savedMode !== normalizePracticeFilterMode(practiceFilterMode)) return null;
+    const savedQueue = Array.isArray(state?.queue) ? state.queue.map(String) : [];
+    return savedQueue.filter((id) => eligibleIds.has(String(id)));
+  } catch {
+    return null;
+  }
+}
+function savePracticeQueueState() {
+  try {
+    localStorage.setItem(
+      getPracticePoolStorageKey(),
+      JSON.stringify({
+        filterMode: normalizePracticeFilterMode(practiceFilterMode),
+        queue: (practiceQueue || []).map(String),
+        savedAt: Date.now(),
+      })
+    );
+  } catch {}
+}
+function clearPracticeQueueState(mode = null) {
+  try {
+    if (mode) {
+      localStorage.removeItem(getPracticePoolStorageKey(mode));
+      return;
+    }
+    localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_ALL));
+    localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_GIRO));
+    localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_NORMAL));
+  } catch {}
+}
+function ensurePracticeQueue({ forceNew = false } = {}) {
+  const eligibleIdList = getEligiblePracticeEntries().map((x) => getPracticeEntryKey(x)).filter(Boolean).map(String);
+  const eligibleIds = new Set(eligibleIdList);
+
+  if (!forceNew && !practiceQueue.length) {
+    const restored = loadPracticeQueueState(eligibleIds);
+    if (Array.isArray(restored)) practiceQueue = restored;
+  }
+
+  practiceQueue = (practiceQueue || []).map(String).filter((id) => eligibleIds.has(String(id)));
+
+  if (practiceQueue.length) {
+    savePracticeQueueState();
+    return;
+  }
+
+  practiceQueue = eligibleIdList.length ? shuffleArray(eligibleIdList) : [];
+  savePracticeQueueState();
 }
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
@@ -3258,9 +3313,18 @@ function pullNextPracticeEntry() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
   if (!practiceQueue.length) return null;
-  const nextId = String(practiceQueue.shift());
+
+  const entries = getEligiblePracticeEntries();
+  let next = null;
+
+  while (practiceQueue.length && !next) {
+    const nextId = String(practiceQueue.shift());
+    next = entries.find((x) => getPracticeEntryKey(x) === nextId) || null;
+  }
+
+  savePracticeQueueState();
   updatePracticePoolLabel();
-  return getEligiblePracticeEntries().find((x) => getPracticeEntryKey(x) === nextId) || null;
+  return next;
 }
 function getOutcomeLabel(outcome) {
   return outcome === "up" ? "ALCISTA" : outcome === "down" ? "BAJISTA" : "NEUTRA";
@@ -6729,6 +6793,7 @@ updateDisciplineLockUI(false);
 
 seedTradesJournalFromHistory();
 
+initTabs();
 ensureInlineClearButtons();
 ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
