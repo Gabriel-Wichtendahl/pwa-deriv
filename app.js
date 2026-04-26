@@ -1665,7 +1665,15 @@ function paintGiroOnlyButtonState(btn, enabled, reason) {
   btn.style.opacity = '0.38';
   if (reason) btn.title = reason;
 }
+function shouldBypassGiroOnlyTradeGate() {
+  // En REAL mantenemos el modo GIRO como análisis/señal,
+  // pero NO bloqueamos COMPRA/VENTA según el color actual de la vela.
+  // El bloqueo por confirmaciones 0/3 queda intacto y se aplica después.
+  return activeTradingAccount === ACCOUNT_MODE_REAL;
+}
 function applyGiroOnlyTradeButtons(item, locked = false, candleClosed = false) {
+  if (shouldBypassGiroOnlyTradeGate()) return;
+
   const giroState = getGiroAllowedTradeSide(item);
   if (!giroState.active) return;
   if (locked || candleClosed) return;
@@ -4418,7 +4426,9 @@ function updateModalCandleStatusUI() {
     const autoTxt = shouldUseAutoHighLowExecution()
       ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
       : "";
-    const giroState = getGiroAllowedTradeSide(modalCurrentItem);
+    const giroState = shouldBypassGiroOnlyTradeGate()
+      ? { active: false }
+      : getGiroAllowedTradeSide(modalCurrentItem);
     let giroTxt = "";
     if (giroState.active) {
       if (giroState.bodyDir > 0) giroTxt = " | SOLO GIRO: habilitada VENTA";
