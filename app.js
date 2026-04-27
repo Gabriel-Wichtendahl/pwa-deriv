@@ -78,7 +78,7 @@ const DEFAULT_CURRENCY = "USD";
 ========================= */
 const C100_STATE_KEY = "gestionC100Real_state_v1";
 const C100_PAYOUT_REQUIRED = 95; // cálculo de tabla C100
-const C100_MIN_PAYOUT = 94; // mínimo permitido para comprar
+const C100_MIN_PAYOUT = 92; // mínimo permitido para comprar
 const C100_CAPITAL_BASE = 100;
 const C100_MAX_LEVEL = 5;
 const C100_MODE_LABEL = "SEMI_REAL";
