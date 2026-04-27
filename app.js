@@ -18,6 +18,7 @@
 // ✅ NUEVO: guardar señales manualmente al pool de práctica con botón 💾
 // ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
 // ✅ NUEVO: Práctica y Señales con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
+// ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 
 "use strict";
 
@@ -2300,6 +2301,8 @@ function initTabs() {
 const PRACTICE_STATS_KEY = "practiceStats_v1";
 const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
 const PRACTICE_POOL_STATE_KEY = "practicePoolState_v2";
+const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_v1";
+const PRACTICE_EXPORT_MAX = 150;
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
 const PRACTICE_FILTER_NORMAL = "NORMAL";
@@ -2311,6 +2314,8 @@ let practiceRound = null;
 let practiceRaf = null;
 let practiceChoiceHitZones = [];
 let practiceSimilarResults = [];
+let practiceExportSaved = loadPracticeExportSaved();
+let practiceExportSaveBtnEl = null;
 let practiceConfirmPanelEl = null;
 let practiceConfirmCountEl = null;
 let practiceConfirmBtnEl = null; // compat: apunta al botón de confirmación COMPRA
@@ -2367,6 +2372,234 @@ function formatPracticeStats(stats) {
   const decided = Number(stats.itm || 0) + Number(stats.otm || 0);
   const pct = decided ? Math.round((Number(stats.itm || 0) / decided) * 100) : 0;
   return `ITM ${stats.itm} · OTM ${stats.otm} · PASAR ${stats.pass} · % ${pct} · TOTAL ${stats.total}`;
+}
+function loadPracticeExportSaved() {
+  try {
+    const raw = localStorage.getItem(PRACTICE_EXPORT_SAVED_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(Boolean).slice(0, PRACTICE_EXPORT_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+function savePracticeExportSaved() {
+  try {
+    const safe = Array.isArray(practiceExportSaved) ? practiceExportSaved.filter(Boolean).slice(0, PRACTICE_EXPORT_MAX) : [];
+    practiceExportSaved = safe;
+    localStorage.setItem(PRACTICE_EXPORT_SAVED_KEY, JSON.stringify(safe));
+  } catch {}
+}
+function getPracticeExportSavedList() {
+  if (!Array.isArray(practiceExportSaved)) practiceExportSaved = loadPracticeExportSaved();
+  return practiceExportSaved;
+}
+function getPracticeExportKey(entry, cutoffMs = PRACTICE_EVAL_SEC * 1000) {
+  const entryKey = getPracticeEntryKey(entry) || String(entry?.id || entry?.journal_id || entry?.practice_id || "");
+  if (!entryKey) return "";
+  return `CLEAR::${entryKey}::${Number(cutoffMs || 0)}`;
+}
+function getPracticeExportConfirmationScore(confirmations) {
+  return (Array.isArray(confirmations) ? confirmations : []).reduce((acc, ev) => {
+    const side = normalizePracticeConfirmationSide(ev?.side);
+    if (side === "CALL") return acc + 1;
+    if (side === "PUT") return acc - 1;
+    return acc;
+  }, 0);
+}
+function getPracticeExportEnabledSide(confirmations) {
+  const score = getPracticeExportConfirmationScore(confirmations);
+  if (score >= PRACTICE_CONFIRM_MIN) return "CALL";
+  if (score <= -PRACTICE_CONFIRM_MIN) return "PUT";
+  return "";
+}
+function getPracticeExportConfirmationStatus(confirmations) {
+  const score = getPracticeExportConfirmationScore(confirmations);
+  return `COMPRA ${Math.max(0, score)}/${PRACTICE_CONFIRM_MIN} · VENTA ${Math.max(0, -score)}/${PRACTICE_CONFIRM_MIN}`;
+}
+function findPracticeExportSavedIndex(exportId) {
+  const id = String(exportId || "");
+  if (!id) return -1;
+  return getPracticeExportSavedList().findIndex((x) => String(x?.export_id || "") === id);
+}
+function isPracticeExportSaved(exportId) {
+  return findPracticeExportSavedIndex(exportId) >= 0;
+}
+function isCurrentPracticeRoundSavedForExport() {
+  if (!practiceRound?.entry) return false;
+  return isPracticeExportSaved(getPracticeExportKey(practiceRound.entry, practiceRound.cutoffMs));
+}
+function buildPracticeExportSnapshotFromRound(round = practiceRound) {
+  if (!round?.entry) return null;
+  const entry = round.entry;
+  const cutoffMs = Number(round.cutoffMs || PRACTICE_EVAL_SEC * 1000 || 0);
+  const confirmations = Array.isArray(round.confirmations) ? round.confirmations.map((ev) => ({ ...ev })) : [];
+  const score = getPracticeExportConfirmationScore(confirmations);
+  const enabledSide = getPracticeExportEnabledSide(confirmations);
+  const exportId = getPracticeExportKey(entry, cutoffMs);
+  if (!exportId) return null;
+
+  return {
+    export_id: exportId,
+    export_type: "practice_clear_formation",
+    saved_from: "practice",
+    saved_at: Date.now(),
+    source_key: getPracticeEntryKey(entry),
+    source_type: entry.source_type || "practice_entry",
+    journal_id: entry.journal_id || "",
+    practice_id: entry.practice_id || "",
+    id: entry.id || "",
+    minute: Number(entry.minute || 0),
+    time: String(entry.time || ""),
+    symbol: String(entry.symbol || ""),
+    direction: String(entry.direction || ""),
+    mode: entry.mode || "NORMAL",
+    mode_version: entry.mode_version || getModeVersion(entry.mode || "NORMAL") || "",
+    nextOutcome: entry.nextOutcome || "",
+    minuteComplete: !!entry.minuteComplete,
+    trade: entry.trade && typeof entry.trade === "object" ? { ...entry.trade } : null,
+    cutoffMs,
+    cutoffSec: Math.round(cutoffMs / 1000),
+    practice_eval_sec: PRACTICE_EVAL_SEC,
+    practice_filter: normalizePracticeFilterMode(practiceFilterMode),
+    answer: round.answer || "",
+    resultType: round.resultType || "",
+    confirmations,
+    confirmation_score: score,
+    confirmation_status: getPracticeExportConfirmationStatus(confirmations),
+    enabled_side: enabledSide,
+    clear_side: enabledSide || round.answer || "",
+    note: "Formación marcada manualmente como clara en Modo Práctica para estudiar/configurar señales.",
+    ticks: Array.isArray(entry.ticks) ? entry.ticks : Array.isArray(round.ticks) ? round.ticks : [],
+  };
+}
+function upsertPracticeExportSavedSnapshot(snapshot, { silent = false } = {}) {
+  if (!snapshot?.export_id) return false;
+  const idx = findPracticeExportSavedIndex(snapshot.export_id);
+  if (idx >= 0) {
+    practiceExportSaved[idx] = { ...practiceExportSaved[idx], ...snapshot, updated_at: Date.now() };
+  } else {
+    practiceExportSaved.unshift(snapshot);
+    if (practiceExportSaved.length > PRACTICE_EXPORT_MAX) practiceExportSaved = practiceExportSaved.slice(0, PRACTICE_EXPORT_MAX);
+  }
+  savePracticeExportSaved();
+  updatePracticeExportSaveButtonUI();
+  updateExportTradesButtonUI();
+  if (!silent) toast(`💾 Formación clara guardada (${practiceExportSaved.length})`, 1500);
+  return true;
+}
+function refreshCurrentPracticeExportSavedSnapshot() {
+  if (!practiceRound?.entry) return;
+  const exportId = getPracticeExportKey(practiceRound.entry, practiceRound.cutoffMs);
+  if (!isPracticeExportSaved(exportId)) return;
+  const snapshot = buildPracticeExportSnapshotFromRound(practiceRound);
+  if (snapshot) upsertPracticeExportSavedSnapshot(snapshot, { silent: true });
+}
+function removePracticeExportSaved(exportId, { silent = false } = {}) {
+  const idx = findPracticeExportSavedIndex(exportId);
+  if (idx < 0) return false;
+  practiceExportSaved.splice(idx, 1);
+  savePracticeExportSaved();
+  updatePracticeExportSaveButtonUI();
+  updateExportTradesButtonUI();
+  if (!silent) toast(`🗑️ Formación quitada del export (${practiceExportSaved.length})`, 1500);
+  return true;
+}
+function toggleCurrentPracticeExportSaved() {
+  if (!practiceRound?.entry) {
+    toast("No hay formación activa para guardar", 1300);
+    return;
+  }
+  const exportId = getPracticeExportKey(practiceRound.entry, practiceRound.cutoffMs);
+  if (isPracticeExportSaved(exportId)) {
+    removePracticeExportSaved(exportId);
+    return;
+  }
+  const snapshot = buildPracticeExportSnapshotFromRound(practiceRound);
+  if (snapshot) upsertPracticeExportSavedSnapshot(snapshot);
+}
+function ensurePracticeExportSaveButton() {
+  if (practiceExportSaveBtnEl && practiceExportSaveBtnEl.isConnected) return practiceExportSaveBtnEl;
+  if (!practiceView) return null;
+
+  let btn = pickEl("practiceExportSaveBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "practiceExportSaveBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.textContent = "💾 Guardar formación clara";
+    btn.style.width = "100%";
+    btn.style.minHeight = "42px";
+    btn.style.borderRadius = "14px";
+    btn.style.fontWeight = "950";
+    btn.style.fontSize = "13px";
+    btn.style.letterSpacing = ".15px";
+    btn.style.border = "1px solid rgba(34,211,238,.34)";
+    btn.style.background = "linear-gradient(180deg, rgba(34,211,238,.12), rgba(255,255,255,.035))";
+    btn.style.boxShadow = "inset 0 0 0 1px rgba(255,255,255,.035)";
+    btn.style.touchAction = "manipulation";
+  }
+
+  const wrap = document.getElementById("practicePutSimilarWrap");
+  if (wrap) {
+    if (btn.parentElement !== wrap) wrap.appendChild(btn);
+  } else if (practiceSimilarBtn && practiceSimilarBtn.parentElement) {
+    practiceSimilarBtn.insertAdjacentElement("afterend", btn);
+  } else if (practicePassBtn && practicePassBtn.parentElement) {
+    practicePassBtn.insertAdjacentElement("afterend", btn);
+  } else {
+    practiceView.appendChild(btn);
+  }
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    toggleCurrentPracticeExportSaved();
+  };
+
+  practiceExportSaveBtnEl = btn;
+  updatePracticeExportSaveButtonUI();
+  return btn;
+}
+function updatePracticeExportSaveButtonUI() {
+  const btn = practiceExportSaveBtnEl || pickEl("practiceExportSaveBtn");
+  if (!btn) return;
+
+  const hasRound = !!practiceRound?.entry;
+  btn.disabled = !hasRound;
+  btn.style.display = hasRound ? "flex" : "none";
+  btn.style.alignItems = "center";
+  btn.style.justifyContent = "center";
+  btn.style.gap = "8px";
+  btn.style.opacity = hasRound ? "1" : ".45";
+
+  if (!hasRound) {
+    btn.textContent = "💾 Guardar formación clara";
+    btn.title = "Aparece cuando hay una formación activa en práctica.";
+    return;
+  }
+
+  const saved = isCurrentPracticeRoundSavedForExport();
+  btn.textContent = saved ? `✅ Guardada para exportar (${practiceExportSaved.length})` : "💾 Guardar formación clara";
+  btn.title = saved
+    ? "Tocar para quitar esta formación clara del export."
+    : "Guardar esta formación de práctica para exportarla y estudiarla en PDF.";
+  btn.classList.toggle("active", saved);
+  btn.style.color = saved ? "#ecfeff" : "";
+  btn.style.borderColor = saved ? "rgba(34,211,238,.92)" : "rgba(34,211,238,.34)";
+  btn.style.background = saved
+    ? "linear-gradient(180deg, rgba(20,184,166,.30), rgba(34,197,94,.16))"
+    : "linear-gradient(180deg, rgba(34,211,238,.12), rgba(255,255,255,.035))";
+  btn.style.boxShadow = saved
+    ? "0 0 0 1px rgba(34,211,238,.22) inset, 0 0 14px rgba(34,211,238,.42)"
+    : "inset 0 0 0 1px rgba(255,255,255,.035)";
+}
+function clearPracticeExportSaved() {
+  practiceExportSaved = [];
+  savePracticeExportSaved();
+  updatePracticeExportSaveButtonUI();
+  updateExportTradesButtonUI();
+  toast("🧹 Formaciones claras borradas", 1600);
 }
 function normalizePracticeEntryMode(mode) {
   const m = String(mode || "").toUpperCase();
@@ -2677,6 +2910,7 @@ function addPracticeConfirmation(side = "CALL") {
   practiceRound.confirmations.push({ side: safeSide, ms: getPracticeConfirmationMs(), at: Date.now() });
   updatePracticeConfirmationUI();
   redrawPracticeRoundChart();
+  refreshCurrentPracticeExportSavedSnapshot();
 
   const enabled = getPracticeEnabledTradeSide();
   if (enabled === "CALL") {
@@ -2693,6 +2927,7 @@ function removePracticeConfirmation() {
   practiceRound.confirmations.pop();
   updatePracticeConfirmationUI();
   redrawPracticeRoundChart();
+  refreshCurrentPracticeExportSavedSnapshot();
 }
 function updatePracticeConfirmationUI() {
   ensurePracticeConfirmationControls();
@@ -3490,6 +3725,8 @@ function finalizePracticeRound(answer = null) {
   practiceSimilarResults = [];
   if (getEligiblePracticeEntries().length > 1) setPracticeSimilarButtonVisible(true);
   if (practiceSimilarBtn) practiceSimilarBtn.textContent = "🔎 Ver similares";
+  refreshCurrentPracticeExportSavedSnapshot();
+  updatePracticeExportSaveButtonUI();
   updatePracticeStatusText(`Ronda terminada. Toca VER SIMILARES o SIGUIENTE para continuar sin repetir hasta agotar el pool.`);
 }
 function practiceLoop(ts) {
@@ -3526,6 +3763,7 @@ function startPracticeRound(entry = null) {
       practiceChoiceHitZones = [];
     }
     setPracticeConfirmationControlsVisible(false);
+    updatePracticeExportSaveButtonUI();
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
     return;
@@ -3549,6 +3787,7 @@ function startPracticeRound(entry = null) {
   }
   updatePracticePoolLabel();
   setPracticeConfirmationControlsVisible(true);
+  updatePracticeExportSaveButtonUI();
   updatePracticeConfirmationUI();
   updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. PASAR siempre vale.`, "is-pass");
   setPracticePassButtonMode("PASS");
@@ -3562,6 +3801,7 @@ function ensurePracticeReady() {
   ensurePracticeFilterButton();
   applyPracticeFilterButtonUI();
   ensurePracticeSimilarBelowPut();
+  ensurePracticeExportSaveButton();
   renderPracticeStats();
   paintPracticeSecButtons();
   ensurePracticeQueue();
@@ -3581,6 +3821,7 @@ function ensurePracticeReady() {
         : "Filtro activo: todos los modos.";
     updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales quedan pausadas.`);
     setPracticeConfirmationControlsVisible(false);
+    updatePracticeExportSaveButtonUI();
     updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
@@ -3588,6 +3829,7 @@ function ensurePracticeReady() {
     if (getEligiblePracticeEntries().length > 1) setPracticeSimilarButtonVisible(true);
     setPracticeConfirmationControlsVisible(true);
     updatePracticeConfirmationUI();
+    updatePracticeExportSaveButtonUI();
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true, practiceRound.answer || "");
     drawPracticeChart(practiceCanvas, buildPracticeVisibleTicks(practiceRound.ticks, 60000), 60000, practiceRound.segmentMarks);
@@ -3596,6 +3838,7 @@ function ensurePracticeReady() {
     resetPracticeSimilarState();
     setPracticeConfirmationControlsVisible(true);
     updatePracticeConfirmationUI();
+    updatePracticeExportSaveButtonUI();
     setPracticePassButtonMode("PASS");
     setPracticeDecisionState(false);
   }
@@ -3718,9 +3961,12 @@ function ensureExportButton() {
    Export Trades (journal)
 ========================= */
 function buildExportPayloadTrades() {
+  const selectedPractice = getPracticeExportSavedList();
   return {
     exported_at: new Date().toISOString(),
     count_trades: (tradesJournal || []).length,
+    count_practice_selected: selectedPractice.length,
+    description: "Trades del journal + formaciones claras guardadas manualmente desde Modo Práctica.",
     trades: (tradesJournal || []).map((t) => ({
       journal_id: t.journal_id,
       saved_at: t.saved_at,
@@ -3735,25 +3981,30 @@ function buildExportPayloadTrades() {
       trade: t.trade || null,
       ticks: Array.isArray(t.ticks) ? t.ticks : [],
     })),
+    practice_selected: selectedPractice.map((x) => ({
+      ...x,
+      ticks: Array.isArray(x?.ticks) ? x.ticks : [],
+      confirmations: Array.isArray(x?.confirmations) ? x.confirmations : [],
+    })),
   };
 }
 async function exportTradesJournal() {
   const payload = buildExportPayloadTrades();
   const json = JSON.stringify(payload, null, 2);
 
-  if (!payload.count_trades) {
-    alert("No hay trades guardados todavía.");
+  if (!payload.count_trades && !payload.count_practice_selected) {
+    alert("No hay trades ni formaciones claras guardadas para exportar todavía.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Trades exportados al portapapeles (${payload.count_trades}). Pegalo acá en el chat.`);
+    alert(`✅ Exportado al portapapeles: ${payload.count_trades} trades + ${payload.count_practice_selected} formaciones claras. Pegalo acá en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
-    downloadTextFile(`deriv-trades-journal-${ts}.json`, json);
-    alert(`📥 Descargado JSON (${payload.count_trades}).`);
+    downloadTextFile(`deriv-trades-y-practica-clara-${ts}.json`, json);
+    alert(`📥 Descargado JSON: ${payload.count_trades} trades + ${payload.count_practice_selected} formaciones claras.`);
   }
 }
 function ensureExportTradesButton() {
@@ -3770,10 +4021,20 @@ function ensureExportTradesButton() {
   btn.id = "exportTradesBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "📤 Exportar Trades (estudio)";
-  btn.title = "Copia al portapapeles / descarga JSON del journal de trades";
+  btn.textContent = "📤 Exportar Trades + Práctica";
+  btn.title = "Copia al portapapeles / descarga JSON del journal de trades y formaciones claras guardadas en práctica";
   host.appendChild(btn);
+  updateExportTradesButtonUI();
   return btn;
+}
+function updateExportTradesButtonUI() {
+  const btn = document.getElementById("exportTradesBtn");
+  if (!btn) return;
+  const count = getPracticeExportSavedList().length;
+  btn.textContent = count ? `📤 Exportar Trades + Claras (${count})` : "📤 Exportar Trades + Práctica";
+  btn.title = count
+    ? `Exporta el journal de trades y ${count} formación${count === 1 ? " clara" : "es claras"} guardada${count === 1 ? "" : "s"} en práctica.`
+    : "Exporta el journal de trades. Si guardás formaciones claras en práctica, también salen acá.";
 }
 
 /* =========================
@@ -3791,6 +4052,26 @@ function ensureSplitClearButtons() {
 
   const expT = ensureExportTradesButton();
   if (expT) expT.onclick = exportTradesJournal;
+  updateExportTradesButtonUI();
+
+  let clearPracticeExportBtn = document.getElementById("clearPracticeExportBtn");
+  if (!clearPracticeExportBtn) {
+    clearPracticeExportBtn = document.createElement("button");
+    clearPracticeExportBtn.id = "clearPracticeExportBtn";
+    clearPracticeExportBtn.type = "button";
+    clearPracticeExportBtn.className = "btn btnGhost";
+    clearPracticeExportBtn.textContent = "🧹 Borrar guardadas de práctica";
+    clearPracticeExportBtn.title = "Borra solo las formaciones claras marcadas en Modo Práctica para exportar";
+    host.appendChild(clearPracticeExportBtn);
+  }
+  clearPracticeExportBtn.onclick = () => {
+    if (!getPracticeExportSavedList().length) {
+      toast("No hay formaciones claras guardadas", 1300);
+      return;
+    }
+    if (!confirm("¿Borrar las formaciones claras guardadas desde Práctica? No borra el journal de trades.")) return;
+    clearPracticeExportSaved();
+  };
 
   let btn = document.getElementById("clearTradesConfigBtn");
   if (!btn) {
@@ -6809,6 +7090,7 @@ if (practiceCallBtn) {
     }
     practiceRound.answer = "CALL";
     setPracticeDecisionState(true, "CALL");
+    refreshCurrentPracticeExportSavedSnapshot();
     updatePracticeResult("🟢 COMPRA elegida. Esperando cierre de la vela…", "is-pass");
   };
 }
@@ -6823,6 +7105,7 @@ if (practicePutBtn) {
     }
     practiceRound.answer = "PUT";
     setPracticeDecisionState(true, "PUT");
+    refreshCurrentPracticeExportSavedSnapshot();
     updatePracticeResult("🔴 VENTA elegida. Esperando cierre de la vela…", "is-pass");
   };
 }
@@ -6836,6 +7119,7 @@ if (practicePassBtn) {
     }
     if (!practiceRound || practiceRound.finished) return;
     practiceRound.answer = "PASS";
+    refreshCurrentPracticeExportSavedSnapshot();
     finalizePracticeRound("PASS");
   };
 }
@@ -6904,5 +7188,8 @@ initTabs();
 ensureInlineClearButtons();
 ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
+ensurePracticeExportSaveButton();
+updatePracticeExportSaveButtonUI();
+updateExportTradesButtonUI();
 
 connect();
