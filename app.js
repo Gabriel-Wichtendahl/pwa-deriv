@@ -182,18 +182,18 @@ let tradesJournal = loadTradesJournal();
 const MODE_NORMAL = "NORMAL";
 const MODE_GIRO = "GIRO";
 const MODE_GIRO_FLEX = "GIRO FLEX";
-const MODE_DEBILIDAD = "DEBILIDAD";
+const MODE_NORMAL_DEBILIDAD = "NORMAL + DEBILIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
-const DEBILIDAD_LOGIC_VERSION = "DEBILIDAD_FUERZA_CLARA_20260427";
+const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 
 function normalizeSignalMode(mode) {
   const m = String(mode || "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (m === MODE_GIRO || m === "MODO GIRO") return MODE_GIRO;
   if (m === MODE_GIRO_FLEX || m === "GIRO FLEXIBLE" || m === "MODO GIRO FLEX" || m === "MODO GIRO FLEXIBLE") return MODE_GIRO_FLEX;
-  if (m === MODE_DEBILIDAD || m === "MODO DEBILIDAD" || m === "DEBILIDAD PRO" || m === "FUERZA DEBILIDAD" || m === "FUERZA/DEBILIDAD" || m === "DFC") return MODE_DEBILIDAD;
+  if (m === MODE_NORMAL_DEBILIDAD || m === "NORMAL DEBILIDAD" || m === "NORMAL MAS DEBILIDAD" || m === "NORMAL MÁS DEBILIDAD" || m === "NORMAL + DFC" || m === "NORMAL DFC" || m === "MODO NORMAL DEBILIDAD" || m === "MODO NORMAL + DEBILIDAD" || m === "DEBILIDAD" || m === "MODO DEBILIDAD" || m === "DEBILIDAD PRO" || m === "FUERZA DEBILIDAD" || m === "FUERZA/DEBILIDAD" || m === "DFC") return MODE_NORMAL_DEBILIDAD;
   return MODE_NORMAL;
 }
 function isGiroFamilyMode(mode) {
@@ -204,7 +204,7 @@ function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_GIRO) return GIRO_LOGIC_VERSION;
   if (m === MODE_GIRO_FLEX) return GIRO_FLEX_LOGIC_VERSION;
-  if (m === MODE_DEBILIDAD) return DEBILIDAD_LOGIC_VERSION;
+  if (m === MODE_NORMAL_DEBILIDAD) return NORMAL_DEBILIDAD_LOGIC_VERSION;
   return "";
 }
 function loadAnalysisMode() {
@@ -230,14 +230,14 @@ function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_GIRO) return "🟥 Modo GIRO";
   if (m === MODE_GIRO_FLEX) return "🟧 Modo GIRO FLEX";
-  if (m === MODE_DEBILIDAD) return "🟣 Modo DEBILIDAD";
+  if (m === MODE_NORMAL_DEBILIDAD) return "🟦🟣 NORMAL + DEBILIDAD";
   return "🟦 Modo NORMAL";
 }
 function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
-  if (m === MODE_NORMAL) return MODE_GIRO;
+  if (m === MODE_NORMAL) return MODE_NORMAL_DEBILIDAD;
+  if (m === MODE_NORMAL_DEBILIDAD) return MODE_GIRO;
   if (m === MODE_GIRO) return MODE_GIRO_FLEX;
-  if (m === MODE_GIRO_FLEX) return MODE_DEBILIDAD;
   return MODE_NORMAL;
 }
 
@@ -4146,7 +4146,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.toggle("active-strong", isSpecial);
     modeBtn.classList.toggle("active", isSpecial);
-    modeBtn.title = "Tocá para alternar entre NORMAL, GIRO, GIRO FLEX y DEBILIDAD.";
+    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, GIRO y GIRO FLEX.";
   };
   paintMode();
 
@@ -6776,10 +6776,10 @@ function detectGiroFlexiblePattern(candidate) {
 }
 
 /* =========================
-   Modo DEBILIDAD / FORTALEZA CLARA
+   Motor DEBILIDAD / FORTALEZA CLARA
    - CALL = vendedor agotado + comprador con mejor respuesta
    - PUT  = comprador agotado + vendedor con mejor respuesta
-   No depende del color final de la vela: mide estructura interna.
+   Se usa como filtro del Modo NORMAL + DEBILIDAD: NORMAL da estructura, DEBILIDAD confirma calidad.
 ========================= */
 const RULES_DEBILIDAD = {
   rangeVsVolMin: 1.85,
@@ -6794,6 +6794,12 @@ const RULES_DEBILIDAD = {
   minWeakStepsTotal: 1,
   minWinnerStepsLate: 1,
   clarityMin: 53,
+};
+
+const RULES_NORMAL_DEBILIDAD = {
+  // NORMAL tiene que encontrar estructura/avance. DEBILIDAD decide la dirección final.
+  // Si no aparece DEBILIDAD, no dispara para que este modo no se comporte como NORMAL puro.
+  minAlignedDebilidadScore: 53,
 };
 
 function buildDebilidadCheckpoints(evalMs) {
@@ -6992,40 +6998,56 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return strictLikeMode ? true : false;
 
-  if (signalMode === MODE_DEBILIDAD) {
+  if (signalMode === MODE_NORMAL_DEBILIDAD) {
     const matches = [];
+    const rules = RULES_NORMAL;
 
     for (const c of candidates) {
-      const match = detectDebilidadPattern(c);
-      if (!match) continue;
+      if (c.score < rules.scoreMin) continue;
+      if (!passesTechnicalFilters(c, c.vol, rules)) continue;
+
+      const normalStructureDirection = c.move > 0 ? "CALL" : "PUT";
+      const debilidadMatch = detectDebilidadPattern(c);
+
+      // Este modo NO dispara con NORMAL puro: NORMAL solo valida estructura/avance.
+      // La dirección final la decide DEBILIDAD, porque buscamos agotamiento de un grupo
+      // y aprovechamiento del grupo contrario.
+      if (!debilidadMatch) continue;
+      if (debilidadMatch.quality < RULES_NORMAL_DEBILIDAD.minAlignedDebilidadScore) continue;
 
       matches.push({
         ...c,
-        direction: match.direction,
-        quality: match.quality,
-        debilidadScore: match.quality,
+        direction: debilidadMatch.direction,
+        quality: debilidadMatch.quality + Math.min(35, c.score * 3),
+        normalScore: c.score,
+        normalStructureDirection,
+        debilidadScore: debilidadMatch.quality,
         debilidadMeta: {
-          weakLead: match.weakLead,
-          recovery: match.recovery,
-          lateWinnerRatio: match.lateWinnerRatio,
-          lateWinnerMove: match.lateWinnerMove,
-          range: match.range,
-          rangeVsVol: match.rangeVsVol,
-          weakReduction: match.weakReduction,
-          weakIrregularity: match.weakIrregularity,
-          lateControl: match.lateControl,
+          weakLead: debilidadMatch.weakLead,
+          recovery: debilidadMatch.recovery,
+          lateWinnerRatio: debilidadMatch.lateWinnerRatio,
+          lateWinnerMove: debilidadMatch.lateWinnerMove,
+          range: debilidadMatch.range,
+          rangeVsVol: debilidadMatch.rangeVsVol,
+          weakReduction: debilidadMatch.weakReduction,
+          weakIrregularity: debilidadMatch.weakIrregularity,
+          lateControl: debilidadMatch.lateControl,
+          normalStructureDirection,
+          debilidadDirection: debilidadMatch.direction,
+          normalScore: c.score,
         },
       });
     }
 
     if (!matches.length) return true;
 
-    matches.sort((a, b) => b.quality - a.quality || b.score - a.score);
+    matches.sort((a, b) => b.quality - a.quality || b.debilidadScore - a.debilidadScore || b.normalScore - a.normalScore);
     const bestMatch = matches[0];
 
     addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      debilidad: bestMatch.debilidadMeta,
+      normalScore: bestMatch.normalScore,
       debilidadScore: bestMatch.debilidadScore,
+      debilidad: bestMatch.debilidadMeta,
     });
     return true;
   }
@@ -7078,7 +7100,7 @@ function fmtTimeUTC(minute) {
 function addSignal(minute, symbol, direction, ticks, extra = {}) {
   if (areSignalsPaused()) return;
   const modeLabel = normalizeSignalMode(signalMode);
-  const modeId = modeLabel.replace(/\s+/g, "_");
+  const modeId = modeLabel.replace(/\s+/g, "_").replace(/[^A-Z0-9_]/gi, "");
   const item = {
     id: `${minute}-${symbol}-${direction}-${modeId}`,
     minute,
