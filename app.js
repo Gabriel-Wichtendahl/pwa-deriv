@@ -182,15 +182,18 @@ let tradesJournal = loadTradesJournal();
 const MODE_NORMAL = "NORMAL";
 const MODE_GIRO = "GIRO";
 const MODE_GIRO_FLEX = "GIRO FLEX";
+const MODE_DEBILIDAD = "DEBILIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
+const DEBILIDAD_LOGIC_VERSION = "DEBILIDAD_FUERZA_CLARA_20260427";
 
 function normalizeSignalMode(mode) {
   const m = String(mode || "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (m === MODE_GIRO || m === "MODO GIRO") return MODE_GIRO;
   if (m === MODE_GIRO_FLEX || m === "GIRO FLEXIBLE" || m === "MODO GIRO FLEX" || m === "MODO GIRO FLEXIBLE") return MODE_GIRO_FLEX;
+  if (m === MODE_DEBILIDAD || m === "MODO DEBILIDAD" || m === "DEBILIDAD PRO" || m === "FUERZA DEBILIDAD" || m === "FUERZA/DEBILIDAD" || m === "DFC") return MODE_DEBILIDAD;
   return MODE_NORMAL;
 }
 function isGiroFamilyMode(mode) {
@@ -201,6 +204,7 @@ function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_GIRO) return GIRO_LOGIC_VERSION;
   if (m === MODE_GIRO_FLEX) return GIRO_FLEX_LOGIC_VERSION;
+  if (m === MODE_DEBILIDAD) return DEBILIDAD_LOGIC_VERSION;
   return "";
 }
 function loadAnalysisMode() {
@@ -226,12 +230,14 @@ function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_GIRO) return "🟥 Modo GIRO";
   if (m === MODE_GIRO_FLEX) return "🟧 Modo GIRO FLEX";
+  if (m === MODE_DEBILIDAD) return "🟣 Modo DEBILIDAD";
   return "🟦 Modo NORMAL";
 }
 function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_NORMAL) return MODE_GIRO;
   if (m === MODE_GIRO) return MODE_GIRO_FLEX;
+  if (m === MODE_GIRO_FLEX) return MODE_DEBILIDAD;
   return MODE_NORMAL;
 }
 
@@ -4140,7 +4146,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.toggle("active-strong", isSpecial);
     modeBtn.classList.toggle("active", isSpecial);
-    modeBtn.title = "Tocá para alternar entre NORMAL, GIRO y GIRO FLEX.";
+    modeBtn.title = "Tocá para alternar entre NORMAL, GIRO, GIRO FLEX y DEBILIDAD.";
   };
   paintMode();
 
@@ -6769,7 +6775,190 @@ function detectGiroFlexiblePattern(candidate) {
   return detectGiroPatternWithRules(candidate, RULES_GIRO_FLEX);
 }
 
+/* =========================
+   Modo DEBILIDAD / FORTALEZA CLARA
+   - CALL = vendedor agotado + comprador con mejor respuesta
+   - PUT  = comprador agotado + vendedor con mejor respuesta
+   No depende del color final de la vela: mide estructura interna.
+========================= */
+const RULES_DEBILIDAD = {
+  rangeVsVolMin: 1.85,
+  weakLeadMinFracRange: 0.24,
+  recoveryMinFracRange: 0.18,
+  lateWinnerRatioMin: 0.38,
+  lateWinnerMoveMinFracRange: 0.025,
+  last8WinnerMoveMinFracRange: -0.05,
+  lateControlMin: 0.36,
+  weakReductionMax: 1.34,
+  weakIrregularityMin: 0.035,
+  minWeakStepsTotal: 1,
+  minWinnerStepsLate: 1,
+  clarityMin: 53,
+};
+
+function buildDebilidadCheckpoints(evalMs) {
+  return [...new Set([0, 8000, 16000, 24000, 32000, 40000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+}
+
+function buildDebilidadStepSummary(stepMoves, winnerSign, splitIndex) {
+  const weakSign = -winnerSign;
+  const weakStepsTotal = [];
+  const weakStepsEarly = [];
+  const weakStepsLate = [];
+  const winnerStepsLate = [];
+  let weakLateSum = 0;
+  let winnerLateSum = 0;
+
+  for (let i = 0; i < stepMoves.length; i++) {
+    const raw = Number(stepMoves[i] || 0);
+    if (!Number.isFinite(raw) || Math.abs(raw) < 1e-12) continue;
+    const abs = Math.abs(raw);
+    const isLate = i >= splitIndex;
+
+    if (Math.sign(raw) === weakSign) {
+      weakStepsTotal.push(abs);
+      if (isLate) {
+        weakStepsLate.push(abs);
+        weakLateSum += abs;
+      } else {
+        weakStepsEarly.push(abs);
+      }
+    } else if (Math.sign(raw) === winnerSign && isLate) {
+      winnerStepsLate.push(abs);
+      winnerLateSum += abs;
+    }
+  }
+
+  const weakFirstAvg = average(weakStepsEarly.slice(0, 2).length ? weakStepsEarly.slice(0, 2) : weakStepsTotal.slice(0, 2));
+  const weakLastAvg = average(weakStepsLate.slice(-2).length ? weakStepsLate.slice(-2) : weakStepsTotal.slice(-2));
+  const weakReduction = weakFirstAvg > 1e-12 ? weakLastAvg / weakFirstAvg : 999;
+  const weakIrregularity = coeffVar(weakStepsTotal);
+  const lateControl = winnerLateSum / (weakLateSum + 1e-12);
+
+  return {
+    weakStepsTotal,
+    weakStepsEarly,
+    weakStepsLate,
+    winnerStepsLate,
+    weakLateSum,
+    winnerLateSum,
+    weakFirstAvg,
+    weakLastAvg,
+    weakReduction,
+    weakIrregularity,
+    lateControl,
+  };
+}
+
+function analyzeDebilidadSide(candidate, winnerSign, rules) {
+  const ticks = candidate?.ticks || [];
+  const evalMs = EVAL_SEC * 1000;
+  if (ticks.length < 6) return null;
+
+  const p0 = getPriceAtMs(ticks, 0);
+  const pE = getPriceAtMs(ticks, evalMs);
+  if (p0 == null || pE == null) return null;
+
+  const fullTicks = sliceTicks(ticks, 0, evalMs);
+  if (fullTicks.length < 5) return null;
+
+  const qs = fullTicks.map((t) => Number(t.quote)).filter((q) => Number.isFinite(q));
+  if (qs.length < 5) return null;
+
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = Math.max(1e-12, maxP - minP);
+  const volMean = Number(candidate?.vol || 0);
+  const rangeVsVol = range / (volMean || 1e-9);
+  if (rangeVsVol < rules.rangeVsVolMin) return null;
+
+  const weakSign = -winnerSign;
+  const weakExtreme = weakSign > 0 ? maxP : minP;
+  const weakLead = Math.max(0, (weakExtreme - p0) * weakSign);
+  const recovery = Math.max(0, (pE - weakExtreme) * winnerSign);
+
+  if (weakLead < range * rules.weakLeadMinFracRange) return null;
+  if (recovery < range * rules.recoveryMinFracRange) return null;
+
+  const lateStartMs = Math.max(0, evalMs - 14000);
+  const last8StartMs = Math.max(0, evalMs - 8000);
+  const lateTicks = sliceTicks(ticks, lateStartMs, evalMs);
+  const lateWinnerRatio = directionalRatio(lateTicks, winnerSign);
+  const lateWinnerMove = segmentMoveSigned(ticks, lateStartMs, evalMs, winnerSign);
+  const last8WinnerMove = segmentMoveSigned(ticks, last8StartMs, evalMs, winnerSign);
+
+  if (lateWinnerRatio < rules.lateWinnerRatioMin) return null;
+  if (lateWinnerMove < range * rules.lateWinnerMoveMinFracRange) return null;
+  if (last8WinnerMove < range * rules.last8WinnerMoveMinFracRange) return null;
+
+  const cps = buildDebilidadCheckpoints(evalMs);
+  const stepMoves = [];
+  for (let i = 1; i < cps.length; i++) {
+    const a = getPriceAtMs(ticks, cps[i - 1]);
+    const b = getPriceAtMs(ticks, cps[i]);
+    if (a == null || b == null) return null;
+    stepMoves.push(b - a);
+  }
+
+  const splitIndex = Math.max(1, Math.floor(stepMoves.length / 2));
+  const summary = buildDebilidadStepSummary(stepMoves, winnerSign, splitIndex);
+
+  if (summary.weakStepsTotal.length < rules.minWeakStepsTotal) return null;
+  if (summary.winnerStepsLate.length < rules.minWinnerStepsLate) return null;
+
+  const hasWeaknessSignature =
+    summary.weakReduction <= rules.weakReductionMax ||
+    summary.weakIrregularity >= rules.weakIrregularityMin ||
+    summary.lateControl >= rules.lateControlMin;
+  if (!hasWeaknessSignature) return null;
+
+  const weakLeadScore = Math.min(1.35, weakLead / range);
+  const recoveryScore = Math.min(1.35, recovery / range);
+  const lateMoveScore = Math.max(0, Math.min(1.35, lateWinnerMove / range));
+  const last8Score = Math.max(0, Math.min(1.1, last8WinnerMove / range));
+  const controlScore = Math.min(1.45, summary.lateControl);
+  const reductionScore = Math.max(0, 1.25 - Math.min(1.25, summary.weakReduction));
+  const irregularityScore = Math.min(1.2, summary.weakIrregularity);
+
+  const quality =
+    weakLeadScore * 18 +
+    recoveryScore * 26 +
+    lateWinnerRatio * 26 +
+    lateMoveScore * 22 +
+    last8Score * 8 +
+    controlScore * 15 +
+    reductionScore * 12 +
+    irregularityScore * 10;
+
+  if (quality < rules.clarityMin) return null;
+
+  return {
+    direction: winnerSign > 0 ? "CALL" : "PUT",
+    quality,
+    weakLead,
+    recovery,
+    lateWinnerRatio,
+    lateWinnerMove,
+    range,
+    rangeVsVol,
+    weakReduction: summary.weakReduction,
+    weakIrregularity: summary.weakIrregularity,
+    lateControl: summary.lateControl,
+  };
+}
+
+function detectDebilidadPattern(candidate) {
+  const call = analyzeDebilidadSide(candidate, 1, RULES_DEBILIDAD);
+  const put = analyzeDebilidadSide(candidate, -1, RULES_DEBILIDAD);
+
+  if (call && put) {
+    return call.quality >= put.quality ? call : put;
+  }
+  return call || put || null;
+}
+
 function evaluateMinute(minute) {
+
   const strictLikeMode = signalMode !== MODE_NORMAL;
   const data = minuteData[minute];
   if (!data) return strictLikeMode ? true : false;
@@ -6802,6 +6991,44 @@ function evaluateMinute(minute) {
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return strictLikeMode ? true : false;
+
+  if (signalMode === MODE_DEBILIDAD) {
+    const matches = [];
+
+    for (const c of candidates) {
+      const match = detectDebilidadPattern(c);
+      if (!match) continue;
+
+      matches.push({
+        ...c,
+        direction: match.direction,
+        quality: match.quality,
+        debilidadScore: match.quality,
+        debilidadMeta: {
+          weakLead: match.weakLead,
+          recovery: match.recovery,
+          lateWinnerRatio: match.lateWinnerRatio,
+          lateWinnerMove: match.lateWinnerMove,
+          range: match.range,
+          rangeVsVol: match.rangeVsVol,
+          weakReduction: match.weakReduction,
+          weakIrregularity: match.weakIrregularity,
+          lateControl: match.lateControl,
+        },
+      });
+    }
+
+    if (!matches.length) return true;
+
+    matches.sort((a, b) => b.quality - a.quality || b.score - a.score);
+    const bestMatch = matches[0];
+
+    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+      debilidad: bestMatch.debilidadMeta,
+      debilidadScore: bestMatch.debilidadScore,
+    });
+    return true;
+  }
 
   if (signalMode === MODE_GIRO || signalMode === MODE_GIRO_FLEX) {
     const matches = [];
@@ -6848,7 +7075,7 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
-function addSignal(minute, symbol, direction, ticks) {
+function addSignal(minute, symbol, direction, ticks, extra = {}) {
   if (areSignalsPaused()) return;
   const modeLabel = normalizeSignalMode(signalMode);
   const modeId = modeLabel.replace(/\s+/g, "_");
@@ -6867,6 +7094,7 @@ function addSignal(minute, symbol, direction, ticks) {
     minuteComplete: false,
     trade: null,
     signalConfirmations: [],
+    ...(extra && typeof extra === "object" ? extra : {}),
   };
 
   if (history.some((x) => x.id === item.id)) return;
