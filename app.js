@@ -3964,23 +3964,16 @@ function buildExportPayloadTrades() {
   const selectedPractice = getPracticeExportSavedList();
   return {
     exported_at: new Date().toISOString(),
-    count_trades: (tradesJournal || []).length,
+    export_scope: "practice_clear_formations_only",
+    count_trades: 0,
     count_practice_selected: selectedPractice.length,
-    description: "Trades del journal + formaciones claras guardadas manualmente desde Modo Práctica.",
-    trades: (tradesJournal || []).map((t) => ({
-      journal_id: t.journal_id,
-      saved_at: t.saved_at,
-      id: t.id,
-      minute: t.minute,
-      time: t.time,
-      symbol: t.symbol,
-      direction: t.direction,
-      mode: t.mode,
-      mode_version: t.mode_version || getModeVersion(t.mode || "NORMAL") || "",
-      nextOutcome: t.nextOutcome || "",
-      trade: t.trade || null,
-      ticks: Array.isArray(t.ticks) ? t.ticks : [],
-    })),
+    count_clear_formations: selectedPractice.length,
+    description: "Solo formaciones claras guardadas manualmente desde Modo Práctica. No incluye el journal completo de trades.",
+
+    // Se deja vacío a propósito para no exportar los 100+ trades del journal.
+    trades: [],
+
+    // Estas son las formaciones que marcaste con 💾 Guardar formación clara.
     practice_selected: selectedPractice.map((x) => ({
       ...x,
       ticks: Array.isArray(x?.ticks) ? x.ticks : [],
@@ -3992,19 +3985,19 @@ async function exportTradesJournal() {
   const payload = buildExportPayloadTrades();
   const json = JSON.stringify(payload, null, 2);
 
-  if (!payload.count_trades && !payload.count_practice_selected) {
-    alert("No hay trades ni formaciones claras guardadas para exportar todavía.");
+  if (!payload.count_practice_selected) {
+    alert("No hay formaciones claras guardadas desde Práctica para exportar todavía.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado al portapapeles: ${payload.count_trades} trades + ${payload.count_practice_selected} formaciones claras. Pegalo acá en el chat.`);
+    alert(`✅ Exportado al portapapeles: ${payload.count_practice_selected} formaciones claras. Pegalo acá en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
-    downloadTextFile(`deriv-trades-y-practica-clara-${ts}.json`, json);
-    alert(`📥 Descargado JSON: ${payload.count_trades} trades + ${payload.count_practice_selected} formaciones claras.`);
+    downloadTextFile(`deriv-formaciones-claras-practica-${ts}.json`, json);
+    alert(`📥 Descargado JSON: ${payload.count_practice_selected} formaciones claras.`);
   }
 }
 function ensureExportTradesButton() {
@@ -4021,8 +4014,8 @@ function ensureExportTradesButton() {
   btn.id = "exportTradesBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "📤 Exportar Trades + Práctica";
-  btn.title = "Copia al portapapeles / descarga JSON del journal de trades y formaciones claras guardadas en práctica";
+  btn.textContent = "📤 Exportar claras";
+  btn.title = "Copia al portapapeles / descarga JSON solo con las formaciones claras guardadas en práctica";
   host.appendChild(btn);
   updateExportTradesButtonUI();
   return btn;
@@ -4031,10 +4024,10 @@ function updateExportTradesButtonUI() {
   const btn = document.getElementById("exportTradesBtn");
   if (!btn) return;
   const count = getPracticeExportSavedList().length;
-  btn.textContent = count ? `📤 Exportar Trades + Claras (${count})` : "📤 Exportar Trades + Práctica";
+  btn.textContent = count ? `📤 Exportar claras (${count})` : "📤 Exportar claras";
   btn.title = count
-    ? `Exporta el journal de trades y ${count} formación${count === 1 ? " clara" : "es claras"} guardada${count === 1 ? "" : "s"} en práctica.`
-    : "Exporta el journal de trades. Si guardás formaciones claras en práctica, también salen acá.";
+    ? `Exporta solo ${count} formación${count === 1 ? " clara" : "es claras"} guardada${count === 1 ? "" : "s"} en práctica. No exporta el journal completo.`
+    : "Exporta solo las formaciones claras que guardes desde Modo Práctica.";
 }
 
 /* =========================
