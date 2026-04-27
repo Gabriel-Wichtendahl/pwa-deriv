@@ -1,4 +1,4 @@
-// app.js — Base estable + LIVE chart FIX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
+// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
@@ -6782,28 +6782,77 @@ function detectGiroFlexiblePattern(candidate) {
    Se usa como filtro del Modo NORMAL + DEBILIDAD: NORMAL da estructura, DEBILIDAD confirma calidad.
 ========================= */
 const RULES_DEBILIDAD = {
-  rangeVsVolMin: 1.85,
-  weakLeadMinFracRange: 0.24,
-  recoveryMinFracRange: 0.18,
-  lateWinnerRatioMin: 0.38,
-  lateWinnerMoveMinFracRange: 0.025,
-  last8WinnerMoveMinFracRange: -0.05,
-  lateControlMin: 0.36,
-  weakReductionMax: 1.34,
-  weakIrregularityMin: 0.035,
+  // FLEX 20260427: más señales, pero manteniendo estructura + debilidad.
+  rangeVsVolMin: 1.25,
+  weakLeadMinFracRange: 0.17,
+  recoveryMinFracRange: 0.11,
+  lateWinnerRatioMin: 0.32,
+  lateWinnerMoveMinFracRange: -0.005,
+  last8WinnerMoveMinFracRange: -0.12,
+  lateControlMin: 0.24,
+  weakReductionMax: 1.75,
+  weakIrregularityMin: 0.018,
   minWeakStepsTotal: 1,
   minWinnerStepsLate: 1,
-  clarityMin: 53,
+  clarityMin: 43,
 };
 
 const RULES_NORMAL_DEBILIDAD = {
-  // NORMAL tiene que encontrar estructura/avance. DEBILIDAD decide la dirección final.
-  // Si no aparece DEBILIDAD, no dispara para que este modo no se comporte como NORMAL puro.
-  minAlignedDebilidadScore: 53,
+  // NORMAL da contexto/estructura; DEBILIDAD decide si hay agotamiento aprovechable.
+  minAlignedDebilidadScore: 43,
+  structureRangeVsVolMin: 1.12,
+  structureDominanceMin: 0.40,
+  structureEarlyRangeMinFrac: 0.18,
 };
 
 function buildDebilidadCheckpoints(evalMs) {
   return [...new Set([0, 8000, 16000, 24000, 32000, 40000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+}
+
+function passesNormalDebilidadStructure(candidate, rules = RULES_NORMAL_DEBILIDAD) {
+  const ticks = candidate?.ticks || [];
+  const evalMs = EVAL_SEC * 1000;
+  if (ticks.length < 6) return false;
+
+  const fullTicks = sliceTicks(ticks, 0, evalMs);
+  if (fullTicks.length < 5) return false;
+
+  const qs = fullTicks.map((t) => Number(t.quote)).filter((q) => Number.isFinite(q));
+  if (qs.length < 5) return false;
+
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = Math.max(1e-12, maxP - minP);
+  const rangeVsVol = range / (Number(candidate?.vol || 0) || 1e-9);
+  if (rangeVsVol < Number(rules.structureRangeVsVolMin || 1.12)) return false;
+
+  // Hay estructura cuando existe una intención predominante mínima dentro de la vela,
+  // aunque después aparezca el giro/debilidad. No pedimos continuidad perfecta.
+  const cps = [...new Set([0, 10000, 20000, 30000, 40000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+  let upSum = 0;
+  let downSum = 0;
+  for (let i = 1; i < cps.length; i++) {
+    const a = getPriceAtMs(ticks, cps[i - 1]);
+    const b = getPriceAtMs(ticks, cps[i]);
+    if (a == null || b == null) return false;
+    const mv = b - a;
+    if (mv > 0) upSum += mv;
+    else downSum += Math.abs(mv);
+  }
+
+  const totalLegs = upSum + downSum;
+  if (totalLegs <= 1e-12) return false;
+  const dominance = Math.max(upSum, downSum) / totalLegs;
+  if (dominance < Number(rules.structureDominanceMin || 0.40)) return false;
+
+  const earlyTicks = sliceTicks(ticks, 0, Math.min(30000, evalMs));
+  const earlyQs = earlyTicks.map((t) => Number(t.quote)).filter((q) => Number.isFinite(q));
+  if (earlyQs.length >= 3) {
+    const earlyRange = Math.max(...earlyQs) - Math.min(...earlyQs);
+    if (earlyRange < range * Number(rules.structureEarlyRangeMinFrac || 0.18)) return false;
+  }
+
+  return true;
 }
 
 function buildDebilidadStepSummary(stepMoves, winnerSign, splitIndex) {
@@ -7000,11 +7049,12 @@ function evaluateMinute(minute) {
 
   if (signalMode === MODE_NORMAL_DEBILIDAD) {
     const matches = [];
-    const rules = RULES_NORMAL;
 
     for (const c of candidates) {
-      if (c.score < rules.scoreMin) continue;
-      if (!passesTechnicalFilters(c, c.vol, rules)) continue;
+      // FLEX: NORMAL ya no exige una continuación perfecta.
+      // Solo pide que haya estructura/avance real dentro de la vela;
+      // la dirección final la decide la lectura de Debilidad/Fortaleza.
+      if (!passesNormalDebilidadStructure(c, RULES_NORMAL_DEBILIDAD)) continue;
 
       const normalStructureDirection = c.move > 0 ? "CALL" : "PUT";
       const debilidadMatch = detectDebilidadPattern(c);
