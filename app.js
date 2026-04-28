@@ -2166,6 +2166,7 @@ function clearTradesOnly() {
   tradesJournal = [];
   saveTradesJournal(tradesJournal);
   practiceQueue = [];
+  practicePoolMeta = null;
   clearPracticeQueueState();
   practiceRound = null;
   resetPracticeSimilarState();
@@ -2316,6 +2317,7 @@ let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
 let practiceFilterMode = loadPracticeFilterMode();
 let practiceQueue = [];
+let practicePoolMeta = null; // estado persistente de la pool: queue + usadas + vuelta
 let practiceRound = null;
 let practiceRaf = null;
 let practiceChoiceHitZones = [];
@@ -2711,13 +2713,13 @@ function ensurePracticeFilterButton() {
 
     cancelPracticeAnim();
     practiceQueue = [];
-    clearPracticeQueueState(practiceFilterMode);
+    practicePoolMeta = null;
     practiceRound = null;
     practiceChoiceHitZones = [];
     resetPracticeSimilarState();
 
     applyPracticeFilterButtonUI();
-    ensurePracticeQueue({ forceNew: true });
+    ensurePracticeQueue();
     updatePracticePoolLabel();
 
     if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
@@ -3012,76 +3014,228 @@ function getEligiblePracticeEntries() {
     return true;
   });
 }
+function secureRandomIndex(maxExclusive) {
+  const max = Number(maxExclusive || 0);
+  if (!Number.isFinite(max) || max <= 1) return 0;
+
+  try {
+    if (window.crypto && window.crypto.getRandomValues) {
+      const arr = new Uint32Array(1);
+      window.crypto.getRandomValues(arr);
+      return arr[0] % max;
+    }
+  } catch {}
+
+  return Math.floor(Math.random() * max);
+}
+
 function shuffleArray(arr) {
-  const out = arr.slice();
+  const out = Array.isArray(arr) ? arr.slice() : [];
   for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = secureRandomIndex(i + 1);
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
 }
+
 function getPracticePoolStorageKey(mode = practiceFilterMode) {
   return `${PRACTICE_POOL_STATE_KEY}_${normalizePracticeFilterMode(mode)}`;
 }
-function loadPracticeQueueState(eligibleIds) {
+
+function getPracticeEligibleIdList(entries = null) {
+  const list = Array.isArray(entries) ? entries : getEligiblePracticeEntries();
+  const out = [];
+  const seen = new Set();
+
+  for (const entry of list) {
+    const id = String(getPracticeEntryKey(entry) || "");
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+
+  return out;
+}
+
+function normalizePracticeQueueState(state, eligibleIdList = []) {
+  const eligible = getPracticeEligibleIdList(Array.isArray(eligibleIdList) ? eligibleIdList.map((id) => ({ practice_id: id })) : []);
+  const ids = eligible.length ? eligible : (Array.isArray(eligibleIdList) ? eligibleIdList.map(String).filter(Boolean) : []);
+  const eligibleIds = new Set(ids);
+
+  const rawState = state && typeof state === "object" ? state : {};
+  const rawQueue = Array.isArray(rawState.queue)
+    ? rawState.queue
+    : Array.isArray(state)
+      ? state
+      : [];
+
+  const queue = rawQueue.map(String).filter((id) => eligibleIds.has(id));
+  const queueSet = new Set(queue);
+
+  let usedIds = [];
+  if (Array.isArray(rawState.usedIds)) {
+    usedIds = rawState.usedIds.map(String).filter((id) => eligibleIds.has(id) && !queueSet.has(id));
+  } else if (queue.length && ids.length) {
+    // Migración desde el estado viejo: antes solo se guardaba queue.
+    // Todo lo que no está pendiente se considera ya usado en esta vuelta,
+    // así no vuelve a aparecer antes de agotar el mazo.
+    usedIds = ids.filter((id) => !queueSet.has(id));
+  }
+
+  return {
+    schema: 3,
+    filterMode: normalizePracticeFilterMode(rawState.filterMode || practiceFilterMode),
+    queue,
+    usedIds,
+    cycle: Math.max(1, Number(rawState.cycle || 1)),
+    savedAt: Number(rawState.savedAt || Date.now()),
+  };
+}
+
+function loadPracticeQueueState(eligibleIdList = null) {
   try {
+    const ids = Array.isArray(eligibleIdList) ? eligibleIdList.map(String).filter(Boolean) : getPracticeEligibleIdList();
     const raw = localStorage.getItem(getPracticePoolStorageKey());
-    if (!raw) return null;
+    if (!raw) {
+      practicePoolMeta = normalizePracticeQueueState(
+        {
+          filterMode: normalizePracticeFilterMode(practiceFilterMode),
+          queue: [],
+          usedIds: [],
+          cycle: 1,
+        },
+        ids
+      );
+      return practicePoolMeta;
+    }
+
     const state = JSON.parse(raw);
     const savedMode = normalizePracticeFilterMode(state?.filterMode || PRACTICE_FILTER_ALL);
-    if (savedMode !== normalizePracticeFilterMode(practiceFilterMode)) return null;
-    const savedQueue = Array.isArray(state?.queue) ? state.queue.map(String) : [];
-    return savedQueue.filter((id) => eligibleIds.has(String(id)));
+    if (savedMode !== normalizePracticeFilterMode(practiceFilterMode)) {
+      practicePoolMeta = normalizePracticeQueueState(
+        {
+          filterMode: normalizePracticeFilterMode(practiceFilterMode),
+          queue: [],
+          usedIds: [],
+          cycle: 1,
+        },
+        ids
+      );
+      return practicePoolMeta;
+    }
+
+    practicePoolMeta = normalizePracticeQueueState(state, ids);
+    return practicePoolMeta;
   } catch {
-    return null;
+    practicePoolMeta = normalizePracticeQueueState(
+      {
+        filterMode: normalizePracticeFilterMode(practiceFilterMode),
+        queue: [],
+        usedIds: [],
+        cycle: 1,
+      },
+      Array.isArray(eligibleIdList) ? eligibleIdList : []
+    );
+    return practicePoolMeta;
   }
 }
-function savePracticeQueueState() {
+
+function savePracticeQueueState(state = null) {
   try {
-    localStorage.setItem(
-      getPracticePoolStorageKey(),
-      JSON.stringify({
-        filterMode: normalizePracticeFilterMode(practiceFilterMode),
-        queue: (practiceQueue || []).map(String),
-        savedAt: Date.now(),
-      })
-    );
+    const base = state && typeof state === "object" ? state : practicePoolMeta || {};
+    const payload = {
+      schema: 3,
+      filterMode: normalizePracticeFilterMode(practiceFilterMode),
+      cycle: Math.max(1, Number(base.cycle || 1)),
+      queue: (practiceQueue || []).map(String).filter(Boolean),
+      usedIds: Array.isArray(base.usedIds) ? base.usedIds.map(String).filter(Boolean) : [],
+      eligibleTotal: getPracticeEligibleIdList().length,
+      savedAt: Date.now(),
+    };
+
+    practicePoolMeta = payload;
+    localStorage.setItem(getPracticePoolStorageKey(), JSON.stringify(payload));
   } catch {}
 }
+
 function clearPracticeQueueState(mode = null) {
   try {
     if (mode) {
       localStorage.removeItem(getPracticePoolStorageKey(mode));
+      if (normalizePracticeFilterMode(mode) === normalizePracticeFilterMode(practiceFilterMode)) {
+        practicePoolMeta = null;
+      }
       return;
     }
     localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_ALL));
     localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_GIRO));
     localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_NORMAL));
+    practicePoolMeta = null;
   } catch {}
 }
+
 function ensurePracticeQueue({ forceNew = false } = {}) {
-  const eligibleIdList = getEligiblePracticeEntries().map((x) => getPracticeEntryKey(x)).filter(Boolean).map(String);
+  const eligibleIdList = getPracticeEligibleIdList();
   const eligibleIds = new Set(eligibleIdList);
 
-  if (!forceNew && !practiceQueue.length) {
-    const restored = loadPracticeQueueState(eligibleIds);
-    if (Array.isArray(restored)) practiceQueue = restored;
+  let state = forceNew
+    ? normalizePracticeQueueState(
+        {
+          filterMode: normalizePracticeFilterMode(practiceFilterMode),
+          queue: [],
+          usedIds: [],
+          cycle: Math.max(1, Number(practicePoolMeta?.cycle || 1)) + 1,
+        },
+        eligibleIdList
+      )
+    : loadPracticeQueueState(eligibleIdList);
+
+  if (!forceNew && !practiceQueue.length && Array.isArray(state.queue) && state.queue.length) {
+    practiceQueue = state.queue.slice();
   }
 
-  practiceQueue = (practiceQueue || []).map(String).filter((id) => eligibleIds.has(String(id)));
+  practiceQueue = (practiceQueue || []).map(String).filter((id) => eligibleIds.has(id));
 
-  if (practiceQueue.length) {
-    savePracticeQueueState();
-    return;
+  let usedSet = new Set(
+    Array.isArray(state.usedIds)
+      ? state.usedIds.map(String).filter((id) => eligibleIds.has(id) && !practiceQueue.includes(id))
+      : []
+  );
+
+  if (forceNew) {
+    usedSet = new Set();
+    practiceQueue = eligibleIdList.length ? shuffleArray(eligibleIdList) : [];
+  } else {
+    const queuedSet = new Set(practiceQueue);
+
+    // Si guardaste/importaste nuevas formaciones, se suman al final de la vuelta actual.
+    const newIds = eligibleIdList.filter((id) => !queuedSet.has(id) && !usedSet.has(id));
+    if (newIds.length) {
+      practiceQueue.push(...shuffleArray(newIds));
+    }
+
+    // Recién cuando se agotó todo el mazo, empieza una vuelta nueva.
+    if (!practiceQueue.length && eligibleIdList.length) {
+      state.cycle = Math.max(1, Number(state.cycle || 1)) + 1;
+      usedSet = new Set();
+      practiceQueue = shuffleArray(eligibleIdList);
+    }
   }
 
-  practiceQueue = eligibleIdList.length ? shuffleArray(eligibleIdList) : [];
-  savePracticeQueueState();
+  state.queue = practiceQueue.slice();
+  state.usedIds = Array.from(usedSet);
+  practicePoolMeta = state;
+  savePracticeQueueState(state);
 }
+
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
+  const meta = practicePoolMeta || loadPracticeQueueState(getPracticeEligibleIdList());
+  const cycle = Math.max(1, Number(meta?.cycle || 1));
+  const used = Array.isArray(meta?.usedIds) ? meta.usedIds.length : 0;
+
   if (practicePoolLabelEl) {
-    practicePoolLabelEl.textContent = `Pool ${getPracticeFilterTag()}: ${practiceQueue.length}/${eligible}`;
+    practicePoolLabelEl.textContent = `Pool ${getPracticeFilterTag()}: ${practiceQueue.length}/${eligible} · vuelta ${cycle} · usadas ${used}`;
   }
 }
 function paintPracticeSecButtons() {
@@ -3658,18 +3812,38 @@ function redrawPracticeSimilarCanvases() {
 function pullNextPracticeEntry() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
+
   if (!practiceQueue.length) return null;
 
   const entries = getEligiblePracticeEntries();
+  const eligibleIds = getPracticeEligibleIdList(entries);
+  const byId = new Map(entries.map((entry) => [String(getPracticeEntryKey(entry)), entry]));
+
+  let nextId = "";
   let next = null;
 
   while (practiceQueue.length && !next) {
-    const nextId = String(practiceQueue.shift());
-    next = entries.find((x) => getPracticeEntryKey(x) === nextId) || null;
+    nextId = String(practiceQueue.shift() || "");
+    next = byId.get(nextId) || null;
   }
 
-  savePracticeQueueState();
+  const state = loadPracticeQueueState(eligibleIds) || {
+    filterMode: normalizePracticeFilterMode(practiceFilterMode),
+    usedIds: [],
+    cycle: 1,
+  };
+
+  if (next) {
+    const usedSet = new Set(Array.isArray(state.usedIds) ? state.usedIds.map(String) : []);
+    usedSet.add(nextId);
+    state.usedIds = Array.from(usedSet).filter((id) => eligibleIds.includes(id));
+  }
+
+  state.queue = practiceQueue.slice();
+  practicePoolMeta = state;
+  savePracticeQueueState(state);
   updatePracticePoolLabel();
+
   return next;
 }
 function getOutcomeLabel(outcome) {
