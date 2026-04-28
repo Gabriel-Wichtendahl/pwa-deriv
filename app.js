@@ -2334,6 +2334,11 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 const PRACTICE_CONFIRM_MIN = 3;
+// Auto-entrada de práctica: al llegar a 57s, si hay 3+ puntos netos para un lado,
+// la ronda toma automáticamente COMPRA o VENTA.
+const PRACTICE_AUTO_ENTRY_MS = 57000;
+const PRACTICE_AUTO_ENTRY_SEC = Math.round(PRACTICE_AUTO_ENTRY_MS / 1000);
+const PRACTICE_AUTO_ENTRY_ENABLED = true;
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
   { start: 15000, end: 30000, label: "15s" },
@@ -2478,6 +2483,10 @@ function buildPracticeExportSnapshotFromRound(round = practiceRound) {
     confirmation_score: score,
     confirmation_status: getPracticeExportConfirmationStatus(confirmations),
     enabled_side: enabledSide,
+    auto_entry: !!round.autoEntry,
+    auto_entry_ms: Number(round.autoEntryMs || 0),
+    auto_entry_sec: round.autoEntry ? Math.round(Number(round.autoEntryMs || 0) / 1000) : 0,
+    auto_entry_side: round.autoEntrySide || "",
     clear_side: enabledSide || round.answer || "",
     note: "Formación marcada manualmente como clara en Modo Práctica para estudiar/configurar señales.",
     ticks: Array.isArray(entry.ticks) ? entry.ticks : Array.isArray(round.ticks) ? round.ticks : [],
@@ -3855,6 +3864,42 @@ function cancelPracticeAnim() {
   if (practiceRaf) cancelAnimationFrame(practiceRaf);
   practiceRaf = null;
 }
+function shouldAutoEnterPracticeRound(replayMs) {
+  if (!PRACTICE_AUTO_ENTRY_ENABLED) return false;
+  if (!practiceRound || practiceRound.finished || practiceRound.answer) return false;
+  if (practiceRound.autoEntryChecked) return false;
+  return Number(replayMs || 0) >= PRACTICE_AUTO_ENTRY_MS;
+}
+function getPracticeAutoEntrySide() {
+  const enabled = getPracticeEnabledTradeSide();
+  return enabled === "CALL" || enabled === "PUT" ? enabled : "";
+}
+function tryPracticeAutoEntryAt57s(replayMs) {
+  if (!shouldAutoEnterPracticeRound(replayMs)) return false;
+
+  practiceRound.autoEntryChecked = true;
+  const side = getPracticeAutoEntrySide();
+
+  if (!side) {
+    updatePracticeResult(`⏱️ ${PRACTICE_AUTO_ENTRY_SEC}s sin entrada automática: ${getPracticeConfirmationStatusText()}. Si no aparece puntaje suficiente, queda PASAR.`, "is-pass");
+    return false;
+  }
+
+  practiceRound.answer = side;
+  practiceRound.autoEntry = true;
+  practiceRound.autoEntryMs = PRACTICE_AUTO_ENTRY_MS;
+  practiceRound.autoEntrySide = side;
+  refreshCurrentPracticeExportSavedSnapshot();
+  setPracticeDecisionState(true, side);
+
+  updatePracticeResult(
+    `${side === "CALL" ? "🟢" : "🔴"} AUTO ${side === "CALL" ? "COMPRA" : "VENTA"} en ${PRACTICE_AUTO_ENTRY_SEC}s por puntaje: ${getPracticeConfirmationStatusText()}.`,
+    side === "CALL" ? "is-itm" : "is-otm"
+  );
+
+  finalizePracticeRound(side);
+  return true;
+}
 function finalizePracticeRound(answer = null) {
   if (!practiceRound || practiceRound.finished) return;
   cancelPracticeAnim();
@@ -3894,10 +3939,11 @@ function finalizePracticeRound(answer = null) {
 
   const confirmText = ` | ${getPracticeConfirmationStatusText()}`;
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
+  const autoText = round.autoEntry ? `AUTO ${PRACTICE_AUTO_ENTRY_SEC}s` : "Tu decisión";
   if (resultType === "ITM") {
-    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
+    updatePracticeResult(`✅ ITM | ${autoText}: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
   } else if (resultType === "OTM") {
-    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
+    updatePracticeResult(`❌ OTM | ${autoText}: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
   } else {
     updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
   }
@@ -3925,6 +3971,8 @@ function practiceLoop(ts) {
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
   const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "—";
   updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | ${getPracticeConfirmationStatusText()} | decisión: ${picked}`);
+
+  if (tryPracticeAutoEntryAt57s(replayMs)) return;
 
   if (replayMs >= 60000) {
     finalizePracticeRound(practiceRound.answer || "PASS");
@@ -3960,6 +4008,10 @@ function startPracticeRound(entry = null) {
     replayMs: PRACTICE_EVAL_SEC * 1000,
     answer: null,
     finished: false,
+    autoEntry: false,
+    autoEntryChecked: false,
+    autoEntryMs: 0,
+    autoEntrySide: "",
     confirmations: [],
     segmentMarks: freshPracticeSegmentMarks(),
   };
@@ -3971,7 +4023,7 @@ function startPracticeRound(entry = null) {
   setPracticeConfirmationControlsVisible(true);
   updatePracticeExportSaveButtonUI();
   updatePracticeConfirmationUI();
-  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. PASAR siempre vale.`, "is-pass");
+  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. A los ${PRACTICE_AUTO_ENTRY_SEC}s entra automático si ya hay puntaje suficiente.`, "is-pass");
   setPracticePassButtonMode("PASS");
   setPracticeDecisionState(false);
 
