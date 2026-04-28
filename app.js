@@ -20,6 +20,7 @@
 // ✅ NUEVO: Práctica y Señales con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
+// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 3 confirmaciones netas para COMPRA/VENTA
 
 "use strict";
 
@@ -2386,6 +2387,8 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 const PRACTICE_CONFIRM_MIN = 3;
+const PRACTICE_AUTO_ENTRY_MS = 57000;
+const PRACTICE_AUTO_ENTRY_SEC = Math.round(PRACTICE_AUTO_ENTRY_MS / 1000);
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
   { start: 15000, end: 30000, label: "15s" },
@@ -2526,6 +2529,9 @@ function buildPracticeExportSnapshotFromRound(round = practiceRound) {
     practice_filter: normalizePracticeFilterMode(practiceFilterMode),
     answer: round.answer || "",
     resultType: round.resultType || "",
+    autoEntry: round.autoEntry && typeof round.autoEntry === "object" ? { ...round.autoEntry } : null,
+    auto_entry_sec: PRACTICE_AUTO_ENTRY_SEC,
+    auto_entry_ms: PRACTICE_AUTO_ENTRY_MS,
     confirmations,
     confirmation_score: score,
     confirmation_status: getPracticeExportConfirmationStatus(confirmations),
@@ -2832,6 +2838,38 @@ function hasPracticeMinimumConfirmations(side = null) {
 function getPracticeConfirmationStatusText() {
   return `COMPRA ${getPracticeNetBuyPoints()}/${PRACTICE_CONFIRM_MIN} · VENTA ${getPracticeNetSellPoints()}/${PRACTICE_CONFIRM_MIN}`;
 }
+function isPracticePastAutoEntryTime(round = practiceRound) {
+  if (!round || round.finished || round.answer) return false;
+  const ms = Number(round.replayMs ?? round.cutoffMs ?? 0);
+  return Number.isFinite(ms) && ms >= PRACTICE_AUTO_ENTRY_MS;
+}
+function tryPracticeAutoEntryAt57(reason = "AUTO_57") {
+  if (!practiceRound || practiceRound.finished || practiceRound.answer) return false;
+  if (!isPracticePastAutoEntryTime(practiceRound)) return false;
+
+  const side = getPracticeEnabledTradeSide();
+  if (side !== "CALL" && side !== "PUT") return false;
+
+  practiceRound.answer = side;
+  practiceRound.autoEntry = {
+    type: "AUTO_57",
+    side,
+    ms: Math.round(Number(practiceRound.replayMs || PRACTICE_AUTO_ENTRY_MS)),
+    sec: PRACTICE_AUTO_ENTRY_SEC,
+    reason: String(reason || "AUTO_57"),
+    confirmationStatus: getPracticeConfirmationStatusText(),
+    at: Date.now(),
+  };
+
+  setPracticeDecisionState(true, side);
+  updatePracticeConfirmationUI();
+  refreshCurrentPracticeExportSavedSnapshot();
+
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  updatePracticeResult(`🤖 AUTO ${PRACTICE_AUTO_ENTRY_SEC}s: ${label} ejecutada por confirmaciones (${getPracticeConfirmationStatusText()}). Esperando cierre…`, side === "CALL" ? "is-itm" : "is-otm");
+  toast(`🤖 AUTO ${PRACTICE_AUTO_ENTRY_SEC}s: ${label}`, 1500);
+  return true;
+}
 function getPracticeMissingConfirmations(side) {
   const wanted = normalizePracticeConfirmationSide(side);
   if (wanted === "CALL") return Math.max(0, PRACTICE_CONFIRM_MIN - getPracticeNetBuyPoints());
@@ -2965,7 +3003,7 @@ function getPracticeConfirmationMs() {
   return Math.max(0, Math.min(60000, ms));
 }
 function addPracticeConfirmation(side = "CALL") {
-  if (!practiceRound || practiceRound.finished) return;
+  if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
   const safeSide = normalizePracticeConfirmationSide(side);
   if (!safeSide) return;
   practiceRound.confirmations ||= [];
@@ -2982,9 +3020,13 @@ function addPracticeConfirmation(side = "CALL") {
   } else {
     updatePracticeResult(`🧠 ${getPracticeConfirmationStatusText()}. Si no llega a 3 para un lado, PASAR.`, "is-pass");
   }
+
+  // Si el usuario suma la tercera confirmación cuando la ronda ya pasó 57s,
+  // también entra automáticamente sin esperar otro frame.
+  tryPracticeAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
 function removePracticeConfirmation() {
-  if (!practiceRound || practiceRound.finished) return;
+  if (!practiceRound || practiceRound.finished || practiceRound.answer) return;
   practiceRound.confirmations ||= [];
   practiceRound.confirmations.pop();
   updatePracticeConfirmationUI();
@@ -3020,7 +3062,7 @@ function updatePracticeConfirmationUI() {
     }
   }
 
-  const controlsDisabled = !practiceRound || !!practiceRound.finished;
+  const controlsDisabled = !practiceRound || !!practiceRound.finished || !!practiceRound.answer;
   [practiceConfirmBuyBtnEl, practiceConfirmSellBtnEl].forEach((btn) => {
     if (!btn) return;
     btn.disabled = controlsDisabled;
@@ -3868,11 +3910,12 @@ function finalizePracticeRound(answer = null) {
   setPracticeDecisionState(true, round.answer);
 
   const confirmText = ` | ${getPracticeConfirmationStatusText()}`;
+  const autoText = round.autoEntry ? ` | AUTO ${PRACTICE_AUTO_ENTRY_SEC}s` : "";
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
   if (resultType === "ITM") {
-    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
+    updatePracticeResult(`✅ ITM${autoText} | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
   } else if (resultType === "OTM") {
-    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
+    updatePracticeResult(`❌ OTM${autoText} | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
   } else {
     updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
   }
@@ -3895,6 +3938,10 @@ function practiceLoop(ts) {
 
   const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
   drawPracticeChart(practiceCanvas, visibleTicks, replayMs, practiceRound.segmentMarks);
+
+  // Auto-entrada de práctica: al segundo 57, si ya hay 3 puntos netos
+  // para COMPRA o VENTA y no hubo decisión manual, se elige esa dirección.
+  tryPracticeAutoEntryAt57("TIMER_57");
 
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
@@ -3935,6 +3982,7 @@ function startPracticeRound(entry = null) {
     replayMs: PRACTICE_EVAL_SEC * 1000,
     answer: null,
     finished: false,
+    autoEntry: null,
     confirmations: [],
     segmentMarks: freshPracticeSegmentMarks(),
   };
@@ -3946,7 +3994,7 @@ function startPracticeRound(entry = null) {
   setPracticeConfirmationControlsVisible(true);
   updatePracticeExportSaveButtonUI();
   updatePracticeConfirmationUI();
-  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. PASAR siempre vale.`, "is-pass");
+  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. En ${PRACTICE_AUTO_ENTRY_SEC}s entra automático si ya está habilitada. PASAR siempre vale.`, "is-pass");
   setPracticePassButtonMode("PASS");
   setPracticeDecisionState(false);
 
@@ -3979,7 +4027,7 @@ function ensurePracticeReady() {
     updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales quedan pausadas.`);
     setPracticeConfirmationControlsVisible(false);
     updatePracticeExportSaveButtonUI();
-    updatePracticeResult("Se usa tu journal de trades. PASAR no entra en el porcentaje.", "is-pass");
+    updatePracticeResult(`Se usa tu journal de trades. PASAR no entra en el porcentaje. Auto-entrada: ${PRACTICE_AUTO_ENTRY_SEC}s con 3 puntos netos.`, "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
   } else if (practiceRound.finished) {
@@ -7636,4 +7684,4 @@ ensurePracticeExportSaveButton();
 updatePracticeExportSaveButtonUI();
 updateExportTradesButtonUI();
 
-connect(); 
+connect();
