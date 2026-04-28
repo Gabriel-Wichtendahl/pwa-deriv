@@ -1,4 +1,4 @@
-// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + Pool práctica persistente + ✅ PUNTAJE REAL estilo práctica
+// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + ✅ Práctica pool sin duplicados/repetición + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
 // ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
@@ -19,6 +19,7 @@
 // ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
 // ✅ NUEVO: Práctica y Señales con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
+// ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
 
 "use strict";
 
@@ -281,8 +282,61 @@ function normalizePracticeSavedSignal(item) {
     source_type: "saved_signal",
   };
 }
+function hashPracticeString(str) {
+  let h = 2166136261;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+function getPracticeTicksFingerprint(ticks) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .filter((t) => Number.isFinite(Number(t?.ms)) && Number.isFinite(Number(t?.quote)))
+    .slice()
+    .sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (!pts.length) return "";
+
+  const compact = pts
+    .map((t) => `${Math.round(Number(t.ms))}:${Number(t.quote).toFixed(8)}`)
+    .join("|");
+  return `${pts.length}:${hashPracticeString(compact)}`;
+}
+function getPracticeCandleKey(entry) {
+  if (!entry) return "";
+  const symbol = String(entry.symbol || "").trim();
+  const minute = Number.isFinite(Number(entry.minute)) ? String(Number(entry.minute)) : String(entry.minute || "");
+  const ticksHash = getPracticeTicksFingerprint(entry.ticks);
+
+  if (ticksHash) return `VELA::${symbol}::${minute}::${ticksHash}`;
+
+  const fallbackId = String(entry.practice_id || entry.journal_id || entry.id || "");
+  return fallbackId ? `ID::${fallbackId}` : "";
+}
 function getPracticeEntryKey(entry) {
-  return String(entry?.practice_id || entry?.journal_id || entry?.id || "");
+  const identity = String(entry?.practice_id || entry?.journal_id || entry?.id || "");
+  if (identity) return identity;
+  const candleKey = getPracticeCandleKey(entry);
+  return candleKey ? `CANDLE::${candleKey}` : "";
+}
+function dedupePracticeEntriesByCandle(entries) {
+  const out = [];
+  const seenCandles = new Set();
+  const seenIds = new Set();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const candleKey = getPracticeCandleKey(entry);
+    const entryKey = getPracticeEntryKey(entry);
+    const key = candleKey || entryKey;
+    if (!key) continue;
+    if (seenCandles.has(key) || (entryKey && seenIds.has(entryKey))) continue;
+    seenCandles.add(key);
+    if (entryKey) seenIds.add(entryKey);
+    out.push(entry);
+  }
+
+  return out;
 }
 function findPracticeSavedSignalIndex(signalId) {
   const sid = String(signalId || "");
@@ -530,9 +584,7 @@ const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
 let signalConfirmCountEl = null;
-let signalConfirmBtnEl = null; // compat: apunta al botón de confirmación COMPRA
-let signalConfirmBuyBtnEl = null;
-let signalConfirmSellBtnEl = null;
+let signalConfirmBtnEl = null;
 let signalConfirmUndoBtnEl = null;
 let signalConfirmHintEl = null;
 const SIGNAL_CONFIRM_MIN = 3;
@@ -2168,7 +2220,6 @@ function clearTradesOnly() {
   tradesJournal = [];
   saveTradesJournal(tradesJournal);
   practiceQueue = [];
-  practicePoolMeta = null;
   clearPracticeQueueState();
   practiceRound = null;
   resetPracticeSimilarState();
@@ -2319,7 +2370,8 @@ let practiceSessionStats = freshPracticeStats();
 let practiceAllStats = loadPracticeAllStats();
 let practiceFilterMode = loadPracticeFilterMode();
 let practiceQueue = [];
-let practicePoolMeta = null; // estado persistente de la pool: queue + usadas + vuelta
+let practiceLastEntryKey = "";
+let practiceLastCandleKey = "";
 let practiceRound = null;
 let practiceRaf = null;
 let practiceChoiceHitZones = [];
@@ -2334,11 +2386,6 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 const PRACTICE_CONFIRM_MIN = 3;
-// Auto-entrada de práctica: al llegar a 57s, si hay 3+ puntos netos para un lado,
-// la ronda toma automáticamente COMPRA o VENTA.
-const PRACTICE_AUTO_ENTRY_MS = 57000;
-const PRACTICE_AUTO_ENTRY_SEC = Math.round(PRACTICE_AUTO_ENTRY_MS / 1000);
-const PRACTICE_AUTO_ENTRY_ENABLED = true;
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
   { start: 15000, end: 30000, label: "15s" },
@@ -2483,10 +2530,6 @@ function buildPracticeExportSnapshotFromRound(round = practiceRound) {
     confirmation_score: score,
     confirmation_status: getPracticeExportConfirmationStatus(confirmations),
     enabled_side: enabledSide,
-    auto_entry: !!round.autoEntry,
-    auto_entry_ms: Number(round.autoEntryMs || 0),
-    auto_entry_sec: round.autoEntry ? Math.round(Number(round.autoEntryMs || 0) / 1000) : 0,
-    auto_entry_side: round.autoEntrySide || "",
     clear_side: enabledSide || round.answer || "",
     note: "Formación marcada manualmente como clara en Modo Práctica para estudiar/configurar señales.",
     ticks: Array.isArray(entry.ticks) ? entry.ticks : Array.isArray(round.ticks) ? round.ticks : [],
@@ -2724,13 +2767,13 @@ function ensurePracticeFilterButton() {
 
     cancelPracticeAnim();
     practiceQueue = [];
-    practicePoolMeta = null;
+    clearPracticeQueueState(practiceFilterMode);
     practiceRound = null;
     practiceChoiceHitZones = [];
     resetPracticeSimilarState();
 
     applyPracticeFilterButtonUI();
-    ensurePracticeQueue();
+    ensurePracticeQueue({ forceNew: true });
     updatePracticePoolLabel();
 
     if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
@@ -3016,7 +3059,7 @@ function renderPracticeStats() {
   updateCounter("practice");
 }
 function getEligiblePracticeEntries() {
-  return getMergedPracticeEntries().filter((entry) => {
+  const eligible = getMergedPracticeEntries().filter((entry) => {
     if (!entry) return false;
     if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
     if (!(entry.nextOutcome === "up" || entry.nextOutcome === "down")) return false;
@@ -3024,229 +3067,141 @@ function getEligiblePracticeEntries() {
     if (shouldPracticeOnlyNormal() && !isStrictNormalPracticeEntry(entry)) return false;
     return true;
   });
+
+  return dedupePracticeEntriesByCandle(eligible);
 }
-function secureRandomIndex(maxExclusive) {
-  const max = Number(maxExclusive || 0);
-  if (!Number.isFinite(max) || max <= 1) return 0;
-
-  try {
-    if (window.crypto && window.crypto.getRandomValues) {
-      const arr = new Uint32Array(1);
-      window.crypto.getRandomValues(arr);
-      return arr[0] % max;
-    }
-  } catch {}
-
-  return Math.floor(Math.random() * max);
-}
-
 function shuffleArray(arr) {
-  const out = Array.isArray(arr) ? arr.slice() : [];
+  const out = arr.slice();
   for (let i = out.length - 1; i > 0; i--) {
-    const j = secureRandomIndex(i + 1);
+    const j = Math.floor(Math.random() * (i + 1));
     [out[i], out[j]] = [out[j], out[i]];
   }
   return out;
 }
-
 function getPracticePoolStorageKey(mode = practiceFilterMode) {
   return `${PRACTICE_POOL_STATE_KEY}_${normalizePracticeFilterMode(mode)}`;
 }
-
-function getPracticeEligibleIdList(entries = null) {
-  const list = Array.isArray(entries) ? entries : getEligiblePracticeEntries();
+function getLegacyPracticePoolStorageKeys(mode = practiceFilterMode) {
+  const suffix = normalizePracticeFilterMode(mode);
+  return [`practicePoolState_v1_${suffix}`, `practicePoolState_v2_${suffix}`];
+}
+function getPracticeEntryByIdMap(entries) {
+  const map = new Map();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const key = getPracticeEntryKey(entry);
+    if (key && !map.has(key)) map.set(key, entry);
+  }
+  return map;
+}
+function dedupePracticeQueueIds(queue, eligibleIds) {
   const out = [];
   const seen = new Set();
-
-  for (const entry of list) {
-    const id = String(getPracticeEntryKey(entry) || "");
-    if (!id || seen.has(id)) continue;
+  for (const rawId of Array.isArray(queue) ? queue : []) {
+    const id = String(rawId || "");
+    if (!id || !eligibleIds.has(id) || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
   }
-
   return out;
 }
+function avoidImmediatePracticeRepeat(queue, entryById) {
+  const ids = Array.isArray(queue) ? queue.slice() : [];
+  if (ids.length <= 1 || !practiceLastCandleKey) return ids;
 
-function normalizePracticeQueueState(state, eligibleIdList = []) {
-  const eligible = getPracticeEligibleIdList(Array.isArray(eligibleIdList) ? eligibleIdList.map((id) => ({ practice_id: id })) : []);
-  const ids = eligible.length ? eligible : (Array.isArray(eligibleIdList) ? eligibleIdList.map(String).filter(Boolean) : []);
-  const eligibleIds = new Set(ids);
+  const first = entryById.get(String(ids[0]));
+  if (getPracticeCandleKey(first) !== practiceLastCandleKey) return ids;
 
-  const rawState = state && typeof state === "object" ? state : {};
-  const rawQueue = Array.isArray(rawState.queue)
-    ? rawState.queue
-    : Array.isArray(state)
-      ? state
-      : [];
-
-  const queue = rawQueue.map(String).filter((id) => eligibleIds.has(id));
-  const queueSet = new Set(queue);
-
-  let usedIds = [];
-  if (Array.isArray(rawState.usedIds)) {
-    usedIds = rawState.usedIds.map(String).filter((id) => eligibleIds.has(id) && !queueSet.has(id));
-  } else if (queue.length && ids.length) {
-    // Migración desde el estado viejo: antes solo se guardaba queue.
-    // Todo lo que no está pendiente se considera ya usado en esta vuelta,
-    // así no vuelve a aparecer antes de agotar el mazo.
-    usedIds = ids.filter((id) => !queueSet.has(id));
-  }
-
-  return {
-    schema: 3,
-    filterMode: normalizePracticeFilterMode(rawState.filterMode || practiceFilterMode),
-    queue,
-    usedIds,
-    cycle: Math.max(1, Number(rawState.cycle || 1)),
-    savedAt: Number(rawState.savedAt || Date.now()),
-  };
+  const swapIdx = ids.findIndex((id, idx) => idx > 0 && getPracticeCandleKey(entryById.get(String(id))) !== practiceLastCandleKey);
+  if (swapIdx > 0) [ids[0], ids[swapIdx]] = [ids[swapIdx], ids[0]];
+  return ids;
 }
+function buildNewPracticeQueue(entries) {
+  const validIds = (Array.isArray(entries) ? entries : []).map((entry) => getPracticeEntryKey(entry)).filter(Boolean).map(String);
+  const uniqueIds = dedupePracticeQueueIds(validIds, new Set(validIds));
+  const entryById = getPracticeEntryByIdMap(entries);
+  return avoidImmediatePracticeRepeat(shuffleArray(uniqueIds), entryById);
+}
+function readPracticeQueueStateForKey(storageKey, eligibleIds) {
+  const raw = localStorage.getItem(storageKey);
+  if (!raw) return null;
 
-function loadPracticeQueueState(eligibleIdList = null) {
+  const state = JSON.parse(raw);
+  const savedMode = normalizePracticeFilterMode(state?.filterMode || PRACTICE_FILTER_ALL);
+  if (savedMode !== normalizePracticeFilterMode(practiceFilterMode)) return null;
+
+  const savedQueue = Array.isArray(state?.queue) ? state.queue.map(String) : [];
+  const queue = dedupePracticeQueueIds(savedQueue, eligibleIds);
+
+  practiceLastEntryKey = String(state?.lastEntryKey || practiceLastEntryKey || "");
+  practiceLastCandleKey = String(state?.lastCandleKey || practiceLastCandleKey || "");
+
+  return queue;
+}
+function loadPracticeQueueState(eligibleIds) {
   try {
-    const ids = Array.isArray(eligibleIdList) ? eligibleIdList.map(String).filter(Boolean) : getPracticeEligibleIdList();
-    const raw = localStorage.getItem(getPracticePoolStorageKey());
-    if (!raw) {
-      practicePoolMeta = normalizePracticeQueueState(
-        {
-          filterMode: normalizePracticeFilterMode(practiceFilterMode),
-          queue: [],
-          usedIds: [],
-          cycle: 1,
-        },
-        ids
-      );
-      return practicePoolMeta;
+    const keys = [getPracticePoolStorageKey(), ...getLegacyPracticePoolStorageKeys()];
+    for (const key of keys) {
+      const restored = readPracticeQueueStateForKey(key, eligibleIds);
+      if (Array.isArray(restored)) return restored;
     }
-
-    const state = JSON.parse(raw);
-    const savedMode = normalizePracticeFilterMode(state?.filterMode || PRACTICE_FILTER_ALL);
-    if (savedMode !== normalizePracticeFilterMode(practiceFilterMode)) {
-      practicePoolMeta = normalizePracticeQueueState(
-        {
-          filterMode: normalizePracticeFilterMode(practiceFilterMode),
-          queue: [],
-          usedIds: [],
-          cycle: 1,
-        },
-        ids
-      );
-      return practicePoolMeta;
-    }
-
-    practicePoolMeta = normalizePracticeQueueState(state, ids);
-    return practicePoolMeta;
+    return null;
   } catch {
-    practicePoolMeta = normalizePracticeQueueState(
-      {
-        filterMode: normalizePracticeFilterMode(practiceFilterMode),
-        queue: [],
-        usedIds: [],
-        cycle: 1,
-      },
-      Array.isArray(eligibleIdList) ? eligibleIdList : []
-    );
-    return practicePoolMeta;
+    return null;
   }
 }
-
-function savePracticeQueueState(state = null) {
+function savePracticeQueueState() {
   try {
-    const base = state && typeof state === "object" ? state : practicePoolMeta || {};
-    const payload = {
-      schema: 3,
-      filterMode: normalizePracticeFilterMode(practiceFilterMode),
-      cycle: Math.max(1, Number(base.cycle || 1)),
-      queue: (practiceQueue || []).map(String).filter(Boolean),
-      usedIds: Array.isArray(base.usedIds) ? base.usedIds.map(String).filter(Boolean) : [],
-      eligibleTotal: getPracticeEligibleIdList().length,
-      savedAt: Date.now(),
-    };
-
-    practicePoolMeta = payload;
-    localStorage.setItem(getPracticePoolStorageKey(), JSON.stringify(payload));
+    localStorage.setItem(
+      getPracticePoolStorageKey(),
+      JSON.stringify({
+        version: 3,
+        filterMode: normalizePracticeFilterMode(practiceFilterMode),
+        queue: (practiceQueue || []).map(String),
+        lastEntryKey: practiceLastEntryKey || "",
+        lastCandleKey: practiceLastCandleKey || "",
+        savedAt: Date.now(),
+      })
+    );
   } catch {}
 }
-
 function clearPracticeQueueState(mode = null) {
   try {
-    if (mode) {
-      localStorage.removeItem(getPracticePoolStorageKey(mode));
-      if (normalizePracticeFilterMode(mode) === normalizePracticeFilterMode(practiceFilterMode)) {
-        practicePoolMeta = null;
-      }
-      return;
+    const modes = mode ? [mode] : [PRACTICE_FILTER_ALL, PRACTICE_FILTER_GIRO, PRACTICE_FILTER_NORMAL];
+    for (const m of modes) {
+      localStorage.removeItem(getPracticePoolStorageKey(m));
+      for (const legacyKey of getLegacyPracticePoolStorageKeys(m)) localStorage.removeItem(legacyKey);
     }
-    localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_ALL));
-    localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_GIRO));
-    localStorage.removeItem(getPracticePoolStorageKey(PRACTICE_FILTER_NORMAL));
-    practicePoolMeta = null;
+    if (!mode || normalizePracticeFilterMode(mode) === normalizePracticeFilterMode(practiceFilterMode)) {
+      practiceLastEntryKey = "";
+      practiceLastCandleKey = "";
+    }
   } catch {}
 }
-
 function ensurePracticeQueue({ forceNew = false } = {}) {
-  const eligibleIdList = getPracticeEligibleIdList();
-  const eligibleIds = new Set(eligibleIdList);
+  if (forceNew) practiceQueue = [];
 
-  let state = forceNew
-    ? normalizePracticeQueueState(
-        {
-          filterMode: normalizePracticeFilterMode(practiceFilterMode),
-          queue: [],
-          usedIds: [],
-          cycle: Math.max(1, Number(practicePoolMeta?.cycle || 1)) + 1,
-        },
-        eligibleIdList
-      )
-    : loadPracticeQueueState(eligibleIdList);
+  const eligibleEntries = getEligiblePracticeEntries();
+  const eligibleIds = new Set(eligibleEntries.map((entry) => getPracticeEntryKey(entry)).filter(Boolean).map(String));
+  const entryById = getPracticeEntryByIdMap(eligibleEntries);
 
-  if (!forceNew && !practiceQueue.length && Array.isArray(state.queue) && state.queue.length) {
-    practiceQueue = state.queue.slice();
+  if (!forceNew && !practiceQueue.length) {
+    const restored = loadPracticeQueueState(eligibleIds);
+    if (Array.isArray(restored)) practiceQueue = restored;
   }
 
-  practiceQueue = (practiceQueue || []).map(String).filter((id) => eligibleIds.has(id));
+  practiceQueue = dedupePracticeQueueIds(practiceQueue, eligibleIds);
+  practiceQueue = avoidImmediatePracticeRepeat(practiceQueue, entryById);
 
-  let usedSet = new Set(
-    Array.isArray(state.usedIds)
-      ? state.usedIds.map(String).filter((id) => eligibleIds.has(id) && !practiceQueue.includes(id))
-      : []
-  );
-
-  if (forceNew) {
-    usedSet = new Set();
-    practiceQueue = eligibleIdList.length ? shuffleArray(eligibleIdList) : [];
-  } else {
-    const queuedSet = new Set(practiceQueue);
-
-    // Si guardaste/importaste nuevas formaciones, se suman al final de la vuelta actual.
-    const newIds = eligibleIdList.filter((id) => !queuedSet.has(id) && !usedSet.has(id));
-    if (newIds.length) {
-      practiceQueue.push(...shuffleArray(newIds));
-    }
-
-    // Recién cuando se agotó todo el mazo, empieza una vuelta nueva.
-    if (!practiceQueue.length && eligibleIdList.length) {
-      state.cycle = Math.max(1, Number(state.cycle || 1)) + 1;
-      usedSet = new Set();
-      practiceQueue = shuffleArray(eligibleIdList);
-    }
+  if (!practiceQueue.length && eligibleEntries.length) {
+    practiceQueue = buildNewPracticeQueue(eligibleEntries);
   }
 
-  state.queue = practiceQueue.slice();
-  state.usedIds = Array.from(usedSet);
-  practicePoolMeta = state;
-  savePracticeQueueState(state);
+  savePracticeQueueState();
 }
-
 function updatePracticePoolLabel() {
   const eligible = getEligiblePracticeEntries().length;
-  const meta = practicePoolMeta || loadPracticeQueueState(getPracticeEligibleIdList());
-  const cycle = Math.max(1, Number(meta?.cycle || 1));
-  const used = Array.isArray(meta?.usedIds) ? meta.usedIds.length : 0;
-
   if (practicePoolLabelEl) {
-    practicePoolLabelEl.textContent = `Pool ${getPracticeFilterTag()}: ${practiceQueue.length}/${eligible} · vuelta ${cycle} · usadas ${used}`;
+    practicePoolLabelEl.textContent = `Pool ${getPracticeFilterTag()}: ${practiceQueue.length}/${eligible}`;
   }
 }
 function paintPracticeSecButtons() {
@@ -3640,12 +3595,12 @@ function computePracticeSimilarityScore(baseSig, candidateSig) {
   return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.75))));
 }
 function findPracticeSimilarEntries(entry, cutoffMs, limit = 6) {
-  const entryKey = String(entry?.journal_id || entry?.id || "");
+  const entryKey = getPracticeEntryKey(entry);
   const baseSig = buildPracticeSignature(entry?.ticks || [], cutoffMs);
   if (!entryKey || !baseSig) return [];
 
   return getEligiblePracticeEntries()
-    .filter((candidate) => String(candidate?.journal_id || candidate?.id || "") !== entryKey)
+    .filter((candidate) => getPracticeEntryKey(candidate) !== entryKey)
     .map((candidate) => {
       const sig = buildPracticeSignature(candidate?.ticks || [], cutoffMs);
       const similarity = computePracticeSimilarityScore(baseSig, sig);
@@ -3823,38 +3778,49 @@ function redrawPracticeSimilarCanvases() {
 function pullNextPracticeEntry() {
   ensurePracticeQueue();
   updatePracticePoolLabel();
-
   if (!practiceQueue.length) return null;
 
-  const entries = getEligiblePracticeEntries();
-  const eligibleIds = getPracticeEligibleIdList(entries);
-  const byId = new Map(entries.map((entry) => [String(getPracticeEntryKey(entry)), entry]));
-
-  let nextId = "";
+  let entries = getEligiblePracticeEntries();
+  let entryById = getPracticeEntryByIdMap(entries);
   let next = null;
 
   while (practiceQueue.length && !next) {
-    nextId = String(practiceQueue.shift() || "");
-    next = byId.get(nextId) || null;
+    practiceQueue = avoidImmediatePracticeRepeat(practiceQueue, entryById);
+    const nextId = String(practiceQueue.shift());
+    const candidate = entryById.get(nextId) || null;
+    if (!candidate) continue;
+
+    const candleKey = getPracticeCandleKey(candidate);
+    if (practiceLastCandleKey && candleKey === practiceLastCandleKey && entries.length > 1) {
+      const hasAlternative = practiceQueue.some((id) => getPracticeCandleKey(entryById.get(String(id))) !== practiceLastCandleKey);
+      if (hasAlternative) {
+        practiceQueue.push(nextId);
+        continue;
+      }
+      practiceQueue = buildNewPracticeQueue(entries);
+      entryById = getPracticeEntryByIdMap(entries);
+      continue;
+    }
+
+    next = candidate;
   }
 
-  const state = loadPracticeQueueState(eligibleIds) || {
-    filterMode: normalizePracticeFilterMode(practiceFilterMode),
-    usedIds: [],
-    cycle: 1,
-  };
+  if (!next && entries.length) {
+    practiceQueue = buildNewPracticeQueue(entries);
+    entryById = getPracticeEntryByIdMap(entries);
+    while (practiceQueue.length && !next) {
+      const nextId = String(practiceQueue.shift());
+      next = entryById.get(nextId) || null;
+    }
+  }
 
   if (next) {
-    const usedSet = new Set(Array.isArray(state.usedIds) ? state.usedIds.map(String) : []);
-    usedSet.add(nextId);
-    state.usedIds = Array.from(usedSet).filter((id) => eligibleIds.includes(id));
+    practiceLastEntryKey = getPracticeEntryKey(next);
+    practiceLastCandleKey = getPracticeCandleKey(next);
   }
 
-  state.queue = practiceQueue.slice();
-  practicePoolMeta = state;
-  savePracticeQueueState(state);
+  savePracticeQueueState();
   updatePracticePoolLabel();
-
   return next;
 }
 function getOutcomeLabel(outcome) {
@@ -3863,42 +3829,6 @@ function getOutcomeLabel(outcome) {
 function cancelPracticeAnim() {
   if (practiceRaf) cancelAnimationFrame(practiceRaf);
   practiceRaf = null;
-}
-function shouldAutoEnterPracticeRound(replayMs) {
-  if (!PRACTICE_AUTO_ENTRY_ENABLED) return false;
-  if (!practiceRound || practiceRound.finished || practiceRound.answer) return false;
-  if (practiceRound.autoEntryChecked) return false;
-  return Number(replayMs || 0) >= PRACTICE_AUTO_ENTRY_MS;
-}
-function getPracticeAutoEntrySide() {
-  const enabled = getPracticeEnabledTradeSide();
-  return enabled === "CALL" || enabled === "PUT" ? enabled : "";
-}
-function tryPracticeAutoEntryAt57s(replayMs) {
-  if (!shouldAutoEnterPracticeRound(replayMs)) return false;
-
-  practiceRound.autoEntryChecked = true;
-  const side = getPracticeAutoEntrySide();
-
-  if (!side) {
-    updatePracticeResult(`⏱️ ${PRACTICE_AUTO_ENTRY_SEC}s sin entrada automática: ${getPracticeConfirmationStatusText()}. Si no aparece puntaje suficiente, queda PASAR.`, "is-pass");
-    return false;
-  }
-
-  practiceRound.answer = side;
-  practiceRound.autoEntry = true;
-  practiceRound.autoEntryMs = PRACTICE_AUTO_ENTRY_MS;
-  practiceRound.autoEntrySide = side;
-  refreshCurrentPracticeExportSavedSnapshot();
-  setPracticeDecisionState(true, side);
-
-  updatePracticeResult(
-    `${side === "CALL" ? "🟢" : "🔴"} AUTO ${side === "CALL" ? "COMPRA" : "VENTA"} en ${PRACTICE_AUTO_ENTRY_SEC}s por puntaje: ${getPracticeConfirmationStatusText()}.`,
-    side === "CALL" ? "is-itm" : "is-otm"
-  );
-
-  finalizePracticeRound(side);
-  return true;
 }
 function finalizePracticeRound(answer = null) {
   if (!practiceRound || practiceRound.finished) return;
@@ -3939,11 +3869,10 @@ function finalizePracticeRound(answer = null) {
 
   const confirmText = ` | ${getPracticeConfirmationStatusText()}`;
   const outcomeText = getOutcomeLabel(round.entry.nextOutcome);
-  const autoText = round.autoEntry ? `AUTO ${PRACTICE_AUTO_ENTRY_SEC}s` : "Tu decisión";
   if (resultType === "ITM") {
-    updatePracticeResult(`✅ ITM | ${autoText}: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
+    updatePracticeResult(`✅ ITM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-itm");
   } else if (resultType === "OTM") {
-    updatePracticeResult(`❌ OTM | ${autoText}: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
+    updatePracticeResult(`❌ OTM | Tu decisión: ${round.answer === "CALL" ? "COMPRA" : "VENTA"}${confirmText} | Próxima vela: ${outcomeText}`, "is-otm");
   } else {
     updatePracticeResult(`⏭️ PASAR | Próxima vela: ${outcomeText}`, "is-pass");
   }
@@ -3971,8 +3900,6 @@ function practiceLoop(ts) {
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
   const picked = practiceRound.answer === "CALL" ? "COMPRA" : practiceRound.answer === "PUT" ? "VENTA" : practiceRound.answer === "PASS" ? "PASAR" : "—";
   updatePracticeStatusText(`Tiempo para decidir: ${remainingSec}s | tramo: ${tramo} | ${getPracticeConfirmationStatusText()} | decisión: ${picked}`);
-
-  if (tryPracticeAutoEntryAt57s(replayMs)) return;
 
   if (replayMs >= 60000) {
     finalizePracticeRound(practiceRound.answer || "PASS");
@@ -4008,10 +3935,6 @@ function startPracticeRound(entry = null) {
     replayMs: PRACTICE_EVAL_SEC * 1000,
     answer: null,
     finished: false,
-    autoEntry: false,
-    autoEntryChecked: false,
-    autoEntryMs: 0,
-    autoEntrySide: "",
     confirmations: [],
     segmentMarks: freshPracticeSegmentMarks(),
   };
@@ -4023,7 +3946,7 @@ function startPracticeRound(entry = null) {
   setPracticeConfirmationControlsVisible(true);
   updatePracticeExportSaveButtonUI();
   updatePracticeConfirmationUI();
-  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. A los ${PRACTICE_AUTO_ENTRY_SEC}s entra automático si ya hay puntaje suficiente.`, "is-pass");
+  updatePracticeResult(`Marcá confirmaciones direccionales. Con ${PRACTICE_CONFIRM_MIN} netas se habilita COMPRA o VENTA. PASAR siempre vale.`, "is-pass");
   setPracticePassButtonMode("PASS");
   setPracticeDecisionState(false);
 
@@ -4773,54 +4696,11 @@ function ensureModalCandleStatusBar() {
   modalCandleStatusEl = el;
   return modalCandleStatusEl;
 }
-function normalizeSignalConfirmationSide(side) {
-  const s = String(side || "").toUpperCase();
-  if (s === "CALL" || s === "BUY" || s === "COMPRA") return "CALL";
-  if (s === "PUT" || s === "SELL" || s === "VENTA") return "PUT";
-  return "";
+function getSignalConfirmationCount(item = modalCurrentItem) {
+  return Array.isArray(item?.signalConfirmations) ? item.signalConfirmations.length : 0;
 }
-function getSignalConfirmationEvents(item = modalCurrentItem) {
-  return Array.isArray(item?.signalConfirmations) ? item.signalConfirmations : [];
-}
-function getSignalConfirmationCount(item = modalCurrentItem, side = null) {
-  const wanted = normalizeSignalConfirmationSide(side);
-  const events = getSignalConfirmationEvents(item);
-  if (!wanted) return events.length;
-  return events.filter((ev) => normalizeSignalConfirmationSide(ev?.side) === wanted).length;
-}
-function getSignalConfirmationScore(item = modalCurrentItem) {
-  return getSignalConfirmationEvents(item).reduce((acc, ev) => {
-    const side = normalizeSignalConfirmationSide(ev?.side);
-    if (side === "CALL") return acc + 1;
-    if (side === "PUT") return acc - 1;
-    return acc;
-  }, 0);
-}
-function getSignalNetBuyPoints(item = modalCurrentItem) {
-  return Math.max(0, getSignalConfirmationScore(item));
-}
-function getSignalNetSellPoints(item = modalCurrentItem) {
-  return Math.max(0, -getSignalConfirmationScore(item));
-}
-function getSignalEnabledTradeSide(item = modalCurrentItem) {
-  const score = getSignalConfirmationScore(item);
-  if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
-  if (score <= -SIGNAL_CONFIRM_MIN) return "PUT";
-  return "";
-}
-function hasSignalMinimumConfirmations(item = modalCurrentItem, side = null) {
-  const wanted = normalizeSignalConfirmationSide(side);
-  const enabled = getSignalEnabledTradeSide(item);
-  return wanted ? enabled === wanted : !!enabled;
-}
-function getSignalConfirmationStatusText(item = modalCurrentItem) {
-  return `COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} · VENTA ${getSignalNetSellPoints(item)}/${SIGNAL_CONFIRM_MIN}`;
-}
-function getSignalMissingConfirmations(side = null, item = modalCurrentItem) {
-  const wanted = normalizeSignalConfirmationSide(side);
-  if (wanted === "CALL") return Math.max(0, SIGNAL_CONFIRM_MIN - getSignalNetBuyPoints(item));
-  if (wanted === "PUT") return Math.max(0, SIGNAL_CONFIRM_MIN - getSignalNetSellPoints(item));
-  return Math.max(0, SIGNAL_CONFIRM_MIN - Math.max(getSignalNetBuyPoints(item), getSignalNetSellPoints(item)));
+function hasSignalMinimumConfirmations(item = modalCurrentItem) {
+  return getSignalConfirmationCount(item) >= SIGNAL_CONFIRM_MIN;
 }
 function ensureSignalConfirmationControls() {
   if (signalConfirmPanelEl && signalConfirmPanelEl.isConnected) return signalConfirmPanelEl;
@@ -4874,41 +4754,24 @@ function ensureSignalConfirmationControls() {
 
   const row = document.createElement("div");
   row.style.display = "grid";
-  row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
+  row.style.gridTemplateColumns = "minmax(0, 1fr) auto";
   row.style.gap = "10px";
   row.style.alignItems = "stretch";
 
-  const buyBtn = document.createElement("button");
-  buyBtn.id = "signalConfirmBuyBtn";
-  buyBtn.type = "button";
-  buyBtn.className = "btn";
-  buyBtn.textContent = "🟢 + COMPRA";
-  buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
-  buyBtn.style.minHeight = "52px";
-  buyBtn.style.borderRadius = "16px";
-  buyBtn.style.fontWeight = "950";
-  buyBtn.style.fontSize = "14px";
-  buyBtn.style.letterSpacing = ".25px";
-  buyBtn.style.border = "1px solid rgba(34,197,94,.62)";
-  buyBtn.style.background = "linear-gradient(180deg, rgba(34,197,94,.26), rgba(34,197,94,.10))";
-  buyBtn.style.boxShadow = "0 0 18px rgba(34,197,94,.14), inset 0 0 14px rgba(34,197,94,.07)";
-  buyBtn.style.touchAction = "manipulation";
-
-  const sellBtn = document.createElement("button");
-  sellBtn.id = "signalConfirmSellBtn";
-  sellBtn.type = "button";
-  sellBtn.className = "btn";
-  sellBtn.textContent = "🔴 + VENTA";
-  sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
-  sellBtn.style.minHeight = "52px";
-  sellBtn.style.borderRadius = "16px";
-  sellBtn.style.fontWeight = "950";
-  sellBtn.style.fontSize = "14px";
-  sellBtn.style.letterSpacing = ".25px";
-  sellBtn.style.border = "1px solid rgba(239,68,68,.62)";
-  sellBtn.style.background = "linear-gradient(180deg, rgba(239,68,68,.24), rgba(239,68,68,.10))";
-  sellBtn.style.boxShadow = "0 0 18px rgba(239,68,68,.13), inset 0 0 14px rgba(239,68,68,.07)";
-  sellBtn.style.touchAction = "manipulation";
+  const confirmBtn = document.createElement("button");
+  confirmBtn.id = "signalConfirmBtn";
+  confirmBtn.type = "button";
+  confirmBtn.className = "btn";
+  confirmBtn.textContent = "➕ CONFIRMACIÓN";
+  confirmBtn.style.minHeight = "52px";
+  confirmBtn.style.borderRadius = "16px";
+  confirmBtn.style.fontWeight = "950";
+  confirmBtn.style.fontSize = "15px";
+  confirmBtn.style.letterSpacing = ".35px";
+  confirmBtn.style.border = "1px solid rgba(251,191,36,.58)";
+  confirmBtn.style.background = "linear-gradient(180deg, rgba(251,191,36,.28), rgba(251,191,36,.10))";
+  confirmBtn.style.boxShadow = "0 0 20px rgba(251,191,36,.16), inset 0 0 16px rgba(251,191,36,.08)";
+  confirmBtn.style.touchAction = "manipulation";
 
   const undoBtn = document.createElement("button");
   undoBtn.id = "signalConfirmUndoBtn";
@@ -4923,8 +4786,7 @@ function ensureSignalConfirmationControls() {
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
 
-  row.appendChild(buyBtn);
-  row.appendChild(sellBtn);
+  row.appendChild(confirmBtn);
   row.appendChild(undoBtn);
   panel.appendChild(top);
   panel.appendChild(row);
@@ -4941,14 +4803,11 @@ function ensureSignalConfirmationControls() {
 
   signalConfirmPanelEl = panel;
   signalConfirmCountEl = count;
-  signalConfirmBtnEl = buyBtn;
-  signalConfirmBuyBtnEl = buyBtn;
-  signalConfirmSellBtnEl = sellBtn;
+  signalConfirmBtnEl = confirmBtn;
   signalConfirmUndoBtnEl = undoBtn;
   signalConfirmHintEl = hint;
 
-  buyBtn.onclick = () => addSignalConfirmation("CALL");
-  sellBtn.onclick = () => addSignalConfirmation("PUT");
+  confirmBtn.onclick = () => addSignalConfirmation();
   undoBtn.onclick = () => removeSignalConfirmation();
 
   updateSignalConfirmationUI();
@@ -4962,24 +4821,19 @@ function getSignalConfirmationMs() {
     : Math.floor(now / 60000) * 60000;
   return Math.max(0, Math.min(60000, now - minuteStart));
 }
-function addSignalConfirmation(side = "CALL") {
+function addSignalConfirmation() {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
-  const safeSide = normalizeSignalConfirmationSide(side);
-  if (!safeSide) return;
-
   modalCurrentItem.signalConfirmations ||= [];
-  modalCurrentItem.signalConfirmations.push({ side: safeSide, ms: getSignalConfirmationMs(), at: Date.now() });
+  modalCurrentItem.signalConfirmations.push({ ms: getSignalConfirmationMs(), at: Date.now() });
   saveHistory(history);
   updateSignalConfirmationUI();
   updateModalCandleStatusUI();
 
-  const enabled = getSignalEnabledTradeSide(modalCurrentItem);
-  if (enabled === "CALL") {
-    toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1500);
-  } else if (enabled === "PUT") {
-    toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1500);
+  if (hasSignalMinimumConfirmations()) {
+    toast("✅ 3 confirmaciones: operación habilitada", 1400);
   } else {
-    toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Si no llega a 3 para un lado, no operar.`, 1500);
+    const faltan = SIGNAL_CONFIRM_MIN - getSignalConfirmationCount();
+    toast(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}`, 1200);
   }
 }
 function removeSignalConfirmation() {
@@ -4995,52 +4849,29 @@ function updateSignalConfirmationUI() {
 
   const hasItem = !!modalCurrentItem;
   const isOpen = hasItem && isTradeEntryOpen(modalCurrentItem);
-  const totalEvents = getSignalConfirmationCount(modalCurrentItem);
-  const enabled = getSignalEnabledTradeSide(modalCurrentItem);
-  const ok = !!enabled;
-  const buyPts = getSignalNetBuyPoints(modalCurrentItem);
-  const sellPts = getSignalNetSellPoints(modalCurrentItem);
+  const n = getSignalConfirmationCount();
+  const ok = n >= SIGNAL_CONFIRM_MIN;
 
   if (signalConfirmCountEl) {
-    signalConfirmCountEl.textContent = getSignalConfirmationStatusText(modalCurrentItem);
-    signalConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
-    signalConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.52)" : enabled === "PUT" ? "rgba(239,68,68,.52)" : "rgba(255,255,255,.14)";
-    signalConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.18)" : enabled === "PUT" ? "rgba(127,29,29,.22)" : "rgba(0,0,0,.16)";
-    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(255,255,255,.10)" : "none";
+    signalConfirmCountEl.textContent = `Confirmaciones: ${Math.min(n, SIGNAL_CONFIRM_MIN)}/${SIGNAL_CONFIRM_MIN}${n > SIGNAL_CONFIRM_MIN ? ` +${n - SIGNAL_CONFIRM_MIN}` : ""}`;
+    signalConfirmCountEl.style.color = ok ? "#dcfce7" : "rgba(255,255,255,.92)";
+    signalConfirmCountEl.style.borderColor = ok ? "rgba(34,197,94,.48)" : "rgba(251,191,36,.28)";
+    signalConfirmCountEl.style.background = ok ? "rgba(22,163,74,.18)" : "rgba(0,0,0,.16)";
+    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(34,197,94,.16)" : "none";
   }
   if (signalConfirmHintEl) {
     const scope = getTradeScopeText ? getTradeScopeText() : "";
-    if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `Solo COMPRA habilitada${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "#bbf7d0";
-    } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `Solo VENTA habilitada${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "#fecaca";
-    } else {
-      const score = getSignalConfirmationScore(modalCurrentItem);
-      signalConfirmHintEl.textContent = score === 0
-        ? `Mínimo 3 netas para un lado${scope ? " · " + scope : ""}`
-        : `Neto ${score > 0 ? "+" : ""}${score}${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "rgba(255,255,255,.72)";
-    }
+    signalConfirmHintEl.textContent = ok
+      ? `Operación válida por disciplina${scope ? " · " + scope : ""}`
+      : `Mínimo 3 para operar${scope ? " · " + scope : ""}`;
+    signalConfirmHintEl.style.color = ok ? "#bbf7d0" : "rgba(255,255,255,.72)";
   }
-
-  const controlsDisabled = !hasItem || !isOpen;
-  [signalConfirmBuyBtnEl, signalConfirmSellBtnEl].forEach((btn) => {
-    if (!btn) return;
-    btn.disabled = controlsDisabled;
-    btn.style.opacity = btn.disabled ? ".45" : "1";
-  });
-  if (signalConfirmBuyBtnEl) {
-    signalConfirmBuyBtnEl.textContent = `🟢 + COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
-    signalConfirmBuyBtnEl.style.transform = enabled === "CALL" ? "translateY(-1px)" : "none";
-  }
-  if (signalConfirmSellBtnEl) {
-    signalConfirmSellBtnEl.textContent = `🔴 + VENTA ${sellPts}/${SIGNAL_CONFIRM_MIN}`;
-    signalConfirmSellBtnEl.style.transform = enabled === "PUT" ? "translateY(-1px)" : "none";
+  if (signalConfirmBtnEl) {
+    signalConfirmBtnEl.disabled = !hasItem || !isOpen;
+    signalConfirmBtnEl.style.opacity = signalConfirmBtnEl.disabled ? ".45" : "1";
   }
   if (signalConfirmUndoBtnEl) {
-    signalConfirmUndoBtnEl.disabled = controlsDisabled || totalEvents <= 0;
+    signalConfirmUndoBtnEl.disabled = !hasItem || !isOpen || n <= 0;
     signalConfirmUndoBtnEl.style.opacity = signalConfirmUndoBtnEl.disabled ? ".42" : "1";
   }
 }
@@ -5053,41 +4884,19 @@ function applySignalConfirmationTradeGate(locked = false, candleClosed = false) 
   updateSignalConfirmationUI();
 
   if (locked || candleClosed) return;
+  if (hasSignalMinimumConfirmations()) return;
 
-  const enabled = getSignalEnabledTradeSide(modalCurrentItem);
-  const status = getSignalConfirmationStatusText(modalCurrentItem);
+  const faltan = Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount());
+  const msg = `Necesitas ${SIGNAL_CONFIRM_MIN} confirmaciones para operar. Faltan ${faltan}.`;
 
-  if (!enabled) {
-    const msg = `Necesitas ${SIGNAL_CONFIRM_MIN} confirmaciones netas para COMPRA o VENTA. ${status}.`;
-    paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
-    paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
-    return;
-  }
-
-  if (enabled === "CALL") {
-    if (modalBuyCallBtn && !modalBuyCallBtn.disabled) modalBuyCallBtn.title = `COMPRA habilitada por puntaje. ${status}.`;
-    paintGiroOnlyButtonState(modalBuyPutBtn, false, `Puntaje real: solo COMPRA habilitada. ${status}.`);
-    return;
-  }
-
-  if (enabled === "PUT") {
-    paintGiroOnlyButtonState(modalBuyCallBtn, false, `Puntaje real: solo VENTA habilitada. ${status}.`);
-    if (modalBuyPutBtn && !modalBuyPutBtn.disabled) modalBuyPutBtn.title = `VENTA habilitada por puntaje. ${status}.`;
-  }
+  paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
+  paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
 }
-function assertSignalMinimumConfirmations(side = null) {
+function assertSignalMinimumConfirmations() {
   if (!modalCurrentItem) return;
-
-  const wanted = normalizeSignalConfirmationSide(side);
-  const enabled = getSignalEnabledTradeSide(modalCurrentItem);
-  if (wanted && enabled && enabled !== wanted) {
-    throw new Error(`El puntaje habilitó ${enabled === "CALL" ? "COMPRA" : "VENTA"}, no ${wanted === "CALL" ? "COMPRA" : "VENTA"}.`);
-  }
-
-  if (!hasSignalMinimumConfirmations(modalCurrentItem, wanted)) {
-    const faltan = getSignalMissingConfirmations(wanted, modalCurrentItem);
-    const sideTxt = wanted === "CALL" ? "COMPRA" : wanted === "PUT" ? "VENTA" : "COMPRA o VENTA";
-    throw new Error(`Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} neta${faltan === 1 ? "" : "s"} para ${sideTxt}`);
+  if (!hasSignalMinimumConfirmations(modalCurrentItem)) {
+    const faltan = Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount(modalCurrentItem));
+    throw new Error(`Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} para operar`);
   }
 }
 
@@ -5218,7 +5027,7 @@ function requestModalDraw(force = false) {
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
       const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
       const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      const confTag = ` | CONF:${getSignalConfirmationStatusText(it)}`;
+      const confTag = ` | CONF:${getSignalConfirmationCount(it)}/${SIGNAL_CONFIRM_MIN}`;
       const c100Tag = getC100ModalTag();
       modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${confTag}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}${c100Tag}`;
     }
@@ -6095,7 +5904,7 @@ function assertEntryWindowOpen() {
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
   assertEntryWindowOpen();
-  assertSignalMinimumConfirmations(side);
+  assertSignalMinimumConfirmations();
   assertC100CanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
