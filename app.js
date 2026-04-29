@@ -1778,7 +1778,7 @@ function applyAutoOpenChartUI() {
   btn.textContent = autoOpenChartOnSignal ? "📈 Auto-abrir gráfico ON" : "📈 Auto-abrir gráfico OFF";
   btn.classList.toggle("active", autoOpenChartOnSignal);
   btn.title = autoOpenChartOnSignal
-    ? "Al salir una señal, abre el gráfico automáticamente (solo si la app está en pantalla)"
+    ? "Al salir una señal, abre el gráfico automáticamente. Si ya había un gráfico abierto, lo reemplaza por la señal nueva."
     : "No abre el gráfico automáticamente";
 }
 function ensureAutoOpenChartButton() {
@@ -1810,7 +1810,12 @@ function ensureAutoOpenChartButton() {
 function shouldAutoOpenChartNow() {
   if (!autoOpenChartOnSignal) return false;
   if (document.visibilityState !== "visible") return false;
-  if (chartModal && !chartModal.classList.contains("hidden")) return false;
+
+  // ✅ NUEVO:
+  // Antes se bloqueaba el auto-open si ya había un gráfico abierto.
+  // Eso hacía que, si quedaba abierta una señal vieja, una señal nueva NO se mostrara.
+  // Ahora, si el modal de gráfico está abierto, la nueva señal lo reemplaza automáticamente.
+  // Solo se bloquea en Configuración, Práctica o Trades para no interrumpir esos flujos.
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
 
   const activeView = localStorage.getItem("activeView") || "signals";
