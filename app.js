@@ -17,10 +17,11 @@
 // ✅ NUEVO UX: botones de borrar por pestaña en la UI, no en el modal Config
 // ✅ NUEVO: guardar señales manualmente al pool de práctica con botón 💾
 // ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
-// ✅ NUEVO: Práctica y Señales con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
+// ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
 // ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 4 confirmaciones netas para COMPRA/VENTA
+// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 57
 
 "use strict";
 
@@ -585,10 +586,14 @@ const modalLiveBtn = pickEl("modalLiveBtn");
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
 let signalConfirmCountEl = null;
-let signalConfirmBtnEl = null;
+let signalConfirmBtnEl = null; // compat: apunta al botón de confirmación COMPRA
+let signalConfirmBuyBtnEl = null;
+let signalConfirmSellBtnEl = null;
 let signalConfirmUndoBtnEl = null;
 let signalConfirmHintEl = null;
-const SIGNAL_CONFIRM_MIN = 3;
+const SIGNAL_CONFIRM_MIN = 4;
+const SIGNAL_AUTO_ENTRY_MS = 57000;
+const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 
 let executionMode = EXECUTION_MODE_RISE_FALL;
 const executionPlanCache = new Map();
@@ -1730,7 +1735,7 @@ function paintGiroOnlyButtonState(btn, enabled, reason) {
 function shouldBypassGiroOnlyTradeGate() {
   // En REAL mantenemos el modo GIRO como análisis/señal,
   // pero NO bloqueamos COMPRA/VENTA según el color actual de la vela.
-  // El bloqueo por confirmaciones 0/3 queda intacto y se aplica después.
+  // El bloqueo por confirmaciones direccionales queda intacto y se aplica después.
   return activeTradingAccount === ACCOUNT_MODE_REAL;
 }
 function applyGiroOnlyTradeButtons(item, locked = false, candleClosed = false) {
@@ -3061,7 +3066,7 @@ function updatePracticeConfirmationUI() {
       practiceConfirmHintEl.textContent = "Solo VENTA habilitada";
       practiceConfirmHintEl.style.color = "#fecaca";
     } else {
-      practiceConfirmHintEl.textContent = score === 0 ? "Mínimo 3 netas para un lado" : `Neto ${score > 0 ? "+" : ""}${score}`;
+      practiceConfirmHintEl.textContent = score === 0 ? "Mínimo 4 netas para un lado" : `Neto ${score > 0 ? "+" : ""}${score}`;
       practiceConfirmHintEl.style.color = "rgba(255,255,255,.70)";
     }
   }
@@ -3419,7 +3424,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // Confirmaciones: se mantienen en el panel 0/3, pero ya no se dibujan sobre el gráfico.
+  // Confirmaciones: se mantienen en el panel de confirmaciones, pero ya no se dibujan sobre el gráfico.
 
 }
 function setPracticePassButtonMode(mode = "PASS") {
@@ -4748,11 +4753,64 @@ function ensureModalCandleStatusBar() {
   modalCandleStatusEl = el;
   return modalCandleStatusEl;
 }
-function getSignalConfirmationCount(item = modalCurrentItem) {
-  return Array.isArray(item?.signalConfirmations) ? item.signalConfirmations.length : 0;
+function normalizeSignalConfirmationSide(side) {
+  const s = String(side || "").toUpperCase();
+  if (s === "CALL" || s === "BUY" || s === "COMPRA") return "CALL";
+  if (s === "PUT" || s === "SELL" || s === "VENTA") return "PUT";
+  return "";
 }
-function hasSignalMinimumConfirmations(item = modalCurrentItem) {
-  return getSignalConfirmationCount(item) >= SIGNAL_CONFIRM_MIN;
+function getSignalConfirmationEvents(item = modalCurrentItem) {
+  const arr = Array.isArray(item?.signalConfirmations) ? item.signalConfirmations : [];
+  const fallbackSide = normalizeSignalConfirmationSide(item?.direction);
+  return arr
+    .map((ev) => {
+      if (ev && typeof ev === "object") {
+        const side = normalizeSignalConfirmationSide(ev.side) || fallbackSide;
+        return { ...ev, side };
+      }
+      return { side: fallbackSide, ms: 0, at: 0 };
+    })
+    .filter((ev) => normalizeSignalConfirmationSide(ev.side));
+}
+function getSignalConfirmationScore(item = modalCurrentItem) {
+  return getSignalConfirmationEvents(item).reduce((acc, ev) => {
+    const side = normalizeSignalConfirmationSide(ev?.side);
+    if (side === "CALL") return acc + 1;
+    if (side === "PUT") return acc - 1;
+    return acc;
+  }, 0);
+}
+function getSignalNetBuyPoints(item = modalCurrentItem) {
+  return Math.max(0, getSignalConfirmationScore(item));
+}
+function getSignalNetSellPoints(item = modalCurrentItem) {
+  return Math.max(0, -getSignalConfirmationScore(item));
+}
+function getSignalEnabledTradeSide(item = modalCurrentItem) {
+  const score = getSignalConfirmationScore(item);
+  if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
+  if (score <= -SIGNAL_CONFIRM_MIN) return "PUT";
+  return "";
+}
+function getSignalConfirmationCount(item = modalCurrentItem, side = null) {
+  const wanted = normalizeSignalConfirmationSide(side);
+  if (wanted === "CALL") return getSignalNetBuyPoints(item);
+  if (wanted === "PUT") return getSignalNetSellPoints(item);
+  return Math.max(getSignalNetBuyPoints(item), getSignalNetSellPoints(item));
+}
+function hasSignalMinimumConfirmations(item = modalCurrentItem, side = null) {
+  const wanted = normalizeSignalConfirmationSide(side);
+  const enabled = getSignalEnabledTradeSide(item);
+  return wanted ? enabled === wanted : !!enabled;
+}
+function getSignalConfirmationStatusText(item = modalCurrentItem) {
+  return `COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} · VENTA ${getSignalNetSellPoints(item)}/${SIGNAL_CONFIRM_MIN}`;
+}
+function getSignalMissingConfirmations(side, item = modalCurrentItem) {
+  const wanted = normalizeSignalConfirmationSide(side);
+  if (wanted === "CALL") return Math.max(0, SIGNAL_CONFIRM_MIN - getSignalNetBuyPoints(item));
+  if (wanted === "PUT") return Math.max(0, SIGNAL_CONFIRM_MIN - getSignalNetSellPoints(item));
+  return Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount(item));
 }
 function ensureSignalConfirmationControls() {
   if (signalConfirmPanelEl && signalConfirmPanelEl.isConnected) return signalConfirmPanelEl;
@@ -4806,24 +4864,41 @@ function ensureSignalConfirmationControls() {
 
   const row = document.createElement("div");
   row.style.display = "grid";
-  row.style.gridTemplateColumns = "minmax(0, 1fr) auto";
+  row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
   row.style.gap = "10px";
   row.style.alignItems = "stretch";
 
-  const confirmBtn = document.createElement("button");
-  confirmBtn.id = "signalConfirmBtn";
-  confirmBtn.type = "button";
-  confirmBtn.className = "btn";
-  confirmBtn.textContent = "➕ CONFIRMACIÓN";
-  confirmBtn.style.minHeight = "52px";
-  confirmBtn.style.borderRadius = "16px";
-  confirmBtn.style.fontWeight = "950";
-  confirmBtn.style.fontSize = "15px";
-  confirmBtn.style.letterSpacing = ".35px";
-  confirmBtn.style.border = "1px solid rgba(251,191,36,.58)";
-  confirmBtn.style.background = "linear-gradient(180deg, rgba(251,191,36,.28), rgba(251,191,36,.10))";
-  confirmBtn.style.boxShadow = "0 0 20px rgba(251,191,36,.16), inset 0 0 16px rgba(251,191,36,.08)";
-  confirmBtn.style.touchAction = "manipulation";
+  const buyBtn = document.createElement("button");
+  buyBtn.id = "signalConfirmBuyBtn";
+  buyBtn.type = "button";
+  buyBtn.className = "btn";
+  buyBtn.textContent = "🟢 + COMPRA";
+  buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
+  buyBtn.style.minHeight = "52px";
+  buyBtn.style.borderRadius = "16px";
+  buyBtn.style.fontWeight = "950";
+  buyBtn.style.fontSize = "14px";
+  buyBtn.style.letterSpacing = ".25px";
+  buyBtn.style.border = "1px solid rgba(34,197,94,.62)";
+  buyBtn.style.background = "linear-gradient(180deg, rgba(34,197,94,.26), rgba(34,197,94,.10))";
+  buyBtn.style.boxShadow = "0 0 18px rgba(34,197,94,.14), inset 0 0 14px rgba(34,197,94,.07)";
+  buyBtn.style.touchAction = "manipulation";
+
+  const sellBtn = document.createElement("button");
+  sellBtn.id = "signalConfirmSellBtn";
+  sellBtn.type = "button";
+  sellBtn.className = "btn";
+  sellBtn.textContent = "🔴 + VENTA";
+  sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
+  sellBtn.style.minHeight = "52px";
+  sellBtn.style.borderRadius = "16px";
+  sellBtn.style.fontWeight = "950";
+  sellBtn.style.fontSize = "14px";
+  sellBtn.style.letterSpacing = ".25px";
+  sellBtn.style.border = "1px solid rgba(239,68,68,.62)";
+  sellBtn.style.background = "linear-gradient(180deg, rgba(239,68,68,.24), rgba(239,68,68,.10))";
+  sellBtn.style.boxShadow = "0 0 18px rgba(239,68,68,.13), inset 0 0 14px rgba(239,68,68,.07)";
+  sellBtn.style.touchAction = "manipulation";
 
   const undoBtn = document.createElement("button");
   undoBtn.id = "signalConfirmUndoBtn";
@@ -4838,7 +4913,8 @@ function ensureSignalConfirmationControls() {
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
 
-  row.appendChild(confirmBtn);
+  row.appendChild(buyBtn);
+  row.appendChild(sellBtn);
   row.appendChild(undoBtn);
   panel.appendChild(top);
   panel.appendChild(row);
@@ -4855,11 +4931,14 @@ function ensureSignalConfirmationControls() {
 
   signalConfirmPanelEl = panel;
   signalConfirmCountEl = count;
-  signalConfirmBtnEl = confirmBtn;
+  signalConfirmBtnEl = buyBtn; // compat
+  signalConfirmBuyBtnEl = buyBtn;
+  signalConfirmSellBtnEl = sellBtn;
   signalConfirmUndoBtnEl = undoBtn;
   signalConfirmHintEl = hint;
 
-  confirmBtn.onclick = () => addSignalConfirmation();
+  buyBtn.onclick = () => addSignalConfirmation("CALL");
+  sellBtn.onclick = () => addSignalConfirmation("PUT");
   undoBtn.onclick = () => removeSignalConfirmation();
 
   updateSignalConfirmationUI();
@@ -4873,20 +4952,28 @@ function getSignalConfirmationMs() {
     : Math.floor(now / 60000) * 60000;
   return Math.max(0, Math.min(60000, now - minuteStart));
 }
-function addSignalConfirmation() {
+function addSignalConfirmation(side = "CALL") {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return;
   modalCurrentItem.signalConfirmations ||= [];
-  modalCurrentItem.signalConfirmations.push({ ms: getSignalConfirmationMs(), at: Date.now() });
+  modalCurrentItem.signalConfirmations.push({ side: safeSide, ms: getSignalConfirmationMs(), at: Date.now() });
   saveHistory(history);
   updateSignalConfirmationUI();
   updateModalCandleStatusUI();
 
-  if (hasSignalMinimumConfirmations()) {
-    toast("✅ 3 confirmaciones: operación habilitada", 1400);
+  const enabled = getSignalEnabledTradeSide(modalCurrentItem);
+  if (enabled === "CALL") {
+    toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
+  } else if (enabled === "PUT") {
+    toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
-    const faltan = SIGNAL_CONFIRM_MIN - getSignalConfirmationCount();
-    toast(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"}`, 1200);
+    toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
+
+  // Si el usuario suma el cuarto punto cuando la vela ya pasó 57s,
+  // también se dispara la auto-entrada sin esperar otro tick/timer.
+  trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
 function removeSignalConfirmation() {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
@@ -4901,29 +4988,52 @@ function updateSignalConfirmationUI() {
 
   const hasItem = !!modalCurrentItem;
   const isOpen = hasItem && isTradeEntryOpen(modalCurrentItem);
-  const n = getSignalConfirmationCount();
-  const ok = n >= SIGNAL_CONFIRM_MIN;
+  const buyPts = getSignalNetBuyPoints(modalCurrentItem);
+  const sellPts = getSignalNetSellPoints(modalCurrentItem);
+  const totalEvents = getSignalConfirmationEvents(modalCurrentItem).length;
+  const enabled = getSignalEnabledTradeSide(modalCurrentItem);
+  const ok = !!enabled;
 
   if (signalConfirmCountEl) {
-    signalConfirmCountEl.textContent = `Confirmaciones: ${Math.min(n, SIGNAL_CONFIRM_MIN)}/${SIGNAL_CONFIRM_MIN}${n > SIGNAL_CONFIRM_MIN ? ` +${n - SIGNAL_CONFIRM_MIN}` : ""}`;
-    signalConfirmCountEl.style.color = ok ? "#dcfce7" : "rgba(255,255,255,.92)";
-    signalConfirmCountEl.style.borderColor = ok ? "rgba(34,197,94,.48)" : "rgba(251,191,36,.28)";
-    signalConfirmCountEl.style.background = ok ? "rgba(22,163,74,.18)" : "rgba(0,0,0,.16)";
-    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(34,197,94,.16)" : "none";
+    signalConfirmCountEl.textContent = getSignalConfirmationStatusText(modalCurrentItem);
+    signalConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
+    signalConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.52)" : enabled === "PUT" ? "rgba(239,68,68,.52)" : "rgba(251,191,36,.28)";
+    signalConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.18)" : enabled === "PUT" ? "rgba(127,29,29,.22)" : "rgba(0,0,0,.16)";
+    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(255,255,255,.10)" : "none";
   }
   if (signalConfirmHintEl) {
     const scope = getTradeScopeText ? getTradeScopeText() : "";
-    signalConfirmHintEl.textContent = ok
-      ? `Operación válida por disciplina${scope ? " · " + scope : ""}`
-      : `Mínimo 3 para operar${scope ? " · " + scope : ""}`;
-    signalConfirmHintEl.style.color = ok ? "#bbf7d0" : "rgba(255,255,255,.72)";
+    if (enabled === "CALL") {
+      signalConfirmHintEl.textContent = `Solo COMPRA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = "#bbf7d0";
+    } else if (enabled === "PUT") {
+      signalConfirmHintEl.textContent = `Solo VENTA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = "#fecaca";
+    } else {
+      const score = getSignalConfirmationScore(modalCurrentItem);
+      signalConfirmHintEl.textContent = score === 0
+        ? `Mínimo ${SIGNAL_CONFIRM_MIN} netas para un lado${scope ? " · " + scope : ""}`
+        : `Neto ${score > 0 ? "+" : ""}${score}${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = "rgba(255,255,255,.72)";
+    }
   }
-  if (signalConfirmBtnEl) {
-    signalConfirmBtnEl.disabled = !hasItem || !isOpen;
-    signalConfirmBtnEl.style.opacity = signalConfirmBtnEl.disabled ? ".45" : "1";
+
+  const controlsDisabled = !hasItem || !isOpen || !!modalCurrentItem?.trade?.badge || !!modalCurrentItem?.signalAutoEntry?.attempted;
+  [signalConfirmBuyBtnEl, signalConfirmSellBtnEl].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = controlsDisabled;
+    btn.style.opacity = btn.disabled ? ".45" : "1";
+  });
+  if (signalConfirmBuyBtnEl) {
+    signalConfirmBuyBtnEl.textContent = `🟢 + COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
+    signalConfirmBuyBtnEl.style.transform = enabled === "CALL" ? "translateY(-1px)" : "none";
+  }
+  if (signalConfirmSellBtnEl) {
+    signalConfirmSellBtnEl.textContent = `🔴 + VENTA ${sellPts}/${SIGNAL_CONFIRM_MIN}`;
+    signalConfirmSellBtnEl.style.transform = enabled === "PUT" ? "translateY(-1px)" : "none";
   }
   if (signalConfirmUndoBtnEl) {
-    signalConfirmUndoBtnEl.disabled = !hasItem || !isOpen || n <= 0;
+    signalConfirmUndoBtnEl.disabled = controlsDisabled || totalEvents <= 0;
     signalConfirmUndoBtnEl.style.opacity = signalConfirmUndoBtnEl.disabled ? ".42" : "1";
   }
 }
@@ -4936,20 +5046,86 @@ function applySignalConfirmationTradeGate(locked = false, candleClosed = false) 
   updateSignalConfirmationUI();
 
   if (locked || candleClosed) return;
-  if (hasSignalMinimumConfirmations()) return;
+  const enabledSide = getSignalEnabledTradeSide(modalCurrentItem);
 
-  const faltan = Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount());
-  const msg = `Necesitas ${SIGNAL_CONFIRM_MIN} confirmaciones para operar. Faltan ${faltan}.`;
+  if (enabledSide === "CALL") {
+    paintGiroOnlyButtonState(modalBuyPutBtn, false, `Confirmaciones reales: solo COMPRA habilitada (${getSignalConfirmationStatusText(modalCurrentItem)}).`);
+    return;
+  }
+  if (enabledSide === "PUT") {
+    paintGiroOnlyButtonState(modalBuyCallBtn, false, `Confirmaciones reales: solo VENTA habilitada (${getSignalConfirmationStatusText(modalCurrentItem)}).`);
+    return;
+  }
 
+  const msg = `Necesitas ${SIGNAL_CONFIRM_MIN} puntos netos en un grupo para operar: ${getSignalConfirmationStatusText(modalCurrentItem)}.`;
   paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
   paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
 }
-function assertSignalMinimumConfirmations() {
+function assertSignalMinimumConfirmations(side = null) {
   if (!modalCurrentItem) return;
-  if (!hasSignalMinimumConfirmations(modalCurrentItem)) {
-    const faltan = Math.max(0, SIGNAL_CONFIRM_MIN - getSignalConfirmationCount(modalCurrentItem));
-    throw new Error(`Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} para operar`);
+  const wanted = normalizeSignalConfirmationSide(side);
+  if (!hasSignalMinimumConfirmations(modalCurrentItem, wanted)) {
+    const faltan = getSignalMissingConfirmations(wanted, modalCurrentItem);
+    const label = wanted === "CALL" ? "COMPRA" : wanted === "PUT" ? "VENTA" : "un lado";
+    throw new Error(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${label}`);
   }
+}
+function trySignalAutoEntryAt57(reason = "AUTO_57") {
+  const item = modalCurrentItem;
+  if (!item || !isTradeEntryOpen(item)) return false;
+  if (item?.trade?.badge) return false;
+  if (tradeInFlight) return false;
+  if (item?.signalAutoEntry?.attempted) return false;
+
+  const ms = getSignalConfirmationMs();
+  if (ms < SIGNAL_AUTO_ENTRY_MS) return false;
+
+  const side = getSignalEnabledTradeSide(item);
+  if (!side) return false;
+
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  item.signalAutoEntry = {
+    type: "AUTO_57_REAL",
+    attempted: true,
+    status: "sending",
+    side,
+    ms,
+    sec: Math.round(ms / 1000),
+    reason: String(reason || "AUTO_57"),
+    at: Date.now(),
+    confirmation_status: getSignalConfirmationStatusText(item),
+  };
+  saveHistory(history);
+  updateSignalConfirmationUI();
+
+  toast(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${label} ${getTradeScopeText()}…`, 1500);
+
+  Promise.race([
+    buyOneClick(side),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("timeout auto trade")), 22000)),
+  ])
+    .then((res) => {
+      const cid = res?.buy?.contract_id || "";
+      item.signalAutoEntry.status = "sent";
+      item.signalAutoEntry.contract_id = cid ? String(cid) : "";
+      item.signalAutoEntry.sent_at = Date.now();
+      saveHistory(history);
+      toast(`✅ AUTO ${label} enviado ${cid ? "ID: " + cid : ""}`, 1800);
+    })
+    .catch((e) => {
+      item.signalAutoEntry.status = "error";
+      item.signalAutoEntry.error = e?.message || String(e);
+      item.signalAutoEntry.error_at = Date.now();
+      saveHistory(history);
+      toast(`⚠️ AUTO ${label} falló: ${e?.message || e}`, 2600);
+    })
+    .finally(() => {
+      updateDisciplineLockUI(false);
+      updateSignalConfirmationUI();
+      requestModalDraw(true);
+    });
+
+  return true;
 }
 
 function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false) {
@@ -5015,7 +5191,7 @@ function updateModalCandleStatusUI() {
       else if (giroState.bodyDir < 0) giroTxt = " | SOLO GIRO: habilitada COMPRA";
       else giroTxt = " | SOLO GIRO: esperando definición";
     }
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s${autoTxt}${giroTxt}${getC100ModalTag()}`;
+    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s | ${getSignalConfirmationStatusText(modalCurrentItem)} | AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${autoTxt}${giroTxt}${getC100ModalTag()}`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.18)";
     bar.style.borderColor = "rgba(34,197,94,.34)";
@@ -5041,6 +5217,9 @@ function updateModalCandleStatusUI() {
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
+
+  // Auto-entrada real: igual que práctica, al segundo 57 si ya hay 4 puntos netos.
+  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_57");
 }
 
 /* =========================
@@ -5079,7 +5258,7 @@ function requestModalDraw(force = false) {
       const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
       const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
       const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      const confTag = ` | CONF:${getSignalConfirmationCount(it)}/${SIGNAL_CONFIRM_MIN}`;
+      const confTag = ` | CONF:${getSignalConfirmationStatusText(it)} | AUTO:${SIGNAL_AUTO_ENTRY_SEC}s`;
       const c100Tag = getC100ModalTag();
       modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${confTag}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}${c100Tag}`;
     }
@@ -5956,7 +6135,7 @@ function assertEntryWindowOpen() {
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
   assertCanTrade();
   assertEntryWindowOpen();
-  assertSignalMinimumConfirmations();
+  assertSignalMinimumConfirmations(side);
   assertC100CanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
@@ -7369,6 +7548,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
     minuteComplete: false,
     trade: null,
     signalConfirmations: [],
+    signalAutoEntry: null,
     ...(extra && typeof extra === "object" ? extra : {}),
   };
 
@@ -7581,7 +7761,7 @@ if (practiceCallBtn) {
     if (!hasPracticeMinimumConfirmations("CALL")) {
       const faltan = getPracticeMissingConfirmations("CALL");
       updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} neta${faltan === 1 ? "" : "s"} para COMPRA. ${getPracticeConfirmationStatusText()}`, "is-pass");
-      toast("Primero marcá 3 confirmaciones netas para COMPRA", 1500);
+      toast("Primero marcá 4 confirmaciones netas para COMPRA", 1500);
       return;
     }
     practiceRound.answer = "CALL";
@@ -7596,7 +7776,7 @@ if (practicePutBtn) {
     if (!hasPracticeMinimumConfirmations("PUT")) {
       const faltan = getPracticeMissingConfirmations("PUT");
       updatePracticeResult(`🧠 Faltan ${faltan} confirmación${faltan === 1 ? "" : "es"} neta${faltan === 1 ? "" : "s"} para VENTA. ${getPracticeConfirmationStatusText()}`, "is-pass");
-      toast("Primero marcá 3 confirmaciones netas para VENTA", 1500);
+      toast("Primero marcá 4 confirmaciones netas para VENTA", 1500);
       return;
     }
     practiceRound.answer = "PUT";
