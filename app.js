@@ -7688,4 +7688,4 @@ ensurePracticeExportSaveButton();
 updatePracticeExportSaveButtonUI();
 updateExportTradesButtonUI();
 
-connect();
+connect(); 
