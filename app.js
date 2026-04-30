@@ -20,7 +20,7 @@
 // ✅ NUEVO: Práctica y Señales con botón de confirmaciones 0/3 y COMPRA/VENTA bloqueadas hasta 3 confirmaciones
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 3 confirmaciones netas para COMPRA/VENTA
+// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 4 confirmaciones netas para COMPRA/VENTA
 
 "use strict";
 
@@ -2390,7 +2390,7 @@ let practiceConfirmBuyBtnEl = null;
 let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
-const PRACTICE_CONFIRM_MIN = 3;
+const PRACTICE_CONFIRM_MIN = 4;
 const PRACTICE_AUTO_ENTRY_MS = 57000;
 const PRACTICE_AUTO_ENTRY_SEC = Math.round(PRACTICE_AUTO_ENTRY_MS / 1000);
 const PRACTICE_SEGMENTS = [
@@ -3025,7 +3025,7 @@ function addPracticeConfirmation(side = "CALL") {
     updatePracticeResult(`🧠 ${getPracticeConfirmationStatusText()}. Si no llega a 3 para un lado, PASAR.`, "is-pass");
   }
 
-  // Si el usuario suma la tercera confirmación cuando la ronda ya pasó 57s,
+  // Si el usuario suma la cuarta confirmación cuando la ronda ya pasó 57s,
   // también entra automáticamente sin esperar otro frame.
   tryPracticeAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -3943,7 +3943,7 @@ function practiceLoop(ts) {
   const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
   drawPracticeChart(practiceCanvas, visibleTicks, replayMs, practiceRound.segmentMarks);
 
-  // Auto-entrada de práctica: al segundo 57, si ya hay 3 puntos netos
+  // Auto-entrada de práctica: al segundo 57, si ya hay 4 puntos netos
   // para COMPRA o VENTA y no hubo decisión manual, se elige esa dirección.
   tryPracticeAutoEntryAt57("TIMER_57");
 
@@ -4031,7 +4031,7 @@ function ensurePracticeReady() {
     updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales siguen activas y pueden auto-abrirse si Auto-abrir está ON.`);
     setPracticeConfirmationControlsVisible(false);
     updatePracticeExportSaveButtonUI();
-    updatePracticeResult(`Se usa tu journal de trades. PASAR no entra en el porcentaje. Auto-entrada: ${PRACTICE_AUTO_ENTRY_SEC}s con 3 puntos netos.`, "is-pass");
+    updatePracticeResult(`Se usa tu journal de trades. PASAR no entra en el porcentaje. Auto-entrada: ${PRACTICE_AUTO_ENTRY_SEC}s con ${PRACTICE_CONFIRM_MIN} puntos netos.`, "is-pass");
     setPracticePassButtonMode("NEXT");
     setPracticeDecisionState(true);
   } else if (practiceRound.finished) {
@@ -7688,4 +7688,4 @@ ensurePracticeExportSaveButton();
 updatePracticeExportSaveButtonUI();
 updateExportTradesButtonUI();
 
-connect(); 
+connect();
