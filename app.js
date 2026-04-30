@@ -1,4 +1,4 @@
-// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + ✅ Práctica pool sin duplicados/repetición + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable)
+// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + ✅ Práctica pool sin duplicados/repetición + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable) + ✅ señales activas en Trades/Práctica
 // ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
@@ -1814,13 +1814,10 @@ function shouldAutoOpenChartNow() {
   // ✅ NUEVO:
   // Antes se bloqueaba el auto-open si ya había un gráfico abierto.
   // Eso hacía que, si quedaba abierta una señal vieja, una señal nueva NO se mostrara.
-  // Ahora, si el modal de gráfico está abierto, la nueva señal lo reemplaza automáticamente.
-  // Solo se bloquea en Configuración, Práctica o Trades para no interrumpir esos flujos.
+  // ✅ FIX: ahora también puede auto-abrir aunque estés en Trades o Práctica.
+  // Si sale una señal nueva, la app cambia a Señales y abre/reemplaza el gráfico.
+  // Solo se bloquea en Configuración para no tocar ajustes mientras los estás editando.
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
-
-  const activeView = localStorage.getItem("activeView") || "signals";
-  if (activeView === "practice") return false;
-  if (activeView === "trades") return false;
 
   return true;
 }
@@ -2000,8 +1997,10 @@ function saveBool(key, value) {
 }
 
 function areSignalsPaused(viewName = null) {
-  const activeView = viewName || (localStorage.getItem("activeView") || "signals");
-  return activeView === "practice";
+  // ✅ FIX: el motor de señales NO se pausa por pestaña.
+  // Antes Práctica frenaba evaluateMinute/addSignal(), entonces podían perderse señales.
+  // Ahora Trades y Práctica son solo vistas: el análisis sigue corriendo igual.
+  return false;
 }
 function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
@@ -4029,7 +4028,7 @@ function ensurePracticeReady() {
       : shouldPracticeOnlyNormal()
         ? "Filtro activo: solo NORMAL."
         : "Filtro activo: todos los modos.";
-    updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales quedan pausadas.`);
+    updatePracticeStatusText(`Toca PASAR para empezar una ronda con trades aleatorios sin repetir. ${msgFiltro} En Práctica, las señales siguen activas y pueden auto-abrirse si Auto-abrir está ON.`);
     setPracticeConfirmationControlsVisible(false);
     updatePracticeExportSaveButtonUI();
     updatePracticeResult(`Se usa tu journal de trades. PASAR no entra en el porcentaje. Auto-entrada: ${PRACTICE_AUTO_ENTRY_SEC}s con 3 puntos netos.`, "is-pass");
