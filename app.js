@@ -78,20 +78,21 @@ const DEFAULT_DURATION_UNIT = "m";
 const DEFAULT_CURRENCY = "USD";
 
 /* =========================
-   Gestión C100 REAL
+   Interés Compuesto 2 niveles
+   - Reemplaza la antigua gestión C100
+   - Nivel 1: stake normal configurado
+   - Nivel 2: stake + ganancia real del nivel 1
+   - Después del nivel 2, gane o pierda, vuelve al nivel 1
 ========================= */
-const C100_STATE_KEY = "gestionC100Real_state_v1";
-const C100_PAYOUT_REQUIRED = 95; // cálculo de tabla C100
-const C100_MIN_PAYOUT = 92; // mínimo permitido para comprar
-const C100_CAPITAL_BASE = 100;
-const C100_MAX_LEVEL = 5;
-const C100_MODE_LABEL = "SEMI_REAL";
+const C100_STATE_KEY = "interesCompuesto2_state_v1";
+const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no informa ganancia
+const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
+const C100_CAPITAL_BASE = 0;
+const C100_MAX_LEVEL = 2;
+const C100_MODE_LABEL = "IC2";
 const C100_LEVELS = [
-  { level: 1, base: 1.18, compound: 2.30 },
-  { level: 2, base: 1.61, compound: 3.13 },
-  { level: 3, base: 2.19, compound: 4.27 },
-  { level: 4, base: 2.97, compound: 5.79 },
-  { level: 5, base: 4.03, compound: 7.85 },
+  { level: 1, base: DEFAULT_STAKE, compound: DEFAULT_STAKE },
+  { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
 const EXECUTION_MODE_KEY = "executionMode_v1";
@@ -1036,7 +1037,7 @@ function ensureTradingAccountButton() {
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
     if (c100State) {
-      c100State.accountMode = ACCOUNT_MODE_REAL;
+      c100State.accountMode = activeTradingAccount || ACCOUNT_MODE_DEMO;
       saveC100State();
     }
     updateC100PanelUI();
@@ -1103,21 +1104,34 @@ function applyTradingAccountBannerUI() {
 }
 
 /* =========================
-   Gestión C100 REAL
+   Interés Compuesto 2 niveles
+   Nota: se conservan nombres internos C100* para no romper integraciones antiguas.
 ========================= */
+function getC100BaseStake() {
+  const n = Number(getTradeStake());
+  return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : Number(DEFAULT_STAKE.toFixed(2));
+}
 function getC100Level(level = 1) {
-  const n = Math.max(1, Math.min(C100_MAX_LEVEL, Number(level || 1)));
-  return C100_LEVELS.find((x) => x.level === n) || C100_LEVELS[0];
+  const base = getC100BaseStake();
+  const fallbackCompound = Number((base * (1 + C100_PAYOUT_REQUIRED / 100)).toFixed(2));
+  const storedCompound = Number(c100State?.nextCompoundStake || c100State?.currentStake || 0);
+  const compound = Number.isFinite(storedCompound) && storedCompound > 0 && Number(c100State?.compoundStep || 0) === 1
+    ? Number(storedCompound.toFixed(2))
+    : fallbackCompound;
+  const safeLevel = Number(level || 1) >= 2 ? 2 : 1;
+  return { level: safeLevel, base, compound };
 }
 function makeFreshC100State({ keepDay = false } = {}) {
   const prev = c100State || {};
-  const lvl = getC100Level(1);
+  const baseStake = getC100BaseStake();
   return {
     enabled: !!prev.enabled,
-    accountMode: ACCOUNT_MODE_REAL,
+    accountMode: activeTradingAccount || ACCOUNT_MODE_DEMO,
     level: 1,
     compoundStep: 0,
-    currentStake: lvl.base,
+    currentStake: baseStake,
+    baseStake,
+    nextCompoundStake: 0,
     cycleLoss: 0,
     dayProfit: keepDay ? Number(prev.dayProfit || 0) : 0,
     dayLoss: keepDay ? Number(prev.dayLoss || 0) : 0,
@@ -1130,22 +1144,25 @@ function makeFreshC100State({ keepDay = false } = {}) {
 function normalizeC100State(raw) {
   const base = makeFreshC100State();
   const obj = raw && typeof raw === "object" ? raw : {};
-  const level = Math.max(1, Math.min(C100_MAX_LEVEL, Number(obj.level || 1)));
-  const compoundStep = Number(obj.compoundStep || 0) === 1 ? 1 : 0;
-  const lvl = getC100Level(level);
+  const compoundStep = Number(obj.compoundStep || 0) === 1 || Number(obj.level || 1) >= 2 ? 1 : 0;
+  const level = compoundStep ? 2 : 1;
+  const baseStake = getC100BaseStake();
+  const nextCompoundStake = Number(obj.nextCompoundStake || (compoundStep ? obj.currentStake : 0));
   const currentStake = Number(obj.currentStake);
   return {
     ...base,
     ...obj,
     enabled: !!obj.enabled,
-    accountMode: ACCOUNT_MODE_REAL,
+    accountMode: obj.accountMode || activeTradingAccount || ACCOUNT_MODE_DEMO,
     level,
     compoundStep,
-    currentStake: Number.isFinite(currentStake) && currentStake > 0 ? currentStake : (compoundStep ? lvl.compound : lvl.base),
-    cycleLoss: Number(obj.cycleLoss || 0),
+    baseStake,
+    nextCompoundStake: Number.isFinite(nextCompoundStake) && nextCompoundStake > 0 ? Number(nextCompoundStake.toFixed(2)) : 0,
+    currentStake: Number.isFinite(currentStake) && currentStake > 0 ? Number(currentStake.toFixed(2)) : baseStake,
+    cycleLoss: 0,
     dayProfit: Number(obj.dayProfit || 0),
     dayLoss: Number(obj.dayLoss || 0),
-    locked: !!obj.locked,
+    locked: false,
     pendingContractId: obj.pendingContractId ? String(obj.pendingContractId) : "",
     lastResult: obj.lastResult ? String(obj.lastResult) : "",
     updatedAt: Number(obj.updatedAt || Date.now()),
@@ -1179,30 +1196,37 @@ function resetC100Gestion({ keepDay = true, keepEnabled = true } = {}) {
   updateModalCandleStatusUI();
 }
 function isC100RealModeAvailable() {
-  return activeTradingAccount === ACCOUNT_MODE_REAL;
+  // IC2 puede usarse tanto en DEMO como en REAL; respeta la cuenta activa.
+  return true;
 }
 function isC100Active() {
-  return !!c100State?.enabled && isC100RealModeAvailable();
+  return !!c100State?.enabled;
 }
 function getC100Stake() {
   if (!c100State) loadC100State();
-  const lvl = getC100Level(c100State.level);
-  const stake = c100State.compoundStep === 1 ? lvl.compound : lvl.base;
-  c100State.currentStake = stake;
-  return Number(stake.toFixed(2));
+  const base = getC100BaseStake();
+  if (Number(c100State.compoundStep || 0) === 1) {
+    const compound = Number(c100State.nextCompoundStake || c100State.currentStake || 0);
+    const fallback = Number((base * (1 + C100_PAYOUT_REQUIRED / 100)).toFixed(2));
+    const stake = Number.isFinite(compound) && compound > 0 ? compound : fallback;
+    c100State.level = 2;
+    c100State.currentStake = Number(stake.toFixed(2));
+    return Number(stake.toFixed(2));
+  }
+  c100State.level = 1;
+  c100State.currentStake = base;
+  c100State.baseStake = base;
+  return base;
 }
 function getEffectiveTradeStake() {
   return isC100Active() ? getC100Stake() : getTradeStake();
 }
 function getC100StatusText() {
   if (!c100State) loadC100State();
-  if (!isC100RealModeAvailable()) return "Disponible solo en REAL";
-  if (!c100State.enabled) return "Desactivada";
-  if (c100State.locked) return "Bloqueada";
+  if (!c100State.enabled) return "Desactivado";
   if (c100State.pendingContractId) return "Contrato pendiente";
-  if (c100State.compoundStep === 1) return "Buscando segundo ITM";
-  if (Number(c100State.level || 1) > 1 || Number(c100State.cycleLoss || 0) > 0) return "Recuperando";
-  return "Esperando señal";
+  if (Number(c100State.compoundStep || 0) === 1) return "Nivel 2: compuesto listo";
+  return "Nivel 1: stake base";
 }
 function getC100DayNet() {
   return Number(c100State?.dayProfit || 0) - Number(c100State?.dayLoss || 0);
@@ -1220,18 +1244,18 @@ function ensureC100Panel() {
   panel.style.gridColumn = "1 / -1";
   panel.style.padding = "12px";
   panel.style.borderRadius = "18px";
-  panel.style.border = "1px solid rgba(251,191,36,.32)";
-  panel.style.background = "linear-gradient(180deg, rgba(251,191,36,.10), rgba(255,255,255,.025))";
-  panel.style.boxShadow = "0 0 22px rgba(251,191,36,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
+  panel.style.border = "1px solid rgba(34,211,238,.32)";
+  panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.025))";
+  panel.style.boxShadow = "0 0 22px rgba(34,211,238,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
   panel.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
-      <div style="font-weight:950;font-size:15px;letter-spacing:.2px;">Gestión C100 REAL</div>
+      <div style="font-weight:950;font-size:15px;letter-spacing:.2px;">Interés Compuesto 2 niveles</div>
       <div id="c100StateBadge" style="font-weight:950;font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.16);">OFF</div>
     </div>
     <div id="c100Info" style="display:grid;grid-template-columns:1fr;gap:6px;font-size:13px;line-height:1.35;color:var(--text,#e5e7eb);"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
-      <button id="c100ToggleBtn" class="btn btnGhost" type="button">Activar C100</button>
-      <button id="c100ResetBtn" class="btn btnGhost" type="button">Reset C100</button>
+      <button id="c100ToggleBtn" class="btn btnGhost" type="button">Activar IC2</button>
+      <button id="c100ResetBtn" class="btn btnGhost" type="button">Reset IC2</button>
     </div>
   `;
 
@@ -1249,21 +1273,21 @@ function ensureC100Panel() {
     toggleBtn.onclick = () => {
       if (!c100State) loadC100State();
       c100State.enabled = !c100State.enabled;
-      c100State.accountMode = ACCOUNT_MODE_REAL;
+      c100State.accountMode = activeTradingAccount || ACCOUNT_MODE_DEMO;
       saveC100State();
       stopAllExecutionPlanLoops();
       executionPlanCache.clear();
       updateC100PanelUI();
       updateModalCandleStatusUI();
-      toast(c100State.enabled ? "🟡 Gestión C100 REAL ON" : "⚪ Gestión C100 REAL OFF", 1600);
+      toast(c100State.enabled ? "🧮 Interés Compuesto 2 niveles ON" : "⚪ Interés Compuesto 2 niveles OFF", 1600);
     };
   }
   if (resetBtn) {
     resetBtn.onclick = () => {
-      const ok = confirm("¿Resetear la Gestión C100? Se reinicia nivel/ciclo/bloqueo y se conserva Ganancia/Pérdida del día.");
+      const ok = confirm("¿Resetear Interés Compuesto 2 niveles? Vuelve al nivel 1 y conserva Ganancia/Pérdida del día.");
       if (!ok) return;
       resetC100Gestion({ keepDay: true, keepEnabled: true });
-      toast("↺ Gestión C100 reseteada", 1600);
+      toast("↺ IC2 reseteado", 1600);
     };
   }
   updateC100PanelUI();
@@ -1280,60 +1304,55 @@ function updateC100PanelUI() {
   const resetBtn = panel.querySelector("#c100ResetBtn");
   const active = isC100Active();
   const stake = getC100Stake();
+  const baseStake = getC100BaseStake();
   const net = getC100DayNet();
   const status = getC100StatusText();
 
   if (badge) {
-    badge.textContent = c100State.enabled ? (active ? "ON" : "ON · SOLO REAL") : "OFF";
-    badge.style.color = active ? "#fef3c7" : "rgba(229,231,235,.82)";
-    badge.style.borderColor = active ? "rgba(251,191,36,.48)" : "rgba(255,255,255,.14)";
-    badge.style.boxShadow = active ? "0 0 14px rgba(251,191,36,.18)" : "none";
+    badge.textContent = active ? `ON · N${Number(c100State.compoundStep || 0) + 1}/2` : "OFF";
+    badge.style.color = active ? "#cffafe" : "rgba(229,231,235,.82)";
+    badge.style.borderColor = active ? "rgba(34,211,238,.48)" : "rgba(255,255,255,.14)";
+    badge.style.boxShadow = active ? "0 0 14px rgba(34,211,238,.18)" : "none";
   }
   if (toggleBtn) {
-    toggleBtn.textContent = c100State.enabled ? "Desactivar C100" : "Activar C100";
+    toggleBtn.textContent = c100State.enabled ? "Desactivar IC2" : "Activar IC2";
     toggleBtn.classList.toggle("active", active);
-    toggleBtn.title = "Modo SEMI_REAL: calcula stake y valida payout; compra solo cuando tocás el botón.";
+    toggleBtn.title = "Interés compuesto simple: nivel 1 base; si gana, nivel 2 con stake+ganancia; luego vuelve al nivel 1.";
   }
   if (resetBtn) {
     resetBtn.disabled = false;
-    resetBtn.title = "Reinicia nivel/ciclo/bloqueo. Mantiene Ganancia/Pérdida del día.";
+    resetBtn.title = "Vuelve al nivel 1. Mantiene Ganancia/Pérdida del día.";
   }
   if (info) {
     info.innerHTML = `
-      <div>Modo: <b>${C100_MODE_LABEL}</b> · Capital base: <b>$${C100_CAPITAL_BASE.toFixed(2)}</b></div>
-      <div>Payout requerido: <b>${C100_PAYOUT_REQUIRED}%</b> · Payout mínimo: <b>${C100_MIN_PAYOUT}%</b></div>
-      <div>Nivel actual: <b>${c100State.level} / ${C100_MAX_LEVEL}</b> · Paso compuesto: <b>${c100State.compoundStep} / 2</b></div>
+      <div>Modo: <b>${C100_MODE_LABEL}</b> · Cuenta activa: <b>${getTradingAccountLabel()}</b></div>
+      <div>Regla: <b>Nivel 1 stake base → si gana, Nivel 2 stake + ganancia → reset</b></div>
+      <div>Nivel actual: <b>${Number(c100State.compoundStep || 0) + 1} / ${C100_MAX_LEVEL}</b></div>
+      <div>Stake base: <b>$${baseStake.toFixed(2)}</b></div>
       <div>Próximo stake: <b>$${stake.toFixed(2)}</b></div>
       <div>Estado: <b>${escapeHtml(status)}</b></div>
-      <div>Pérdida del ciclo: <b>$${Math.max(0, Number(c100State.cycleLoss || 0)).toFixed(2)}</b></div>
       <div>Ganancia/Pérdida del día: <b>${net >= 0 ? "+" : "-"}$${Math.abs(net).toFixed(2)}</b></div>
       ${c100State.pendingContractId ? `<div>Contrato pendiente: <b>${escapeHtml(c100State.pendingContractId)}</b></div>` : ""}
-      ${c100State.locked ? `<div style="color:#fecaca;font-weight:950;">Gestión C100 agotada. Reinicio manual requerido.</div>` : ""}
     `;
   }
 }
 function assertC100CanTrade() {
   if (!isC100Active()) return;
-  if (c100State.locked) throw new Error("Gestión C100 agotada. Reinicio manual requerido.");
-  if (c100State.pendingContractId) throw new Error(`Gestión C100: contrato pendiente ${c100State.pendingContractId}`);
-  if ((disciplinePendingContracts || []).length > 0) throw new Error("Hay contrato pendiente. Esperá el cierre antes de operar C100.");
+  if (c100State.pendingContractId) throw new Error(`IC2: contrato pendiente ${c100State.pendingContractId}`);
+  if ((disciplinePendingContracts || []).length > 0) throw new Error("Hay contrato pendiente. Esperá el cierre antes de operar IC2.");
   if (!ws || ws.readyState !== 1) throw new Error("Conexión inestable: WebSocket no está listo.");
   if (!lastTickLocalNowMs) throw new Error("Conexión inestable: todavía no hay ticks confirmados.");
   const age = Date.now() - lastTickLocalNowMs;
   if (age > 8000) throw new Error(`Conexión inestable: último tick hace ${Math.round(age / 1000)}s.`);
 }
 function assertC100PayoutOK(profitPct) {
-  if (!isC100Active()) return;
-  const pct = Number(profitPct);
-  if (!Number.isFinite(pct)) throw new Error("Gestión C100: Deriv no informó payout válido.");
-  if (pct + 1e-9 < C100_MIN_PAYOUT) {
-    throw new Error(`Payout ${pct.toFixed(1)}% menor al mínimo C100 (${C100_MIN_PAYOUT}%).`);
-  }
+  // IC2 no filtra por payout mínimo. Se conserva la función para compatibilidad.
+  return true;
 }
 function markC100PendingContract(contractId) {
   if (!isC100Active() || !contractId) return;
   c100State.pendingContractId = String(contractId);
-  c100State.accountMode = ACCOUNT_MODE_REAL;
+  c100State.accountMode = activeTradingAccount || ACCOUNT_MODE_DEMO;
   c100State.currentStake = getC100Stake();
   c100State.lastResult = "PENDING";
   saveC100State();
@@ -1341,10 +1360,11 @@ function markC100PendingContract(contractId) {
 }
 function updateC100AfterResult(result, profit = null) {
   if (!c100State) loadC100State();
-  const wasPending = c100State.pendingContractId;
   const normalized = String(result || "").toUpperCase() === "ITM" ? "ITM" : "OTM";
   const stakeUsed = Number(c100State.currentStake || getC100Stake());
   const profitNum = Number(profit);
+  const wasLevel2 = Number(c100State.compoundStep || 0) === 1;
+  const enabled = !!c100State.enabled;
 
   c100State.pendingContractId = "";
   c100State.lastResult = normalized;
@@ -1353,47 +1373,43 @@ function updateC100AfterResult(result, profit = null) {
     const gain = Number.isFinite(profitNum) && profitNum > 0 ? profitNum : stakeUsed * (C100_PAYOUT_REQUIRED / 100);
     c100State.dayProfit = Number(c100State.dayProfit || 0) + gain;
 
-    if (Number(c100State.compoundStep || 0) === 0) {
-      // Ganancia del primer ITM queda acumulada dentro del ciclo para compensar si falla el compuesto.
-      c100State.cycleLoss = Number(c100State.cycleLoss || 0) - gain;
+    if (!wasLevel2) {
+      const nextStake = Number((stakeUsed + gain).toFixed(2));
+      c100State.level = 2;
       c100State.compoundStep = 1;
-      c100State.currentStake = getC100Level(c100State.level).compound;
+      c100State.nextCompoundStake = nextStake;
+      c100State.currentStake = nextStake;
+      c100State.lastResult = "ITM_NIVEL_1_PASA_A_NIVEL_2";
     } else {
-      const enabled = !!c100State.enabled;
       const dayProfit = Number(c100State.dayProfit || 0);
       const dayLoss = Number(c100State.dayLoss || 0);
       c100State = makeFreshC100State({ keepDay: true });
       c100State.enabled = enabled;
       c100State.dayProfit = dayProfit;
       c100State.dayLoss = dayLoss;
-      c100State.lastResult = "CICLO_COMPLETO_2_ITM";
+      c100State.lastResult = "CICLO_IC2_COMPLETO";
     }
   } else {
     const loss = Number.isFinite(profitNum) && profitNum < 0 ? Math.abs(profitNum) : stakeUsed;
-    c100State.dayLoss = Number(c100State.dayLoss || 0) + loss;
-    c100State.cycleLoss = Number(c100State.cycleLoss || 0) + loss;
-    c100State.compoundStep = 0;
-
-    if (Number(c100State.level || 1) >= C100_MAX_LEVEL) {
-      c100State.locked = true;
-      c100State.currentStake = 0;
-      c100State.lastResult = "AGOTADA_NIVEL_5";
-    } else {
-      c100State.level = Number(c100State.level || 1) + 1;
-      c100State.currentStake = getC100Level(c100State.level).base;
-    }
+    const dayProfit = Number(c100State.dayProfit || 0);
+    const dayLoss = Number(c100State.dayLoss || 0) + loss;
+    c100State = makeFreshC100State({ keepDay: false });
+    c100State.enabled = enabled;
+    c100State.dayProfit = dayProfit;
+    c100State.dayLoss = dayLoss;
+    c100State.lastResult = wasLevel2 ? "OTM_NIVEL_2_RESET" : "OTM_NIVEL_1_RESET";
   }
 
   saveC100State();
   updateC100PanelUI();
   updateModalCandleStatusUI();
 
-  if (c100State.locked) {
-    toast("🚫 Gestión C100 agotada. Reinicio manual requerido.", 3200);
-  } else if (normalized === "ITM" && c100State.lastResult === "CICLO_COMPLETO_2_ITM") {
-    toast("✅ C100: ciclo completo con 2 ITM. Reset automático.", 2600);
+  if (normalized === "ITM" && !wasLevel2) {
+    toast(`✅ IC2: nivel 1 ganado · próximo stake $${getC100Stake().toFixed(2)}`, 2400);
+  } else if (normalized === "ITM" && wasLevel2) {
+    toast("✅ IC2: ciclo de 2 niveles completo · vuelve al stake base", 2600);
   } else {
-    toast(`C100: ${normalized} registrado · próximo stake $${getC100Stake().toFixed(2)}`, 2200);
+    toast("↺ IC2: OTM registrado · vuelve al stake base", 2400);
   }
 }
 function handleC100ContractClosed(contractId, isWin, profit = null) {
@@ -1408,24 +1424,19 @@ function applyC100TradeGate(locked = false, candleClosed = false) {
   updateC100PanelUI();
   if (locked || candleClosed) return;
 
-  if (c100State.locked) {
-    paintGiroOnlyButtonState(modalBuyCallBtn, false, "Gestión C100 agotada. Reinicio manual requerido.");
-    paintGiroOnlyButtonState(modalBuyPutBtn, false, "Gestión C100 agotada. Reinicio manual requerido.");
-    return;
-  }
   if (c100State.pendingContractId || (disciplinePendingContracts || []).length > 0) {
-    paintGiroOnlyButtonState(modalBuyCallBtn, false, "Gestión C100: hay contrato pendiente.");
-    paintGiroOnlyButtonState(modalBuyPutBtn, false, "Gestión C100: hay contrato pendiente.");
+    paintGiroOnlyButtonState(modalBuyCallBtn, false, "IC2: hay contrato pendiente.");
+    paintGiroOnlyButtonState(modalBuyPutBtn, false, "IC2: hay contrato pendiente.");
     return;
   }
   if (!ws || ws.readyState !== 1 || !lastTickLocalNowMs || Date.now() - lastTickLocalNowMs > 8000) {
-    paintGiroOnlyButtonState(modalBuyCallBtn, false, "Gestión C100: conexión inestable.");
-    paintGiroOnlyButtonState(modalBuyPutBtn, false, "Gestión C100: conexión inestable.");
+    paintGiroOnlyButtonState(modalBuyCallBtn, false, "IC2: conexión inestable.");
+    paintGiroOnlyButtonState(modalBuyPutBtn, false, "IC2: conexión inestable.");
   }
 }
 function getC100ModalTag() {
   if (!isC100Active()) return "";
-  return ` | C100 L${c100State.level}/${C100_MAX_LEVEL} S$${getC100Stake().toFixed(2)} ${getC100StatusText()}`;
+  return ` | IC2 N${Number(c100State.compoundStep || 0) + 1}/${C100_MAX_LEVEL} S$${getC100Stake().toFixed(2)} ${getC100StatusText()}`;
 }
 
 function loadExecutionMode() {
@@ -1790,7 +1801,7 @@ function formatExecutionPlanMini(plan) {
 }
 function buildTradeButtonLabel(side, plan = null) {
   const base = side === "CALL" ? "🟢 COMPRA" : "🔴 VENTA";
-  const c100 = isC100Active() ? ` · C100 $${getC100Stake().toFixed(2)}` : "";
+  const c100 = isC100Active() ? ` · IC2 $${getC100Stake().toFixed(2)}` : "";
   if (!shouldUseAutoHighLowExecution()) return `${base}${c100}`;
   return `${base}${c100} · ${formatExecutionPlanMini(plan)}`;
 }
@@ -6608,12 +6619,12 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
         payout_pct: Number(plan.profitPct),
         target_return_pct: Math.round(plan.profitPct),
         proposal_id: plan.proposalId,
-        c100_enabled: isC100Active(),
-        c100_level: c100State?.level || null,
-        c100_compoundStep: c100State?.compoundStep || 0,
+        ic2_enabled: isC100Active(),
+        ic2_level: c100State?.level || null,
+        ic2_step: c100State?.compoundStep || 0,
       };
     } else if (isC100Active()) {
-      // C100 siempre pide proposal antes de comprar para validar payout >= 95%.
+      // IC2 pide proposal antes de comprar para capturar payout y ejecutar con el stake compuesto exacto.
       const proposalRes = await wsRequest(
         {
           proposal: 1,
@@ -6634,7 +6645,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
       const askPrice = Number(proposal?.ask_price);
       const payout = Number(proposal?.payout);
       if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
-        throw new Error("Deriv no confirmó proposal válida para C100.");
+        throw new Error("Deriv no confirmó proposal válida para IC2.");
       }
       const profitPct = ((payout - askPrice) / askPrice) * 100;
       assertC100PayoutOK(profitPct);
@@ -6642,14 +6653,14 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
       res = await wsRequest({ buy: proposalId, price: askPrice }, 20000);
       tradeExtra = {
         ...tradeExtra,
-        exec_mode: "C100_RISE_FALL_PROPOSAL",
+        exec_mode: "IC2_RISE_FALL_PROPOSAL",
         contract_type: side,
         payout_pct: Number(profitPct),
         proposal_id: proposalId,
-        c100_enabled: true,
-        c100_mode: C100_MODE_LABEL,
-        c100_level: c100State?.level || null,
-        c100_compoundStep: c100State?.compoundStep || 0,
+        ic2_enabled: true,
+        ic2_mode: C100_MODE_LABEL,
+        ic2_level: c100State?.level || null,
+        ic2_step: c100State?.compoundStep || 0,
       };
     } else {
       res = await wsRequest(
@@ -6686,7 +6697,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null) {
     subscribeContractOutcome(cid, true);
     scheduleOutcomeFallbackPoll(cid, 85000);
 
-    const c100Txt = isC100Active() ? ` | C100 stake $${stake.toFixed(2)}` : "";
+    const c100Txt = isC100Active() ? ` | IC2 stake $${stake.toFixed(2)}` : "";
     toast(`📌 ${getTradingAccountLabel()} trade registrado (${contractLabel})${c100Txt}. Esperando resultado…`, 1800);
 
     updateDisciplineLockUI(false);
