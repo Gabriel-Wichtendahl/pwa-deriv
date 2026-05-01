@@ -22,6 +22,7 @@
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
 // ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 4 confirmaciones netas para COMPRA/VENTA
 // ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 57
+// ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 
 "use strict";
 
@@ -188,6 +189,7 @@ const MODE_GIRO_FLEX = "GIRO FLEX";
 const MODE_NORMAL_DEBILIDAD = "NORMAL + DEBILIDAD";
 const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
 const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
+const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -195,11 +197,16 @@ const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
 const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
+const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
+const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
+const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
+
 
 function normalizeSignalMode(mode) {
   const m = String(mode || "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (m === MODE_GIRO || m === "MODO GIRO") return MODE_GIRO;
   if (m === MODE_GIRO_FLEX || m === "GIRO FLEXIBLE" || m === "MODO GIRO FLEX" || m === "MODO GIRO FLEXIBLE") return MODE_GIRO_FLEX;
+  if (m === MODE_GIRO_APRENDIZAJE || m === "GIRO APRENDIZAJE" || m === "GIRO MAS APRENDIZAJE" || m === "GIRO MÁS APRENDIZAJE" || m === "MODO GIRO APRENDIZAJE" || m === "MODO GIRO + APRENDIZAJE" || m === "GIRO + LEARNING" || m === "GIRO LEARNING") return MODE_GIRO_APRENDIZAJE;
   if (m === MODE_LIKE_MANTENIDO || m === "LIKE" || m === "LIKES" || m === "MODO LIKE" || m === "MODO LIKES" || m === "SIMILARES LIKE" || m === "SIMILARES LIKES" || m === "TRADES LIKE" || m === "TRADES LIKES" || m === "GIRO LIKE" || m === "GIRO MANTENIDO" || m === "DIRECCION MANTENIDA" || m === "DIRECCIÓN MANTENIDA" || m === "MANTENIDO") return MODE_LIKE_MANTENIDO;
   if (m === MODE_FUERZA_DEBILIDAD_CLARA || m === "FUERZA DEBILIDAD CLARA" || m === "FUERZA Y DEBILIDAD CLARA" || m === "MODO FUERZA DEBILIDAD" || m === "MODO FUERZA/DEBILIDAD" || m === "IMPULSOS Y RETROCESOS" || m === "IMPULSOS RETROCESOS" || m === "FD CLARA" || m === "FDC") return MODE_FUERZA_DEBILIDAD_CLARA;
   if (m === MODE_NORMAL_DEBILIDAD || m === "NORMAL DEBILIDAD" || m === "NORMAL MAS DEBILIDAD" || m === "NORMAL MÁS DEBILIDAD" || m === "NORMAL + DFC" || m === "NORMAL DFC" || m === "MODO NORMAL DEBILIDAD" || m === "MODO NORMAL + DEBILIDAD" || m === "DEBILIDAD" || m === "MODO DEBILIDAD" || m === "DEBILIDAD PRO" || m === "FUERZA DEBILIDAD" || m === "FUERZA/DEBILIDAD" || m === "DFC") return MODE_NORMAL_DEBILIDAD;
@@ -207,7 +214,7 @@ function normalizeSignalMode(mode) {
 }
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
-  return m === MODE_GIRO || m === MODE_GIRO_FLEX;
+  return m === MODE_GIRO || m === MODE_GIRO_FLEX || m === MODE_GIRO_APRENDIZAJE;
 }
 function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
@@ -216,6 +223,7 @@ function getModeVersion(mode) {
   if (m === MODE_NORMAL_DEBILIDAD) return NORMAL_DEBILIDAD_LOGIC_VERSION;
   if (m === MODE_FUERZA_DEBILIDAD_CLARA) return FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION;
   if (m === MODE_LIKE_MANTENIDO) return LIKE_MANTENIDO_LOGIC_VERSION;
+  if (m === MODE_GIRO_APRENDIZAJE) return GIRO_APRENDIZAJE_LOGIC_VERSION;
   return "";
 }
 function loadAnalysisMode() {
@@ -244,6 +252,7 @@ function getModeBtnLabel(mode) {
   if (m === MODE_NORMAL_DEBILIDAD) return "🟦🟣 NORMAL + DEBILIDAD";
   if (m === MODE_FUERZA_DEBILIDAD_CLARA) return "⚡ FUERZA/DEBILIDAD";
   if (m === MODE_LIKE_MANTENIDO) return "🎯 LIKE MANTENIDO";
+  if (m === MODE_GIRO_APRENDIZAJE) return "🧠 GIRO + APRENDIZAJE";
   return "🟦 Modo NORMAL";
 }
 function nextSignalMode(mode) {
@@ -251,7 +260,8 @@ function nextSignalMode(mode) {
   if (m === MODE_NORMAL) return MODE_NORMAL_DEBILIDAD;
   if (m === MODE_NORMAL_DEBILIDAD) return MODE_FUERZA_DEBILIDAD_CLARA;
   if (m === MODE_FUERZA_DEBILIDAD_CLARA) return MODE_LIKE_MANTENIDO;
-  if (m === MODE_LIKE_MANTENIDO) return MODE_GIRO;
+  if (m === MODE_LIKE_MANTENIDO) return MODE_GIRO_APRENDIZAJE;
+  if (m === MODE_GIRO_APRENDIZAJE) return MODE_GIRO;
   if (m === MODE_GIRO) return MODE_GIRO_FLEX;
   return MODE_NORMAL;
 }
@@ -273,6 +283,143 @@ function savePracticeSavedSignals(arr) {
   } catch {}
 }
 let practiceSavedSignals = loadPracticeSavedSignals();
+
+/* =========================
+   Giro + Aprendizaje — ejemplos enseñados por el usuario
+========================= */
+function loadGiroAprendizajeExamples() {
+  try {
+    const raw = localStorage.getItem(GIRO_APRENDIZAJE_STORE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(Boolean).slice(0, GIRO_APRENDIZAJE_MAX_EXAMPLES) : [];
+  } catch {
+    return [];
+  }
+}
+function saveGiroAprendizajeExamples(arr = giroAprendizajeExamples) {
+  try {
+    giroAprendizajeExamples = (Array.isArray(arr) ? arr : []).filter(Boolean).slice(0, GIRO_APRENDIZAJE_MAX_EXAMPLES);
+    localStorage.setItem(GIRO_APRENDIZAJE_STORE_KEY, JSON.stringify(giroAprendizajeExamples));
+  } catch {}
+}
+let giroAprendizajeExamples = loadGiroAprendizajeExamples();
+
+function normalizeGiroAprendizajeLabel(label) {
+  const l = String(label || "").toUpperCase().trim();
+  if (["YES", "SI", "SÍ", "BUSCO", "TARGET", "LIKE", "FORMACION", "FORMACIÓN"].includes(l)) return "target";
+  if (["CLEAR", "CLARA", "MUY_CLARA", "MUY CLARA", "STAR", "ESTRELLA"].includes(l)) return "clear";
+  if (["NO", "AVOID", "DISLIKE", "NO_BUSCO", "NO BUSCO", "EVITAR"].includes(l)) return "avoid";
+  if (["DUDOSA", "DUDA", "SIMILAR", "PARECIDA"].includes(l)) return "doubt";
+  if (["REMOVE", "QUITAR", "BORRAR"].includes(l)) return "remove";
+  return "doubt";
+}
+function getGiroAprendizajeLabelText(label) {
+  const l = normalizeGiroAprendizajeLabel(label);
+  if (l === "clear") return "⭐ Muy clara";
+  if (l === "target") return "✅ Es mi formación";
+  if (l === "avoid") return "❌ No es";
+  if (l === "doubt") return "⚠️ Dudosa";
+  return "—";
+}
+function getGiroAprendizajeKey(item) {
+  if (!item) return "";
+  const id = String(item.practice_id || item.journal_id || item.id || "");
+  if (id) return id;
+  return getPracticeCandleKey(item);
+}
+function findGiroAprendizajeExampleIndex(itemOrKey) {
+  const key = typeof itemOrKey === "string" ? itemOrKey : getGiroAprendizajeKey(itemOrKey);
+  if (!key) return -1;
+  return (giroAprendizajeExamples || []).findIndex((x) => String(x?.source_key || x?.id || "") === key);
+}
+function getGiroAprendizajeExampleForItem(item) {
+  const idx = findGiroAprendizajeExampleIndex(item);
+  return idx >= 0 ? giroAprendizajeExamples[idx] : null;
+}
+function inferLearningDirectionFromOutcome(item) {
+  const out = String(item?.nextOutcome || "").toLowerCase();
+  if (out === "up") return "CALL";
+  if (out === "down") return "PUT";
+
+  const tradeSide = normalizeTradeDirection(item?.trade?.side || item?.trade?.contract_type);
+  if (tradeSide) return tradeSide;
+
+  return normalizeTradeDirection(item?.direction);
+}
+function buildGiroAprendizajeSnapshot(item, label, source = "modal") {
+  if (!item) return null;
+  const safeLabel = normalizeGiroAprendizajeLabel(label);
+  if (safeLabel === "remove") return null;
+  const key = getGiroAprendizajeKey(item);
+  if (!key) return null;
+
+  const learnedDirection = inferLearningDirectionFromOutcome(item);
+  return {
+    source_key: key,
+    source,
+    label: safeLabel,
+    labelText: getGiroAprendizajeLabelText(safeLabel),
+    saved_at: Date.now(),
+    id: String(item.id || ""),
+    journal_id: String(item.journal_id || ""),
+    practice_id: String(item.practice_id || ""),
+    minute: Number(item.minute || 0),
+    time: String(item.time || ""),
+    symbol: String(item.symbol || ""),
+    direction: String(item.direction || ""),
+    learnedDirection: learnedDirection || "",
+    mode: normalizeSignalMode(item.mode || "NORMAL"),
+    mode_version: String(item.mode_version || getModeVersion(item.mode || "NORMAL") || ""),
+    nextOutcome: String(item.nextOutcome || ""),
+    minuteComplete: !!item.minuteComplete,
+    trade: item.trade && typeof item.trade === "object" ? { ...item.trade } : null,
+    ticks: Array.isArray(item.ticks) ? item.ticks : [],
+  };
+}
+function upsertGiroAprendizajeExample(item, label, source = "modal") {
+  const safeLabel = normalizeGiroAprendizajeLabel(label);
+  const key = getGiroAprendizajeKey(item);
+  if (!key) return false;
+
+  if (safeLabel === "remove") {
+    const idx = findGiroAprendizajeExampleIndex(key);
+    if (idx >= 0) giroAprendizajeExamples.splice(idx, 1);
+    saveGiroAprendizajeExamples(giroAprendizajeExamples);
+    updateGiroAprendizajeControlsUI();
+    updateExportTradesButtonUI();
+    toast("🗑️ Marca de aprendizaje quitada", 1200);
+    return true;
+  }
+
+  const snap = buildGiroAprendizajeSnapshot(item, safeLabel, source);
+  if (!snap) return false;
+  const idx = findGiroAprendizajeExampleIndex(key);
+  if (idx >= 0) giroAprendizajeExamples[idx] = { ...giroAprendizajeExamples[idx], ...snap, updated_at: Date.now() };
+  else giroAprendizajeExamples.unshift(snap);
+  saveGiroAprendizajeExamples(giroAprendizajeExamples);
+  updateGiroAprendizajeControlsUI();
+  updateExportTradesButtonUI();
+  toast(`${getGiroAprendizajeLabelText(safeLabel)} guardada para Giro + Aprendizaje`, 1450);
+  return true;
+}
+function getGiroAprendizajeStats() {
+  const ex = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples : [];
+  return {
+    total: ex.length,
+    clear: ex.filter((x) => normalizeGiroAprendizajeLabel(x?.label) === "clear").length,
+    target: ex.filter((x) => normalizeGiroAprendizajeLabel(x?.label) === "target").length,
+    avoid: ex.filter((x) => normalizeGiroAprendizajeLabel(x?.label) === "avoid").length,
+    doubt: ex.filter((x) => normalizeGiroAprendizajeLabel(x?.label) === "doubt").length,
+  };
+}
+function clearGiroAprendizajeExamples() {
+  giroAprendizajeExamples = [];
+  saveGiroAprendizajeExamples(giroAprendizajeExamples);
+  updateGiroAprendizajeControlsUI();
+  updateExportTradesButtonUI();
+  toast("🧹 Aprendizaje Giro borrado", 1600);
+}
 
 function normalizePracticeSavedSignal(item) {
   if (!item) return null;
@@ -620,6 +767,10 @@ let signalConfirmBuyBtnEl = null;
 let signalConfirmSellBtnEl = null;
 let signalConfirmUndoBtnEl = null;
 let signalConfirmHintEl = null;
+let giroAprendizajePanelEl = null;
+let giroAprendizajeCountEl = null;
+let giroAprendizajeHintEl = null;
+let giroAprendizajeButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
 const SIGNAL_AUTO_ENTRY_MS = 57000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
@@ -3060,10 +3211,10 @@ function addPracticeConfirmation(side = "CALL") {
   } else if (enabled === "PUT") {
     updatePracticeResult(`✅ VENTA habilitada por confirmaciones: ${getPracticeConfirmationStatusText()}`, "is-otm");
   } else {
-    updatePracticeResult(`🧠 ${getPracticeConfirmationStatusText()}. Si no llega a 3 para un lado, PASAR.`, "is-pass");
+    updatePracticeResult(`🧠 ${getPracticeConfirmationStatusText()}. Si no llega a ${PRACTICE_CONFIRM_MIN} para un lado, PASAR.`, "is-pass");
   }
 
-  // Si el usuario suma la cuarta confirmación cuando la ronda ya pasó 57s,
+  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 57s,
   // también entra automáticamente sin esperar otro frame.
   tryPracticeAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -4210,14 +4361,18 @@ function ensureExportButton() {
 function buildExportPayloadTrades() {
   const selectedPractice = getPracticeExportSavedList();
   const markedTrades = (tradesJournal || []).filter((x) => x && (x.vote || x.comment));
+  const aprendizaje = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples : [];
+  const aprendizajeStats = getGiroAprendizajeStats();
   return {
     exported_at: new Date().toISOString(),
-    export_scope: "trades_feedback_and_practice_clear_formations",
+    export_scope: "trades_feedback_practice_clear_and_giro_aprendizaje",
     count_trades_total: (tradesJournal || []).length,
     count_marked_trades: markedTrades.length,
     count_practice_selected: selectedPractice.length,
     count_clear_formations: selectedPractice.length,
-    description: "Incluye trades marcados desde la pestaña Trades con me gusta/no me gusta y motivo, más formaciones claras guardadas desde Modo Práctica.",
+    count_giro_aprendizaje_examples: aprendizaje.length,
+    giro_aprendizaje_stats: aprendizajeStats,
+    description: "Incluye trades marcados desde la pestaña Trades, formaciones claras guardadas desde Modo Práctica y ejemplos enseñados para Giro + Aprendizaje.",
 
     // Operaciones marcadas desde la pestaña Trades para mostrar qué formaciones buscás/evitás.
     trades_marked: markedTrades.map((x) => ({
@@ -4246,25 +4401,30 @@ function buildExportPayloadTrades() {
       ticks: Array.isArray(x?.ticks) ? x.ticks : [],
       confirmations: Array.isArray(x?.confirmations) ? x.confirmations : [],
     })),
+
+    giro_aprendizaje_examples: aprendizaje.map((x) => ({
+      ...x,
+      ticks: Array.isArray(x?.ticks) ? x.ticks : [],
+    })),
   };
 }
 async function exportTradesJournal() {
   const payload = buildExportPayloadTrades();
   const json = JSON.stringify(payload, null, 2);
 
-  if (!payload.count_marked_trades && !payload.count_practice_selected) {
-    alert("No hay trades marcados ni formaciones claras guardadas para exportar todavía.");
+  if (!payload.count_marked_trades && !payload.count_practice_selected && !payload.count_giro_aprendizaje_examples) {
+    alert("No hay trades marcados, formaciones claras ni ejemplos de Giro + Aprendizaje para exportar todavía.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado al portapapeles: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras. Pegalo acá en el chat.`);
+    alert(`✅ Exportado al portapapeles: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras + ${payload.count_giro_aprendizaje_examples} aprendizaje. Pegalo acá en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
     downloadTextFile(`deriv-trades-feedback-estudio-${ts}.json`, json);
-    alert(`📥 Descargado JSON: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras.`);
+    alert(`📥 Descargado JSON: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras + ${payload.count_giro_aprendizaje_examples} aprendizaje.`);
   }
 }
 function ensureExportTradesButton() {
@@ -4292,11 +4452,12 @@ function updateExportTradesButtonUI() {
   if (!btn) return;
   const claras = getPracticeExportSavedList().length;
   const marcados = (tradesJournal || []).filter((x) => x && (x.vote || x.comment)).length;
-  const total = claras + marcados;
-  btn.textContent = total ? `📤 Exportar estudio (${marcados}T/${claras}C)` : "📤 Exportar estudio";
+  const aprendizaje = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples.length : 0;
+  const total = claras + marcados + aprendizaje;
+  btn.textContent = total ? `📤 Exportar estudio (${marcados}T/${claras}C/${aprendizaje}A)` : "📤 Exportar estudio";
   btn.title = total
-    ? `Exporta ${marcados} trade${marcados === 1 ? " marcado" : "s marcados"} desde Trades y ${claras} formación${claras === 1 ? " clara" : "es claras"} desde Práctica.`
-    : "Exporta trades marcados con 👍/👎/motivo y formaciones claras guardadas desde Práctica.";
+    ? `Exporta ${marcados} trade${marcados === 1 ? " marcado" : "s marcados"}, ${claras} formación${claras === 1 ? " clara" : "es claras"} y ${aprendizaje} ejemplo${aprendizaje === 1 ? "" : "s"} de Giro + Aprendizaje.`
+    : "Exporta trades marcados, formaciones claras y ejemplos de Giro + Aprendizaje.";
 }
 
 /* =========================
@@ -4333,6 +4494,25 @@ function ensureSplitClearButtons() {
     }
     if (!confirm("¿Borrar las formaciones claras guardadas desde Práctica? No borra el journal de trades.")) return;
     clearPracticeExportSaved();
+  };
+
+  let clearGiroLearningBtn = document.getElementById("clearGiroAprendizajeBtn");
+  if (!clearGiroLearningBtn) {
+    clearGiroLearningBtn = document.createElement("button");
+    clearGiroLearningBtn.id = "clearGiroAprendizajeBtn";
+    clearGiroLearningBtn.type = "button";
+    clearGiroLearningBtn.className = "btn btnGhost";
+    clearGiroLearningBtn.textContent = "🧠 Borrar aprendizaje Giro";
+    clearGiroLearningBtn.title = "Borra solo las marcas del panel Giro + Aprendizaje";
+    host.appendChild(clearGiroLearningBtn);
+  }
+  clearGiroLearningBtn.onclick = () => {
+    if (!giroAprendizajeExamples.length) {
+      toast("No hay ejemplos de aprendizaje", 1300);
+      return;
+    }
+    if (!confirm("¿Borrar SOLO los ejemplos enseñados de Giro + Aprendizaje? No borra Trades ni Práctica.")) return;
+    clearGiroAprendizajeExamples();
   };
 
   let btn = document.getElementById("clearTradesConfigBtn");
@@ -4409,7 +4589,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.toggle("active-strong", isSpecial);
     modeBtn.classList.toggle("active", isSpecial);
-    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, FUERZA/DEBILIDAD, LIKE MANTENIDO, GIRO y GIRO FLEX.";
+    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, FUERZA/DEBILIDAD, LIKE MANTENIDO, GIRO + APRENDIZAJE, GIRO y GIRO FLEX.";
   };
   paintMode();
 
@@ -5026,7 +5206,7 @@ function addSignalConfirmation(side = "CALL") {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario suma el cuarto punto cuando la vela ya pasó 57s,
+  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 57s,
   // también se dispara la auto-entrada sin esperar otro tick/timer.
   trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -5221,6 +5401,7 @@ function updateModalCandleStatusUI() {
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
     setSignalConfirmationControlsVisible(false);
+    setGiroAprendizajeControlsVisible(false);
     return;
   }
 
@@ -5266,7 +5447,9 @@ function updateModalCandleStatusUI() {
   paintTradeButtonLocked(modalBuyCallBtn, locked, remain, candleClosed);
   paintTradeButtonLocked(modalBuyPutBtn, locked, remain, candleClosed);
   setSignalConfirmationControlsVisible(true);
+  setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
+  updateGiroAprendizajeControlsUI();
 
   applyModalExecutionButtonUI(locked, candleClosed);
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
@@ -5320,6 +5503,139 @@ function requestModalDraw(force = false) {
 
     updateModalCandleStatusUI();
   });
+}
+
+/* =========================
+   Panel Giro + Aprendizaje en modal
+========================= */
+function ensureGiroAprendizajeControls() {
+  if (giroAprendizajePanelEl && giroAprendizajePanelEl.isConnected) return giroAprendizajePanelEl;
+
+  const footer =
+    document.querySelector("#chartModal .modalFooter") ||
+    (chartModal ? chartModal.querySelector(".modalFooter") : null);
+  if (!footer) return null;
+
+  const panel = document.createElement("div");
+  panel.id = "giroAprendizajePanel";
+  panel.style.width = "100%";
+  panel.style.boxSizing = "border-box";
+  panel.style.margin = "0 0 10px 0";
+  panel.style.padding = "12px";
+  panel.style.borderRadius = "18px";
+  panel.style.border = "1px solid rgba(34,211,238,.24)";
+  panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.030))";
+  panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.16), inset 0 0 0 1px rgba(34,211,238,.035)";
+
+  const top = document.createElement("div");
+  top.style.display = "flex";
+  top.style.alignItems = "center";
+  top.style.justifyContent = "space-between";
+  top.style.gap = "10px";
+  top.style.marginBottom = "10px";
+
+  const count = document.createElement("div");
+  count.id = "giroAprendizajeCount";
+  count.style.fontWeight = "950";
+  count.style.letterSpacing = ".25px";
+  count.style.fontSize = "14px";
+  count.style.padding = "8px 10px";
+  count.style.borderRadius = "999px";
+  count.style.border = "1px solid rgba(34,211,238,.24)";
+  count.style.background = "rgba(0,0,0,.16)";
+  count.style.whiteSpace = "nowrap";
+
+  const hint = document.createElement("div");
+  hint.id = "giroAprendizajeHint";
+  hint.style.flex = "1";
+  hint.style.textAlign = "right";
+  hint.style.fontSize = "12px";
+  hint.style.fontWeight = "850";
+  hint.style.opacity = ".88";
+  hint.style.lineHeight = "1.25";
+
+  top.appendChild(count);
+  top.appendChild(hint);
+
+  const row = document.createElement("div");
+  row.id = "giroAprendizajeButtons";
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "1fr 1fr";
+  row.style.gap = "8px";
+
+  const mk = (label, text, title) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btnGhost giroLearnBtn";
+    btn.dataset.learnLabel = label;
+    btn.textContent = text;
+    btn.title = title;
+    btn.style.minHeight = "42px";
+    btn.style.borderRadius = "14px";
+    btn.style.fontWeight = "950";
+    btn.style.fontSize = "12px";
+    btn.style.padding = "9px 8px";
+    btn.style.touchAction = "manipulation";
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (!modalCurrentItem) return;
+      upsertGiroAprendizajeExample(modalCurrentItem, label, "modal_signal");
+    };
+    row.appendChild(btn);
+    return btn;
+  };
+
+  mk("target", "✅ Es mi formación", "Guardar como formación que buscás para Giro + Aprendizaje");
+  mk("avoid", "❌ No es", "Guardar como formación a evitar");
+  mk("doubt", "⚠️ Dudosa", "Guardar como parecida/dudosa sin usarla como positiva fuerte");
+  mk("clear", "⭐ Muy clara", "Guardar como ejemplo fuerte de la esencia buscada");
+  mk("remove", "🗑 Quitar marca", "Quitar esta vela del aprendizaje");
+
+  panel.appendChild(top);
+  panel.appendChild(row);
+
+  const signalPanel = ensureSignalConfirmationControls();
+  if (signalPanel && signalPanel.parentElement === footer) signalPanel.insertAdjacentElement("afterend", panel);
+  else footer.prepend(panel);
+
+  giroAprendizajePanelEl = panel;
+  giroAprendizajeCountEl = count;
+  giroAprendizajeHintEl = hint;
+  giroAprendizajeButtonsEl = row;
+
+  updateGiroAprendizajeControlsUI();
+  return panel;
+}
+function updateGiroAprendizajeControlsUI() {
+  if (!giroAprendizajePanelEl || !giroAprendizajePanelEl.isConnected) return;
+  const stats = getGiroAprendizajeStats();
+  const ex = modalCurrentItem ? getGiroAprendizajeExampleForItem(modalCurrentItem) : null;
+  const currentLabel = ex ? normalizeGiroAprendizajeLabel(ex.label) : "";
+
+  if (giroAprendizajeCountEl) {
+    giroAprendizajeCountEl.textContent = `🧠 Giro + Aprendizaje · ${stats.clear + stats.target} sí / ${stats.avoid} no`;
+    giroAprendizajeCountEl.style.color = currentLabel ? "#ecfeff" : "rgba(255,255,255,.92)";
+    giroAprendizajeCountEl.style.borderColor = currentLabel ? "rgba(34,211,238,.72)" : "rgba(34,211,238,.24)";
+  }
+  if (giroAprendizajeHintEl) {
+    giroAprendizajeHintEl.textContent = currentLabel ? `Esta vela: ${getGiroAprendizajeLabelText(currentLabel)}` : "Enseñá si esta forma es la esencia buscada";
+    giroAprendizajeHintEl.style.color = currentLabel === "avoid" ? "#fecaca" : currentLabel ? "#a5f3fc" : "rgba(255,255,255,.70)";
+  }
+  if (giroAprendizajeButtonsEl) {
+    giroAprendizajeButtonsEl.querySelectorAll(".giroLearnBtn").forEach((btn) => {
+      const label = normalizeGiroAprendizajeLabel(btn.dataset.learnLabel || "");
+      const selected = label === currentLabel;
+      btn.classList.toggle("selected", selected);
+      btn.setAttribute("aria-pressed", selected ? "true" : "false");
+      btn.style.opacity = selected ? "1" : ".92";
+      btn.style.borderColor = selected ? "rgba(34,211,238,.88)" : "rgba(255,255,255,.16)";
+      btn.style.boxShadow = selected ? "0 0 14px rgba(34,211,238,.35), inset 0 0 0 1px rgba(34,211,238,.20)" : "";
+    });
+  }
+}
+function setGiroAprendizajeControlsVisible(show) {
+  ensureGiroAprendizajeControls();
+  if (giroAprendizajePanelEl) giroAprendizajePanelEl.style.display = show ? "block" : "none";
 }
 
 /* =========================
@@ -5603,7 +5919,10 @@ function openChartModal(item) {
   item.signalConfirmations ||= [];
   applyModalTradeButtonsLayout();
   setSignalConfirmationControlsVisible(true);
+  ensureGiroAprendizajeControls();
+  setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
+  updateGiroAprendizajeControlsUI();
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
@@ -7957,6 +8276,182 @@ function analyzeLikeMantenidoCandidate(candidate, rules = RULES_LIKE_MANTENIDO) 
   };
 }
 
+/* =========================
+   Modo GIRO + APRENDIZAJE
+   Usa como positivos tus 👍 de Trades y los botones “Es mi formación / Muy clara”.
+   Usa como negativos los botones “No es”. La dirección se aprende por la próxima vela
+   cuando exista; si no, cae a trade.side/direction.
+========================= */
+const RULES_GIRO_APRENDIZAJE = {
+  minPositivePrototypes: 3,
+  sampleCount: 28,
+  topSimilarityMin: 56,
+  avgTop3SimilarityMin: 52,
+  negativeSimilarityMax: 74,
+  bodyVsRangeMin: 0.045,
+  leadMoveMin: 0.24,
+  closeDominanceMin: 0.46,
+  releaseFromExtremeMax: 0.66,
+  lateAgainstMax: 0.52,
+  retraceMax: 0.92,
+  dirRatioMin: 0.24,
+  minPoints: 5,
+  minQualityGap: 4,
+};
+
+function getGiroAprendizajePrototypeEntries() {
+  const out = [];
+  const seen = new Set();
+  const push = (entry, label, source) => {
+    if (!entry || !Array.isArray(entry.ticks) || entry.ticks.length < 6) return;
+    const key = String(entry.source_key || entry.journal_id || entry.practice_id || entry.id || getPracticeCandleKey(entry) || "");
+    if (!key || seen.has(`${source}:${key}`)) return;
+    seen.add(`${source}:${key}`);
+    out.push({ ...entry, aprendizajeLabel: normalizeGiroAprendizajeLabel(label), aprendizajeSource: source });
+  };
+
+  for (const entry of tradesJournal || []) {
+    if (!entry || entry.vote !== "like") continue;
+    push(entry, "clear", "trades_like");
+  }
+
+  for (const ex of giroAprendizajeExamples || []) {
+    const label = normalizeGiroAprendizajeLabel(ex?.label);
+    if (label === "clear" || label === "target" || label === "avoid" || label === "doubt") {
+      push(ex, label, "giro_aprendizaje");
+    }
+  }
+  return out;
+}
+function getGiroAprendizajeLeadSignFromDirection(direction) {
+  const d = normalizeTradeDirection(direction);
+  if (d === "PUT") return 1;   // vela actual cargada arriba => giro PUT
+  if (d === "CALL") return -1; // vela actual cargada abajo => giro CALL
+  return 0;
+}
+function getGiroAprendizajePrototypes(evalMs, rules = RULES_GIRO_APRENDIZAJE) {
+  const positives = [];
+  const negatives = [];
+  for (const entry of getGiroAprendizajePrototypeEntries()) {
+    const label = normalizeGiroAprendizajeLabel(entry.aprendizajeLabel || entry.label);
+    const learnedDirection = inferLearningDirectionFromOutcome(entry);
+    const leadSign = getGiroAprendizajeLeadSignFromDirection(learnedDirection);
+    if (!leadSign) continue;
+    const sig = buildLikeMantenidoSignature(entry.ticks, leadSign, evalMs, rules.sampleCount);
+    if (!sig) continue;
+    const proto = {
+      id: entry.source_key || entry.journal_id || entry.id || "",
+      direction: learnedDirection,
+      leadSign,
+      label,
+      symbol: entry.symbol || "",
+      time: entry.time || "",
+      sig,
+    };
+    if (label === "avoid") negatives.push(proto);
+    else if (label === "clear" || label === "target") positives.push(proto);
+  }
+  return { positives, negatives };
+}
+function getGiroAprendizajePoints(sig, topSimilarity, avgTop3, rules = RULES_GIRO_APRENDIZAJE) {
+  if (!sig) return 0;
+  let pts = 0;
+  if (sig.leadMove >= rules.leadMoveMin) pts += 1;
+  if (sig.closeDominance >= rules.closeDominanceMin) pts += 1;
+  if (sig.releaseFromExtreme <= rules.releaseFromExtremeMax) pts += 1;
+  if (sig.lateAgainst <= rules.lateAgainstMax) pts += 1;
+  if (sig.retrace <= rules.retraceMax && sig.dirRatio >= rules.dirRatioMin) pts += 1;
+  if (topSimilarity >= rules.topSimilarityMin && avgTop3 >= rules.avgTop3SimilarityMin) pts += 1;
+  return pts;
+}
+function buildAutoLearningConfirmations(side, points, evalMs, meta = {}) {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  const n = Math.max(0, Math.min(8, Math.floor(Number(points || 0))));
+  if (!safeSide || n <= 0) return [];
+  const base = Math.max(0, Math.min(56000, Number(evalMs || EVAL_SEC * 1000)));
+  return Array.from({ length: n }, (_, i) => ({
+    side: safeSide,
+    ms: Math.max(0, Math.min(56000, base + i * 250)),
+    at: Date.now(),
+    source: "GIRO_APRENDIZAJE",
+    reason: meta.reason || "score_auto",
+  }));
+}
+function passesGiroAprendizajeEssence(sig, rules = RULES_GIRO_APRENDIZAJE) {
+  if (!sig) return false;
+  if (sig.bodyVsRange < rules.bodyVsRangeMin && sig.leadMove < rules.leadMoveMin + 0.08) return false;
+  if (sig.leadMove < rules.leadMoveMin) return false;
+  if (sig.closeDominance < rules.closeDominanceMin) return false;
+  if (sig.releaseFromExtreme > rules.releaseFromExtremeMax) return false;
+  if (sig.lateAgainst > rules.lateAgainstMax) return false;
+  if (sig.retrace > rules.retraceMax) return false;
+  if (sig.dirRatio < rules.dirRatioMin) return false;
+  return true;
+}
+function analyzeGiroAprendizajeCandidate(candidate, rules = RULES_GIRO_APRENDIZAJE) {
+  const evalMs = EVAL_SEC * 1000;
+  const { positives, negatives } = getGiroAprendizajePrototypes(evalMs, rules);
+  if (positives.length < rules.minPositivePrototypes) return null;
+
+  const leadSign = inferCandidateLikeLeadSign(candidate, evalMs);
+  if (!leadSign) return null;
+
+  const sig = buildLikeMantenidoSignature(candidate?.ticks || [], leadSign, evalMs, rules.sampleCount);
+  if (!passesGiroAprendizajeEssence(sig, rules)) return null;
+
+  const sameSidePositives = positives.filter((p) => p.leadSign === leadSign);
+  const learningPool = sameSidePositives.length >= rules.minPositivePrototypes ? sameSidePositives : positives;
+  const sims = learningPool.map((proto) => ({ proto, similarity: computeLikeMantenidoSimilarity(sig, proto.sig) })).sort((a, b) => b.similarity - a.similarity);
+  if (!sims.length) return null;
+  const top = sims[0];
+  const top3 = sims.slice(0, 3);
+  const avgTop3 = top3.reduce((acc, x) => acc + x.similarity, 0) / top3.length;
+
+  const negSameSide = negatives.filter((p) => p.leadSign === leadSign);
+  const negSims = negSameSide.map((proto) => computeLikeMantenidoSimilarity(sig, proto.sig)).sort((a, b) => b - a);
+  const negativeTop = negSims[0] || 0;
+
+  if (top.similarity < rules.topSimilarityMin) return null;
+  if (avgTop3 < rules.avgTop3SimilarityMin) return null;
+  if (negativeTop >= rules.negativeSimilarityMax && negativeTop > top.similarity - 3) return null;
+
+  const points = getGiroAprendizajePoints(sig, top.similarity, avgTop3, rules);
+  if (points < rules.minPoints) return null;
+
+  const direction = leadSign > 0 ? "PUT" : "CALL";
+  const quality = top.similarity * 0.72 + avgTop3 * 0.35 + points * 7 + Math.max(0, top.similarity - negativeTop) * 0.22;
+
+  return {
+    direction,
+    quality,
+    points,
+    leadSign,
+    giroAprendizajeScore: Math.round(quality),
+    topSimilarity: top.similarity,
+    avgTop3: Math.round(avgTop3),
+    prototypeCount: positives.length,
+    negativeTop,
+    meta: {
+      points,
+      topSimilarity: top.similarity,
+      avgTop3Similarity: Math.round(avgTop3),
+      prototypeCount: positives.length,
+      negativeTopSimilarity: Math.round(negativeTop),
+      leadSign,
+      signalLogic: leadSign > 0 ? "vela cargada arriba => giro PUT" : "vela cargada abajo => giro CALL",
+      body: sig.body,
+      bodyVsRange: sig.bodyVsRange,
+      leadMove: sig.leadMove,
+      closeDominance: sig.closeDominance,
+      releaseFromExtreme: sig.releaseFromExtreme,
+      lateAgainst: sig.lateAgainst,
+      retrace: sig.retrace,
+      dirRatio: sig.dirRatio,
+      matched: top3.map((x) => ({ id: x.proto.id, symbol: x.proto.symbol, time: x.proto.time, direction: x.proto.direction, label: x.proto.label, similarity: x.similarity })),
+    },
+  };
+}
+
 function detectDebilidadPattern(candidate) {
   const call = analyzeDebilidadSide(candidate, 1, RULES_DEBILIDAD);
   const put = analyzeDebilidadSide(candidate, -1, RULES_DEBILIDAD);
@@ -8030,6 +8525,38 @@ function evaluateMinute(minute) {
       likeMantenidoScore: bestMatch.likeMantenidoScore,
       likeMantenidoAvgTop3: bestMatch.likeMantenidoAvgTop3,
       likeMantenido: bestMatch.likeMantenidoMeta,
+    });
+    return true;
+  }
+
+  if (signalMode === MODE_GIRO_APRENDIZAJE) {
+    const matches = [];
+
+    for (const c of candidates) {
+      const match = analyzeGiroAprendizajeCandidate(c, RULES_GIRO_APRENDIZAJE);
+      if (!match) continue;
+
+      matches.push({
+        ...c,
+        direction: match.direction,
+        quality: match.quality,
+        giroAprendizajeScore: match.giroAprendizajeScore,
+        giroAprendizajePoints: match.points,
+        giroAprendizajeMeta: match.meta,
+      });
+    }
+
+    if (!matches.length) return true;
+
+    matches.sort((a, b) => b.quality - a.quality || b.giroAprendizajePoints - a.giroAprendizajePoints || b.giroAprendizajeScore - a.giroAprendizajeScore);
+    if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_APRENDIZAJE.minQualityGap) return true;
+    const bestMatch = matches[0];
+
+    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+      giroAprendizajeScore: bestMatch.giroAprendizajeScore,
+      giroAprendizajePoints: bestMatch.giroAprendizajePoints,
+      giroAprendizaje: bestMatch.giroAprendizajeMeta,
+      signalConfirmations: buildAutoLearningConfirmations(bestMatch.direction, bestMatch.giroAprendizajePoints, EVAL_SEC * 1000, { reason: "giro_aprendizaje_score" }),
     });
     return true;
   }
