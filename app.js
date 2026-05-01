@@ -186,16 +186,19 @@ const MODE_NORMAL = "NORMAL";
 const MODE_GIRO = "GIRO";
 const MODE_GIRO_FLEX = "GIRO FLEX";
 const MODE_NORMAL_DEBILIDAD = "NORMAL + DEBILIDAD";
+const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
 const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
+const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 
 function normalizeSignalMode(mode) {
   const m = String(mode || "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (m === MODE_GIRO || m === "MODO GIRO") return MODE_GIRO;
   if (m === MODE_GIRO_FLEX || m === "GIRO FLEXIBLE" || m === "MODO GIRO FLEX" || m === "MODO GIRO FLEXIBLE") return MODE_GIRO_FLEX;
+  if (m === MODE_FUERZA_DEBILIDAD_CLARA || m === "FUERZA DEBILIDAD CLARA" || m === "FUERZA Y DEBILIDAD CLARA" || m === "MODO FUERZA DEBILIDAD" || m === "MODO FUERZA/DEBILIDAD" || m === "IMPULSOS Y RETROCESOS" || m === "IMPULSOS RETROCESOS" || m === "FD CLARA" || m === "FDC") return MODE_FUERZA_DEBILIDAD_CLARA;
   if (m === MODE_NORMAL_DEBILIDAD || m === "NORMAL DEBILIDAD" || m === "NORMAL MAS DEBILIDAD" || m === "NORMAL MÁS DEBILIDAD" || m === "NORMAL + DFC" || m === "NORMAL DFC" || m === "MODO NORMAL DEBILIDAD" || m === "MODO NORMAL + DEBILIDAD" || m === "DEBILIDAD" || m === "MODO DEBILIDAD" || m === "DEBILIDAD PRO" || m === "FUERZA DEBILIDAD" || m === "FUERZA/DEBILIDAD" || m === "DFC") return MODE_NORMAL_DEBILIDAD;
   return MODE_NORMAL;
 }
@@ -208,6 +211,7 @@ function getModeVersion(mode) {
   if (m === MODE_GIRO) return GIRO_LOGIC_VERSION;
   if (m === MODE_GIRO_FLEX) return GIRO_FLEX_LOGIC_VERSION;
   if (m === MODE_NORMAL_DEBILIDAD) return NORMAL_DEBILIDAD_LOGIC_VERSION;
+  if (m === MODE_FUERZA_DEBILIDAD_CLARA) return FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION;
   return "";
 }
 function loadAnalysisMode() {
@@ -234,12 +238,14 @@ function getModeBtnLabel(mode) {
   if (m === MODE_GIRO) return "🟥 Modo GIRO";
   if (m === MODE_GIRO_FLEX) return "🟧 Modo GIRO FLEX";
   if (m === MODE_NORMAL_DEBILIDAD) return "🟦🟣 NORMAL + DEBILIDAD";
+  if (m === MODE_FUERZA_DEBILIDAD_CLARA) return "⚡ FUERZA/DEBILIDAD";
   return "🟦 Modo NORMAL";
 }
 function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_NORMAL) return MODE_NORMAL_DEBILIDAD;
-  if (m === MODE_NORMAL_DEBILIDAD) return MODE_GIRO;
+  if (m === MODE_NORMAL_DEBILIDAD) return MODE_FUERZA_DEBILIDAD_CLARA;
+  if (m === MODE_FUERZA_DEBILIDAD_CLARA) return MODE_GIRO;
   if (m === MODE_GIRO) return MODE_GIRO_FLEX;
   return MODE_NORMAL;
 }
@@ -461,8 +467,25 @@ function upsertTradeJournalFromSignal(it) {
   };
 
   const idx = tradesJournal.findIndex((x) => x && x.journal_id === entry.journal_id);
-  if (idx >= 0) tradesJournal[idx] = entry;
-  else tradesJournal.unshift(entry);
+  if (idx >= 0) {
+    const prev = tradesJournal[idx] || {};
+    tradesJournal[idx] = {
+      ...entry,
+      // ✅ Mantener feedback de estudio escrito desde la pestaña Trades.
+      vote: prev.vote || "",
+      comment: prev.comment || "",
+      feedback_at: prev.feedback_at || 0,
+      feedback_source: prev.feedback_source || "",
+    };
+  } else {
+    tradesJournal.unshift({
+      ...entry,
+      vote: "",
+      comment: "",
+      feedback_at: 0,
+      feedback_source: "",
+    });
+  }
 
   if (tradesJournal.length > TRADES_JOURNAL_MAX) tradesJournal = tradesJournal.slice(0, TRADES_JOURNAL_MAX);
 
@@ -2167,16 +2190,20 @@ function renderTradesView() {
         direction: entry.direction,
         mode: entry.mode || "NORMAL",
         mode_version: entry.mode_version || getModeVersion(entry.mode || "NORMAL") || "",
-        vote: "",
-        comment: "",
+        // ✅ Feedback propio de Trades para estudiar qué operaciones buscar.
+        vote: entry.vote || "",
+        comment: entry.comment || "",
+        journal_id: entry.journal_id || "",
+        feedback_at: entry.feedback_at || 0,
+        feedback_source: entry.feedback_source || "",
         ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
         nextOutcome: entry.nextOutcome || "",
         minuteComplete: true,
         trade: entry.trade || null,
       };
 
-      // ✅ SIN voto/comentario en Trades
-      list.appendChild(buildRow(item, { hideActions: true, source: "trades", signalId: entry.id }));
+      // ✅ En Trades ahora también se puede marcar 👍/👎 y escribir el motivo.
+      list.appendChild(buildRow(item, { source: "trades", signalId: entry.id, journalId: entry.journal_id, allowVoteChange: true }));
     }
   }
 
@@ -4176,18 +4203,38 @@ function ensureExportButton() {
 ========================= */
 function buildExportPayloadTrades() {
   const selectedPractice = getPracticeExportSavedList();
+  const markedTrades = (tradesJournal || []).filter((x) => x && (x.vote || x.comment));
   return {
     exported_at: new Date().toISOString(),
-    export_scope: "practice_clear_formations_only",
-    count_trades: 0,
+    export_scope: "trades_feedback_and_practice_clear_formations",
+    count_trades_total: (tradesJournal || []).length,
+    count_marked_trades: markedTrades.length,
     count_practice_selected: selectedPractice.length,
     count_clear_formations: selectedPractice.length,
-    description: "Solo formaciones claras guardadas manualmente desde Modo Práctica. No incluye el journal completo de trades.",
+    description: "Incluye trades marcados desde la pestaña Trades con me gusta/no me gusta y motivo, más formaciones claras guardadas desde Modo Práctica.",
 
-    // Se deja vacío a propósito para no exportar los 100+ trades del journal.
-    trades: [],
+    // Operaciones marcadas desde la pestaña Trades para mostrar qué formaciones buscás/evitás.
+    trades_marked: markedTrades.map((x) => ({
+      journal_id: x.journal_id || "",
+      saved_at: x.saved_at || 0,
+      feedback_at: x.feedback_at || 0,
+      feedback_source: x.feedback_source || "trades_tab",
+      vote: x.vote || "",
+      comment: x.comment || "",
+      id: x.id || "",
+      minute: x.minute || 0,
+      time: x.time || "",
+      symbol: x.symbol || "",
+      direction: x.direction || "",
+      mode: x.mode || "NORMAL",
+      mode_version: x.mode_version || getModeVersion(x.mode || "NORMAL") || "",
+      nextOutcome: x.nextOutcome || "",
+      minuteComplete: !!x.minuteComplete,
+      trade: x.trade || null,
+      ticks: Array.isArray(x.ticks) ? x.ticks : [],
+    })),
 
-    // Estas son las formaciones que marcaste con 💾 Guardar formación clara.
+    // Formaciones marcadas con 💾 Guardar formación clara en Modo Práctica.
     practice_selected: selectedPractice.map((x) => ({
       ...x,
       ticks: Array.isArray(x?.ticks) ? x.ticks : [],
@@ -4199,19 +4246,19 @@ async function exportTradesJournal() {
   const payload = buildExportPayloadTrades();
   const json = JSON.stringify(payload, null, 2);
 
-  if (!payload.count_practice_selected) {
-    alert("No hay formaciones claras guardadas desde Práctica para exportar todavía.");
+  if (!payload.count_marked_trades && !payload.count_practice_selected) {
+    alert("No hay trades marcados ni formaciones claras guardadas para exportar todavía.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado al portapapeles: ${payload.count_practice_selected} formaciones claras. Pegalo acá en el chat.`);
+    alert(`✅ Exportado al portapapeles: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras. Pegalo acá en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
-    downloadTextFile(`deriv-formaciones-claras-practica-${ts}.json`, json);
-    alert(`📥 Descargado JSON: ${payload.count_practice_selected} formaciones claras.`);
+    downloadTextFile(`deriv-trades-feedback-estudio-${ts}.json`, json);
+    alert(`📥 Descargado JSON: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras.`);
   }
 }
 function ensureExportTradesButton() {
@@ -4228,8 +4275,8 @@ function ensureExportTradesButton() {
   btn.id = "exportTradesBtn";
   btn.type = "button";
   btn.className = "btn btnGhost";
-  btn.textContent = "📤 Exportar claras";
-  btn.title = "Copia al portapapeles / descarga JSON solo con las formaciones claras guardadas en práctica";
+  btn.textContent = "📤 Exportar estudio";
+  btn.title = "Copia al portapapeles / descarga JSON con trades marcados y formaciones claras";
   host.appendChild(btn);
   updateExportTradesButtonUI();
   return btn;
@@ -4237,11 +4284,13 @@ function ensureExportTradesButton() {
 function updateExportTradesButtonUI() {
   const btn = document.getElementById("exportTradesBtn");
   if (!btn) return;
-  const count = getPracticeExportSavedList().length;
-  btn.textContent = count ? `📤 Exportar claras (${count})` : "📤 Exportar claras";
-  btn.title = count
-    ? `Exporta solo ${count} formación${count === 1 ? " clara" : "es claras"} guardada${count === 1 ? "" : "s"} en práctica. No exporta el journal completo.`
-    : "Exporta solo las formaciones claras que guardes desde Modo Práctica.";
+  const claras = getPracticeExportSavedList().length;
+  const marcados = (tradesJournal || []).filter((x) => x && (x.vote || x.comment)).length;
+  const total = claras + marcados;
+  btn.textContent = total ? `📤 Exportar estudio (${marcados}T/${claras}C)` : "📤 Exportar estudio";
+  btn.title = total
+    ? `Exporta ${marcados} trade${marcados === 1 ? " marcado" : "s marcados"} desde Trades y ${claras} formación${claras === 1 ? " clara" : "es claras"} desde Práctica.`
+    : "Exporta trades marcados con 👍/👎/motivo y formaciones claras guardadas desde Práctica.";
 }
 
 /* =========================
@@ -4354,7 +4403,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.toggle("active-strong", isSpecial);
     modeBtn.classList.toggle("active", isSpecial);
-    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, GIRO y GIRO FLEX.";
+    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, FUERZA/DEBILIDAD, GIRO y GIRO FLEX.";
   };
   paintMode();
 
@@ -5728,6 +5777,55 @@ function setNextOutcome(item, outcome) {
 }
 
 /* =========================
+   Feedback Trades / Señales
+========================= */
+function findTradesJournalEntryForFeedback(item, opts = {}) {
+  const journalId = String(opts.journalId || item?.journal_id || "");
+  if (journalId) {
+    const byJournal = (tradesJournal || []).find((x) => x && String(x.journal_id || "") === journalId);
+    if (byJournal) return byJournal;
+  }
+
+  const signalId = String(opts.signalId || item?.id || "");
+  if (signalId) {
+    const bySignal = (tradesJournal || []).find((x) => x && String(x.id || "") === signalId);
+    if (bySignal) return bySignal;
+  }
+
+  return null;
+}
+function persistRowFeedback(item, opts = {}, row = null) {
+  if (!item) return;
+
+  if (opts.source === "trades") {
+    const entry = findTradesJournalEntryForFeedback(item, opts);
+    if (!entry) return;
+
+    entry.vote = item.vote || "";
+    entry.comment = item.comment || "";
+    entry.feedback_at = Date.now();
+    entry.feedback_source = "trades_tab";
+    saveTradesJournal(tradesJournal);
+    updateExportTradesButtonUI();
+    return;
+  }
+
+  saveHistory(history);
+}
+function applyVoteButtonsVisual(row, vote = "", { lock = false } = {}) {
+  if (!row) return;
+  const safeVote = String(vote || "");
+  const btns = row.querySelectorAll("button[data-v]");
+  btns.forEach((btn) => {
+    const selected = String(btn.dataset.v || "") === safeVote;
+    btn.classList.toggle("selected", selected);
+    btn.disabled = !!lock;
+    btn.setAttribute("aria-pressed", selected ? "true" : "false");
+  });
+  row.classList.toggle("voted", !!safeVote);
+}
+
+/* =========================
    Build row
 ========================= */
 function buildRow(item, opts = {}) {
@@ -5740,14 +5838,17 @@ function buildRow(item, opts = {}) {
   const modeLabel = item.mode || "NORMAL";
 
   const savedForPractice = isSignalSavedForPractice(item.id);
+  const voteIsLocked = !!item.vote && !opts.allowVoteChange;
+  const commentPlaceholder = opts.source === "trades" ? "por qué" : "comentario";
+  const commentStyle = opts.source === "trades" ? "max-width:190px; min-width:130px;" : "max-width:118px; min-width:90px;";
   const actionsHtml = opts.hideActions
     ? ""
     : `
     <div class="row-actions">
-      <button class="voteBtn" data-v="like" type="button" ${item.vote ? "disabled" : ""}>👍</button>
-      <button class="voteBtn" data-v="dislike" type="button" ${item.vote ? "disabled" : ""}>👎</button>
+      <button class="voteBtn" data-v="like" type="button" ${voteIsLocked ? "disabled" : ""} title="Me gusta / operación que quiero buscar">👍</button>
+      <button class="voteBtn" data-v="dislike" type="button" ${voteIsLocked ? "disabled" : ""} title="No me gusta / operación que quiero evitar">👎</button>
       <button class="savePracticeBtn ${savedForPractice ? "selected" : ""}" type="button" title="${savedForPractice ? "Quitar del pool de práctica" : "Guardar en el pool de práctica del modo correspondiente"}">💾</button>
-      <input class="row-comment" style="max-width:118px; min-width:90px;" placeholder="comentario" value="${escapeHtml(item.comment || "")}">
+      <input class="row-comment" style="${commentStyle}" placeholder="${commentPlaceholder}" value="${escapeHtml(item.comment || "")}">
     </div>
   `;
 
@@ -5783,29 +5884,28 @@ function buildRow(item, opts = {}) {
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
 
-  // acciones (solo señales)
+  // acciones: señales + Trades de estudio
   if (!opts.hideActions) {
-    if (item.vote) {
-      const likeBtn = row.querySelector('button[data-v="like"]');
-      const disBtn = row.querySelector('button[data-v="dislike"]');
-      if (item.vote === "like" && likeBtn) likeBtn.classList.add("selected");
-      if (item.vote === "dislike" && disBtn) disBtn.classList.add("selected");
-    }
+    applyVoteButtonsVisual(row, item.vote || "", { lock: !!item.vote && !opts.allowVoteChange });
 
     row.querySelectorAll("button[data-v]").forEach((btn) => {
       btn.onclick = (e) => {
         e.stopPropagation();
-        if (item.vote) return;
 
-        item.vote = btn.dataset.v;
-        item.comment = row.querySelector(".row-comment").value || "";
+        const selectedVote = String(btn.dataset.v || "");
+        if (!opts.allowVoteChange && item.vote) return;
 
-        row.classList.add("voted");
-        btn.classList.add("selected");
+        // En Trades permitimos cambiar la marca. Si tocás el mismo botón, se quita.
+        item.vote = opts.allowVoteChange && item.vote === selectedVote ? "" : selectedVote;
+        item.comment = row.querySelector(".row-comment")?.value || "";
 
-        saveHistory(history);
+        applyVoteButtonsVisual(row, item.vote || "", { lock: !!item.vote && !opts.allowVoteChange });
+        persistRowFeedback(item, opts, row);
 
-        row.querySelectorAll("button[data-v]").forEach((b) => (b.disabled = true));
+        if (opts.source === "trades") {
+          const txt = item.vote === "like" ? "👍 Me gusta guardado" : item.vote === "dislike" ? "👎 No me gusta guardado" : "Marca quitada";
+          toast(txt, 1200);
+        }
       };
     });
 
@@ -5859,10 +5959,19 @@ function buildRow(item, opts = {}) {
     }
 
     const input = row.querySelector(".row-comment");
-    input.addEventListener("blur", () => {
-      item.comment = input.value || "";
-      saveHistory(history);
-        });
+    if (input) {
+      input.addEventListener("blur", () => {
+        item.comment = input.value || "";
+        persistRowFeedback(item, opts, row);
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          input.blur();
+          toast(opts.source === "trades" ? "💬 Motivo guardado" : "💬 Comentario guardado", 1000);
+        }
+      });
+    }
   }
 
   return row;
@@ -7384,6 +7493,182 @@ function analyzeDebilidadSide(candidate, winnerSign, rules) {
   };
 }
 
+
+/* =========================
+   Modo FUERZA/DEBILIDAD CLARA
+   Busca la esencia visual: impulsos fuertes de un grupo + retrocesos contrarios débiles/irregulares.
+   - CALL = compradores dominan con impulsos alcistas y vendedores no logran recuperar mando.
+   - PUT  = vendedores dominan con impulsos bajistas y compradores no logran recuperar mando.
+========================= */
+const RULES_FUERZA_DEBILIDAD_CLARA = {
+  rangeVsVolMin: 1.22,
+  minBigDominantLegs: 2,
+  dominantLegMinFracRange: 0.105,
+  dominanceRatioMin: 1.06,
+  closeDominanceMin: 0.50,
+  breakCountMin: 1,
+  weakResponseMaxVsDomLargest: 1.22,
+  minOppositeLegs: 1,
+  weakIrregularityMin: 0.04,
+  qualityMin: 60,
+  minQualityGap: 7,
+};
+
+function buildFuerzaDebilidadCheckpoints(evalMs) {
+  return [...new Set([0, 7000, 15000, 23000, 30000, 38000, 45000, evalMs].filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+}
+
+function countDominantBreaksByTicks(ticks, dirSign, range, minStep) {
+  const pts = (ticks || []).slice().sort((a, b) => a.ms - b.ms);
+  if (pts.length < 3) return 0;
+
+  let breaks = 0;
+  if (dirSign > 0) {
+    let extreme = pts[0].quote;
+    for (const t of pts) {
+      if (t.ms < 7000) {
+        extreme = Math.max(extreme, t.quote);
+        continue;
+      }
+      if (t.quote > extreme + minStep) {
+        breaks += 1;
+        extreme = t.quote;
+      } else {
+        extreme = Math.max(extreme, t.quote);
+      }
+    }
+  } else {
+    let extreme = pts[0].quote;
+    for (const t of pts) {
+      if (t.ms < 7000) {
+        extreme = Math.min(extreme, t.quote);
+        continue;
+      }
+      if (t.quote < extreme - minStep) {
+        breaks += 1;
+        extreme = t.quote;
+      } else {
+        extreme = Math.min(extreme, t.quote);
+      }
+    }
+  }
+
+  return breaks;
+}
+
+function analyzeFuerzaDebilidadSide(candidate, dirSign, rules = RULES_FUERZA_DEBILIDAD_CLARA) {
+  const ticks = candidate?.ticks || [];
+  const evalMs = EVAL_SEC * 1000;
+  if (ticks.length < 7) return null;
+
+  const fullTicks = sliceTicks(ticks, 0, evalMs);
+  if (fullTicks.length < 6) return null;
+
+  const p0 = getPriceAtMs(ticks, 0);
+  const pE = getPriceAtMs(ticks, evalMs);
+  if (p0 == null || pE == null) return null;
+
+  const qs = fullTicks.map((t) => Number(t.quote)).filter((q) => Number.isFinite(q));
+  if (qs.length < 6) return null;
+
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = Math.max(1e-12, maxP - minP);
+  const volMean = Number(candidate?.vol || 0);
+  const rangeVsVol = range / (volMean || 1e-9);
+  if (rangeVsVol < rules.rangeVsVolMin) return null;
+
+  const cps = buildFuerzaDebilidadCheckpoints(evalMs);
+  const stepMoves = [];
+  for (let i = 1; i < cps.length; i++) {
+    const a = getPriceAtMs(ticks, cps[i - 1]);
+    const b = getPriceAtMs(ticks, cps[i]);
+    if (a == null || b == null) return null;
+    stepMoves.push(b - a);
+  }
+
+  const dominantLegs = [];
+  const oppositeLegs = [];
+  for (const raw of stepMoves) {
+    const mv = Number(raw || 0);
+    if (!Number.isFinite(mv) || Math.abs(mv) < range * 0.015) continue;
+    const signed = mv * dirSign;
+    if (signed > 0) dominantLegs.push(Math.abs(mv));
+    else oppositeLegs.push(Math.abs(mv));
+  }
+
+  const dominantSum = dominantLegs.reduce((a, b) => a + b, 0);
+  const oppositeSum = oppositeLegs.reduce((a, b) => a + b, 0);
+  if (dominantSum <= 1e-12) return null;
+  if (oppositeLegs.length < rules.minOppositeLegs) return null;
+
+  const bigDominantLegs = dominantLegs.filter((v) => v >= range * rules.dominantLegMinFracRange);
+  if (bigDominantLegs.length < rules.minBigDominantLegs) return null;
+
+  const dominanceRatio = dominantSum / (oppositeSum + 1e-12);
+  if (dominanceRatio < rules.dominanceRatioMin) return null;
+
+  const dominantLargest = Math.max(...dominantLegs, 0);
+  const oppositeLargest = Math.max(...oppositeLegs, 0);
+  const weakResponseRatio = oppositeLargest / (dominantLargest + 1e-12);
+  if (weakResponseRatio > rules.weakResponseMaxVsDomLargest) return null;
+
+  const closeDominance = dirSign > 0 ? (pE - minP) / range : (maxP - pE) / range;
+  if (closeDominance < rules.closeDominanceMin) return null;
+
+  const breakCount = countDominantBreaksByTicks(fullTicks, dirSign, range, range * 0.055);
+  if (breakCount < rules.breakCountMin) return null;
+
+  const wholeDirRatio = directionalRatio(fullTicks, dirSign);
+  const oppIrregularity = coeffVar(oppositeLegs);
+  const domConsistency = 1 / (1 + coeffVar(dominantLegs));
+  const pMid = getPriceAtMs(ticks, Math.min(30000, evalMs));
+  const midDominantMove = pMid == null ? 0 : (pMid - p0) * dirSign;
+  const earlyDominance = Math.max(0, midDominantMove / range);
+
+  const forceScore = Math.min(1.8, dominanceRatio) * 20;
+  const impulseScore = Math.min(4, bigDominantLegs.length) * 10;
+  const breakScore = Math.min(3, breakCount) * 8;
+  const closeScore = Math.min(1.25, closeDominance) * 14;
+  const weakFailScore = Math.max(0, 1.25 - Math.min(1.25, weakResponseRatio)) * 16;
+  const weakIrregularityScore = Math.min(1.2, oppIrregularity) * 8;
+  const dirRatioScore = wholeDirRatio * 10;
+  const earlyScore = Math.min(1.2, earlyDominance) * 8;
+  const consistencyScore = domConsistency * 5;
+
+  const quality = forceScore + impulseScore + breakScore + closeScore + weakFailScore + weakIrregularityScore + dirRatioScore + earlyScore + consistencyScore;
+  if (quality < rules.qualityMin) return null;
+
+  return {
+    direction: dirSign > 0 ? "CALL" : "PUT",
+    quality,
+    dirSign,
+    range,
+    rangeVsVol,
+    dominanceRatio,
+    dominantSum,
+    oppositeSum,
+    dominantLargest,
+    oppositeLargest,
+    weakResponseRatio,
+    breakCount,
+    bigDominantLegs: bigDominantLegs.length,
+    closeDominance,
+    wholeDirRatio,
+    weakIrregularity: oppIrregularity,
+    earlyDominance,
+  };
+}
+
+function detectFuerzaDebilidadClaraPattern(candidate) {
+  const call = analyzeFuerzaDebilidadSide(candidate, 1, RULES_FUERZA_DEBILIDAD_CLARA);
+  const put = analyzeFuerzaDebilidadSide(candidate, -1, RULES_FUERZA_DEBILIDAD_CLARA);
+  const matches = [call, put].filter(Boolean).sort((a, b) => b.quality - a.quality);
+  if (!matches.length) return null;
+  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_FUERZA_DEBILIDAD_CLARA.minQualityGap) return null;
+  return matches[0];
+}
+
 function detectDebilidadPattern(candidate) {
   const call = analyzeDebilidadSide(candidate, 1, RULES_DEBILIDAD);
   const put = analyzeDebilidadSide(candidate, -1, RULES_DEBILIDAD);
@@ -7428,6 +7713,50 @@ function evaluateMinute(minute) {
   }
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return strictLikeMode ? true : false;
+
+
+  if (signalMode === MODE_FUERZA_DEBILIDAD_CLARA) {
+    const matches = [];
+
+    for (const c of candidates) {
+      const match = detectFuerzaDebilidadClaraPattern(c);
+      if (!match) continue;
+
+      matches.push({
+        ...c,
+        direction: match.direction,
+        quality: match.quality,
+        fuerzaDebilidadScore: match.quality,
+        fuerzaDebilidadMeta: {
+          range: match.range,
+          rangeVsVol: match.rangeVsVol,
+          dominanceRatio: match.dominanceRatio,
+          dominantSum: match.dominantSum,
+          oppositeSum: match.oppositeSum,
+          dominantLargest: match.dominantLargest,
+          oppositeLargest: match.oppositeLargest,
+          weakResponseRatio: match.weakResponseRatio,
+          breakCount: match.breakCount,
+          bigDominantLegs: match.bigDominantLegs,
+          closeDominance: match.closeDominance,
+          wholeDirRatio: match.wholeDirRatio,
+          weakIrregularity: match.weakIrregularity,
+          earlyDominance: match.earlyDominance,
+        },
+      });
+    }
+
+    if (!matches.length) return true;
+
+    matches.sort((a, b) => b.quality - a.quality || b.score - a.score);
+    const bestMatch = matches[0];
+
+    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+      fuerzaDebilidadScore: bestMatch.fuerzaDebilidadScore,
+      fuerzaDebilidad: bestMatch.fuerzaDebilidadMeta,
+    });
+    return true;
+  }
 
   if (signalMode === MODE_NORMAL_DEBILIDAD) {
     const matches = [];
