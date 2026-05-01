@@ -1,4 +1,4 @@
-// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + ✅ Práctica pool sin duplicados/repetición + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable) + ✅ señales activas en Trades/Práctica
+// app.js — Base estable + LIVE chart FIX + NORMAL+DEBILIDAD FLEX + ✅ Práctica pool sin duplicados/repetición + Trades no quedan colgados (timeouts + race) + ✅ Auto-abrir gráfico (configurable) + ✅ señales activas en Trades/Práctica + ✅ Modo LIKE MANTENIDO
 // ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
@@ -187,17 +187,20 @@ const MODE_GIRO = "GIRO";
 const MODE_GIRO_FLEX = "GIRO FLEX";
 const MODE_NORMAL_DEBILIDAD = "NORMAL + DEBILIDAD";
 const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
+const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
 const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
+const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 
 function normalizeSignalMode(mode) {
   const m = String(mode || "").toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
   if (m === MODE_GIRO || m === "MODO GIRO") return MODE_GIRO;
   if (m === MODE_GIRO_FLEX || m === "GIRO FLEXIBLE" || m === "MODO GIRO FLEX" || m === "MODO GIRO FLEXIBLE") return MODE_GIRO_FLEX;
+  if (m === MODE_LIKE_MANTENIDO || m === "LIKE" || m === "LIKES" || m === "MODO LIKE" || m === "MODO LIKES" || m === "SIMILARES LIKE" || m === "SIMILARES LIKES" || m === "TRADES LIKE" || m === "TRADES LIKES" || m === "GIRO LIKE" || m === "GIRO MANTENIDO" || m === "DIRECCION MANTENIDA" || m === "DIRECCIÓN MANTENIDA" || m === "MANTENIDO") return MODE_LIKE_MANTENIDO;
   if (m === MODE_FUERZA_DEBILIDAD_CLARA || m === "FUERZA DEBILIDAD CLARA" || m === "FUERZA Y DEBILIDAD CLARA" || m === "MODO FUERZA DEBILIDAD" || m === "MODO FUERZA/DEBILIDAD" || m === "IMPULSOS Y RETROCESOS" || m === "IMPULSOS RETROCESOS" || m === "FD CLARA" || m === "FDC") return MODE_FUERZA_DEBILIDAD_CLARA;
   if (m === MODE_NORMAL_DEBILIDAD || m === "NORMAL DEBILIDAD" || m === "NORMAL MAS DEBILIDAD" || m === "NORMAL MÁS DEBILIDAD" || m === "NORMAL + DFC" || m === "NORMAL DFC" || m === "MODO NORMAL DEBILIDAD" || m === "MODO NORMAL + DEBILIDAD" || m === "DEBILIDAD" || m === "MODO DEBILIDAD" || m === "DEBILIDAD PRO" || m === "FUERZA DEBILIDAD" || m === "FUERZA/DEBILIDAD" || m === "DFC") return MODE_NORMAL_DEBILIDAD;
   return MODE_NORMAL;
@@ -212,6 +215,7 @@ function getModeVersion(mode) {
   if (m === MODE_GIRO_FLEX) return GIRO_FLEX_LOGIC_VERSION;
   if (m === MODE_NORMAL_DEBILIDAD) return NORMAL_DEBILIDAD_LOGIC_VERSION;
   if (m === MODE_FUERZA_DEBILIDAD_CLARA) return FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION;
+  if (m === MODE_LIKE_MANTENIDO) return LIKE_MANTENIDO_LOGIC_VERSION;
   return "";
 }
 function loadAnalysisMode() {
@@ -239,13 +243,15 @@ function getModeBtnLabel(mode) {
   if (m === MODE_GIRO_FLEX) return "🟧 Modo GIRO FLEX";
   if (m === MODE_NORMAL_DEBILIDAD) return "🟦🟣 NORMAL + DEBILIDAD";
   if (m === MODE_FUERZA_DEBILIDAD_CLARA) return "⚡ FUERZA/DEBILIDAD";
+  if (m === MODE_LIKE_MANTENIDO) return "🎯 LIKE MANTENIDO";
   return "🟦 Modo NORMAL";
 }
 function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_NORMAL) return MODE_NORMAL_DEBILIDAD;
   if (m === MODE_NORMAL_DEBILIDAD) return MODE_FUERZA_DEBILIDAD_CLARA;
-  if (m === MODE_FUERZA_DEBILIDAD_CLARA) return MODE_GIRO;
+  if (m === MODE_FUERZA_DEBILIDAD_CLARA) return MODE_LIKE_MANTENIDO;
+  if (m === MODE_LIKE_MANTENIDO) return MODE_GIRO;
   if (m === MODE_GIRO) return MODE_GIRO_FLEX;
   return MODE_NORMAL;
 }
@@ -4403,7 +4409,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.toggle("active-strong", isSpecial);
     modeBtn.classList.toggle("active", isSpecial);
-    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, FUERZA/DEBILIDAD, GIRO y GIRO FLEX.";
+    modeBtn.title = "Tocá para alternar entre NORMAL, NORMAL + DEBILIDAD, FUERZA/DEBILIDAD, LIKE MANTENIDO, GIRO y GIRO FLEX.";
   };
   paintMode();
 
@@ -7669,6 +7675,288 @@ function detectFuerzaDebilidadClaraPattern(candidate) {
   return matches[0];
 }
 
+
+/* =========================
+   Modo LIKE MANTENIDO
+   Aprende de los trades marcados con 👍 en la pestaña Trades.
+   Busca velas parecidas a esas 17: la vela mantiene su dirección actual
+   hasta el momento de señal aunque se estanque, y la entrada va al giro:
+   - vela verde/mantenida arriba  => PUT
+   - vela roja/mantenida abajo    => CALL
+========================= */
+const RULES_LIKE_MANTENIDO = {
+  minLikedPrototypes: 3,
+  sampleCount: 28,
+  topSimilarityMin: 58,
+  avgTop3SimilarityMin: 54,
+  bodyVsRangeMin: 0.055,
+  leadMoveMin: 0.26,
+  closeDominanceMin: 0.48,
+  releaseFromExtremeMax: 0.62,
+  lateAgainstMax: 0.48,
+  retraceMax: 0.88,
+  dirRatioMin: 0.30,
+  minQualityGap: 4,
+};
+
+function normalizeTradeDirection(dir) {
+  const d = String(dir || "").toUpperCase();
+  if (d === "CALL" || d === "BUY" || d === "COMPRA") return "CALL";
+  if (d === "PUT" || d === "SELL" || d === "VENTA") return "PUT";
+  return "";
+}
+
+function getGiroLeadSignFromSignalDirection(direction) {
+  const d = normalizeTradeDirection(direction);
+  if (d === "PUT") return 1;
+  if (d === "CALL") return -1;
+  return 0;
+}
+
+function ensureTicksWithBoundary(ticks, evalMs) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .filter((t) => Number.isFinite(Number(t?.ms)) && Number.isFinite(Number(t?.quote)) && Number(t.ms) <= evalMs)
+    .map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) }))
+    .sort((a, b) => a.ms - b.ms);
+
+  if (!pts.length) return [];
+
+  const p0 = getPriceAtMs(pts, 0);
+  const pE = getPriceAtMs(pts, evalMs);
+  if (p0 == null || pE == null) return pts;
+
+  if (pts[0].ms > 0) pts.unshift({ ms: 0, quote: Number(p0) });
+  if (pts[pts.length - 1].ms < evalMs) pts.push({ ms: evalMs, quote: Number(pE) });
+  return pts;
+}
+
+function buildLikeMantenidoSignature(ticks, leadSign, evalMs, sampleCount = RULES_LIKE_MANTENIDO.sampleCount) {
+  const dir = Math.sign(Number(leadSign || 0));
+  if (!dir) return null;
+
+  const pts = ensureTicksWithBoundary(ticks, evalMs);
+  if (pts.length < 6) return null;
+
+  const p0 = Number(getPriceAtMs(pts, 0));
+  const pE = Number(getPriceAtMs(pts, evalMs));
+  if (!Number.isFinite(p0) || !Number.isFinite(pE)) return null;
+
+  const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (qs.length < 6) return null;
+
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = Math.max(1e-12, maxP - minP);
+  const transformed = (q) => ((Number(q) - p0) * dir) / range;
+
+  const values = [];
+  for (let i = 0; i < sampleCount; i++) {
+    const ms = (evalMs * i) / Math.max(1, sampleCount - 1);
+    const q = getPriceAtMs(pts, ms);
+    values.push(transformed(q));
+  }
+
+  const slopes = [];
+  for (let i = 1; i < values.length; i++) slopes.push(values[i] - values[i - 1]);
+
+  const cpRaw = [0, 7000, 14000, 21000, 28000, 35000, 40000, evalMs];
+  const cps = [...new Set(cpRaw.filter((ms) => ms <= evalMs))].sort((a, b) => a - b);
+  const segMoves = [];
+  for (let i = 1; i < cps.length; i++) {
+    const a = getPriceAtMs(pts, cps[i - 1]);
+    const b = getPriceAtMs(pts, cps[i]);
+    if (a == null || b == null) return null;
+    segMoves.push(((Number(b) - Number(a)) * dir) / range);
+  }
+
+  const leadExtreme = dir > 0 ? maxP : minP;
+  const releaseFromExtreme = dir > 0 ? (maxP - pE) / range : (pE - minP) / range;
+  const closeDominance = dir > 0 ? (pE - minP) / range : (maxP - pE) / range;
+  const body = ((pE - p0) * dir) / range;
+  const leadMove = dir > 0 ? (maxP - p0) / range : (p0 - minP) / range;
+
+  const lateStart = Math.max(0, evalMs - 14000);
+  const last8Start = Math.max(0, evalMs - 8000);
+  const pLate = Number(getPriceAtMs(pts, lateStart));
+  const pLast8 = Number(getPriceAtMs(pts, last8Start));
+  const lateMove = Number.isFinite(pLate) ? ((pE - pLate) * dir) / range : 0;
+  const last8Move = Number.isFinite(pLast8) ? ((pE - pLast8) * dir) / range : 0;
+  const lateAgainst = Math.max(0, -lateMove);
+
+  const fullTicks = sliceTicks(pts, 0, evalMs);
+  const lateTicks = sliceTicks(pts, lateStart, evalMs);
+  const retrace = maxRetraceAgainst(fullTicks, dir) / range;
+  const dirRatio = directionalRatio(fullTicks, dir);
+  const lateDirRatio = directionalRatio(lateTicks, dir);
+
+  let lateVol = 0;
+  for (let i = 1; i < lateTicks.length; i++) lateVol += Math.abs(Number(lateTicks[i].quote) - Number(lateTicks[i - 1].quote));
+  lateVol = lateVol / range;
+
+  return {
+    values,
+    slopes,
+    segMoves,
+    leadSign: dir,
+    range,
+    p0,
+    pE,
+    minP,
+    maxP,
+    leadExtreme,
+    body,
+    bodyVsRange: Math.abs(pE - p0) / range,
+    leadMove,
+    releaseFromExtreme,
+    closeDominance,
+    lateMove,
+    last8Move,
+    lateAgainst,
+    lateVol,
+    retrace,
+    dirRatio,
+    lateDirRatio,
+  };
+}
+
+function passesLikeMantenidoDirection(sig, rules = RULES_LIKE_MANTENIDO) {
+  if (!sig) return false;
+  if (sig.body <= 0 && sig.closeDominance < rules.closeDominanceMin + 0.12) return false;
+  if (sig.bodyVsRange < rules.bodyVsRangeMin && sig.leadMove < rules.leadMoveMin + 0.08) return false;
+  if (sig.leadMove < rules.leadMoveMin) return false;
+  if (sig.closeDominance < rules.closeDominanceMin) return false;
+  if (sig.releaseFromExtreme > rules.releaseFromExtremeMax) return false;
+  if (sig.lateAgainst > rules.lateAgainstMax) return false;
+  if (sig.retrace > rules.retraceMax) return false;
+  if (sig.dirRatio < rules.dirRatioMin) return false;
+  return true;
+}
+
+function rmsDiffLike(a, b) {
+  const n = Math.min((a || []).length, (b || []).length);
+  if (!n) return 0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const d = Number(a[i] || 0) - Number(b[i] || 0);
+    acc += d * d;
+  }
+  return Math.sqrt(acc / n);
+}
+
+function avgAbsDiffLike(a, b) {
+  const n = Math.min((a || []).length, (b || []).length);
+  if (!n) return 0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) acc += Math.abs(Number(a[i] || 0) - Number(b[i] || 0));
+  return acc / n;
+}
+
+function computeLikeMantenidoSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const distance =
+    rmsDiffLike(a.values, b.values) * 1.55 +
+    avgAbsDiffLike(a.slopes, b.slopes) * 0.95 +
+    avgAbsDiffLike(a.segMoves, b.segMoves) * 1.10 +
+    Math.abs(a.body - b.body) * 0.55 +
+    Math.abs(a.leadMove - b.leadMove) * 0.55 +
+    Math.abs(a.releaseFromExtreme - b.releaseFromExtreme) * 0.70 +
+    Math.abs(a.closeDominance - b.closeDominance) * 0.70 +
+    Math.abs(a.lateMove - b.lateMove) * 0.70 +
+    Math.abs(a.retrace - b.retrace) * 0.40 +
+    Math.abs(a.dirRatio - b.dirRatio) * 0.32;
+  return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-distance * 0.86))));
+}
+
+function getLikedMantenidoPrototypeEntries() {
+  return (tradesJournal || []).filter((entry) => {
+    if (!entry || entry.vote !== "like") return false;
+    const direction = normalizeTradeDirection(entry.direction || entry?.trade?.side);
+    if (!direction) return false;
+    if (!Array.isArray(entry.ticks) || entry.ticks.length < 6) return false;
+    return true;
+  });
+}
+
+function getLikedMantenidoPrototypes(evalMs, rules = RULES_LIKE_MANTENIDO) {
+  const prototypes = [];
+  const entries = getLikedMantenidoPrototypeEntries();
+  for (const entry of entries) {
+    const direction = normalizeTradeDirection(entry.direction || entry?.trade?.side);
+    const leadSign = getGiroLeadSignFromSignalDirection(direction);
+    if (!leadSign) continue;
+    const sig = buildLikeMantenidoSignature(entry.ticks, leadSign, evalMs, rules.sampleCount);
+    if (!sig) continue;
+    if (!passesLikeMantenidoDirection(sig, { ...rules, topSimilarityMin: 0, avgTop3SimilarityMin: 0 })) continue;
+    prototypes.push({ id: entry.journal_id || entry.id || "", direction, leadSign, symbol: entry.symbol || "", time: entry.time || "", sig });
+  }
+  return prototypes;
+}
+
+function inferCandidateLikeLeadSign(candidate, evalMs) {
+  const pts = ensureTicksWithBoundary(candidate?.ticks || [], evalMs);
+  if (pts.length < 6) return 0;
+  const p0 = Number(getPriceAtMs(pts, 0));
+  const pE = Number(getPriceAtMs(pts, evalMs));
+  if (!Number.isFinite(p0) || !Number.isFinite(pE)) return 0;
+  const qs = pts.map((t) => Number(t.quote)).filter(Number.isFinite);
+  if (qs.length < 6) return 0;
+  const minP = Math.min(...qs);
+  const maxP = Math.max(...qs);
+  const range = Math.max(1e-12, maxP - minP);
+  const body = pE - p0;
+  if (Math.abs(body) >= range * 0.035) return Math.sign(body);
+  const pos = (pE - minP) / range;
+  if (pos >= 0.60) return 1;
+  if (pos <= 0.40) return -1;
+  return 0;
+}
+
+function analyzeLikeMantenidoCandidate(candidate, rules = RULES_LIKE_MANTENIDO) {
+  const evalMs = EVAL_SEC * 1000;
+  const prototypes = getLikedMantenidoPrototypes(evalMs, rules);
+  if (prototypes.length < rules.minLikedPrototypes) return null;
+  const leadSign = inferCandidateLikeLeadSign(candidate, evalMs);
+  if (!leadSign) return null;
+  const sig = buildLikeMantenidoSignature(candidate?.ticks || [], leadSign, evalMs, rules.sampleCount);
+  if (!passesLikeMantenidoDirection(sig, rules)) return null;
+  const sims = prototypes.map((proto) => ({ proto, similarity: computeLikeMantenidoSimilarity(sig, proto.sig) })).sort((a, b) => b.similarity - a.similarity);
+  if (!sims.length) return null;
+  const top = sims[0];
+  const top3 = sims.slice(0, 3);
+  const avgTop3 = top3.reduce((acc, x) => acc + x.similarity, 0) / top3.length;
+  if (top.similarity < rules.topSimilarityMin) return null;
+  if (avgTop3 < rules.avgTop3SimilarityMin) return null;
+  const holdScore = Math.min(1, sig.leadMove) * 18 + Math.min(1, sig.closeDominance) * 18 + Math.max(0, 1 - sig.releaseFromExtreme) * 18 + Math.max(0, 1 - sig.lateAgainst) * 12 + Math.min(1, sig.dirRatio) * 10;
+  const quality = top.similarity * 0.75 + avgTop3 * 0.35 + holdScore;
+  return {
+    direction: leadSign > 0 ? "PUT" : "CALL",
+    quality,
+    likeScore: top.similarity,
+    likeAvgTop3: avgTop3,
+    prototypeCount: prototypes.length,
+    leadSign,
+    signalLogic: leadSign > 0 ? "vela_verde_o_arriba_mantenida_giro_PUT" : "vela_roja_o_abajo_mantenida_giro_CALL",
+    meta: {
+      topSimilarity: top.similarity,
+      avgTop3Similarity: Math.round(avgTop3),
+      prototypeCount: prototypes.length,
+      matched: top3.map((x) => ({ id: x.proto.id, symbol: x.proto.symbol, time: x.proto.time, direction: x.proto.direction, similarity: x.similarity })),
+      leadSign,
+      body: sig.body,
+      bodyVsRange: sig.bodyVsRange,
+      leadMove: sig.leadMove,
+      closeDominance: sig.closeDominance,
+      releaseFromExtreme: sig.releaseFromExtreme,
+      lateMove: sig.lateMove,
+      lateAgainst: sig.lateAgainst,
+      retrace: sig.retrace,
+      dirRatio: sig.dirRatio,
+      lateDirRatio: sig.lateDirRatio,
+      signalLogic: leadSign > 0 ? "PUT por dirección alcista mantenida/estancada" : "CALL por dirección bajista mantenida/estancada",
+    },
+  };
+}
+
 function detectDebilidadPattern(candidate) {
   const call = analyzeDebilidadSide(candidate, 1, RULES_DEBILIDAD);
   const put = analyzeDebilidadSide(candidate, -1, RULES_DEBILIDAD);
@@ -7714,6 +8002,37 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return strictLikeMode ? true : false;
 
+
+  if (signalMode === MODE_LIKE_MANTENIDO) {
+    const matches = [];
+
+    for (const c of candidates) {
+      const match = analyzeLikeMantenidoCandidate(c, RULES_LIKE_MANTENIDO);
+      if (!match) continue;
+
+      matches.push({
+        ...c,
+        direction: match.direction,
+        quality: match.quality,
+        likeMantenidoScore: match.likeScore,
+        likeMantenidoAvgTop3: match.likeAvgTop3,
+        likeMantenidoMeta: match.meta,
+      });
+    }
+
+    if (!matches.length) return true;
+
+    matches.sort((a, b) => b.quality - a.quality || b.likeMantenidoScore - a.likeMantenidoScore || b.likeMantenidoAvgTop3 - a.likeMantenidoAvgTop3);
+    if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_LIKE_MANTENIDO.minQualityGap) return true;
+    const bestMatch = matches[0];
+
+    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+      likeMantenidoScore: bestMatch.likeMantenidoScore,
+      likeMantenidoAvgTop3: bestMatch.likeMantenidoAvgTop3,
+      likeMantenido: bestMatch.likeMantenidoMeta,
+    });
+    return true;
+  }
 
   if (signalMode === MODE_FUERZA_DEBILIDAD_CLARA) {
     const matches = [];
@@ -8197,4 +8516,4 @@ ensurePracticeExportSaveButton();
 updatePracticeExportSaveButtonUI();
 updateExportTradesButtonUI();
 
-connect(); 
+connect();
