@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#020617" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Deriv PWA Base V2 SNR</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="theme-dark">
+  <div class="bgNeon" aria-hidden="true"></div>
+
+  <header class="appHeader">
+    <div class="brandRow">
+      <div>
+        <h1 id="appTitle">Deriv PWA Base V2</h1>
+        <p id="status" class="statusText">Iniciando SNR…</p>
+      </div>
+      <button id="settingsBtn" class="iconBtn" type="button" aria-label="Abrir ajustes">⚙️</button>
+    </div>
+
+    <div class="statusGrid" aria-label="Estado general">
+      <div class="statusPill">
+        <span class="muted">WS</span>
+        <strong id="wsState">—</strong>
+      </div>
+      <div class="statusPill">
+        <span class="muted">Tick</span>
+        <strong id="tickState">—</strong>
+      </div>
+      <div class="statusPill">
+        <span class="muted">Minuto</span>
+        <strong id="countdownText">60s</strong>
+      </div>
+    </div>
+
+    <nav class="tabs" aria-label="Vistas">
+      <button class="tab active" type="button" data-view="monitor">Monitor</button>
+      <button class="tab" type="button" data-view="signals">Señales</button>
+      <button class="tab" type="button" data-view="history">Historial</button>
+      <button class="tab" type="button" data-view="system">Sistema</button>
+    </nav>
+  </header>
+
+  <main class="main">
+    <section id="monitorView" class="view active" aria-label="Monitor en vivo">
+      <section class="card heroCard">
+        <div class="cardHeader">
+          <div>
+            <h2>Mercado en vivo</h2>
+            <p class="muted">Base V2: conexión en vivo + modo SNR por cuerpos y segundo toque.</p>
+          </div>
+          <button id="pauseBtn" class="compactBtn" type="button">⏸️ Live</button>
+        </div>
+
+        <div class="symbolStrip" id="symbolStrip"></div>
+
+        <div class="chartHeader">
+          <div>
+            <div class="muted small">Símbolo seleccionado</div>
+            <strong id="selectedSymbolLabel">—</strong>
+          </div>
+          <div class="quoteBox">
+            <span class="muted small">Último precio</span>
+            <strong id="selectedQuote">—</strong>
+          </div>
+        </div>
+        <canvas id="liveCanvas" class="liveCanvas" width="900" height="360" aria-label="Gráfico de minuto"></canvas>
+      </section>
+
+      <section class="cardsGrid" id="symbolCards"></section>
+    </section>
+
+    <section id="signalsView" class="view" aria-label="Señales SNR">
+      <section class="card">
+        <div class="cardHeader">
+          <div>
+            <h2>Señales SNR</h2>
+            <p id="snrState" class="muted">SNR activo · esperando datos…</p>
+          </div>
+          <strong id="signalCount" class="signalCounter">0 señales</strong>
+        </div>
+        <div class="snrRulesBox">
+          <strong>Regla:</strong> SNR chico por cuerpos/open-close · soporte que pasa a resistencia o resistencia que pasa a soporte · rechazo en primer toque · señal en segundo toque.
+        </div>
+        <div id="signalsList" class="signalsList"></div>
+      </section>
+    </section>
+
+    <section id="historyView" class="view" aria-label="Historial de ticks">
+      <section class="card">
+        <div class="cardHeader">
+          <div>
+            <h2>Historial base</h2>
+            <p class="muted">Últimas lecturas guardadas por símbolo. No ejecuta acciones externas.</p>
+          </div>
+          <button id="clearHistoryBtn" class="compactBtn danger" type="button">Limpiar</button>
+        </div>
+        <div id="historyList" class="historyList"></div>
+      </section>
+    </section>
+
+    <section id="systemView" class="view" aria-label="Sistema">
+      <section class="card">
+        <h2>Diagnóstico</h2>
+        <div id="systemList" class="systemList"></div>
+      </section>
+    </section>
+  </main>
+
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <button id="settingsBackdrop" class="modalBackdrop" type="button" aria-label="Cerrar ajustes"></button>
+    <section class="modalPanel">
+      <div class="modalHead">
+        <div>
+          <h2 id="settingsTitle">Ajustes base</h2>
+          <p class="muted">Configuración mínima y segura · V2 SNR.</p>
+        </div>
+        <button id="settingsCloseBtn" class="iconBtn" type="button" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="settingsBody">
+        <div class="settingGroup">
+          <h3>Conexión</h3>
+          <button id="reconnectBtn" class="btn" type="button">🔄 Reconectar WS</button>
+          <button id="pauseBtn2" class="btn" type="button">⏸️ Pausar live</button>
+        </div>
+
+        <div class="settingGroup">
+          <h3>Preferencias</h3>
+          <button id="themeBtn" class="btn" type="button">🌙 Tema oscuro</button>
+          <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
+          <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
+          <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
+          <button id="lowPowerBtn" class="btn" type="button">🪫 Bajo consumo OFF</button>
+        </div>
+
+        <div class="settingGroup">
+          <h3>Datos</h3>
+          <button id="exportBtn" class="btn" type="button">⬇️ Exportar diagnóstico</button>
+          <button id="resetStorageBtn" class="btn danger" type="button">🧹 Borrar datos base</button>
+          <button id="resetSwBtn" class="btn danger" type="button">🧹 Reset Cache/SW</button>
+        </div>
+
+        <div class="settingGroup">
+          <h3>Modo SNR</h3>
+          <p class="muted">Usa zonas pequeñas tomadas de aperturas/cierres. Señal al segundo toque luego del primer rechazo.</p>
+          <h3 style="margin-top:14px">Símbolos activos</h3>
+          <p id="symbolsText" class="muted"></p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <audio id="alertSound" preload="auto" src="alert.mp3"></audio>
+  <script src="app.js" defer></script>
+</body>
+</html>
