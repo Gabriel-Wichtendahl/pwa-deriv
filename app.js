@@ -1,5 +1,5 @@
 // app.js — BASE V3 CONFIG RESTAURADA: estética/funciones originales preservadas, motores de señal desactivados
-// ✅ Base limpia: conserva configuración, trades, práctica, modal, IC2, capturas y UI; no genera señales automáticas
+// ✅ Base V4 SNR: conserva estética/configuración original y agrega único motor SNR segundo toque
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
 // ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
@@ -676,6 +676,7 @@ const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
 const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
+const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
@@ -694,36 +695,35 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
 function normalizeSignalMode(mode) {
-  // BASE V3: se neutralizan modos viejos en estado activo.
-  // No se generan señales hasta agregar un nuevo motor encima de esta base.
-  return MODE_NORMAL;
+  // BASE V4: único motor activo. Cualquier modo viejo guardado se fuerza a SNR.
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 function isGiroFamilyMode(mode) {
-  return false;
+  return mode === MODE_SNR_SEGUNDO_TOQUE || mode === MODE_GIRO_NIVEL || mode === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_NORMAL);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
-  return MODE_NORMAL;
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 function saveAnalysisMode(mode) {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_NORMAL);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return "⚪ Base limpia · sin motor de señales";
+  return "🎯 SNR 2º toque";
 }
 function nextSignalMode(mode) {
-  return MODE_NORMAL;
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -11994,11 +11994,77 @@ function detectDebilidadPattern(candidate) {
 }
 
 function evaluateMinute(minute) {
-  // BASE V3 limpia:
-  // conserva conexión, ticks, gráficos, configuración, trades, práctica, capturas y modal,
-  // pero NO ejecuta ningún motor de señales viejo.
-  // Este es el único corte de señal: no llama a addSignal() ni a analizadores antiguos.
   if (areSignalsPaused()) return true;
+
+  const data = minuteData[minute];
+  if (!data) return true;
+
+  const candidates = [];
+  let readySymbols = 0;
+
+  for (const sym of SYMBOLS) {
+    const ticks = data[sym] || [];
+    if (ticks.length >= MIN_TICKS) readySymbols++;
+    if (ticks.length < MIN_TICKS) continue;
+
+    const prices = ticks.map((t) => Number(t.quote)).filter(Number.isFinite);
+    if (prices.length < MIN_TICKS) continue;
+
+    const move = prices[prices.length - 1] - prices[0];
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
+    vol = vol / Math.max(1, prices.length - 1);
+
+    candidates.push({
+      symbol: sym,
+      move,
+      score: Math.abs(move) / (vol || 1e-9),
+      ticks,
+      vol,
+    });
+  }
+
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return true;
+
+  const matches = [];
+  for (const c of candidates) {
+    const match = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
+    if (!match) continue;
+
+    matches.push({
+      ...c,
+      direction: match.direction,
+      quality: match.quality,
+      giroNivelScore: Math.round(match.quality),
+      giroNivelPoints: match.points,
+      giroPolaridadScore: Math.round(match.quality),
+      giroPolaridadPoints: match.points,
+      giroPolaridadMeta: match.meta,
+      matchSource: "SNR_SEGUNDO_TOQUE",
+    });
+  }
+
+  if (!matches.length) return true;
+  matches.sort((a, b) =>
+    b.quality - a.quality ||
+    b.giroNivelPoints - a.giroNivelPoints ||
+    b.giroNivelScore - a.giroNivelScore
+  );
+
+  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
+
+  const bestMatch = matches[0];
+  addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+    mode: MODE_SNR_SEGUNDO_TOQUE,
+    mode_version: GIRO_NIVEL_LOGIC_VERSION,
+    giroNivelScore: bestMatch.giroNivelScore,
+    giroNivelPoints: bestMatch.giroNivelPoints,
+    giroPolaridadScore: bestMatch.giroPolaridadScore,
+    giroPolaridadPoints: bestMatch.giroPolaridadPoints,
+    giroPolaridad: bestMatch.giroPolaridadMeta,
+    aiLocalMatchSource: bestMatch.matchSource,
+    signalConfirmations: [],
+  });
   return true;
 }
 
