@@ -1,5 +1,5 @@
-// app.js — MODO ÚNICO: GIRO SIN NIVEL (ATAQUE + RECHAZO + RETEST DÉBIL) + IA LOCAL + RECORRIDO MODERADO + IC2 + disciplina visible + auto57 demo/real
-// ✅ Modo GIRO (ESTRICTO): señales en 35/40/45 (según config) — Práctica sigue en 40/45
+// app.js — BASE V3 CONFIG RESTAURADA: estética/funciones originales preservadas, motores de señal desactivados
+// ✅ Base limpia: conserva configuración, trades, práctica, modal, IC2, capturas y UI; no genera señales automáticas
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
 // ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
@@ -25,6 +25,8 @@
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 
 "use strict";
+
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V3_CONFIG_RESTAURADA_SIN_MOTORES_20260510";
 
 /*
   Mapa rápido de módulos:
@@ -683,7 +685,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "GIRO_SNR_SEGUNDO_TOQUE_20260510";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V3_CONFIG_RESTAURADA_SIN_MOTORES_20260510";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -692,31 +694,36 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
 function normalizeSignalMode(mode) {
-  // MODO ÚNICO: cualquier modo viejo guardado se fuerza a GIRO DOBLE RECHAZO.
-  // Esto evita mezclar NORMAL, GIRO FLEX, LIKE MANTENIDO, POLARIDAD REAL, etc.
-  return MODE_GIRO_NIVEL;
+  // BASE V3: se neutralizan modos viejos en estado activo.
+  // No se generan señales hasta agregar un nuevo motor encima de esta base.
+  return MODE_NORMAL;
 }
 function isGiroFamilyMode(mode) {
-  return true;
+  return false;
 }
 function getModeVersion(mode) {
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
-  return MODE_GIRO_NIVEL;
+  try {
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_NORMAL);
+    localStorage.setItem("giroMode", "false");
+    localStorage.setItem("strongMode", "false");
+  } catch {}
+  return MODE_NORMAL;
 }
 function saveAnalysisMode(mode) {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_GIRO_NIVEL);
-    saveBool("giroMode", true);
-    saveBool("strongMode", false);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_NORMAL);
+    localStorage.setItem("giroMode", "false");
+    localStorage.setItem("strongMode", "false");
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return "🧠 GIRO PATRÓN VISUAL + IA";
+  return "⚪ Base limpia · sin motor de señales";
 }
 function nextSignalMode(mode) {
-  return MODE_GIRO_NIVEL;
+  return MODE_NORMAL;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -5899,23 +5906,24 @@ function applyTheme(theme) {
       })
   );
 
-  signalMode = MODE_GIRO_NIVEL;
+  signalMode = MODE_NORMAL;
   saveAnalysisMode(signalMode);
 
   const paintMode = () => {
     if (!modeBtn) return;
     modeBtn.textContent = getModeBtnLabel(signalMode);
-    modeBtn.classList.add("active-strong", "active");
-    modeBtn.title = "Modo único activo: Giro Doble Rechazo/Nivel. No hay otros modos para alternar.";
+    modeBtn.classList.remove("active-strong");
+    modeBtn.classList.add("active");
+    modeBtn.title = "Base limpia: los motores de señal están desactivados.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = MODE_GIRO_NIVEL;
+      signalMode = MODE_NORMAL;
       saveAnalysisMode(signalMode);
       paintMode();
-      toast("🧠 Modo único: GIRO DOBLE RECHAZO + IA", 1500);
+      toast("⚪ Base limpia: sin motor de señales", 1500);
     };
 })();
 
@@ -11986,333 +11994,11 @@ function detectDebilidadPattern(candidate) {
 }
 
 function evaluateMinute(minute) {
+  // BASE V3 limpia:
+  // conserva conexión, ticks, gráficos, configuración, trades, práctica, capturas y modal,
+  // pero NO ejecuta ningún motor de señales viejo.
+  // Este es el único corte de señal: no llama a addSignal() ni a analizadores antiguos.
   if (areSignalsPaused()) return true;
-
-  const strictLikeMode = signalMode !== MODE_NORMAL;
-  const data = minuteData[minute];
-  if (!data) return strictLikeMode ? true : false;
-
-  const candidates = [];
-  let readySymbols = 0;
-
-  for (const sym of SYMBOLS) {
-    const ticks = data[sym] || [];
-    if (ticks.length >= MIN_TICKS) readySymbols++;
-    if (ticks.length < MIN_TICKS) continue;
-
-    const prices = ticks.map((t) => t.quote);
-    const move = prices[prices.length - 1] - prices[0];
-    const rawMove = Math.abs(move);
-
-    let vol = 0;
-    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
-    vol = vol / Math.max(1, prices.length - 1);
-
-    const score = rawMove / (vol || 1e-9);
-
-    candidates.push({
-      symbol: sym,
-      move,
-      score,
-      ticks,
-      vol,
-    });
-  }
-
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return strictLikeMode ? true : false;
-
-
-  // MODO ÚNICO: SNR por cuerpos + segundo toque.
-  // La señal exige: llegar al SNR -> rechazo fuerte -> segundo intento/toque del nivel habilita señal.
-  // La IA local NO suma puntos de COMPRA/VENTA y NO compra sola; solo refuerza coincidencias.
-  if (true) {
-    const matches = [];
-    for (const c of candidates) {
-      const ruleMatch = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
-      const aiMatch = analyzeGiroAprendizajeCandidate(c, RULES_GIRO_APRENDIZAJE);
-
-      if (ruleMatch) {
-        matches.push({
-          ...c,
-          direction: ruleMatch.direction,
-          quality: ruleMatch.quality,
-          matchSource: "SNR_SEGUNDO_TOQUE",
-          giroNivelScore: Math.round(ruleMatch.quality),
-          giroNivelPoints: ruleMatch.points,
-          giroPolaridadMeta: ruleMatch.meta,
-          giroAprendizajeScore: aiMatch ? aiMatch.giroAprendizajeScore : 0,
-          giroAprendizajePoints: aiMatch ? aiMatch.points : 0,
-          giroAprendizajeMeta: aiMatch ? aiMatch.meta : null,
-        });
-      }
-
-      // v7: la IA local ya NO puede sacar señales sola.
-      // Solo refuerza cuando la secuencia obligatoria sin nivel también aparece.
-
-      // Si ambas coinciden en el mismo lado, sube bastante la calidad: regla + aprendizaje de tus ejemplos.
-      if (ruleMatch && aiMatch && ruleMatch.direction === aiMatch.direction) {
-        matches.push({
-          ...c,
-          direction: ruleMatch.direction,
-          quality: ruleMatch.quality + aiMatch.quality * 0.42 + 16,
-          matchSource: "SNR_SEGUNDO_TOQUE_IA",
-          giroNivelScore: Math.round(ruleMatch.quality),
-          giroNivelPoints: ruleMatch.points,
-          giroPolaridadMeta: ruleMatch.meta,
-          giroAprendizajeScore: aiMatch.giroAprendizajeScore,
-          giroAprendizajePoints: aiMatch.points,
-          giroAprendizajeMeta: aiMatch.meta,
-        });
-      }
-    }
-    if (!matches.length) return true;
-    matches.sort((a, b) =>
-      b.quality - a.quality ||
-      (b.matchSource === "REGLA_IA" ? 1 : 0) - (a.matchSource === "REGLA_IA" ? 1 : 0) ||
-      b.giroNivelPoints - a.giroNivelPoints ||
-      b.giroAprendizajePoints - a.giroAprendizajePoints ||
-      b.giroNivelScore - a.giroNivelScore ||
-      b.giroAprendizajeScore - a.giroAprendizajeScore
-    );
-    if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
-    const bestMatch = matches[0];
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      giroNivelScore: bestMatch.giroNivelScore,
-      giroNivelPoints: bestMatch.giroNivelPoints,
-      giroPolaridadScore: bestMatch.giroNivelScore,
-      giroPolaridadPoints: bestMatch.giroNivelPoints,
-      giroPolaridad: bestMatch.giroPolaridadMeta,
-      giroAprendizajeScore: bestMatch.giroAprendizajeScore,
-      giroAprendizajePoints: bestMatch.giroAprendizajePoints,
-      giroAprendizaje: bestMatch.giroAprendizajeMeta,
-      aiLocalMatchSource: bestMatch.matchSource,
-      // IMPORTANTE: la IA local solo detecta parecido visual.
-      // Los puntos de COMPRA/VENTA siguen siendo manuales.
-      signalConfirmations: [],
-    });
-    return true;
-  }
-
-  if (signalMode === MODE_GIRO_POLARIDAD) {
-    const matches = [];
-    for (const c of candidates) {
-      const match = analyzeGiroPolaridadCandidate(c, minute, RULES_GIRO_POLARIDAD);
-      if (!match) continue;
-      matches.push({ ...c, direction: match.direction, quality: match.quality, giroPolaridadScore: Math.round(match.quality), giroPolaridadPoints: match.points, giroPolaridadMeta: match.meta });
-    }
-    if (!matches.length) return true;
-    matches.sort((a, b) => b.quality - a.quality || b.giroPolaridadPoints - a.giroPolaridadPoints || b.giroPolaridadScore - a.giroPolaridadScore);
-    if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_POLARIDAD.minQualityGap) return true;
-    const bestMatch = matches[0];
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      giroPolaridadScore: bestMatch.giroPolaridadScore,
-      giroPolaridadPoints: bestMatch.giroPolaridadPoints,
-      giroPolaridad: bestMatch.giroPolaridadMeta,
-      signalConfirmations: [],
-    });
-    return true;
-  }
-
-  if (signalMode === MODE_LIKE_MANTENIDO) {
-    const matches = [];
-
-    for (const c of candidates) {
-      const match = analyzeLikeMantenidoCandidate(c, RULES_LIKE_MANTENIDO);
-      if (!match) continue;
-
-      matches.push({
-        ...c,
-        direction: match.direction,
-        quality: match.quality,
-        likeMantenidoScore: match.likeScore,
-        likeMantenidoAvgTop3: match.likeAvgTop3,
-        likeMantenidoMeta: match.meta,
-      });
-    }
-
-    if (!matches.length) return true;
-
-    matches.sort((a, b) => b.quality - a.quality || b.likeMantenidoScore - a.likeMantenidoScore || b.likeMantenidoAvgTop3 - a.likeMantenidoAvgTop3);
-    if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_LIKE_MANTENIDO.minQualityGap) return true;
-    const bestMatch = matches[0];
-
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      likeMantenidoScore: bestMatch.likeMantenidoScore,
-      likeMantenidoAvgTop3: bestMatch.likeMantenidoAvgTop3,
-      likeMantenido: bestMatch.likeMantenidoMeta,
-    });
-    return true;
-  }
-
-  if (signalMode === MODE_GIRO_APRENDIZAJE) {
-    const matches = [];
-
-    for (const c of candidates) {
-      const match = analyzeGiroAprendizajeCandidate(c, RULES_GIRO_APRENDIZAJE);
-      if (!match) continue;
-
-      matches.push({
-        ...c,
-        direction: match.direction,
-        quality: match.quality,
-        giroAprendizajeScore: match.giroAprendizajeScore,
-        giroAprendizajePoints: match.points,
-        giroAprendizajeMeta: match.meta,
-      });
-    }
-
-    if (!matches.length) return true;
-
-    matches.sort((a, b) => b.quality - a.quality || b.giroAprendizajePoints - a.giroAprendizajePoints || b.giroAprendizajeScore - a.giroAprendizajeScore);
-    if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_APRENDIZAJE.minQualityGap) return true;
-    const bestMatch = matches[0];
-
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      giroAprendizajeScore: bestMatch.giroAprendizajeScore,
-      giroAprendizajePoints: bestMatch.giroAprendizajePoints,
-      giroAprendizaje: bestMatch.giroAprendizajeMeta,
-      // IMPORTANTE: este score automático solo detecta que la formación se parece
-      // a tus ejemplos. NO suma puntos de COMPRA/VENTA.
-      // Los puntos de COMPRA/VENTA siguen siendo manuales con los botones + COMPRA / + VENTA.
-      signalConfirmations: [],
-    });
-    return true;
-  }
-
-  if (signalMode === MODE_FUERZA_DEBILIDAD_CLARA) {
-    const matches = [];
-
-    for (const c of candidates) {
-      const match = detectFuerzaDebilidadClaraPattern(c);
-      if (!match) continue;
-
-      matches.push({
-        ...c,
-        direction: match.direction,
-        quality: match.quality,
-        fuerzaDebilidadScore: match.quality,
-        fuerzaDebilidadMeta: {
-          range: match.range,
-          rangeVsVol: match.rangeVsVol,
-          dominanceRatio: match.dominanceRatio,
-          dominantSum: match.dominantSum,
-          oppositeSum: match.oppositeSum,
-          dominantLargest: match.dominantLargest,
-          oppositeLargest: match.oppositeLargest,
-          weakResponseRatio: match.weakResponseRatio,
-          breakCount: match.breakCount,
-          bigDominantLegs: match.bigDominantLegs,
-          closeDominance: match.closeDominance,
-          wholeDirRatio: match.wholeDirRatio,
-          weakIrregularity: match.weakIrregularity,
-          earlyDominance: match.earlyDominance,
-        },
-      });
-    }
-
-    if (!matches.length) return true;
-
-    matches.sort((a, b) => b.quality - a.quality || b.score - a.score);
-    const bestMatch = matches[0];
-
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      fuerzaDebilidadScore: bestMatch.fuerzaDebilidadScore,
-      fuerzaDebilidad: bestMatch.fuerzaDebilidadMeta,
-    });
-    return true;
-  }
-
-  if (signalMode === MODE_NORMAL_DEBILIDAD) {
-    const matches = [];
-
-    for (const c of candidates) {
-      // FLEX: NORMAL ya no exige una continuación perfecta.
-      // Solo pide que haya estructura/avance real dentro de la vela;
-      // la dirección final la decide la lectura de Debilidad/Fortaleza.
-      if (!passesNormalDebilidadStructure(c, RULES_NORMAL_DEBILIDAD)) continue;
-
-      const normalStructureDirection = c.move > 0 ? "CALL" : "PUT";
-      const debilidadMatch = detectDebilidadPattern(c);
-
-      // Este modo NO dispara con NORMAL puro: NORMAL solo valida estructura/avance.
-      // La dirección final la decide DEBILIDAD, porque buscamos agotamiento de un grupo
-      // y aprovechamiento del grupo contrario.
-      if (!debilidadMatch) continue;
-      if (debilidadMatch.quality < RULES_NORMAL_DEBILIDAD.minAlignedDebilidadScore) continue;
-
-      matches.push({
-        ...c,
-        direction: debilidadMatch.direction,
-        quality: debilidadMatch.quality + Math.min(35, c.score * 3),
-        normalScore: c.score,
-        normalStructureDirection,
-        debilidadScore: debilidadMatch.quality,
-        debilidadMeta: {
-          weakLead: debilidadMatch.weakLead,
-          recovery: debilidadMatch.recovery,
-          lateWinnerRatio: debilidadMatch.lateWinnerRatio,
-          lateWinnerMove: debilidadMatch.lateWinnerMove,
-          range: debilidadMatch.range,
-          rangeVsVol: debilidadMatch.rangeVsVol,
-          weakReduction: debilidadMatch.weakReduction,
-          weakIrregularity: debilidadMatch.weakIrregularity,
-          lateControl: debilidadMatch.lateControl,
-          normalStructureDirection,
-          debilidadDirection: debilidadMatch.direction,
-          normalScore: c.score,
-        },
-      });
-    }
-
-    if (!matches.length) return true;
-
-    matches.sort((a, b) => b.quality - a.quality || b.debilidadScore - a.debilidadScore || b.normalScore - a.normalScore);
-    const bestMatch = matches[0];
-
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-      normalScore: bestMatch.normalScore,
-      debilidadScore: bestMatch.debilidadScore,
-      debilidad: bestMatch.debilidadMeta,
-    });
-    return true;
-  }
-
-  if (signalMode === MODE_GIRO || signalMode === MODE_GIRO_FLEX) {
-    const matches = [];
-
-    for (const c of candidates) {
-      const match = signalMode === MODE_GIRO_FLEX ? detectGiroFlexiblePattern(c) : detectGiroPattern(c);
-      if (!match) continue;
-
-      matches.push({
-        ...c,
-        direction: match.direction,
-        quality: match.quality,
-        giroScore: match.giroScore,
-      });
-    }
-
-    if (!matches.length) return true;
-
-    matches.sort((a, b) => b.quality - a.quality || b.giroScore - a.giroScore);
-    const bestMatch = matches[0];
-
-    addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks);
-    return true;
-  }
-
-  // ---- NORMAL (igual que antes) ----
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-  if (!best) return true;
-
-  const rules = RULES_NORMAL;
-  if (best.score < rules.scoreMin) return true;
-
-  const ok = passesTechnicalFilters(best, best.vol, rules);
-  if (!ok) return true;
-
-  addSignal(minute, best.symbol, best.move > 0 ? "CALL" : "PUT", best.ticks);
   return true;
 }
 
