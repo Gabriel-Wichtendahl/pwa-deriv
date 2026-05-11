@@ -21,16 +21,16 @@
 // ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO AUTO BACKTEST V2: sin señal temprana 35/40/45; señal y trade nacen al cierre 60s
-// ✅ NUEVO AUTO BACKTEST V2: SNR válido solo con secuencia S-R-S o R-S-R y cierre dentro de zona
+// ✅ NUEVO AUTO BACKTEST V3: no muestra señales si el cierre 60 real no está dentro del SNR
+// ✅ NUEVO AUTO BACKTEST V3: la señal nace solo con S-R-S/R-S-R + cierre confirmado por ticks_history
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V2_SNR_ROLES_20260511";
-const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V2_SNR_ROLES";
+const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT_20260511";
+const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT";
 const AUTO_BACKTEST_DEMO_ONLY = true;
 const AUTO_BACKTEST_FORCE_DEMO_ACCOUNT = true;
 const AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE = false;
@@ -61,7 +61,7 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
-const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v1";
+const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v3";
 const MAX_HISTORY = 200;
 
 const MIN_TICKS = 3;
@@ -73,7 +73,7 @@ const HISTORY_TIMEOUT_MS = 7000;
 /* =========================
    Trades Journal (estudio)
 ========================= */
-const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v1";
+const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v3";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
@@ -184,7 +184,7 @@ let disciplineBannerEl = null; // banner visible para bloqueo/contador DEMO
 /* =========================
    Link contract_id -> signalId
 ========================= */
-const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v1"; // contract_id -> signalId
+const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v3"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
 
 function loadTradeLinks() {
@@ -1732,6 +1732,9 @@ let history = loadHistory();
 migrateHistoryModesToGiro();
 
 let minuteData = {};
+// AUTO BACKTEST V3: marca qué minutos/símbolos fueron rehidratados con ticks_history.
+// Si no hay cierre real confirmado, no se crea señal.
+let fullMinuteHydrated = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -9052,15 +9055,28 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
+  let changed = false;
+  const clean = [];
   for (const it of history || []) {
+    if (!it) { changed = true; continue; }
     if (!it.mode) it.mode = "NORMAL";
     else {
       const rawMode = String(it.mode || "");
       const normalizedFamily = normalizeSignalMode(rawMode);
       it.mode = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(rawMode) ? normalizedFamily : rawMode.toUpperCase();
     }
+
+    // AUTO BACKTEST V3: esta rama no muestra señales heredadas/tempranas.
+    // Solo se listan señales nacidas al cierre 60 confirmado.
+    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !it.auto_backtest_signal_created_at_close) {
+      changed = true;
+      continue;
+    }
+    clean.push(it);
   }
-  saveHistory(history);
+  if (clean.length !== history.length) changed = true;
+  history = clean;
+  if (changed) saveHistory(history);
 
   updateCounter();
 
@@ -9753,6 +9769,60 @@ async function fetchFullMinuteTicks(symbol, minute) {
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
+
+function markFullMinuteHydrated(minute, symbol, value = true) {
+  const m = Number(minute);
+  const sym = String(symbol || "");
+  if (!Number.isFinite(m) || !sym) return;
+  fullMinuteHydrated[m] ||= {};
+  fullMinuteHydrated[m][sym] = !!value;
+}
+function isFullMinuteHydrated(minute, symbol) {
+  const m = Number(minute);
+  const sym = String(symbol || "");
+  return !!(Number.isFinite(m) && sym && fullMinuteHydrated?.[m]?.[sym]);
+}
+function updateCandleOCFromFullTicks(symbol, minute, ticks) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (!pts.length || !symbol || !Number.isFinite(Number(minute))) return false;
+
+  const prices = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (!prices.length) return false;
+
+  candleOC[minute] ||= {};
+  candleOC[minute][symbol] = {
+    open: Number(getPriceAtMs(pts, 0)),
+    high: Math.max(...prices),
+    low: Math.min(...prices),
+    close: Number(getPriceAtMs(pts, 60000)),
+  };
+  syncCurrentCandleToPolarity(symbol, minute);
+  return true;
+}
+async function hydrateClosedMinuteDataFromDerivHistory(minute) {
+  if (!ws || ws.readyState !== 1) return false;
+  const m = Number(minute);
+  if (!Number.isFinite(m)) return false;
+
+  minuteData[m] ||= {};
+  fullMinuteHydrated[m] ||= {};
+  let any = false;
+
+  const results = await Promise.allSettled(SYMBOLS.map(async (symbol) => {
+    const full = await fetchFullMinuteTicks(symbol, m);
+    if (!full || full.length < 2) return false;
+    minuteData[m][symbol] = full.slice();
+    updateCandleOCFromFullTicks(symbol, m, full);
+    markFullMinuteHydrated(m, symbol, true);
+    return true;
+  }));
+
+  for (const r of results) if (r.status === "fulfilled" && r.value) any = true;
+  return any;
+}
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter((it) => it.minute === minute);
   if (!items.length) return false;
@@ -9985,18 +10055,22 @@ function finalizeMinute(minute) {
     } catch {}
   })();
 
-  // --- AUTO BACKTEST V2: señal + trade nacen recién al cierre de la vela ---
+  // --- AUTO BACKTEST V3: señal + trade nacen recién con cierre 60 REAL confirmado ---
   (async () => {
+    // Primero traemos ticks_history del minuto cerrado.
+    // Esto evita mostrar señales cuando el último tick vivo parecía estar en SNR,
+    // pero el cierre real de 60s terminó afuera.
+    const closedMinuteHydrated = await hydrateClosedMinuteDataFromDerivHistory(minute);
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
-    // No hay señal temprana. En el cierre se analiza:
+    // No hay señal temprana. En el cierre se analiza solo con símbolos hidratados:
     // 1) cierre 60s dentro de zona SNR,
     // 2) SNR con secuencia soporte-resistencia-soporte o viceversa.
     try {
-      if (!areSignalsPaused()) evaluateMinute(minute);
+      if (!areSignalsPaused() && closedMinuteHydrated) evaluateMinute(minute);
     } catch {}
 
-    let changed = ticksChanged;
+    let changed = !!ticksChanged || !!closedMinuteHydrated;
     for (const it of history) {
       if (it.minute === minute && !it.minuteComplete) {
         it.minuteComplete = true;
@@ -10101,7 +10175,7 @@ function onTick(tick) {
   // ✅ FIX AUTO 60: también revisar en cada tick, aunque el modal no haya redibujado.
   scanSignalAutoEntriesAt57();
 
-  // AUTO BACKTEST V2:
+  // AUTO BACKTEST V3:
   // No se generan señales a 35/40/45s.
   // La señal se evalúa recién cuando la vela cerró y finalizeMinute(minute) confirma el cierre 60s.
   if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
@@ -10119,7 +10193,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + GIRO v2)
+   Technical rules + Evaluation (NORMAL + GIRO v3)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -11348,7 +11422,7 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
 
 
 /* =========================
-   AUTO BACKTEST V2 — SNR alternado sin doble rechazo
+   AUTO BACKTEST V3 — SNR alternado sin doble rechazo
    Regla del usuario:
    - No se busca segundo rechazo ni formación temprana.
    - La señal nace al cierre 60s si el cierre queda dentro de la zona SNR.
@@ -13255,6 +13329,10 @@ function evaluateMinute(minute) {
   let readySymbols = 0;
 
   for (const sym of SYMBOLS) {
+    // AUTO BACKTEST V3: no se permite crear señal con ticks vivos/incompletos.
+    // El símbolo tiene que estar confirmado por ticks_history del minuto cerrado.
+    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !isFullMinuteHydrated(minute, sym)) continue;
+
     const ticks = data[sym] || [];
     if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
@@ -13273,6 +13351,7 @@ function evaluateMinute(minute) {
       score: Math.abs(move) / (vol || 1e-9),
       ticks,
       vol,
+      close_confirmed_by_ticks_history: true,
     });
   }
 
@@ -13282,6 +13361,10 @@ function evaluateMinute(minute) {
   for (const c of candidates) {
     const match = analyzeAutoBacktestSNRCloseCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
     if (!match) continue;
+
+    const pseudoItemForMomentum = { minute, symbol: c.symbol, ticks: c.ticks, direction: match.direction, giroPolaridad: match.meta, mode: MODE_SNR_SEGUNDO_TOQUE };
+    const momentum = getMomentumRunBeforeSignal(pseudoItemForMomentum);
+    if (momentum.blocked) continue;
 
     matches.push({
       ...c,
@@ -13293,6 +13376,7 @@ function evaluateMinute(minute) {
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
       matchSource: "AUTO_60_SNR_ROLES_CLOSE_INSIDE",
+      autoBacktestMomentum: momentum,
     });
   }
 
@@ -13319,6 +13403,8 @@ function evaluateMinute(minute) {
     signalConfirmations: [],
     signalAutoEntry: null,
     auto_backtest_signal_created_at_close: true,
+    close_confirmed_by_ticks_history: true,
+    autoBacktestMomentum: bestMatch.autoBacktestMomentum || null,
   });
   return true;
 }
@@ -13328,6 +13414,38 @@ function evaluateMinute(minute) {
 ========================= */
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+}
+function validateAutoBacktestSignalCreatedAtClose(item) {
+  if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE) return true;
+  if (!item?.auto_backtest_signal_created_at_close) return false;
+  if (!item?.close_confirmed_by_ticks_history) return false;
+  if (!isFullMinuteHydrated(item.minute, item.symbol)) return false;
+
+  const meta = getSignalSNREntryMeta(item);
+  if (!meta) return false;
+
+  const pattern = String(meta.rolePattern || "").toUpperCase().trim();
+  const sequence = String(meta.roleSequence || "").toUpperCase().trim();
+  if (!(pattern === "S-R-S" || pattern === "R-S-R" || sequence.includes("S-R-S") || sequence.includes("R-S-R"))) return false;
+
+  const zoneLow = Number(meta.zoneLow);
+  const zoneHigh = Number(meta.zoneHigh);
+  if (![zoneLow, zoneHigh].every(Number.isFinite)) return false;
+  const zl = Math.min(zoneLow, zoneHigh);
+  const zh = Math.max(zoneLow, zoneHigh);
+
+  let close60 = Number(meta.close60);
+  if (!Number.isFinite(close60)) close60 = Number(getSignalClosePriceAt60(item));
+  if (!Number.isFinite(close60)) return false;
+  if (close60 < zl || close60 > zh) return false;
+
+  const candle = getAutoBacktestCandleDirection(item);
+  if (!candle.side || candle.side !== String(item.direction || "").toUpperCase()) return false;
+
+  const momentum = getMomentumRunBeforeSignal(item);
+  if (momentum.blocked) return false;
+
+  return true;
 }
 function addSignal(minute, symbol, direction, ticks, extra = {}) {
   if (areSignalsPaused()) return;
@@ -13354,6 +13472,10 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   };
 
   item.manualGiro = normalizeManualGiroState(item.manualGiro);
+
+  // AUTO BACKTEST V3: si no pasa el cierre 60 real dentro del SNR,
+  // directamente no se guarda ni se muestra la señal.
+  if (!validateAutoBacktestSignalCreatedAtClose(item)) return;
 
   if (history.some((x) => x.id === item.id)) return;
 
