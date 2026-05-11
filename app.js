@@ -24,11 +24,11 @@
 // ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 4 confirmaciones netas para COMPRA/VENTA
 // ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 57
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
-// ✅ V8: el modal muestra en amarillo el área “cerca del SNR” usada por la entrada AUTO 57s
+// ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V8_MODAL_AREA_CERCA_SNR_20260511";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V8_MODAL_AREA_CERCA_SNR_SIN_TEXTOS_20260511";
 
 /*
   Mapa rápido de módulos:
@@ -688,7 +688,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V8_MODAL_AREA_CERCA_SNR_20260511";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V8_MODAL_AREA_CERCA_SNR_SIN_TEXTOS_20260511";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -6433,23 +6433,9 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.lineTo(w - 8, yLevel);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = isSupport ? "rgba(187,247,208,0.98)" : "rgba(254,202,202,0.98)";
-    ctx.font = "12px system-ui, sans-serif";
-    const roleTxt = pol.levelMode === "sin_nivel"
-      ? "ZONA RECHAZO"
-      : (pol.levelMode === "snr_body"
-          ? `SNR ${pol.originalType === "support" ? "SOP." : "RES."}→${pol.levelType === "support" ? "SOP." : "RES."}`
-          : (pol.originalType ? `${pol.originalType === "support" ? "SOP." : "RES."}→${pol.levelType === "support" ? "SOP." : "RES."}` : `${pol.levelType === "support" ? "SOPORTE" : "RESIST."}`));
-    const txt = pol.levelMode === "snr_body" && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))
-      ? `${roleTxt} ${Number(pol.zoneLow).toFixed(6)}-${Number(pol.zoneHigh).toFixed(6)}`
-      : `${roleTxt} ${level.toFixed(6)}`;
-    const labelY = Math.max(18, Math.min(h - 40, yLevel - 6));
-    ctx.fillText(txt, 12, labelY);
-    if (pol.levelMode === "snr_body" && modalSNRNearArea && Number.isFinite(Number(modalSNRNearArea.nearBuffer))) {
-      ctx.fillStyle = "rgba(253,230,138,0.96)";
-      ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText(`AMARILLO = cerca AUTO57 ±${Number(modalSNRNearArea.nearBuffer).toFixed(6)}`, 12, Math.min(h - 24, labelY + 15));
-    }
+    // Sin rótulos sobre la zona SNR ni sobre el área amarilla:
+    // se mantienen las bandas y líneas visuales, pero se quitan los textos
+    // para evitar contaminación visual dentro del modal.
     ctx.restore();
   }
 
