@@ -123,7 +123,17 @@
         <button id="modalCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
       </div>
 
-      <canvas id="minuteCanvas"></canvas>
+      <div class="minuteCanvasWrap">
+        <canvas id="minuteCanvas"></canvas>
+        <div id="modalNavVoteBar" class="modalNavVoteBar" aria-label="Navegación y feedback del modal">
+          <button id="modalPrevItemBtn" class="modalQuickBtn modalNavBtn" type="button" aria-label="Anterior">←</button>
+          <div class="modalVoteGroup" aria-label="Feedback">
+            <button id="modalLikeBtn" class="modalQuickBtn modalVoteBtn" type="button" data-v="like" aria-label="Me gusta">👍</button>
+            <button id="modalDislikeBtn" class="modalQuickBtn modalVoteBtn" type="button" data-v="dislike" aria-label="No me gusta">👎</button>
+          </div>
+          <button id="modalNextItemBtn" class="modalQuickBtn modalNavBtn" type="button" aria-label="Siguiente">→</button>
+        </div>
+      </div>
 
       <div class="modalFooter">
         <div id="modalCandleStatus" class="candleStatusBar" role="status">—</div>

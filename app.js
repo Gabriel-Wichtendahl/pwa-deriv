@@ -29,7 +29,7 @@
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V10_MODAL_NAV_FEEDBACK_20260511";
 
 /*
   Mapa rápido de módulos:
@@ -1503,6 +1503,11 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
+const modalNavVoteBar = $("modalNavVoteBar");
+const modalPrevItemBtn = $("modalPrevItemBtn");
+const modalNextItemBtn = $("modalNextItemBtn");
+const modalLikeBtn = $("modalLikeBtn");
+const modalDislikeBtn = $("modalDislikeBtn");
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
 let signalConfirmCountEl = null;
@@ -1732,6 +1737,7 @@ let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
 let modalCurrentItem = null;
+let modalOpenContext = { source: "signals", signalId: "", journalId: "" };
 
 let modalLive = false;
 let modalDrawRaf = null;
@@ -6206,7 +6212,7 @@ function openSignalFromNotification(signalId = "") {
     } catch {}
 
     try {
-      openChartModal(item);
+      openChartModal(item, { source: "signals", signalId: item.id || "" });
       if (isItemLiveMinute(item)) {
         modalLive = true;
         updateModalLiveUI();
@@ -7186,6 +7192,7 @@ function updateModalCandleStatusUI() {
 
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
+    if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
     setSignalConfirmationControlsVisible(false);
     setGiroAprendizajeControlsVisible(false);
     return;
@@ -7246,6 +7253,7 @@ function updateModalCandleStatusUI() {
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
+  updateModalNavVoteUI();
 
   applyModalExecutionButtonUI(locked, candleClosed);
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
@@ -7289,6 +7297,7 @@ function requestModalDraw(force = false) {
     setCompactModalHeader(it, n);
 
     updateModalCandleStatusUI();
+    updateModalNavVoteUI();
   });
 }
 
@@ -7937,31 +7946,258 @@ async function resubscribePendingContracts() {
   } catch {}
 }
 
+
+/* =========================
+   Modal navigation + like/dislike
+   - Las flechas no ocupan espacio sobre COMPRA/VENTA: van superpuestas al gráfico.
+   - La navegación respeta la pestaña desde la que se abrió: Señales o Trades.
+========================= */
+function hasResolvedNextArrow(item) {
+  const out = String(item?.nextOutcome || "").toLowerCase();
+  return out === "up" || out === "down" || out === "flat";
+}
+function normalizeModalContext(opts = {}, item = null) {
+  const active = localStorage.getItem("activeView") || "signals";
+  const source = String(opts.source || active || "signals") === "trades" ? "trades" : "signals";
+  return {
+    source,
+    signalId: String(opts.signalId || item?.id || ""),
+    journalId: String(opts.journalId || item?.journal_id || ""),
+  };
+}
+function buildModalItemFromTradeEntry(entry) {
+  if (!entry) return null;
+  const live = entry.id ? findHistoryItemById(String(entry.id)) : null;
+  const ticks = Array.isArray(entry.ticks) && entry.ticks.length
+    ? entry.ticks
+    : (Array.isArray(live?.ticks) ? live.ticks : []);
+  return {
+    id: entry.id || live?.id || "",
+    minute: entry.minute ?? live?.minute,
+    time: entry.time || live?.time || "",
+    symbol: entry.symbol || live?.symbol || "",
+    direction: entry.direction || live?.direction || "",
+    mode: entry.mode || live?.mode || "NORMAL",
+    mode_version: entry.mode_version || live?.mode_version || getModeVersion(entry.mode || live?.mode || "NORMAL") || "",
+    vote: entry.vote || "",
+    comment: entry.comment || "",
+    journal_id: entry.journal_id || makeJournalIdFromSignal(entry) || "",
+    feedback_at: entry.feedback_at || 0,
+    feedback_source: entry.feedback_source || "",
+    ticks,
+    nextOutcome: entry.nextOutcome || live?.nextOutcome || "",
+    minuteComplete: entry.minuteComplete !== false,
+    trade: entry.trade || live?.trade || null,
+    study_capture_id: entry.study_capture_id || entry?.trade?.study_capture_id || live?.study_capture_id || live?.trade?.study_capture_id || "",
+    manualGiro: normalizeManualGiroState(entry.manualGiro || live?.manualGiro),
+    giroPolaridad: entry.giroPolaridad || entry.snrLevel || live?.giroPolaridad || live?.snrLevel || live?.polarityLevel || null,
+  };
+}
+function getModalNavigationList() {
+  const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
+  if (source === "trades") {
+    return (tradesJournal || [])
+      .map((entry) => buildModalItemFromTradeEntry(entry))
+      .filter((item) => item && (item.minuteComplete || isItemLiveMinute(item)));
+  }
+  return [...(history || [])]
+    .reverse()
+    .filter((item) => item && (item.minuteComplete || isItemLiveMinute(item)));
+}
+function getModalItemKey(item, source = modalOpenContext?.source) {
+  if (!item) return "";
+  if (source === "trades") return String(item.journal_id || makeJournalIdFromSignal(item) || item.id || "");
+  return String(item.id || "");
+}
+function getModalCurrentIndex(list = getModalNavigationList()) {
+  const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
+  const ctxJournal = String(modalOpenContext?.journalId || "");
+  const ctxSignal = String(modalOpenContext?.signalId || modalCurrentItem?.id || "");
+  const currentKey = source === "trades"
+    ? String(ctxJournal || getModalItemKey(modalCurrentItem, source) || ctxSignal)
+    : String(ctxSignal || getModalItemKey(modalCurrentItem, source));
+  return list.findIndex((item) => {
+    if (!item) return false;
+    if (source === "trades") {
+      const jid = String(item.journal_id || makeJournalIdFromSignal(item) || "");
+      const sid = String(item.id || "");
+      return (!!currentKey && (jid === currentKey || sid === currentKey)) || (!!ctxSignal && sid === ctxSignal);
+    }
+    return String(item.id || "") === currentKey;
+  });
+}
+function findTradeJournalFeedbackEntry() {
+  const journalId = String(modalOpenContext?.journalId || modalCurrentItem?.journal_id || "");
+  if (journalId) {
+    const byJournal = (tradesJournal || []).find((x) => x && String(x.journal_id || "") === journalId);
+    if (byJournal) return byJournal;
+  }
+  const signalId = String(modalOpenContext?.signalId || modalCurrentItem?.id || "");
+  if (signalId) {
+    const bySignal = (tradesJournal || []).find((x) => x && String(x.id || "") === signalId);
+    if (bySignal) return bySignal;
+  }
+  return null;
+}
+function getModalCurrentVote() {
+  if (modalOpenContext?.source === "trades") {
+    const entry = findTradeJournalFeedbackEntry();
+    return String(entry?.vote || modalCurrentItem?.vote || "");
+  }
+  return String(modalCurrentItem?.vote || "");
+}
+function syncVisibleVoteRows(vote = getModalCurrentVote()) {
+  try {
+    const sid = String(modalOpenContext?.signalId || modalCurrentItem?.id || "");
+    const jid = String(modalOpenContext?.journalId || modalCurrentItem?.journal_id || "");
+    const rows = [];
+    if (sid) rows.push(...document.querySelectorAll(`.row[data-id="${cssEscape(sid)}"]`));
+    if (jid) rows.push(...document.querySelectorAll(`.row[data-journal-id="${cssEscape(jid)}"]`));
+    [...new Set(rows)].forEach((row) => applyVoteButtonsVisual(row, vote || "", { lock: false }));
+  } catch {}
+}
+function updateModalNavVoteUI() {
+  if (!modalNavVoteBar) return;
+  if (!modalCurrentItem || !chartModal || chartModal.classList.contains("hidden")) {
+    modalNavVoteBar.style.display = "none";
+    return;
+  }
+
+  modalNavVoteBar.style.display = "inline-flex";
+
+  const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
+  const list = getModalNavigationList();
+  const idx = getModalCurrentIndex(list);
+  const ready = hasResolvedNextArrow(modalCurrentItem);
+  const canPrev = ready && idx > 0;
+  const canNext = ready && idx >= 0 && idx < list.length - 1;
+
+  [modalPrevItemBtn, modalNextItemBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.style.display = ready ? "inline-flex" : "none";
+    btn.setAttribute("aria-hidden", ready ? "false" : "true");
+  });
+
+  if (modalPrevItemBtn) {
+    modalPrevItemBtn.disabled = !canPrev;
+    modalPrevItemBtn.title = ready
+      ? (canPrev ? `Anterior en ${source === "trades" ? "Trades" : "Señales"}` : "No hay anterior")
+      : "Disponible cuando NEXT esté resuelto";
+  }
+  if (modalNextItemBtn) {
+    modalNextItemBtn.disabled = !canNext;
+    modalNextItemBtn.title = ready
+      ? (canNext ? `Siguiente en ${source === "trades" ? "Trades" : "Señales"}` : "No hay siguiente")
+      : "Disponible cuando NEXT esté resuelto";
+  }
+
+  const vote = getModalCurrentVote();
+  [modalLikeBtn, modalDislikeBtn].forEach((btn) => {
+    if (!btn) return;
+    const selected = String(btn.dataset.v || "") === vote;
+    btn.classList.toggle("selected", selected);
+    btn.setAttribute("aria-pressed", selected ? "true" : "false");
+    btn.title = btn.dataset.v === "like"
+      ? (selected ? "Quitar me gusta" : "Me gusta / operación que quiero buscar")
+      : (selected ? "Quitar no me gusta" : "No me gusta / operación que quiero evitar");
+  });
+}
+function setModalFeedbackVote(selectedVote = "") {
+  if (!modalCurrentItem) return;
+  const selected = String(selectedVote || "");
+  if (selected !== "like" && selected !== "dislike") return;
+
+  const current = getModalCurrentVote();
+  const nextVote = current === selected ? "" : selected;
+
+  modalCurrentItem.vote = nextVote;
+  modalCurrentItem.comment = modalCurrentItem.comment || "";
+
+  if (modalOpenContext?.source === "trades") {
+    const entry = findTradeJournalFeedbackEntry();
+    if (entry) {
+      entry.vote = nextVote;
+      entry.comment = entry.comment || modalCurrentItem.comment || "";
+      entry.feedback_at = Date.now();
+      entry.feedback_source = "modal_trades";
+      modalCurrentItem.comment = entry.comment || "";
+      saveTradesJournal(tradesJournal);
+      updateExportTradesButtonUI();
+    } else {
+      persistRowFeedback(modalCurrentItem, {
+        source: "trades",
+        signalId: modalOpenContext?.signalId || modalCurrentItem.id || "",
+        journalId: modalOpenContext?.journalId || modalCurrentItem.journal_id || "",
+      });
+    }
+  } else {
+    const live = modalCurrentItem.id ? findHistoryItemById(String(modalCurrentItem.id)) : null;
+    if (live) {
+      live.vote = nextVote;
+      live.comment = live.comment || modalCurrentItem.comment || "";
+      modalCurrentItem = live;
+    }
+    saveHistory(history);
+    updateExportTradesButtonUI();
+  }
+
+  syncVisibleVoteRows(nextVote);
+  updateModalNavVoteUI();
+  toast(nextVote === "like" ? "👍 Me gusta guardado" : nextVote === "dislike" ? "👎 No me gusta guardado" : "Marca quitada", 1200);
+}
+function navigateModalItem(step = 1) {
+  if (!modalCurrentItem || !hasResolvedNextArrow(modalCurrentItem)) return;
+  const list = getModalNavigationList();
+  const idx = getModalCurrentIndex(list);
+  if (idx < 0) return;
+  const nextIdx = idx + Number(step || 0);
+  if (nextIdx < 0 || nextIdx >= list.length) return;
+  const nextItem = list[nextIdx];
+  if (!nextItem) return;
+  openChartModal(nextItem, {
+    source: modalOpenContext?.source === "trades" ? "trades" : "signals",
+    signalId: nextItem.id || "",
+    journalId: nextItem.journal_id || "",
+  });
+}
+
 /* =========================
    Chart modal
 ========================= */
-function openChartModal(item) {
+function openChartModal(item, opts = {}) {
   modalCurrentItem = item;
+  modalOpenContext = normalizeModalContext(opts, item);
   if (!chartModal || !modalTitle || !modalSub) return;
 
-  setCompactModalHeader(item);
+  if (modalOpenContext.source === "trades") {
+    const entry = findTradeJournalFeedbackEntry();
+    if (entry) {
+      modalCurrentItem.vote = entry.vote || "";
+      modalCurrentItem.comment = entry.comment || "";
+      modalCurrentItem.journal_id = entry.journal_id || modalCurrentItem.journal_id || "";
+      modalOpenContext.journalId = modalOpenContext.journalId || modalCurrentItem.journal_id || "";
+    }
+  }
 
-  modalLive = isItemLiveMinute(item);
+  setCompactModalHeader(modalCurrentItem);
+
+  modalLive = isItemLiveMinute(modalCurrentItem);
   updateModalLiveUI();
 
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  item.signalConfirmations ||= [];
+  modalCurrentItem.signalConfirmations ||= [];
   applyModalTradeButtonsLayout();
   setSignalConfirmationControlsVisible(true);
   ensureGiroAprendizajeControls();
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
-  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
+  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(modalCurrentItem);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
+  updateModalNavVoteUI();
 
   requestModalDraw(true);
 }
@@ -7973,6 +8209,7 @@ function closeChartModal() {
   modalLive = false;
   updateModalLiveUI();
   if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
+  if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
   setGiroAprendizajeControlsVisible(false);
   updateDisciplineLockUI(false);
@@ -8012,6 +8249,11 @@ if (modalLiveBtn) {
     requestModalDraw(true);
   };
 }
+
+if (modalPrevItemBtn) modalPrevItemBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(-1); };
+if (modalNextItemBtn) modalNextItemBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(1); };
+if (modalLikeBtn) modalLikeBtn.onclick = (e) => { e.stopPropagation(); setModalFeedbackVote("like"); };
+if (modalDislikeBtn) modalDislikeBtn.onclick = (e) => { e.stopPropagation(); setModalFeedbackVote("dislike"); };
 
 /* =========================
    Row helpers (global, para Señales)
@@ -8131,6 +8373,10 @@ function setNextOutcome(item, outcome) {
 
   updateRowNextArrow(item);
   updateCounter();
+  if (modalCurrentItem && String(modalCurrentItem.id || "") === String(item.id || "")) {
+    modalCurrentItem.nextOutcome = outcome;
+    updateModalNavVoteUI();
+  }
 
   try {
     upsertTradeJournalFromSignal(item);
@@ -8405,7 +8651,7 @@ function buildRow(item, opts = {}) {
     }
 
     const canOpen = target.minuteComplete || isItemLiveMinute(target);
-    if (canOpen) openChartModal(target);
+    if (canOpen) openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
   };
 
   updateRowChartBtnOnRow(row, item);
@@ -12562,7 +12808,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
     requestAnimationFrame(() => {
       try {
         setActiveView("signals");
-        openChartModal(item);
+        openChartModal(item, { source: "signals", signalId: item.id || "" });
 
         if (isItemLiveMinute(item)) {
           modalLive = true;
