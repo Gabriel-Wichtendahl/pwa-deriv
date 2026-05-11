@@ -21,16 +21,16 @@
 // ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO AUTO BACKTEST V3: no muestra señales si el cierre 60 real no está dentro del SNR
-// ✅ NUEVO AUTO BACKTEST V3: la señal nace solo con S-R-S/R-S-R + cierre confirmado por ticks_history
+// ✅ NUEVO AUTO BACKTEST V4: mantiene entrada estricta, pero agrega diagnóstico visible de cierres descartados
+// ✅ NUEVO AUTO BACKTEST V4: muestra por qué no salió señal: fuera de SNR, sin S-R-S/R-S-R, sin memoria o momentum
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT_20260511";
-const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT";
+const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V4_DIAGNOSTICO_20260511";
+const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V4_DIAGNOSTICO";
 const AUTO_BACKTEST_DEMO_ONLY = true;
 const AUTO_BACKTEST_FORCE_DEMO_ACCOUNT = true;
 const AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE = false;
@@ -61,7 +61,7 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
-const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v3";
+const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v4";
 const MAX_HISTORY = 200;
 
 const MIN_TICKS = 3;
@@ -73,20 +73,20 @@ const HISTORY_TIMEOUT_MS = 7000;
 /* =========================
    Trades Journal (estudio)
 ========================= */
-const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v3";
+const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v4";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
    Capturas de estudio
 ========================= */
-const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_giroAutoBacktest_v1";
+const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_giroAutoBacktest_v4";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
 
 /* =========================
    Trade account config
 ========================= */
-const ACCOUNT_MODE_KEY = "derivTradingAccountMode_giroAutoBacktest_v1";
+const ACCOUNT_MODE_KEY = "derivTradingAccountMode_giroAutoBacktest_v4";
 const ACCOUNT_MODE_DEMO = "demo";
 const ACCOUNT_MODE_REAL = "real";
 const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
@@ -105,7 +105,7 @@ const DEFAULT_CURRENCY = "USD";
    - Nivel 2: stake + ganancia real del nivel 1
    - Después del nivel 2, gane o pierda, vuelve al nivel 1
 ========================= */
-const C100_STATE_KEY = "interesCompuesto2_state_giroAutoBacktest_v1";
+const C100_STATE_KEY = "interesCompuesto2_state_giroAutoBacktest_v4";
 const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no informa ganancia
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
@@ -116,17 +116,17 @@ const C100_LEVELS = [
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
-const EXECUTION_MODE_KEY = "executionMode_giroAutoBacktest_v1";
+const EXECUTION_MODE_KEY = "executionMode_giroAutoBacktest_v4";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_giroAutoBacktest_v1_fixed_by_symbol";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_giroAutoBacktest_v4_fixed_by_symbol";
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
-const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_giroAutoBacktest_v1";
+const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_giroAutoBacktest_v4";
 const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
-const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_giroAutoBacktest_v1";
+const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_giroAutoBacktest_v4";
 const HIGHLOW_DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
 // Límite de pago total para High/Low: payout potencial / stake.
@@ -155,7 +155,7 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
 /* =========================
    Auto-open chart config
 ========================= */
-const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_giroAutoBacktest_v1";
+const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_giroAutoBacktest_v4";
 let autoOpenChartOnSignal = false;
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
@@ -164,11 +164,11 @@ let c100PanelEl = null;
 /* =========================
    Disciplina
 ========================= */
-const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_giroAutoBacktest_v1";
-const DISCIPLINE_WINS_KEY = "discipline_wins_giroAutoBacktest_v1";
-const DISCIPLINE_LOSSES_KEY = "discipline_losses_giroAutoBacktest_v1";
-const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_giroAutoBacktest_v1";
-const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_giroAutoBacktest_v1";
+const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_giroAutoBacktest_v4";
+const DISCIPLINE_WINS_KEY = "discipline_wins_giroAutoBacktest_v4";
+const DISCIPLINE_LOSSES_KEY = "discipline_losses_giroAutoBacktest_v4";
+const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_giroAutoBacktest_v4";
+const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_giroAutoBacktest_v4";
 
 const DISCIPLINE_MAX_WINS = 3;
 const DISCIPLINE_MAX_LOSSES = 2;
@@ -184,7 +184,7 @@ let disciplineBannerEl = null; // banner visible para bloqueo/contador DEMO
 /* =========================
    Link contract_id -> signalId
 ========================= */
-const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v3"; // contract_id -> signalId
+const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v4"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
 
 function loadTradeLinks() {
@@ -690,7 +690,7 @@ const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
-const ANALYSIS_MODE_KEY = "analysisMode_giroAutoBacktest_v1";
+const ANALYSIS_MODE_KEY = "analysisMode_giroAutoBacktest_v4";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
@@ -700,9 +700,9 @@ const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCA
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_giroAutoBacktest_v1";
+const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_giroAutoBacktest_v4";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
-const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_giroAutoBacktest_v1";
+const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_giroAutoBacktest_v4";
 const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
@@ -738,7 +738,7 @@ function nextSignalMode(mode) {
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
-const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_giroAutoBacktest_v1";
+const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_giroAutoBacktest_v4";
 function loadPracticeSavedSignals() {
   try {
     const raw = localStorage.getItem(PRACTICE_SAVED_STORE_KEY);
@@ -1732,7 +1732,7 @@ let history = loadHistory();
 migrateHistoryModesToGiro();
 
 let minuteData = {};
-// AUTO BACKTEST V3: marca qué minutos/símbolos fueron rehidratados con ticks_history.
+// AUTO BACKTEST V4: marca qué minutos/símbolos fueron rehidratados con ticks_history.
 // Si no hay cierre real confirmado, no se crea señal.
 let fullMinuteHydrated = {};
 let lastEvaluatedMinute = null;
@@ -3246,7 +3246,7 @@ function shouldAutoOpenChartNow() {
    🪫 Low power mode
 ========================= */
 let lowPowerMode = false;
-const LOWPOWER_KEY = "lowPowerMode_giroAutoBacktest_v1";
+const LOWPOWER_KEY = "lowPowerMode_giroAutoBacktest_v4";
 
 const UI_INTERVAL_NORMAL_MS = 500;
 const UI_INTERVAL_LOW_MS = 1200;
@@ -3421,7 +3421,7 @@ function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
 
-const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_giroAutoBacktest_v1";
+const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_giroAutoBacktest_v4";
 let liveAnalysisPaused = false;
 
 function loadLiveAnalysisPaused() {
@@ -3895,10 +3895,10 @@ function initTabs() {
 /* =========================
    Práctica
 ========================= */
-const PRACTICE_STATS_KEY = "practiceStats_giroAutoBacktest_v1";
-const PRACTICE_FILTER_KEY = "practiceFilterMode_giroAutoBacktest_v1";
-const PRACTICE_POOL_STATE_KEY = "practicePoolState_giroAutoBacktest_v1";
-const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_giroAutoBacktest_v1";
+const PRACTICE_STATS_KEY = "practiceStats_giroAutoBacktest_v4";
+const PRACTICE_FILTER_KEY = "practiceFilterMode_giroAutoBacktest_v4";
+const PRACTICE_POOL_STATE_KEY = "practicePoolState_giroAutoBacktest_v4";
+const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_giroAutoBacktest_v4";
 const PRACTICE_EXPORT_MAX = 150;
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
@@ -3924,7 +3924,7 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 let practiceImageModeBtnEl = null;
-const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_giroAutoBacktest_v1";
+const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_giroAutoBacktest_v4";
 const PRACTICE_DISPLAY_REPLAY = "REPLAY";
 const PRACTICE_DISPLAY_IMAGE = "IMAGE";
 let practiceDisplayMode = loadPracticeDisplayMode();
@@ -9066,7 +9066,7 @@ function renderHistory() {
       it.mode = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(rawMode) ? normalizedFamily : rawMode.toUpperCase();
     }
 
-    // AUTO BACKTEST V3: esta rama no muestra señales heredadas/tempranas.
+    // AUTO BACKTEST V4: esta rama no muestra señales heredadas/tempranas.
     // Solo se listan señales nacidas al cierre 60 confirmado.
     if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !it.auto_backtest_signal_created_at_close) {
       changed = true;
@@ -10055,7 +10055,7 @@ function finalizeMinute(minute) {
     } catch {}
   })();
 
-  // --- AUTO BACKTEST V3: señal + trade nacen recién con cierre 60 REAL confirmado ---
+  // --- AUTO BACKTEST V4: señal + trade nacen recién con cierre 60 REAL confirmado ---
   (async () => {
     // Primero traemos ticks_history del minuto cerrado.
     // Esto evita mostrar señales cuando el último tick vivo parecía estar en SNR,
@@ -10175,7 +10175,7 @@ function onTick(tick) {
   // ✅ FIX AUTO 60: también revisar en cada tick, aunque el modal no haya redibujado.
   scanSignalAutoEntriesAt57();
 
-  // AUTO BACKTEST V3:
+  // AUTO BACKTEST V4:
   // No se generan señales a 35/40/45s.
   // La señal se evalúa recién cuando la vela cerró y finalizeMinute(minute) confirma el cierre 60s.
   if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
@@ -11422,7 +11422,7 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
 
 
 /* =========================
-   AUTO BACKTEST V3 — SNR alternado sin doble rechazo
+   AUTO BACKTEST V4 — SNR alternado sin doble rechazo + diagnóstico
    Regla del usuario:
    - No se busca segundo rechazo ni formación temprana.
    - La señal nace al cierre 60s si el cierre queda dentro de la zona SNR.
@@ -11596,6 +11596,254 @@ function getAutoBacktestSNRAlternatingLevels(symbol, minute, currentRange, rules
     Number(b.touches || 0) - Number(a.touches || 0) ||
     Math.abs(Number(a.level || 0)) - Math.abs(Number(b.level || 0))
   );
+}
+
+
+/* =========================
+   AUTO BACKTEST V4 — diagnóstico visible
+   No cambia la regla de entrada: solo explica por qué un cierre fue descartado.
+========================= */
+const AUTO_BACKTEST_DIAG_RECENT_MAX = 8;
+let autoBacktestDiagnosticState = {
+  updatedAt: 0,
+  minute: null,
+  message: "Esperando cierre 60s…",
+  readySymbols: 0,
+  totalSymbols: SYMBOLS.length,
+  records: [],
+};
+
+function fmtAutoBacktestNumber(n, digits = 6) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return x.toFixed(digits);
+}
+function getAutoBacktestStatusStyle(status) {
+  const s = String(status || "");
+  if (s === "signal_created" || s === "candidate_ok") return { bg: "rgba(34,197,94,.12)", border: "rgba(34,197,94,.34)", color: "#bbf7d0" };
+  if (s.includes("outside") || s.includes("no_alternating") || s.includes("no_min_touch") || s.includes("momentum") || s.includes("doji")) return { bg: "rgba(251,191,36,.10)", border: "rgba(251,191,36,.30)", color: "#fde68a" };
+  if (s.includes("error") || s.includes("blocked")) return { bg: "rgba(239,68,68,.10)", border: "rgba(239,68,68,.30)", color: "#fecaca" };
+  return { bg: "rgba(148,163,184,.10)", border: "rgba(148,163,184,.24)", color: "rgba(229,231,235,.88)" };
+}
+function ensureAutoBacktestDiagnosticPanel() {
+  let panel = document.getElementById("autoBacktestDiagPanel");
+  if (panel) return panel;
+
+  const host = counterEl?.parentElement || document.querySelector(".header") || document.body;
+  panel = document.createElement("div");
+  panel.id = "autoBacktestDiagPanel";
+  panel.style.margin = "8px 0 10px";
+  panel.style.padding = "9px";
+  panel.style.borderRadius = "16px";
+  panel.style.border = "1px solid rgba(34,211,238,.24)";
+  panel.style.background = "linear-gradient(180deg, rgba(15,23,42,.72), rgba(2,6,23,.62))";
+  panel.style.boxShadow = "0 0 20px rgba(34,211,238,.10), inset 0 0 0 1px rgba(255,255,255,.035)";
+  panel.style.backdropFilter = "blur(12px)";
+  panel.style.position = "relative";
+  panel.style.zIndex = "1";
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;">
+      <div style="font-weight:950;font-size:13px;letter-spacing:.2px;color:#e0f2fe;">🧪 Auto 60 · diagnóstico</div>
+      <div id="autoBacktestDiagStamp" style="font-size:11px;color:rgba(226,232,240,.72);font-variant-numeric:tabular-nums;">—</div>
+    </div>
+    <div id="autoBacktestDiagSummary" style="font-size:12px;line-height:1.28;color:rgba(226,232,240,.88);">Esperando cierre 60s…</div>
+    <div id="autoBacktestDiagRows" style="display:grid;grid-template-columns:1fr;gap:6px;margin-top:7px;"></div>
+  `;
+
+  if (counterEl && counterEl.parentElement === host) counterEl.insertAdjacentElement("afterend", panel);
+  else host.appendChild(panel);
+  return panel;
+}
+function renderAutoBacktestDiagnosticPanel() {
+  const panel = ensureAutoBacktestDiagnosticPanel();
+  if (!panel) return;
+  const state = autoBacktestDiagnosticState || {};
+  const stamp = panel.querySelector("#autoBacktestDiagStamp");
+  const summary = panel.querySelector("#autoBacktestDiagSummary");
+  const rows = panel.querySelector("#autoBacktestDiagRows");
+
+  if (stamp) {
+    const d = state.updatedAt ? new Date(Number(state.updatedAt)) : null;
+    stamp.textContent = d ? d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+  }
+  if (summary) {
+    const minuteTxt = Number.isFinite(Number(state.minute)) ? `m${Number(state.minute)}` : "sin minuto";
+    summary.innerHTML = `${escapeHtml(state.message || "Esperando cierre 60s…")}<br><span style="color:rgba(148,163,184,.92)">${minuteTxt} · listos ${Number(state.readySymbols || 0)}/${Number(state.totalSymbols || SYMBOLS.length)} · regla: cierre dentro SNR + S-R-S/R-S-R</span>`;
+  }
+  if (!rows) return;
+  const records = Array.isArray(state.records) ? state.records.slice(0, AUTO_BACKTEST_DIAG_RECENT_MAX) : [];
+  if (!records.length) {
+    rows.innerHTML = `<div style="font-size:12px;color:rgba(148,163,184,.88);">Todavía no hay cierres diagnosticados.</div>`;
+    return;
+  }
+  rows.innerHTML = records.map((r) => {
+    const st = getAutoBacktestStatusStyle(r.status);
+    const zone = r.closest
+      ? `zona ${fmtAutoBacktestNumber(r.closest.zoneLow)}–${fmtAutoBacktestNumber(r.closest.zoneHigh)} · seq ${escapeHtml(r.closest.roleSequence || "—")} · toques ${Number(r.closest.touches || 0)}`
+      : `zonas ${Number(r.levelsMinTouch || 0)}/${Number(r.clustersTotal || 0)} · S-R-S/R-S-R ${Number(r.alternatingValid || 0)}`;
+    const price = Number.isFinite(Number(r.close60)) ? `cierre ${fmtAutoBacktestNumber(r.close60)}` : "cierre —";
+    const dir = r.direction ? ` → ${escapeHtml(r.direction)}` : "";
+    return `
+      <div style="padding:7px 8px;border-radius:13px;border:1px solid ${st.border};background:${st.bg};color:${st.color};font-size:11.5px;line-height:1.25;">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+          <b style="font-size:12px;">${escapeHtml(r.symbol || "—")}${dir}</b>
+          <span style="font-variant-numeric:tabular-nums;color:rgba(226,232,240,.82);">${price}</span>
+        </div>
+        <div>${escapeHtml(r.message || r.status || "diagnóstico")}</div>
+        <div style="color:rgba(226,232,240,.70);margin-top:2px;">${zone}</div>
+      </div>
+    `;
+  }).join("");
+}
+function setAutoBacktestDiagnostic(next = {}) {
+  autoBacktestDiagnosticState = {
+    ...autoBacktestDiagnosticState,
+    ...next,
+    updatedAt: Date.now(),
+  };
+  try { renderAutoBacktestDiagnosticPanel(); } catch {}
+}
+function getAutoBacktestSNRDiagnosticScan(symbol, minute, currentRange, close60) {
+  const candles = getGiroPolarityCandles(symbol, minute, AUTO_BACKTEST_SNR_ROLE_LOOKBACK);
+  const tol = getGiroSNRBodyTolerance(symbol, currentRange);
+  const raw = [];
+  for (const c of candles) {
+    const open = Number(c.open);
+    const close = Number(c.close);
+    if (![open, close].every(Number.isFinite)) continue;
+    raw.push({ price: Math.max(open, close), minute: Number(c.minute) });
+    raw.push({ price: Math.min(open, close), minute: Number(c.minute) });
+  }
+
+  const clusters = clusterAutoBacktestSNRZones(raw, tol * 1.10);
+  const scan = [];
+  for (const cluster of clusters) {
+    const zoneLow = Number(cluster.zoneLow) - tol * 0.20;
+    const zoneHigh = Number(cluster.zoneHigh) + tol * 0.20;
+    if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh) || zoneHigh <= zoneLow) continue;
+    const roleEvents = buildAutoBacktestSNRRoleEvents(candles, zoneLow, zoneHigh, tol);
+    const pattern = findAutoBacktestSNRAlternatingPattern(roleEvents);
+    const inside = Number.isFinite(Number(close60)) && Number(close60) >= zoneLow && Number(close60) <= zoneHigh;
+    const distance = !Number.isFinite(Number(close60)) ? NaN : Number(close60) < zoneLow ? zoneLow - Number(close60) : Number(close60) > zoneHigh ? Number(close60) - zoneHigh : 0;
+    scan.push({
+      level: Number(cluster.price),
+      touches: Number(cluster.touches || 0),
+      zoneLow,
+      zoneHigh,
+      roleEvents,
+      rolePattern: pattern.pattern,
+      roleSequence: getAutoBacktestSNRRoleSequenceText(roleEvents),
+      roleTurns: roleEvents.length,
+      alternating: !!pattern.ok,
+      inside,
+      distance,
+    });
+  }
+
+  const minTouch = scan.filter((x) => Number(x.touches || 0) >= 3);
+  const alternating = minTouch.filter((x) => x.alternating);
+  const insideAny = minTouch.filter((x) => x.inside);
+  const insideAlternating = alternating.filter((x) => x.inside);
+  const closest = scan.slice().sort((a, b) => {
+    const da = Number.isFinite(Number(a.distance)) ? Number(a.distance) : Number.POSITIVE_INFINITY;
+    const db = Number.isFinite(Number(b.distance)) ? Number(b.distance) : Number.POSITIVE_INFINITY;
+    return da - db;
+  })[0] || null;
+
+  return {
+    candleMemory: candles.length,
+    tolerance: tol,
+    clustersTotal: scan.length,
+    levelsMinTouch: minTouch.length,
+    alternatingValid: alternating.length,
+    closeInsideAnySNR: insideAny.length,
+    closeInsideAlternating: insideAlternating.length,
+    closest,
+    insideAlternating,
+  };
+}
+function diagnoseAutoBacktestSNRCloseCandidate(candidate, minute) {
+  const symbol = String(candidate?.symbol || "");
+  try {
+    if (!symbol) return { symbol: "—", status: "error_no_symbol", message: "Sin símbolo" };
+    if (!isFullMinuteHydrated(minute, symbol)) {
+      return { symbol, status: "pending_ticks_history", message: "Esperando ticks_history del cierre real", close60: NaN };
+    }
+
+    const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+    const pts = ensureTicksWithBoundary(ticks, 60000);
+    const p0 = Number(getPriceAtMs(pts, 0));
+    const p60 = Number(getPriceAtMs(pts, 60000));
+    if (!Number.isFinite(p0) || !Number.isFinite(p60)) {
+      return { symbol, status: "error_no_close", message: "No pude confirmar open/cierre 60s", close60: p60 };
+    }
+
+    const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+    const high = qs.length ? Math.max(...qs) : p60;
+    const low = qs.length ? Math.min(...qs) : p60;
+    const range = Math.max(high - low, Math.abs(p60) * 0.000001, 1e-9);
+    const direction = p60 > p0 ? "PUT" : p60 < p0 ? "CALL" : "";
+    const formationSide = p60 > p0 ? "ALCISTA" : p60 < p0 ? "BAJISTA" : "NEUTRA";
+    const scan = getAutoBacktestSNRDiagnosticScan(symbol, minute, range, p60);
+    const momentum = getMomentumRunBeforeSignal({ minute, symbol, ticks, direction, mode: MODE_SNR_SEGUNDO_TOQUE });
+
+    let status = "candidate_ok";
+    let message = "Candidato válido: cierre dentro de SNR alternado";
+    if (!direction) {
+      status = "blocked_doji";
+      message = "Vela neutra/doji: sin dirección para invertir";
+    } else if (!scan.candleMemory) {
+      status = "blocked_no_memory";
+      message = "Sin velas previas suficientes para formar SNR";
+    } else if (!scan.levelsMinTouch) {
+      status = "blocked_no_min_touch";
+      message = "No hay zona SNR con mínimo 3 toques/cuerpos";
+    } else if (!scan.alternatingValid) {
+      status = "blocked_no_alternating_roles";
+      message = "Hay SNR, pero falta secuencia S-R-S/R-S-R";
+    } else if (!scan.closeInsideAlternating) {
+      status = "blocked_close_outside_snr";
+      message = "El cierre 60s quedó fuera de las zonas SNR alternadas";
+    } else if (momentum.blocked) {
+      status = "blocked_momentum_gt_3";
+      message = `Momentum bloqueado: ${momentum.maxRun} velas consecutivas`;
+    }
+
+    const closest = scan.closeInsideAlternating[0] || scan.closest || null;
+    return {
+      symbol,
+      status,
+      message,
+      open0: p0,
+      close60: p60,
+      high,
+      low,
+      direction,
+      formationSide,
+      candleMemory: scan.candleMemory,
+      clustersTotal: scan.clustersTotal,
+      levelsMinTouch: scan.levelsMinTouch,
+      alternatingValid: scan.alternatingValid,
+      closeInsideAnySNR: scan.closeInsideAnySNR,
+      closeInsideAlternating: scan.closeInsideAlternating,
+      closest,
+      momentum,
+    };
+  } catch (err) {
+    return { symbol, status: "error_diag", message: `Error diagnóstico: ${err?.message || err}` };
+  }
+}
+function summarizeAutoBacktestDiagnostics(records = []) {
+  const arr = Array.isArray(records) ? records : [];
+  if (!arr.length) return "Esperando cierre 60s…";
+  if (arr.some((r) => r.status === "signal_created")) return "✅ Señal creada: cierre dentro de SNR alternado.";
+  if (arr.some((r) => r.status === "candidate_ok")) return "✅ Hay candidato válido. Si no operó, revisar token/contrato/demo.";
+  if (arr.every((r) => r.status === "pending_ticks_history")) return "Esperando cierre confirmado por ticks_history…";
+  if (arr.some((r) => r.status === "blocked_close_outside_snr")) return "Descartado: cierre 60s fuera de zona SNR alternada.";
+  if (arr.some((r) => r.status === "blocked_no_alternating_roles")) return "Descartado: SNR sin secuencia S-R-S/R-S-R.";
+  if (arr.some((r) => r.status === "blocked_no_min_touch")) return "Descartado: no hay SNR con mínimo de toques.";
+  if (arr.some((r) => r.status === "blocked_momentum_gt_3")) return "Descartado: momentum mayor a 3 velas consecutivas.";
+  return arr[0]?.message || "Cierre analizado sin señal.";
 }
 function analyzeAutoBacktestSNRCloseCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
@@ -13323,22 +13571,41 @@ function evaluateMinute(minute) {
   if (areSignalsPaused()) return true;
 
   const data = minuteData[minute];
-  if (!data) return true;
+  if (!data) {
+    setAutoBacktestDiagnostic({
+      minute,
+      message: "Esperando datos del minuto cerrado…",
+      readySymbols: 0,
+      totalSymbols: SYMBOLS.length,
+      records: SYMBOLS.map((symbol) => ({ symbol, status: "pending_minute_data", message: "Sin datos del minuto todavía" })),
+    });
+    return true;
+  }
 
   const candidates = [];
   let readySymbols = 0;
+  const pendingRecords = [];
 
   for (const sym of SYMBOLS) {
-    // AUTO BACKTEST V3: no se permite crear señal con ticks vivos/incompletos.
+    // AUTO BACKTEST V4: no se permite crear señal con ticks vivos/incompletos.
     // El símbolo tiene que estar confirmado por ticks_history del minuto cerrado.
-    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !isFullMinuteHydrated(minute, sym)) continue;
+    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !isFullMinuteHydrated(minute, sym)) {
+      pendingRecords.push({ symbol: sym, status: "pending_ticks_history", message: "Esperando cierre confirmado por ticks_history" });
+      continue;
+    }
 
     const ticks = data[sym] || [];
     if (ticks.length >= MIN_TICKS) readySymbols++;
-    if (ticks.length < MIN_TICKS) continue;
+    if (ticks.length < MIN_TICKS) {
+      pendingRecords.push({ symbol: sym, status: "pending_min_ticks", message: `Pocos ticks del cierre (${ticks.length}/${MIN_TICKS})` });
+      continue;
+    }
 
     const prices = ticks.map((t) => Number(t.quote)).filter(Number.isFinite);
-    if (prices.length < MIN_TICKS) continue;
+    if (prices.length < MIN_TICKS) {
+      pendingRecords.push({ symbol: sym, status: "pending_prices", message: "Ticks sin precios válidos" });
+      continue;
+    }
 
     const move = prices[prices.length - 1] - prices[0];
     let vol = 0;
@@ -13355,7 +13622,18 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return true;
+  const diagnostics = candidates.map((c) => diagnoseAutoBacktestSNRCloseCandidate(c, minute));
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) {
+    const records = diagnostics.concat(pendingRecords).slice(0, AUTO_BACKTEST_DIAG_RECENT_MAX);
+    setAutoBacktestDiagnostic({
+      minute,
+      message: `Esperando símbolos listos: ${readySymbols}/${MIN_SYMBOLS_READY}`,
+      readySymbols,
+      totalSymbols: SYMBOLS.length,
+      records,
+    });
+    return true;
+  }
 
   const matches = [];
   for (const c of candidates) {
@@ -13380,7 +13658,20 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (!matches.length) return true;
+  if (!matches.length) {
+    const records = diagnostics.concat(pendingRecords).sort((a, b) => {
+      const rank = (x) => x.status === "candidate_ok" ? 0 : x.status === "blocked_close_outside_snr" ? 1 : x.status === "blocked_no_alternating_roles" ? 2 : 3;
+      return rank(a) - rank(b);
+    }).slice(0, AUTO_BACKTEST_DIAG_RECENT_MAX);
+    setAutoBacktestDiagnostic({
+      minute,
+      message: summarizeAutoBacktestDiagnostics(records),
+      readySymbols,
+      totalSymbols: SYMBOLS.length,
+      records,
+    });
+    return true;
+  }
   matches.sort((a, b) =>
     b.quality - a.quality ||
     b.giroNivelPoints - a.giroNivelPoints ||
@@ -13388,7 +13679,20 @@ function evaluateMinute(minute) {
   );
 
   // Si dos símbolos quedan casi empatados, no fuerza una operación dudosa.
-  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
+  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) {
+    const records = diagnostics.map((r) => {
+      const m = matches.find((x) => x.symbol === r.symbol);
+      return m ? { ...r, status: "blocked_tie_quality", message: "Candidato válido, pero empatado/casi empatado con otro símbolo" } : r;
+    }).slice(0, AUTO_BACKTEST_DIAG_RECENT_MAX);
+    setAutoBacktestDiagnostic({
+      minute,
+      message: "Descartado: empate de calidad entre símbolos.",
+      readySymbols,
+      totalSymbols: SYMBOLS.length,
+      records,
+    });
+    return true;
+  }
 
   const bestMatch = matches[0];
   addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
@@ -13405,6 +13709,18 @@ function evaluateMinute(minute) {
     auto_backtest_signal_created_at_close: true,
     close_confirmed_by_ticks_history: true,
     autoBacktestMomentum: bestMatch.autoBacktestMomentum || null,
+  });
+
+  const records = diagnostics.map((r) => r.symbol === bestMatch.symbol
+    ? { ...r, status: "signal_created", message: "Señal creada: cierre dentro de SNR alternado" }
+    : r
+  ).slice(0, AUTO_BACKTEST_DIAG_RECENT_MAX);
+  setAutoBacktestDiagnostic({
+    minute,
+    message: `✅ Señal creada en ${bestMatch.symbol}: ${bestMatch.direction}`,
+    readySymbols,
+    totalSymbols: SYMBOLS.length,
+    records,
   });
   return true;
 }
@@ -13473,7 +13789,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 
   item.manualGiro = normalizeManualGiroState(item.manualGiro);
 
-  // AUTO BACKTEST V3: si no pasa el cierre 60 real dentro del SNR,
+  // AUTO BACKTEST V4: si no pasa el cierre 60 real dentro del SNR,
   // directamente no se guarda ni se muestra la señal.
   if (!validateAutoBacktestSignalCreatedAtClose(item)) return;
 
@@ -13744,6 +14060,7 @@ renderHistory();
 initNotificationOpenRouting();
 updateTickHealthUI();
 updateCountdownUI();
+try { ensureAutoBacktestDiagnosticPanel(); renderAutoBacktestDiagnosticPanel(); } catch {}
 
 ensureLowPowerButton();
 applyLowPowerModeUI();

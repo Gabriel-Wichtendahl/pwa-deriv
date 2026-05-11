@@ -1,6 +1,6 @@
 {
-  "name": "Deriv Signals Giro Auto Backtest Demo V3",
-  "short_name": "GiroAutoV3",
+  "name": "Deriv Signals · Auto V4",
+  "short_name": "GiroAutoV4",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#020617",
@@ -9,4 +9,4 @@
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
   ]
-} 
+}
