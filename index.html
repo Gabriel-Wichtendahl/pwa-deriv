@@ -2,68 +2,121 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#020617" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
   <title>Deriv Signals</title>
 
   <link rel="manifest" href="manifest.json" />
-  <meta name="theme-color" content="#020617" />
-
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body class="neon">
-  <!-- ✅ Fondo neon (capa fija) -->
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
     <h2 id="status" class="status">Conectando…</h2>
 
     <div class="topStatus">
-      <div id="tickHealth" class="pill">Último tick: —</div>
-      <div id="countdown" class="pill">⏱️ 60</div>
+      <div class="pill combinedStatusPill" aria-label="Estado de ticks y cuenta regresiva">
+        <span id="tickHealth" class="tickHealthInline">Último tick: —</span>
+        <span class="statusDivider" aria-hidden="true"></span>
+        <span id="countdown" class="countdownPill" aria-label="Cuenta regresiva del minuto">
+          <span class="countRing" aria-hidden="true"></span>
+          <span id="countdownText" class="countText">⏱️ 60</span>
+        </span>
+      </div>
     </div>
 
-    <div class="controls">
-      <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
-      <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
-      <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
-      <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
-
-      <!-- 🕒 Evaluación 45/50/55 -->
-      <div class="btnGroup" aria-label="Segundo de evaluación">
-        <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
-        <button class="btn evalBtn" type="button" data-sec="50">⏱️ 50s</button>
-        <button class="btn evalBtn" type="button" data-sec="55">⏱️ 55s</button>
+    <div class="tabsBar">
+      <div class="tabs" role="tablist" aria-label="Secciones">
+        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true" aria-controls="signalsView">Señales</button>
+        <button class="tab" type="button" data-view="trades" role="tab" aria-selected="false" aria-controls="tradesView">Trades</button>
+        <button class="tab" type="button" data-view="practice" role="tab" aria-selected="false" aria-controls="practiceView">Práctica</button>
       </div>
 
-      <!-- ⚡ Modo -->
-      <button id="modeBtn" class="btn modeBtn" type="button">🟦 Modo NORMAL</button>
-
-      <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+      <button id="configBtn" class="tabIcon" type="button" aria-label="Configuración">⚙️</button>
     </div>
 
     <div id="counter" class="counter">Señales: 0</div>
   </header>
 
   <main class="main">
-    <div id="signals" class="signals"></div>
+    <section id="signalsView" role="tabpanel">
+      <div id="signals" class="signals"></div>
+    </section>
 
-    <section class="feedback">
-      <h3 class="h3">Feedback</h3>
-      <textarea id="feedback" rows="6"></textarea><br />
-      <button id="copyFeedback" class="btn btnGhost" type="button">📋 Copiar feedback</button>
+    <section id="tradesView" class="hidden" role="tabpanel">
+      <div id="tradesActions" class="viewActions"></div>
+      <div id="tradesList" class="signals"></div>
+    </section>
+
+    <section id="practiceView" class="practice hidden" role="tabpanel">
+      <div class="practiceTop">
+        <div class="practiceModeGroup" aria-label="Segundo de práctica">
+          <button id="practice40Btn" class="btn practiceSecBtn" type="button" data-sec="40">⏱️ 40s</button>
+          <button id="practice45Btn" class="btn practiceSecBtn" type="button" data-sec="45">⏱️ 45s</button>
+        </div>
+      </div>
+
+      <div class="practiceStatsGrid">
+        <div class="practiceStatsCard">
+          <div class="practiceStatsHead">
+            <div class="practiceStatsTitle">Sesión</div>
+            <button id="practiceResetSessionBtn" class="practiceResetBtn" type="button" title="Resetear sesión" aria-label="Resetear sesión">↺</button>
+          </div>
+          <div id="practiceSessionStats" class="practiceStatsText">ITM 0 · OTM 0 · PASAR 0 · % 0 · TOTAL 0</div>
+        </div>
+
+        <div class="practiceStatsCard">
+          <div class="practiceStatsHead">
+            <div class="practiceStatsTitle">Histórico</div>
+            <button id="practiceResetAllBtn" class="practiceResetBtn" type="button" title="Resetear histórico" aria-label="Resetear histórico">↺</button>
+          </div>
+          <div id="practiceAllStats" class="practiceStatsText">ITM 0 · OTM 0 · PASAR 0 · % 0 · TOTAL 0</div>
+        </div>
+      </div>
+
+      <div class="practiceStage">
+        <div class="practiceInfoRow">
+          <div id="practiceRoundLabel" class="pill practicePill">Sin ronda</div>
+          <div id="practicePoolLabel" class="pill practicePill">Pool: 0</div>
+        </div>
+
+        <div id="practiceStatus" class="practiceStatus">Usa tu historial de trades para practicar velocidad de análisis.</div>
+
+        <canvas id="practiceCanvas"></canvas>
+
+        <div id="practiceResult" class="practiceResult">Tocá “SIGUIENTE” para cargar una ronda.</div>
+
+        <div id="practiceSimilarPanel" class="practiceSimilarPanel hidden">
+          <div class="practiceSimilarHead">
+            <div class="practiceSimilarTitle">Formaciones similares</div>
+            <div id="practiceSimilarMeta" class="practiceSimilarMeta">Comparación por similitud</div>
+          </div>
+          <div id="practiceSimilarList" class="practiceSimilarList"></div>
+        </div>
+
+        <div class="practiceDecisionRow">
+          <button id="practiceCallBtn" class="btn practiceDecisionBtn practiceCallBtn" type="button">🟢 COMPRA</button>
+          <button id="practicePutBtn" class="btn practiceDecisionBtn practicePutBtn" type="button">🔴 VENTA</button>
+          <button id="practiceSimilarBtn" class="btn practiceReviewBtn hidden" type="button">🔎 Ver similares</button>
+          <button id="practicePassBtn" class="btn practiceDecisionBtn practicePassBtn" type="button">⏭️ PASAR</button>
+        </div>
+      </div>
     </section>
   </main>
 
   <audio id="alertSound" src="alert.mp3" preload="auto"></audio>
 
-  <!-- ✅ Modal gráfico -->
   <div id="chartModal" class="modal hidden" aria-hidden="true">
     <div id="modalCloseBackdrop" class="modalBackdrop"></div>
 
-    <div class="modalCard" role="dialog" aria-modal="true">
+    <div class="modalCard chartModalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modalHeader">
-        <div>
+        <div class="modalHeaderText">
           <div id="modalTitle" class="modalTitle">Gráfico</div>
           <div id="modalSub" class="modalSub">—</div>
         </div>
@@ -73,16 +126,81 @@
       <canvas id="minuteCanvas"></canvas>
 
       <div class="modalFooter">
-        <button id="modalOpenDerivBtn" class="btn btnPrimary" type="button">Abrir Deriv</button>
+        <div id="modalCandleStatus" class="candleStatusBar" role="status">—</div>
+
+        <div class="tradeRow">
+          <button id="modalBuyCallBtn" class="btn" type="button">🟢 COMPRAR</button>
+          <button id="modalBuyPutBtn" class="btn" type="button">🔴 VENDER</button>
+        </div>
+
+        <button id="modalOpenDerivBtn" class="btn btnPrimary openDerivBtn" type="button">Abrir Deriv</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal hidden" aria-hidden="true">
+    <div id="settingsCloseBackdrop" class="modalBackdrop"></div>
+
+    <div class="modalCard modalCardSmall" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modalHeader settingsModalHeader">
+        <div class="modalHeaderText">
+          <div id="settingsTitle" class="modalTitle">Configuración</div>
+          <div class="modalSub">Preferencias, cuenta y token</div>
+        </div>
+        <button id="settingsCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
+      </div>
+
+      <div class="settingsBody">
+        <div class="controls">
+          <button id="tradingAccountBtn" class="btn btnGhost accountBtn" type="button">🟢 Cuenta DEMO</button>
+
+          <button id="soundBtn" class="btn" type="button">🔇 Sonido OFF</button>
+          <button id="vibrateBtn" class="btn" type="button">📳 Vibración ON</button>
+          <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
+          <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
+
+          <div class="btnGroup" aria-label="Segundo de evaluación">
+            <button class="btn evalBtn" type="button" data-sec="35">⏱️ 35s</button>
+            <button class="btn evalBtn" type="button" data-sec="40">⏱️ 40s</button>
+            <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
+          </div>
+          <button id="executionModeBtn" class="btn btnGhost" type="button">↕️ Rise/Fall 1m</button>
+          <button id="autoOpenChartBtn" class="btn btnGhost" type="button">📈 Auto-abrir gráfico OFF</button>
+          <button id="lowPowerBtn" class="btn btnGhost" type="button">🔋 Bajo consumo OFF</button>
+
+          <div class="fieldWrap">
+            <label class="fieldLabel" for="tokenInput">Token DEMO Deriv</label>
+            <input id="tokenInput" class="fieldInput" type="password" placeholder="Pegá tu token DEMO (Read + Trade)" autocomplete="off" />
+            <div class="fieldActions">
+              <button id="saveTokenBtn" class="btn btnGhost" type="button">💾 Guardar</button>
+              <button id="deleteTokenBtn" class="btn btnGhost" type="button">🗑️ Borrar</button>
+            </div>
+          </div>
+
+          <div class="fieldWrap">
+            <label class="fieldLabel" for="stakeInput">Stake (USD) DEMO</label>
+            <input id="stakeInput" class="fieldInput" type="number" min="0.35" step="0.01" placeholder="1.00" inputmode="decimal" />
+            <div class="fieldActions">
+              <button id="saveStakeBtn" class="btn btnGhost" type="button">💾 Guardar</button>
+              <button id="defaultStakeBtn" class="btn btnGhost" type="button">↩️ Default</button>
+            </div>
+          </div>
+
+          <button id="clearHistoryBtn" class="btn btnDanger" type="button">🧹 Vaciar historial</button>
+          <button id="resetCacheBtn" class="btn btnGhost" type="button">🧹 Reset Cache/SW</button>
+        </div>
+
+        <div class="modalFooter settingsFooter">
+          <button id="settingsCloseBtn2" class="btn btnGhost" type="button">Cerrar</button>
+        </div>
       </div>
     </div>
   </div>
 
   <script src="app.js"></script>
-
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js");
+      navigator.serviceWorker.register("./sw.js").catch(function () {});
     }
   </script>
 </body>
