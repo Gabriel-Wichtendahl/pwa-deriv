@@ -1786,6 +1786,30 @@ function makeDerivTraderUrl(symbol) {
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+function formatNextCandleDirectionLabel(direction) {
+  const dir = String(direction || "").toUpperCase().trim();
+  if (dir === "CALL" || dir === "COMPRA" || dir === "BUY" || dir === "UP") return "PROX VELA ALCISTA";
+  if (dir === "PUT" || dir === "VENTA" || dir === "SELL" || dir === "DOWN") return "PROX VELA BAJISTA";
+  return "";
+}
+function getItemNextOutcomeValue(itemOrOutcome) {
+  if (itemOrOutcome && typeof itemOrOutcome === "object") return String(itemOrOutcome.nextOutcome || "").toLowerCase().trim();
+  return String(itemOrOutcome || "").toLowerCase().trim();
+}
+function formatNextCandleOutcomeLabel(itemOrOutcome, showPending = true) {
+  const out = getItemNextOutcomeValue(itemOrOutcome);
+  if (out === "up") return "PROX VELA ALCISTA";
+  if (out === "down") return "PROX VELA BAJISTA";
+  if (out === "flat" || out === "equal" || out === "neutral") return "PROX VELA NEUTRA";
+  return showPending ? "PROX VELA ⏳" : "";
+}
+function getNextCandleOutcomeTextColor(itemOrOutcome, fallback = "rgba(255,255,255,.74)") {
+  const out = getItemNextOutcomeValue(itemOrOutcome);
+  if (out === "up") return "#bbf7d0";
+  if (out === "down") return "#fecaca";
+  if (out === "flat" || out === "equal" || out === "neutral") return "rgba(229,231,235,.88)";
+  return fallback;
+}
 
 function formatCompactModeLabel(mode) {
   const raw = String(mode || "NORMAL").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
@@ -1806,7 +1830,8 @@ function setCompactModalHeader(item, ticksCount = null) {
     const mode = formatCompactModeLabel(item.mode || "NORMAL");
     const n = ticksCount == null ? (Array.isArray(item.ticks) ? item.ticks.length : 0) : Number(ticksCount) || 0;
     const live = modalLive && isItemLiveMinute(item) ? " · LIVE" : "";
-    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${live}`;
+    const nextOutcomeTxt = formatNextCandleOutcomeLabel(item, true);
+    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${nextOutcomeTxt ? " · " + nextOutcomeTxt : ""}${live}`;
   }
 }
 
@@ -6860,12 +6885,13 @@ function updateSignalConfirmationUI() {
   }
   if (signalConfirmHintEl) {
     const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
+    const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · SNR cerca/dentro${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "#bbf7d0";
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · SNR cerca/dentro${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "#fecaca";
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
       signalConfirmHintEl.textContent = score === 0
@@ -8375,7 +8401,11 @@ function setNextOutcome(item, outcome) {
   updateCounter();
   if (modalCurrentItem && String(modalCurrentItem.id || "") === String(item.id || "")) {
     modalCurrentItem.nextOutcome = outcome;
+    setCompactModalHeader(modalCurrentItem);
+    updateSignalConfirmationUI();
+    updateModalCandleStatusUI();
     updateModalNavVoteUI();
+    requestModalDraw(true);
   }
 
   try {
