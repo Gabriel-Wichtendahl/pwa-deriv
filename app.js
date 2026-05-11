@@ -25,10 +25,11 @@
 // ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 57
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
+// ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V8_MODAL_AREA_CERCA_SNR_SIN_TEXTOS_20260511";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
 
 /*
   Mapa rápido de módulos:
@@ -688,7 +689,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V8_MODAL_AREA_CERCA_SNR_SIN_TEXTOS_20260511";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -1780,6 +1781,29 @@ function makeDerivTraderUrl(symbol) {
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
 
+function formatCompactModeLabel(mode) {
+  const raw = String(mode || "NORMAL").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!raw) return "Normal";
+  const lower = raw.toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+function formatCompactScopeLabel() {
+  return String(getTradeScopeText ? getTradeScopeText() : "").replace(/\s+/g, " ").trim();
+}
+function setCompactModalHeader(item, ticksCount = null) {
+  if (!item) return;
+  if (modalTitle) {
+    const scope = formatCompactScopeLabel();
+    modalTitle.textContent = `${item.symbol || "—"} · ${labelDir(item.direction)}${scope ? " · " + scope : ""}`;
+  }
+  if (modalSub) {
+    const mode = formatCompactModeLabel(item.mode || "NORMAL");
+    const n = ticksCount == null ? (Array.isArray(item.ticks) ? item.ticks.length : 0) : Number(ticksCount) || 0;
+    const live = modalLive && isItemLiveMinute(item) ? " · LIVE" : "";
+    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${live}`;
+  }
+}
+
 function getTokenInputEl() {
   return pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
 }
@@ -1851,7 +1875,7 @@ function ensureTradingAccountButton() {
     updateDisciplineLockUI(false);
     if (chartModal && !chartModal.classList.contains("hidden")) {
       if (modalCurrentItem) {
-        modalTitle.textContent = `${modalCurrentItem.symbol} – ${labelDir(modalCurrentItem.direction)} | [${modalCurrentItem.mode || "NORMAL"}] | ${getTradeScopeText()}`;
+        setCompactModalHeader(modalCurrentItem);
       }
       updateModalCandleStatusUI();
       requestModalDraw(true);
@@ -2049,8 +2073,8 @@ function ensureC100Panel() {
   const panel = document.createElement("div");
   panel.id = "c100Panel";
   panel.style.gridColumn = "1 / -1";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(34,211,238,.32)";
   panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.025))";
   panel.style.boxShadow = "0 0 22px rgba(34,211,238,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
@@ -4353,8 +4377,8 @@ function ensurePracticeConfirmationControls() {
   panel.style.width = "100%";
   panel.style.boxSizing = "border-box";
   panel.style.margin = "12px 0 10px 0";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(255,255,255,.14)";
   panel.style.background = "linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035))";
   panel.style.boxShadow = "0 12px 28px rgba(0,0,0,.20), inset 0 0 0 1px rgba(255,255,255,.045)";
@@ -4363,28 +4387,30 @@ function ensurePracticeConfirmationControls() {
   top.style.display = "flex";
   top.style.alignItems = "center";
   top.style.justifyContent = "space-between";
-  top.style.gap = "10px";
-  top.style.marginBottom = "10px";
+  top.style.gap = "8px";
+  top.style.marginBottom = "8px";
 
   const count = document.createElement("div");
   count.id = "practiceConfirmCount";
   count.style.fontWeight = "950";
   count.style.letterSpacing = ".25px";
-  count.style.fontSize = "15px";
-  count.style.padding = "8px 10px";
+  count.style.fontSize = "14px";
+  count.style.padding = "8px 11px";
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(255,255,255,.14)";
   count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "nowrap";
+  count.style.whiteSpace = "normal";
+  count.style.lineHeight = "1.15";
 
   const hint = document.createElement("div");
   hint.id = "practiceConfirmHint";
   hint.style.flex = "1";
   hint.style.textAlign = "right";
-  hint.style.fontSize = "12px";
+  hint.style.fontSize = "11.5px";
   hint.style.fontWeight = "800";
   hint.style.opacity = ".86";
-  hint.style.lineHeight = "1.25";
+  hint.style.lineHeight = "1.18";
+  hint.style.maxWidth = "150px";
 
   top.appendChild(count);
   top.appendChild(hint);
@@ -4392,7 +4418,7 @@ function ensurePracticeConfirmationControls() {
   const row = document.createElement("div");
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
 
   const buyBtn = document.createElement("button");
@@ -4401,8 +4427,8 @@ function ensurePracticeConfirmationControls() {
   buyBtn.className = "btn";
   buyBtn.textContent = "🟢 + COMPRA";
   buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
-  buyBtn.style.minHeight = "52px";
-  buyBtn.style.borderRadius = "16px";
+  buyBtn.style.minHeight = "48px";
+  buyBtn.style.borderRadius = "14px";
   buyBtn.style.fontWeight = "950";
   buyBtn.style.fontSize = "14px";
   buyBtn.style.letterSpacing = ".25px";
@@ -4417,8 +4443,8 @@ function ensurePracticeConfirmationControls() {
   sellBtn.className = "btn";
   sellBtn.textContent = "🔴 + VENTA";
   sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
-  sellBtn.style.minHeight = "52px";
-  sellBtn.style.borderRadius = "16px";
+  sellBtn.style.minHeight = "48px";
+  sellBtn.style.borderRadius = "14px";
   sellBtn.style.fontWeight = "950";
   sellBtn.style.fontSize = "14px";
   sellBtn.style.letterSpacing = ".25px";
@@ -4433,9 +4459,9 @@ function ensurePracticeConfirmationControls() {
   undoBtn.className = "btn btnGhost";
   undoBtn.textContent = "↩️";
   undoBtn.title = "Quitar última confirmación";
-  undoBtn.style.minHeight = "52px";
-  undoBtn.style.minWidth = "58px";
-  undoBtn.style.borderRadius = "16px";
+  undoBtn.style.minHeight = "48px";
+  undoBtn.style.minWidth = "52px";
+  undoBtn.style.borderRadius = "14px";
   undoBtn.style.fontWeight = "950";
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
@@ -4877,7 +4903,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
   ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
   ctx.closePath();
-  ctx.globalAlpha = 0.18;
+  ctx.globalAlpha = 0.14;
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fill();
   ctx.globalAlpha = 1;
@@ -6384,7 +6410,7 @@ function drawDerivLikeChart(canvas, ticks) {
     const yLevel = yOf(level);
     const isSupport = pol.levelType === "support";
     const strokeCol = isSupport ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
-    const fillCol = isSupport ? "rgba(34,197,94,0.14)" : "rgba(248,113,113,0.14)";
+    const fillCol = isSupport ? "rgba(34,197,94,0.10)" : "rgba(248,113,113,0.10)";
     ctx.save();
     if (pol.levelMode === "snr_body" && modalSNRNearArea) {
       const nearLow = Number(modalSNRNearArea.nearLow);
@@ -6400,13 +6426,13 @@ function drawDerivLikeChart(canvas, ticks) {
         const yZoneLow = yOf(zoneLow);
         const yNearLow = yOf(nearLow);
 
-        ctx.fillStyle = "rgba(251,191,36,0.16)";
+        ctx.fillStyle = "rgba(251,191,36,0.115)";
         ctx.fillRect(8, Math.min(yNearHigh, yZoneHigh), w - 16, Math.max(3, Math.abs(yZoneHigh - yNearHigh)));
         ctx.fillRect(8, Math.min(yZoneLow, yNearLow), w - 16, Math.max(3, Math.abs(yNearLow - yZoneLow)));
 
         ctx.save();
         ctx.setLineDash([4, 4]);
-        ctx.strokeStyle = "rgba(251,191,36,0.72)";
+        ctx.strokeStyle = "rgba(251,191,36,0.54)";
         ctx.lineWidth = 1.3;
         ctx.beginPath();
         ctx.moveTo(8, yNearHigh);
@@ -6463,7 +6489,7 @@ function drawDerivLikeChart(canvas, ticks) {
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
   ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
   ctx.closePath();
-  ctx.globalAlpha = 0.18;
+  ctx.globalAlpha = 0.14;
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fill();
   ctx.globalAlpha = 1;
@@ -6482,15 +6508,32 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // último punto
-  const lx = xOf(pts[pts.length - 1].ms);
-  const ly = yOf(pts[pts.length - 1].quote);
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  // precio actual / último punto: guía horizontal suave + punto más visible
+  const lastPoint = pts[pts.length - 1];
+  const lx = xOf(lastPoint.ms);
+  const ly = yOf(lastPoint.quote);
+
+  ctx.save();
+  ctx.setLineDash([3, 5]);
+  ctx.strokeStyle = "rgba(255,255,255,0.30)";
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.moveTo(8, ly);
+  ctx.lineTo(w - 8, ly);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.shadowColor = "rgba(255,255,255,0.32)";
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = "rgba(255,255,255,0.96)";
+  ctx.strokeStyle = "rgba(15,23,42,0.85)";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(lx, ly, 5, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.stroke();
+  ctx.restore();
 }
 
 /* =========================
@@ -6541,7 +6584,7 @@ function ensureModalCandleStatusBar() {
     el.style.borderRadius = "14px";
     el.style.border = "1px solid rgba(255,255,255,.14)";
     el.style.fontWeight = "900";
-    el.style.fontSize = "14px";
+    el.style.fontSize = "13px";
     el.style.letterSpacing = "0.3px";
     el.style.textAlign = "center";
     el.style.transition = "opacity .12s ease, transform .12s ease";
@@ -6623,39 +6666,41 @@ function ensureSignalConfirmationControls() {
   panel.id = "signalConfirmPanel";
   panel.style.width = "100%";
   panel.style.boxSizing = "border-box";
-  panel.style.margin = "0 0 10px 0";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.margin = "0 0 8px 0";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(255,255,255,.14)";
-  panel.style.background = "linear-gradient(180deg, rgba(251,191,36,.105), rgba(255,255,255,.035))";
-  panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.18), inset 0 0 0 1px rgba(251,191,36,.045)";
+  panel.style.background = "linear-gradient(180deg, rgba(251,191,36,.075), rgba(255,255,255,.025))";
+  panel.style.boxShadow = "0 10px 22px rgba(0,0,0,.14), inset 0 0 0 1px rgba(251,191,36,.035)";
 
   const top = document.createElement("div");
   top.style.display = "flex";
   top.style.alignItems = "center";
   top.style.justifyContent = "space-between";
-  top.style.gap = "10px";
-  top.style.marginBottom = "10px";
+  top.style.gap = "8px";
+  top.style.marginBottom = "8px";
 
   const count = document.createElement("div");
   count.id = "signalConfirmCount";
   count.style.fontWeight = "950";
   count.style.letterSpacing = ".25px";
-  count.style.fontSize = "15px";
-  count.style.padding = "8px 10px";
+  count.style.fontSize = "14px";
+  count.style.padding = "8px 11px";
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(255,255,255,.14)";
   count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "nowrap";
+  count.style.whiteSpace = "normal";
+  count.style.lineHeight = "1.15";
 
   const hint = document.createElement("div");
   hint.id = "signalConfirmHint";
   hint.style.flex = "1";
   hint.style.textAlign = "right";
-  hint.style.fontSize = "12px";
+  hint.style.fontSize = "11.5px";
   hint.style.fontWeight = "850";
   hint.style.opacity = ".90";
-  hint.style.lineHeight = "1.25";
+  hint.style.lineHeight = "1.18";
+  hint.style.maxWidth = "150px";
 
   top.appendChild(count);
   top.appendChild(hint);
@@ -6663,7 +6708,7 @@ function ensureSignalConfirmationControls() {
   const row = document.createElement("div");
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
 
   const buyBtn = document.createElement("button");
@@ -6672,8 +6717,8 @@ function ensureSignalConfirmationControls() {
   buyBtn.className = "btn";
   buyBtn.textContent = "🟢 + COMPRA";
   buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
-  buyBtn.style.minHeight = "52px";
-  buyBtn.style.borderRadius = "16px";
+  buyBtn.style.minHeight = "48px";
+  buyBtn.style.borderRadius = "14px";
   buyBtn.style.fontWeight = "950";
   buyBtn.style.fontSize = "14px";
   buyBtn.style.letterSpacing = ".25px";
@@ -6688,8 +6733,8 @@ function ensureSignalConfirmationControls() {
   sellBtn.className = "btn";
   sellBtn.textContent = "🔴 + VENTA";
   sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
-  sellBtn.style.minHeight = "52px";
-  sellBtn.style.borderRadius = "16px";
+  sellBtn.style.minHeight = "48px";
+  sellBtn.style.borderRadius = "14px";
   sellBtn.style.fontWeight = "950";
   sellBtn.style.fontSize = "14px";
   sellBtn.style.letterSpacing = ".25px";
@@ -6704,9 +6749,9 @@ function ensureSignalConfirmationControls() {
   undoBtn.className = "btn btnGhost";
   undoBtn.textContent = "↩️";
   undoBtn.title = "Quitar última confirmación";
-  undoBtn.style.minHeight = "52px";
-  undoBtn.style.minWidth = "58px";
-  undoBtn.style.borderRadius = "16px";
+  undoBtn.style.minHeight = "48px";
+  undoBtn.style.minWidth = "52px";
+  undoBtn.style.borderRadius = "14px";
   undoBtn.style.fontWeight = "950";
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
@@ -6796,26 +6841,31 @@ function updateSignalConfirmationUI() {
   const ok = !!enabled;
 
   if (signalConfirmCountEl) {
-    signalConfirmCountEl.textContent = getSignalConfirmationStatusText(modalCurrentItem);
+    const activePts = enabled === "CALL" ? buyPts : enabled === "PUT" ? sellPts : Math.max(buyPts, sellPts);
+    if (enabled === "CALL" || enabled === "PUT") {
+      signalConfirmCountEl.innerHTML = `${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada <span class="signalConfirmPts">${activePts}/${SIGNAL_CONFIRM_MIN} pts</span>`;
+    } else {
+      signalConfirmCountEl.textContent = getSignalConfirmationStatusText(modalCurrentItem);
+    }
     signalConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
-    signalConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.52)" : enabled === "PUT" ? "rgba(239,68,68,.52)" : "rgba(251,191,36,.28)";
-    signalConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.18)" : enabled === "PUT" ? "rgba(127,29,29,.22)" : "rgba(0,0,0,.16)";
-    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(255,255,255,.10)" : "none";
+    signalConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.46)" : enabled === "PUT" ? "rgba(239,68,68,.46)" : "rgba(251,191,36,.24)";
+    signalConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.16)" : enabled === "PUT" ? "rgba(127,29,29,.19)" : "rgba(0,0,0,.13)";
+    signalConfirmCountEl.style.boxShadow = ok ? "0 0 14px rgba(255,255,255,.07)" : "none";
   }
   if (signalConfirmHintEl) {
-    const scope = getTradeScopeText ? getTradeScopeText() : "";
+    const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `Solo COMPRA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s si está en/cerca del SNR${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · SNR cerca/dentro${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = "#bbf7d0";
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `Solo VENTA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s si está en/cerca del SNR${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · SNR cerca/dentro${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = "#fecaca";
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
       signalConfirmHintEl.textContent = score === 0
-        ? `Mínimo ${SIGNAL_CONFIRM_MIN} netas para un lado${scope ? " · " + scope : ""}`
-        : `Neto ${score > 0 ? "+" : ""}${score}${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "rgba(255,255,255,.72)";
+        ? `Mínimo ${SIGNAL_CONFIRM_MIN} netas`
+        : `Neto ${score > 0 ? "+" : ""}${score}`;
+      signalConfirmHintEl.style.color = "rgba(255,255,255,.68)";
     }
   }
 
@@ -7154,12 +7204,11 @@ function updateModalCandleStatusUI() {
   const candleClosed = !isOpen;
 
   if (locked) {
-    const polarityTxtLocked = formatGiroPolarityLevel(modalCurrentItem);
-    bar.textContent = `🔒 DEMO BLOQUEADA | ${getDisciplineLockReasonText()} | ${getDisciplineCounterText()} | falta ${fmtRemaining(remain)}${polarityTxtLocked ? " | " + polarityTxtLocked : ""}${getC100ModalTag()}`;
+    bar.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     bar.style.color = "#fff";
-    bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.92), rgba(69,10,10,.92))";
-    bar.style.borderColor = "rgba(248,113,113,.72)";
-    bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.16) inset, 0 0 22px rgba(239,68,68,.24)";
+    bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.78), rgba(69,10,10,.78))";
+    bar.style.borderColor = "rgba(248,113,113,.50)";
+    bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.10) inset, 0 0 12px rgba(239,68,68,.12)";
   } else if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
     const autoTxt = shouldUseAutoHighLowExecution()
@@ -7175,17 +7224,18 @@ function updateModalCandleStatusUI() {
       else if (giroState.bodyDir < 0) giroTxt = " | SOLO GIRO: habilitada COMPRA";
       else giroTxt = " | SOLO GIRO: esperando definición";
     }
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s | ${getSignalConfirmationStatusText(modalCurrentItem)} | AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${autoTxt}${giroTxt}${polarityTxt ? " | " + polarityTxt : ""}${getC100ModalTag()}`;
+    const enabled = getSignalEnabledTradeSide(modalCurrentItem);
+    const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
+    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     bar.style.color = "#dcfce7";
-    bar.style.background = "rgba(22,163,74,.18)";
-    bar.style.borderColor = "rgba(34,197,94,.34)";
-    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
+    bar.style.background = "rgba(22,163,74,.14)";
+    bar.style.borderColor = "rgba(34,197,94,.28)";
+    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.05) inset";
   } else {
-    const polarityTxtClosed = formatGiroPolarityLevel(modalCurrentItem);
-    bar.textContent = `${getTradeScopeText()} | VELA CERRADA${polarityTxtClosed ? " | " + polarityTxtClosed : ""}${getC100ModalTag()}`;
-    bar.style.color = "rgba(229,231,235,.95)";
-    bar.style.background = "rgba(107,114,128,.20)";
-    bar.style.borderColor = "rgba(156,163,175,.28)";
+    bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
+    bar.style.color = "rgba(229,231,235,.92)";
+    bar.style.background = "rgba(107,114,128,.16)";
+    bar.style.borderColor = "rgba(156,163,175,.22)";
     bar.style.boxShadow = "none";
   }
 
@@ -7235,19 +7285,8 @@ function requestModalDraw(force = false) {
 
     drawDerivLikeChart(minuteCanvas, ticks);
 
-    if (modalSub) {
-      const n = Array.isArray(ticks) ? ticks.length : 0;
-      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
-      const dTag = disciplineTagText();
-      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
-      const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      const confTag = ` | CONF:${getSignalConfirmationStatusText(it)} | AUTO:${SIGNAL_AUTO_ENTRY_SEC}s`;
-      const manualTag = "";
-      const c100Tag = getC100ModalTag();
-      const polarityTag = formatGiroPolarityLevel(it);
-      modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${confTag}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}${manualTag}${polarityTag ? " | " + polarityTag : ""}${c100Tag}`;
-    }
+    const n = Array.isArray(ticks) ? ticks.length : 0;
+    setCompactModalHeader(it, n);
 
     updateModalCandleStatusUI();
   });
@@ -7425,9 +7464,9 @@ function ensureGiroAprendizajeControls() {
   panel.id = "giroAprendizajePanel";
   panel.style.width = "100%";
   panel.style.boxSizing = "border-box";
-  panel.style.margin = "0 0 10px 0";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.margin = "0 0 8px 0";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(34,211,238,.24)";
   panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.030))";
   panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.16), inset 0 0 0 1px rgba(34,211,238,.035)";
@@ -7436,28 +7475,30 @@ function ensureGiroAprendizajeControls() {
   top.style.display = "flex";
   top.style.alignItems = "center";
   top.style.justifyContent = "space-between";
-  top.style.gap = "10px";
-  top.style.marginBottom = "10px";
+  top.style.gap = "8px";
+  top.style.marginBottom = "8px";
 
   const count = document.createElement("div");
   count.id = "giroAprendizajeCount";
   count.style.fontWeight = "950";
   count.style.letterSpacing = ".25px";
   count.style.fontSize = "14px";
-  count.style.padding = "8px 10px";
+  count.style.padding = "8px 11px";
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(34,211,238,.24)";
   count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "nowrap";
+  count.style.whiteSpace = "normal";
+  count.style.lineHeight = "1.15";
 
   const hint = document.createElement("div");
   hint.id = "giroAprendizajeHint";
   hint.style.flex = "1";
   hint.style.textAlign = "right";
-  hint.style.fontSize = "12px";
+  hint.style.fontSize = "11.5px";
   hint.style.fontWeight = "850";
   hint.style.opacity = ".88";
-  hint.style.lineHeight = "1.25";
+  hint.style.lineHeight = "1.18";
+  hint.style.maxWidth = "150px";
 
   top.appendChild(count);
   top.appendChild(hint);
@@ -7574,7 +7615,7 @@ function applyModalTradeButtonsLayout() {
 
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0,1fr)";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
   row.style.justifyContent = "stretch";
   row.style.width = "100%";
@@ -7730,15 +7771,15 @@ function ensureDisciplineBanner() {
     el.style.bottom = "14px";
     el.style.zIndex = "99999";
     el.style.display = "none";
-    el.style.padding = "13px 14px";
-    el.style.borderRadius = "18px";
+    el.style.padding = "10px 12px";
+    el.style.borderRadius = "16px";
     el.style.border = "1px solid rgba(248,113,113,.72)";
     el.style.background = "linear-gradient(180deg, rgba(127,29,29,.96), rgba(69,10,10,.96))";
     el.style.color = "#fff";
-    el.style.boxShadow = "0 18px 44px rgba(0,0,0,.55), 0 0 28px rgba(239,68,68,.28)";
+    el.style.boxShadow = "0 12px 30px rgba(0,0,0,.42), 0 0 16px rgba(239,68,68,.16)";
     el.style.fontWeight = "950";
-    el.style.fontSize = "14px";
-    el.style.lineHeight = "1.25";
+    el.style.fontSize = "13px";
+    el.style.lineHeight = "1.2";
     el.style.textAlign = "center";
     el.style.letterSpacing = ".15px";
     el.style.backdropFilter = "blur(10px)";
@@ -7758,15 +7799,21 @@ function updateDisciplineBannerUI() {
     return;
   }
 
+  const modalOpen = chartModal && !chartModal.classList.contains("hidden");
+  if (modalOpen) {
+    el.style.display = "none";
+    return;
+  }
+
   const locked = isTradeLockedNow();
   const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
 
   if (locked) {
     el.style.display = "block";
     el.style.borderColor = "rgba(248,113,113,.82)";
-    el.style.background = "linear-gradient(180deg, rgba(127,29,29,.98), rgba(69,10,10,.98))";
-    el.style.boxShadow = "0 18px 44px rgba(0,0,0,.55), 0 0 28px rgba(239,68,68,.34)";
-    el.innerHTML = `🔒 <b>DEMO BLOQUEADA POR DISCIPLINA</b><br>${getDisciplineLockReasonText()} · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
+    el.style.background = "linear-gradient(180deg, rgba(127,29,29,.92), rgba(69,10,10,.92))";
+    el.style.boxShadow = "0 12px 30px rgba(0,0,0,.42), 0 0 16px rgba(239,68,68,.16)";
+    el.innerHTML = `🔒 <b>DEMO bloqueada</b> · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     return;
   }
 
@@ -7897,7 +7944,7 @@ function openChartModal(item) {
   modalCurrentItem = item;
   if (!chartModal || !modalTitle || !modalSub) return;
 
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}] | ${getTradeScopeText()}`;
+  setCompactModalHeader(item);
 
   modalLive = isItemLiveMinute(item);
   updateModalLiveUI();
@@ -7927,6 +7974,8 @@ function closeChartModal() {
   updateModalLiveUI();
   if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
   setSignalConfirmationControlsVisible(false);
+  setGiroAprendizajeControlsVisible(false);
+  updateDisciplineLockUI(false);
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
