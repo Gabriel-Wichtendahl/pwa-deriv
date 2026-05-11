@@ -1,7 +1,8 @@
 // app.js — BASE V3 CONFIG RESTAURADA: estética/funciones originales preservadas, motores de señal desactivados
-// ✅ Base limpia: conserva configuración, trades, práctica, modal, IC2, capturas y UI; no genera señales automáticas
+// ✅ Base V5 SNR: exporta likes/dislikes de Señales y guarda/exporta niveles SNR
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
 // ✅ Disciplina por cuenta: DEMO mantiene bloqueo; REAL queda libre para pruebas
+// ✅ V6: agrega botón “Limpiar marcas export” sin borrar historial ni niveles SNR
 // ✅ FIX Disciplina: feedback visual (candado + contador visible) + auto-unlock con reset
 // ✅ FIX INTERNET: contratos “pendientes” persistentes -> si se corta internet, al reconectar vuelve a suscribirse y cuenta ITM/OTM igual
 // ✅ FIX NUEVO: si proposal_open_contract no manda is_sold, fallback poll y cuenta igual
@@ -26,7 +27,7 @@
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V3_CONFIG_RESTAURADA_SIN_MOTORES_20260510";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V7_AUTO57_SNR_CERCA_20260511";
 
 /*
   Mapa rápido de módulos:
@@ -676,6 +677,7 @@ const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
 const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
+const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
@@ -685,7 +687,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V3_CONFIG_RESTAURADA_SIN_MOTORES_20260510";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V7_AUTO57_SNR_CERCA_20260511";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -694,36 +696,35 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
 function normalizeSignalMode(mode) {
-  // BASE V3: se neutralizan modos viejos en estado activo.
-  // No se generan señales hasta agregar un nuevo motor encima de esta base.
-  return MODE_NORMAL;
+  // BASE V4: único motor activo. Cualquier modo viejo guardado se fuerza a SNR.
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 function isGiroFamilyMode(mode) {
-  return false;
+  return mode === MODE_SNR_SEGUNDO_TOQUE || mode === MODE_GIRO_NIVEL || mode === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_NORMAL);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
-  return MODE_NORMAL;
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 function saveAnalysisMode(mode) {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_NORMAL);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return "⚪ Base limpia · sin motor de señales";
+  return "🎯 SNR 2º toque";
 }
 function nextSignalMode(mode) {
-  return MODE_NORMAL;
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -1336,6 +1337,10 @@ function upsertTradeJournalFromSignal(it) {
     trade: { ...(it.trade || {}) },
     study_capture_id: it?.trade?.study_capture_id || getStudyCaptureIdFromItem(it),
 
+    // nivel SNR / polaridad detectado en la señal
+    giroPolaridad: getSignalLevelMeta(it),
+    snrLevel: getSignalLevelMeta(it),
+
     // capa manual antiengaño
     manualGiro: normalizeManualGiroState(it.manualGiro),
 
@@ -1515,6 +1520,12 @@ let manualGiroButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
 const SIGNAL_AUTO_ENTRY_MS = 57000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
+// V7: aunque haya 4 puntos manuales, la entrada real solo se permite
+// si al segundo 57 el precio está dentro de la zona SNR o muy cerca.
+const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
+const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
+const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
+const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0.35;
 
 let executionMode = EXECUTION_MODE_RISE_FALL;
 const executionPlanCache = new Map();
@@ -5544,6 +5555,9 @@ function buildExportPayloadVoted() {
       comment: it.comment || "",
       nextOutcome: it.nextOutcome || "",
       trade: it.trade || null,
+      signalAutoEntry: it.signalAutoEntry || null,
+      giroPolaridad: getSignalLevelMeta(it),
+      snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
       minuteComplete: !!it.minuteComplete,
       ticks: Array.isArray(it.ticks) ? it.ticks : [],
@@ -5564,12 +5578,12 @@ async function exportVotedSignals() {
       const studyJson = JSON.stringify(studyPayload, null, 2);
       try {
         await navigator.clipboard.writeText(studyJson);
-        alert(`✅ Exportado estudio al portapapeles: ${studyPayload.count_marked_trades} trades marcados + ${studyPayload.count_practice_selected} claras + ${studyPayload.count_giro_aprendizaje_examples} aprendizaje.`);
+        alert(`✅ Exportado estudio al portapapeles: ${studyPayload.count_marked_signals} señales + ${studyPayload.count_marked_trades} trades + ${studyPayload.count_practice_selected} claras + ${studyPayload.count_giro_aprendizaje_examples} aprendizaje.`);
         return;
       } catch {
         const ts = new Date().toISOString().replaceAll(":", "-");
         downloadTextFile(`deriv-trades-feedback-estudio-${ts}.json`, studyJson);
-        alert(`📥 Descargado estudio: ${studyPayload.count_marked_trades} trades marcados + ${studyPayload.count_practice_selected} claras + ${studyPayload.count_giro_aprendizaje_examples} aprendizaje.`);
+        alert(`📥 Descargado estudio: ${studyPayload.count_marked_signals} señales + ${studyPayload.count_marked_trades} trades + ${studyPayload.count_practice_selected} claras + ${studyPayload.count_giro_aprendizaje_examples} aprendizaje.`);
         return;
       }
     }
@@ -5610,6 +5624,7 @@ function buildExportPayloadTrades() {
   const selectedPractice = getPracticeExportSavedList();
   const journalForExport = getTradesJournalExportList();
   const markedTrades = (journalForExport || []).filter((x) => x && (x.vote || x.comment));
+  const markedSignals = (history || []).filter((x) => x && (x.vote || x.comment));
   const aprendizaje = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples : [];
   const aprendizajeStats = getGiroAprendizajeStats();
   return {
@@ -5617,11 +5632,33 @@ function buildExportPayloadTrades() {
     export_scope: "trades_feedback_practice_clear_and_giro_aprendizaje",
     count_trades_total: (journalForExport || []).length,
     count_marked_trades: markedTrades.length,
+    count_marked_signals: markedSignals.length,
     count_practice_selected: selectedPractice.length,
     count_clear_formations: selectedPractice.length,
     count_giro_aprendizaje_examples: aprendizaje.length,
     giro_aprendizaje_stats: aprendizajeStats,
-    description: "Incluye trades marcados desde la pestaña Trades, formaciones claras guardadas desde Modo Práctica y ejemplos enseñados para Giro + Aprendizaje.",
+    description: "Incluye señales marcadas con like/dislike, trades marcados, niveles SNR detectados, formaciones claras de Práctica y ejemplos de Giro + Aprendizaje.",
+
+    // Señales marcadas desde la pestaña Señales. Incluye el nivel SNR si la señal lo trae.
+    signals_marked: markedSignals.map((it) => ({
+      id: it.id || "",
+      minute: it.minute || 0,
+      time: it.time || "",
+      symbol: it.symbol || "",
+      direction: it.direction || "",
+      mode: it.mode || MODE_SNR_SEGUNDO_TOQUE,
+      mode_version: it.mode_version || getModeVersion(it.mode || MODE_SNR_SEGUNDO_TOQUE) || "",
+      vote: it.vote || "",
+      comment: it.comment || "",
+      nextOutcome: it.nextOutcome || "",
+      minuteComplete: !!it.minuteComplete,
+      trade: it.trade || null,
+      signalAutoEntry: it.signalAutoEntry || null,
+      giroPolaridad: getSignalLevelMeta(it),
+      snrLevel: getSignalLevelMeta(it),
+      manualGiro: normalizeManualGiroState(it.manualGiro),
+      ticks: Array.isArray(it.ticks) ? it.ticks : [],
+    })),
 
     // Operaciones marcadas desde la pestaña Trades para mostrar qué formaciones buscás/evitás.
     trades_marked: markedTrades.map((x) => ({
@@ -5641,6 +5678,8 @@ function buildExportPayloadTrades() {
       nextOutcome: x.nextOutcome || "",
       minuteComplete: !!x.minuteComplete,
       trade: x.trade || null,
+      giroPolaridad: getSignalLevelMeta(x),
+      snrLevel: getSignalLevelMeta(x),
       manualGiro: normalizeManualGiroState(x.manualGiro),
       ticks: Array.isArray(x.ticks) ? x.ticks : [],
     })),
@@ -5662,14 +5701,14 @@ async function exportTradesJournal() {
   const payload = buildExportPayloadTrades();
   const json = JSON.stringify(payload, null, 2);
 
-  if (!payload.count_marked_trades && !payload.count_practice_selected && !payload.count_giro_aprendizaje_examples) {
-    alert("No hay trades marcados, formaciones claras ni ejemplos de Giro + Aprendizaje para exportar todavía.");
+  if (!payload.count_marked_signals && !payload.count_marked_trades && !payload.count_practice_selected && !payload.count_giro_aprendizaje_examples) {
+    alert("No hay señales/trades marcados, formaciones claras ni ejemplos de Giro + Aprendizaje para exportar todavía.");
     return;
   }
 
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado al portapapeles: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras + ${payload.count_giro_aprendizaje_examples} aprendizaje. Pegalo acá en el chat.`);
+    alert(`✅ Exportado al portapapeles: ${payload.count_marked_signals} señales + ${payload.count_marked_trades} trades + ${payload.count_practice_selected} claras + ${payload.count_giro_aprendizaje_examples} aprendizaje. Pegalo acá en el chat.`);
     return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
@@ -5702,13 +5741,67 @@ function updateExportTradesButtonUI() {
   if (!btn) return;
   const claras = getPracticeExportSavedList().length;
   try { syncTradesFeedbackFromOpenRows(); } catch {}
+  const senales = (history || []).filter((x) => x && (x.vote || x.comment)).length;
   const marcados = getTradesJournalExportList().filter((x) => x && (x.vote || x.comment)).length;
   const aprendizaje = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples.length : 0;
-  const total = claras + marcados + aprendizaje;
-  btn.textContent = total ? `📤 Exportar estudio (${marcados}T/${claras}C/${aprendizaje}A)` : "📤 Exportar estudio";
+  const total = senales + claras + marcados + aprendizaje;
+  btn.textContent = total ? `📤 Exportar estudio (${senales}S/${marcados}T/${claras}C/${aprendizaje}A)` : "📤 Exportar estudio";
   btn.title = total
-    ? `Exporta ${marcados} trade${marcados === 1 ? " marcado" : "s marcados"}, ${claras} formación${claras === 1 ? " clara" : "es claras"} y ${aprendizaje} ejemplo${aprendizaje === 1 ? "" : "s"} de Giro + Aprendizaje.`
-    : "Exporta trades marcados, formaciones claras y ejemplos de Giro + Aprendizaje.";
+    ? `Exporta ${senales} señal${senales === 1 ? " marcada" : "es marcadas"}, ${marcados} trade${marcados === 1 ? " marcado" : "s marcados"}, ${claras} formación${claras === 1 ? " clara" : "es claras"} y ${aprendizaje} ejemplo${aprendizaje === 1 ? "" : "s"} de Giro + Aprendizaje.`
+    : "Exporta señales marcadas, trades marcados, niveles SNR, formaciones claras y ejemplos de Giro + Aprendizaje.";
+}
+
+function getExportMarksCount() {
+  const signals = (history || []).filter((x) => x && (x.vote || x.comment)).length;
+  const trades = (tradesJournal || []).filter((x) => x && (x.vote || x.comment || x.feedback_at || x.feedback_source)).length;
+  return { signals, trades, total: signals + trades };
+}
+function clearExportMarksOnly() {
+  const counts = getExportMarksCount();
+  if (!counts.total) {
+    toast("No hay marcas de export para limpiar", 1500);
+    return;
+  }
+  const msg = `¿Limpiar marcas de export?\n\nSeñales marcadas: ${counts.signals}\nTrades marcados: ${counts.trades}\n\nNo borra señales, trades, niveles SNR, capturas, práctica ni aprendizaje. Solo quita 👍/👎 y comentarios.`;
+  if (!confirm(msg)) return;
+
+  let changedHistory = false;
+  for (const it of history || []) {
+    if (!it) continue;
+    if (it.vote || it.comment) {
+      it.vote = "";
+      it.comment = "";
+      changedHistory = true;
+    }
+  }
+  if (changedHistory) saveHistory(history);
+
+  let changedTrades = false;
+  for (const tr of tradesJournal || []) {
+    if (!tr) continue;
+    if (tr.vote || tr.comment || tr.feedback_at || tr.feedback_source) {
+      tr.vote = "";
+      tr.comment = "";
+      tr.feedback_at = 0;
+      tr.feedback_source = "";
+      changedTrades = true;
+    }
+  }
+  if (changedTrades) saveTradesJournal(tradesJournal);
+
+  try { renderHistory(); } catch {}
+  try { renderTradesView(); } catch {}
+  try { updateExportTradesButtonUI(); } catch {}
+  toast(`🧹 Marcas de export limpiadas: ${counts.signals} señales + ${counts.trades} trades`, 2400);
+}
+function updateClearExportMarksButtonUI() {
+  const btn = document.getElementById("clearExportMarksBtn");
+  if (!btn) return;
+  const counts = getExportMarksCount();
+  btn.textContent = counts.total ? `🧹 Limpiar marcas export (${counts.signals}S/${counts.trades}T)` : "🧹 Limpiar marcas export";
+  btn.title = counts.total
+    ? `Quita 👍/👎 y comentarios de ${counts.signals} señal(es) y ${counts.trades} trade(s), sin borrar datos.`
+    : "Quita likes/dislikes y comentarios de Señales/Trades sin borrar historial.";
 }
 
 /* =========================
@@ -5727,6 +5820,19 @@ function ensureSplitClearButtons() {
   const expT = ensureExportTradesButton();
   if (expT) expT.onclick = exportTradesJournal;
   updateExportTradesButtonUI();
+
+  let clearExportMarksBtn = document.getElementById("clearExportMarksBtn");
+  if (!clearExportMarksBtn) {
+    clearExportMarksBtn = document.createElement("button");
+    clearExportMarksBtn.id = "clearExportMarksBtn";
+    clearExportMarksBtn.type = "button";
+    clearExportMarksBtn.className = "btn btnGhost";
+    clearExportMarksBtn.textContent = "🧹 Limpiar marcas export";
+    clearExportMarksBtn.title = "Quita likes/dislikes y comentarios de Señales/Trades sin borrar historial";
+    host.appendChild(clearExportMarksBtn);
+  }
+  clearExportMarksBtn.onclick = clearExportMarksOnly;
+  updateClearExportMarksButtonUI();
 
   let clearPracticeExportBtn = document.getElementById("clearPracticeExportBtn");
   if (!clearPracticeExportBtn) {
@@ -5795,6 +5901,7 @@ function repairSettingsMenuBindings() {
   try { initTokenAndStakeUI(); } catch {}
   try { ensureSplitClearButtons(); } catch {}
   try { updateExportTradesButtonUI(); } catch {}
+  try { updateClearExportMarksButtonUI(); } catch {}
 }
 
 function getSettingsMenuSelfCheckItems() {
@@ -5810,6 +5917,7 @@ function getSettingsMenuSelfCheckItems() {
     ["Auto-abrir gráfico", !!pickEl("autoOpenChartBtn") && typeof pickEl("autoOpenChartBtn").onclick === "function"],
     ["Reset Cache/SW", !!pickEl("resetCacheBtn") && typeof pickEl("resetCacheBtn").onclick === "function"],
     ["Exportar estudio", !!pickEl("exportTradesBtn") && typeof pickEl("exportTradesBtn").onclick === "function"],
+    ["Limpiar marcas export", !!pickEl("clearExportMarksBtn") && typeof pickEl("clearExportMarksBtn").onclick === "function"],
     ["Borrar guardadas práctica", !!pickEl("clearPracticeExportBtn") && typeof pickEl("clearPracticeExportBtn").onclick === "function"],
     ["Borrar aprendizaje", !!pickEl("clearGiroAprendizajeBtn") && typeof pickEl("clearGiroAprendizajeBtn").onclick === "function"],
     ["Borrar Trades", !!pickEl("clearTradesConfigBtn") && typeof pickEl("clearTradesConfigBtn").onclick === "function"],
@@ -6611,10 +6719,10 @@ function updateSignalConfirmationUI() {
   if (signalConfirmHintEl) {
     const scope = getTradeScopeText ? getTradeScopeText() : "";
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `Solo COMPRA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `Solo COMPRA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s si está en/cerca del SNR${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = "#bbf7d0";
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `Solo VENTA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `Solo VENTA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s si está en/cerca del SNR${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = "#fecaca";
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
@@ -6677,6 +6785,136 @@ function assertSignalMinimumConfirmations(side = null, item = modalCurrentItem) 
     throw new Error(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${label}`);
   }
 }
+function getSignalSNREntryMeta(item) {
+  const meta = getSignalLevelMeta(item);
+  if (!meta || typeof meta !== "object") return null;
+  if (String(meta.levelMode || "") !== "snr_body") return null;
+  const level = Number(meta.level);
+  if (!Number.isFinite(level)) return null;
+  return meta;
+}
+function getSignalLiveTicksForEntryGate(item) {
+  const minute = Number(item?.minute);
+  const symbol = String(item?.symbol || "");
+  const live = Number.isFinite(minute) && symbol && Array.isArray(minuteData?.[minute]?.[symbol])
+    ? minuteData[minute][symbol]
+    : [];
+  const saved = Array.isArray(item?.ticks) ? item.ticks : [];
+  // Si la señal sigue viva, minuteData tiene los ticks hasta el segundo actual.
+  // Si no, usamos los ticks guardados/hidratados.
+  return live.length >= saved.length ? live.slice() : saved.slice();
+}
+function getSignalPriceAtEntryCheckMs(item, checkMs = SIGNAL_AUTO_SNR_CHECK_MS) {
+  const ticks = getSignalLiveTicksForEntryGate(item)
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (ticks.length) {
+    const q = Number(getPriceAtMs(ticks, checkMs));
+    if (Number.isFinite(q)) return q;
+  }
+  const live = Number(lastQuoteBySymbol?.[item?.symbol]);
+  return Number.isFinite(live) ? live : NaN;
+}
+function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHECK_MS) {
+  const meta = getSignalSNREntryMeta(item);
+  if (!meta) {
+    return { ok: false, pending: false, reason: "sin_snr", message: "La señal no trae zona SNR válida." };
+  }
+
+  const level = Number(meta.level);
+  let zoneLow = Number(meta.zoneLow);
+  let zoneHigh = Number(meta.zoneHigh);
+  const bodyLow = Number(meta.bodyZoneLow);
+  const bodyHigh = Number(meta.bodyZoneHigh);
+  const tolerance = Number(meta.tolerance);
+  const zoneSize = Number(meta.zone);
+
+  // Preferimos zoneLow/zoneHigh porque ya incluyen la zona chica + tolerancia.
+  // Si falta, reconstruimos una franja razonable desde bodyZone o level.
+  if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
+    if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
+      zoneLow = Math.min(bodyLow, bodyHigh);
+      zoneHigh = Math.max(bodyLow, bodyHigh);
+    } else {
+      const fallback = Math.max(
+        Number.isFinite(tolerance) ? tolerance * 0.50 : 0,
+        Number.isFinite(zoneSize) ? zoneSize * 0.50 : 0,
+        Math.abs(level) * 0.000001,
+        1e-9
+      );
+      zoneLow = level - fallback;
+      zoneHigh = level + fallback;
+    }
+  }
+  zoneLow = Math.min(zoneLow, zoneHigh);
+  zoneHigh = Math.max(zoneLow, zoneHigh);
+  const zoneWidth = Math.max(0, zoneHigh - zoneLow);
+
+  const nearBuffer = Math.max(
+    Number.isFinite(tolerance) ? tolerance * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
+    zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
+    Number.isFinite(zoneSize) ? zoneSize * 0.25 : 0,
+    Math.abs(level) * 0.000001,
+    1e-9
+  );
+
+  const price = getSignalPriceAtEntryCheckMs(item, checkMs);
+  if (!Number.isFinite(price)) {
+    return { ok: false, pending: true, reason: "sin_precio_57", message: "Todavía no hay precio suficiente para validar el SNR en 57s." };
+  }
+
+  const distance = price < zoneLow ? zoneLow - price : price > zoneHigh ? price - zoneHigh : 0;
+  const inside = distance <= 0;
+  const near = !inside && distance <= nearBuffer;
+  const ok = inside || near;
+  const relation = inside ? "inside" : price < zoneLow ? (near ? "near_below" : "far_below") : (near ? "near_above" : "far_above");
+  return {
+    ok,
+    pending: false,
+    reason: ok ? (inside ? "inside_snr_zone" : "near_snr_zone") : "far_from_snr_zone",
+    side: normalizeSignalConfirmationSide(side) || "",
+    check_ms: checkMs,
+    check_sec: Math.round(checkMs / 1000),
+    price,
+    level,
+    zoneLow,
+    zoneHigh,
+    bodyZoneLow: Number.isFinite(bodyLow) ? bodyLow : null,
+    bodyZoneHigh: Number.isFinite(bodyHigh) ? bodyHigh : null,
+    tolerance: Number.isFinite(tolerance) ? tolerance : null,
+    nearBuffer,
+    distance,
+    relation,
+    levelType: String(meta.levelType || ""),
+    originalType: String(meta.originalType || ""),
+    currentRole: String(meta.currentRole || ""),
+    message: ok
+      ? `Precio 57s ${price.toFixed(6)} dentro/cerca del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)}`
+      : `Precio 57s ${price.toFixed(6)} lejos del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)} (dist ${distance.toFixed(6)})`,
+  };
+}
+function formatSignalSNREntryGate(gate) {
+  if (!gate || typeof gate !== "object") return "SNR no validado";
+  if (gate.pending) return gate.message || "SNR pendiente";
+  if (!Number.isFinite(Number(gate.price))) return gate.message || "SNR sin precio";
+  const status = gate.ok ? (gate.reason === "inside_snr_zone" ? "dentro" : "cerca") : "lejos";
+  return `57s ${status}: ${Number(gate.price).toFixed(6)} | zona ${Number(gate.zoneLow).toFixed(6)}-${Number(gate.zoneHigh).toFixed(6)}`;
+}
+function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
+  if (!SIGNAL_AUTO_SNR_GATE_ENABLED || !item) return null;
+  const meta = getSignalSNREntryMeta(item);
+  if (!meta) return null;
+  const ms = getSignalConfirmationMs(item);
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    throw new Error(`La entrada SNR se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
+  }
+  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+  if (gate.pending) throw new Error(gate.message || "SNR pendiente de precio");
+  if (!gate.ok) throw new Error(`Precio lejos del SNR: ${formatSignalSNREntryGate(gate)}`);
+  return gate;
+}
+
 function trySignalAutoEntryAt57(reason = "AUTO_57", itemOverride = null) {
   const item = itemOverride || modalCurrentItem;
   if (!item || !isTradeEntryOpen(item)) return false;
@@ -6690,7 +6928,29 @@ function trySignalAutoEntryAt57(reason = "AUTO_57", itemOverride = null) {
   const side = getSignalEnabledTradeSide(item);
   if (!side) return false;
 
+  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+  if (gate.pending) return false;
   const label = side === "CALL" ? "COMPRA" : "VENTA";
+
+  if (SIGNAL_AUTO_SNR_GATE_ENABLED && !gate.ok) {
+    item.signalAutoEntry = {
+      type: "AUTO_57_REAL",
+      attempted: true,
+      status: "blocked_snr_distance",
+      side,
+      ms,
+      sec: Math.round(ms / 1000),
+      reason: String(reason || "AUTO_57"),
+      at: Date.now(),
+      confirmation_status: getSignalConfirmationStatusText(item),
+      snr_entry_gate: gate,
+    };
+    saveHistory(history);
+    if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
+    toast(`⛔ AUTO ${SIGNAL_AUTO_ENTRY_SEC}s cancelado: precio lejos del SNR`, 2600);
+    return true;
+  }
+
   item.signalAutoEntry = {
     type: "AUTO_57_REAL",
     attempted: true,
@@ -6701,6 +6961,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_57", itemOverride = null) {
     reason: String(reason || "AUTO_57"),
     at: Date.now(),
     confirmation_status: getSignalConfirmationStatusText(item),
+    snr_entry_gate: gate,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
@@ -6968,6 +7229,42 @@ function calculateManualGiroState(state) {
 }
 function normalizeManualGiroState(state) {
   return calculateManualGiroState(state && typeof state === "object" ? state : createDefaultManualGiroState());
+}
+function normalizeSNRLevelMeta(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  const n = (v, fallback = null) => {
+    const x = Number(v);
+    return Number.isFinite(x) ? x : fallback;
+  };
+  const s = (v) => String(v || "");
+  return {
+    level: n(meta.level),
+    levelMode: s(meta.levelMode),
+    levelType: s(meta.levelType),
+    originalType: s(meta.originalType),
+    currentRole: s(meta.currentRole),
+    direction: s(meta.direction),
+    zoneLow: n(meta.zoneLow),
+    zoneHigh: n(meta.zoneHigh),
+    bodyZoneLow: n(meta.bodyZoneLow),
+    bodyZoneHigh: n(meta.bodyZoneHigh),
+    tolerance: n(meta.tolerance),
+    zone: n(meta.zone),
+    touches: n(meta.touches, 0),
+    brokenAt: n(meta.brokenAt, 0),
+    breakDirection: s(meta.breakDirection),
+    firstTouchMs: n(meta.firstTouchMs),
+    secondTouchMs: n(meta.secondTouchMs),
+    firstRejection: n(meta.firstRejection),
+    rejectionHasForce: !!meta.rejectionHasForce,
+    secondTouchDistance: n(meta.secondTouchDistance),
+    stage: s(meta.stage),
+    status: s(meta.status),
+    logic: s(meta.logic),
+  };
+}
+function getSignalLevelMeta(item) {
+  return normalizeSNRLevelMeta(item?.giroPolaridad || item?.polarityLevel || item?.giroNivelMeta || item?.levelMeta || null);
 }
 function getManualGiroStatusText(status) {
   const s = String(status || "NONE");
@@ -7895,6 +8192,8 @@ function getTradesJournalExportList() {
       nextOutcome: it.nextOutcome || "",
       minuteComplete: !!it.minuteComplete,
       trade: it.trade || null,
+      giroPolaridad: getSignalLevelMeta(it),
+      snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
       ticks: Array.isArray(it.ticks) ? it.ticks : [],
     });
@@ -8469,6 +8768,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   assertCanTrade();
   assertEntryWindowOpen(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
+  // V7: con SNR, aunque haya 4 puntos, la operación solo se permite
+  // si en el segundo 57 el precio está dentro de la zona SNR o muy cerca.
+  const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
   assertC100CanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
@@ -8484,6 +8786,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     let res = null;
     let contractLabel = side;
     let tradeExtra = { side, symbol, stake };
+    if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
 
     if (shouldUseAutoHighLowExecution() && itemCtx?.id) {
       ensureSignalAutoPrecalc(itemCtx);
@@ -11994,11 +12297,77 @@ function detectDebilidadPattern(candidate) {
 }
 
 function evaluateMinute(minute) {
-  // BASE V3 limpia:
-  // conserva conexión, ticks, gráficos, configuración, trades, práctica, capturas y modal,
-  // pero NO ejecuta ningún motor de señales viejo.
-  // Este es el único corte de señal: no llama a addSignal() ni a analizadores antiguos.
   if (areSignalsPaused()) return true;
+
+  const data = minuteData[minute];
+  if (!data) return true;
+
+  const candidates = [];
+  let readySymbols = 0;
+
+  for (const sym of SYMBOLS) {
+    const ticks = data[sym] || [];
+    if (ticks.length >= MIN_TICKS) readySymbols++;
+    if (ticks.length < MIN_TICKS) continue;
+
+    const prices = ticks.map((t) => Number(t.quote)).filter(Number.isFinite);
+    if (prices.length < MIN_TICKS) continue;
+
+    const move = prices[prices.length - 1] - prices[0];
+    let vol = 0;
+    for (let i = 1; i < prices.length; i++) vol += Math.abs(prices[i] - prices[i - 1]);
+    vol = vol / Math.max(1, prices.length - 1);
+
+    candidates.push({
+      symbol: sym,
+      move,
+      score: Math.abs(move) / (vol || 1e-9),
+      ticks,
+      vol,
+    });
+  }
+
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return true;
+
+  const matches = [];
+  for (const c of candidates) {
+    const match = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
+    if (!match) continue;
+
+    matches.push({
+      ...c,
+      direction: match.direction,
+      quality: match.quality,
+      giroNivelScore: Math.round(match.quality),
+      giroNivelPoints: match.points,
+      giroPolaridadScore: Math.round(match.quality),
+      giroPolaridadPoints: match.points,
+      giroPolaridadMeta: match.meta,
+      matchSource: "SNR_SEGUNDO_TOQUE",
+    });
+  }
+
+  if (!matches.length) return true;
+  matches.sort((a, b) =>
+    b.quality - a.quality ||
+    b.giroNivelPoints - a.giroNivelPoints ||
+    b.giroNivelScore - a.giroNivelScore
+  );
+
+  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
+
+  const bestMatch = matches[0];
+  addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+    mode: MODE_SNR_SEGUNDO_TOQUE,
+    mode_version: GIRO_NIVEL_LOGIC_VERSION,
+    giroNivelScore: bestMatch.giroNivelScore,
+    giroNivelPoints: bestMatch.giroNivelPoints,
+    giroPolaridadScore: bestMatch.giroPolaridadScore,
+    giroPolaridadPoints: bestMatch.giroPolaridadPoints,
+    giroPolaridad: bestMatch.giroPolaridadMeta,
+    aiLocalMatchSource: bestMatch.matchSource,
+    signalConfirmations: [],
+  });
   return true;
 }
 
