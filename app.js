@@ -21,21 +21,24 @@
 // ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 60 si ya hay 4 confirmaciones netas para COMPRA/VENTA
-// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 60
+// ✅ NUEVO AUTO BACKTEST V3: no muestra señales si el cierre 60 real no está dentro del SNR
+// ✅ NUEVO AUTO BACKTEST V3: la señal nace solo con S-R-S/R-S-R + cierre confirmado por ticks_history
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V1_20260511";
-const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V1";
+const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT_20260511";
+const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT";
 const AUTO_BACKTEST_DEMO_ONLY = true;
 const AUTO_BACKTEST_FORCE_DEMO_ACCOUNT = true;
 const AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE = false;
 const AUTO_BACKTEST_MAX_CONSECUTIVE_MOMENTUM = 3;
 const AUTO_BACKTEST_MOMENTUM_LOOKBACK = 8;
+const AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE = true;
+const AUTO_BACKTEST_REQUIRE_SNR_ROLE_SEQUENCE = true;
+const AUTO_BACKTEST_SNR_ROLE_LOOKBACK = 160;
 
 /*
   Mapa rápido de módulos:
@@ -58,7 +61,7 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
-const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v1";
+const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v3";
 const MAX_HISTORY = 200;
 
 const MIN_TICKS = 3;
@@ -70,7 +73,7 @@ const HISTORY_TIMEOUT_MS = 7000;
 /* =========================
    Trades Journal (estudio)
 ========================= */
-const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v1";
+const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v3";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
@@ -181,7 +184,7 @@ let disciplineBannerEl = null; // banner visible para bloqueo/contador DEMO
 /* =========================
    Link contract_id -> signalId
 ========================= */
-const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v1"; // contract_id -> signalId
+const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v3"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
 
 function loadTradeLinks() {
@@ -1729,6 +1732,9 @@ let history = loadHistory();
 migrateHistoryModesToGiro();
 
 let minuteData = {};
+// AUTO BACKTEST V3: marca qué minutos/símbolos fueron rehidratados con ticks_history.
+// Si no hay cierre real confirmado, no se crea señal.
+let fullMinuteHydrated = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -7231,6 +7237,14 @@ function getMomentumRunBeforeSignal(item, lookback = AUTO_BACKTEST_MOMENTUM_LOOK
 function isAutoBacktestGiroMode(item) {
   return isGiroFamilyMode(normalizeSignalMode(item?.mode || ""));
 }
+function hasAutoBacktestSNRRoleSequenceMeta(item) {
+  const meta = getSignalSNREntryMeta(item);
+  if (!meta) return false;
+  const pattern = String(meta.rolePattern || "").toUpperCase().trim();
+  if (pattern === "S-R-S" || pattern === "R-S-R") return true;
+  const seq = String(meta.roleSequence || "").toUpperCase().trim();
+  return seq.includes("S-R-S") || seq.includes("R-S-R");
+}
 function isAutoBacktestEntryWindowOpen(item) {
   if (!item) return false;
   const nowMinute = currentServerMinute();
@@ -7263,6 +7277,14 @@ function buildAutoBacktestDecision(item, reason = "AUTO_60") {
   }
   if (!isAutoBacktestGiroMode(item)) {
     return { ok: false, status: "blocked_not_giro", message: "No es señal GIRO/SNR" };
+  }
+  if (AUTO_BACKTEST_REQUIRE_SNR_ROLE_SEQUENCE && !hasAutoBacktestSNRRoleSequenceMeta(item)) {
+    return {
+      ok: false,
+      status: "blocked_snr_without_role_sequence",
+      message: "SNR inválido: falta secuencia mínima S-R-S o R-S-R",
+      snr_meta: getSignalSNREntryMeta(item) || null,
+    };
   }
   if (!isAutoBacktestEntryWindowOpen(item)) {
     return { ok: false, status: "blocked_not_close_window", message: "La entrada se evalúa al cierre 60s del minuto anterior" };
@@ -7346,7 +7368,9 @@ function trySignalAutoEntryAt57(reason = "AUTO_60", itemOverride = null) {
       ? "⛔ AUTO 60 cancelado: cierre fuera del SNR"
       : decision.status === "blocked_momentum_gt_3"
         ? "⛔ AUTO 60 cancelado: momentum > 3 velas"
-        : `⛔ AUTO 60 cancelado: ${decision.message || decision.status || "regla no cumplida"}`;
+        : decision.status === "blocked_snr_without_role_sequence"
+          ? "⛔ AUTO 60 cancelado: SNR sin S-R-S/R-S-R"
+          : `⛔ AUTO 60 cancelado: ${decision.message || decision.status || "regla no cumplida"}`;
     toast(msg, 2400);
     return true;
   }
@@ -9031,15 +9055,28 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
+  let changed = false;
+  const clean = [];
   for (const it of history || []) {
+    if (!it) { changed = true; continue; }
     if (!it.mode) it.mode = "NORMAL";
     else {
       const rawMode = String(it.mode || "");
       const normalizedFamily = normalizeSignalMode(rawMode);
       it.mode = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(rawMode) ? normalizedFamily : rawMode.toUpperCase();
     }
+
+    // AUTO BACKTEST V3: esta rama no muestra señales heredadas/tempranas.
+    // Solo se listan señales nacidas al cierre 60 confirmado.
+    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !it.auto_backtest_signal_created_at_close) {
+      changed = true;
+      continue;
+    }
+    clean.push(it);
   }
-  saveHistory(history);
+  if (clean.length !== history.length) changed = true;
+  history = clean;
+  if (changed) saveHistory(history);
 
   updateCounter();
 
@@ -9732,6 +9769,60 @@ async function fetchFullMinuteTicks(symbol, minute) {
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
+
+function markFullMinuteHydrated(minute, symbol, value = true) {
+  const m = Number(minute);
+  const sym = String(symbol || "");
+  if (!Number.isFinite(m) || !sym) return;
+  fullMinuteHydrated[m] ||= {};
+  fullMinuteHydrated[m][sym] = !!value;
+}
+function isFullMinuteHydrated(minute, symbol) {
+  const m = Number(minute);
+  const sym = String(symbol || "");
+  return !!(Number.isFinite(m) && sym && fullMinuteHydrated?.[m]?.[sym]);
+}
+function updateCandleOCFromFullTicks(symbol, minute, ticks) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (!pts.length || !symbol || !Number.isFinite(Number(minute))) return false;
+
+  const prices = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (!prices.length) return false;
+
+  candleOC[minute] ||= {};
+  candleOC[minute][symbol] = {
+    open: Number(getPriceAtMs(pts, 0)),
+    high: Math.max(...prices),
+    low: Math.min(...prices),
+    close: Number(getPriceAtMs(pts, 60000)),
+  };
+  syncCurrentCandleToPolarity(symbol, minute);
+  return true;
+}
+async function hydrateClosedMinuteDataFromDerivHistory(minute) {
+  if (!ws || ws.readyState !== 1) return false;
+  const m = Number(minute);
+  if (!Number.isFinite(m)) return false;
+
+  minuteData[m] ||= {};
+  fullMinuteHydrated[m] ||= {};
+  let any = false;
+
+  const results = await Promise.allSettled(SYMBOLS.map(async (symbol) => {
+    const full = await fetchFullMinuteTicks(symbol, m);
+    if (!full || full.length < 2) return false;
+    minuteData[m][symbol] = full.slice();
+    updateCandleOCFromFullTicks(symbol, m, full);
+    markFullMinuteHydrated(m, symbol, true);
+    return true;
+  }));
+
+  for (const r of results) if (r.status === "fulfilled" && r.value) any = true;
+  return any;
+}
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter((it) => it.minute === minute);
   if (!items.length) return false;
@@ -9964,11 +10055,22 @@ function finalizeMinute(minute) {
     } catch {}
   })();
 
-  // --- resto: igual que antes ---
+  // --- AUTO BACKTEST V3: señal + trade nacen recién con cierre 60 REAL confirmado ---
   (async () => {
+    // Primero traemos ticks_history del minuto cerrado.
+    // Esto evita mostrar señales cuando el último tick vivo parecía estar en SNR,
+    // pero el cierre real de 60s terminó afuera.
+    const closedMinuteHydrated = await hydrateClosedMinuteDataFromDerivHistory(minute);
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
-    let changed = ticksChanged;
+    // No hay señal temprana. En el cierre se analiza solo con símbolos hidratados:
+    // 1) cierre 60s dentro de zona SNR,
+    // 2) SNR con secuencia soporte-resistencia-soporte o viceversa.
+    try {
+      if (!areSignalsPaused() && closedMinuteHydrated) evaluateMinute(minute);
+    } catch {}
+
+    let changed = !!ticksChanged || !!closedMinuteHydrated;
     for (const it of history) {
       if (it.minute === minute && !it.minuteComplete) {
         it.minuteComplete = true;
@@ -9978,7 +10080,7 @@ function finalizeMinute(minute) {
     }
     if (changed) saveHistory(history);
 
-    // AUTO BACKTEST: cuando la vela cierra, recién ahí se evalúa cierre 60s dentro del SNR.
+    // AUTO BACKTEST: después de crear la señal al cierre, intenta operar DEMO automáticamente.
     scanSignalAutoEntriesAt57(minute);
 
     if (modalCurrentItem && modalCurrentItem.minute === minute) {
@@ -10073,11 +10175,12 @@ function onTick(tick) {
   // ✅ FIX AUTO 60: también revisar en cada tick, aunque el modal no haya redibujado.
   scanSignalAutoEntriesAt57();
 
-  if (!areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+  // AUTO BACKTEST V3:
+  // No se generan señales a 35/40/45s.
+  // La señal se evalúa recién cuando la vela cerró y finalizeMinute(minute) confirma el cierre 60s.
+  if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
     lastEvaluatedMinute = minute;
     const ok = evaluateMinute(minute);
-
-    // En GIRO / GIRO FLEX no hay retry: evalúan solo en el segundo elegido
     if (!ok && signalMode === MODE_NORMAL) scheduleRetry(minute);
   }
 }
@@ -10090,7 +10193,7 @@ function scheduleRetry(minute) {
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + GIRO v2)
+   Technical rules + Evaluation (NORMAL + GIRO v3)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -11316,6 +11419,261 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
   }
   return out;
 }
+
+
+/* =========================
+   AUTO BACKTEST V3 — SNR alternado sin doble rechazo
+   Regla del usuario:
+   - No se busca segundo rechazo ni formación temprana.
+   - La señal nace al cierre 60s si el cierre queda dentro de la zona SNR.
+   - El SNR debe haber actuado mínimo como S-R-S o R-S-R.
+========================= */
+function clusterAutoBacktestSNRZones(rawLevels, tolerance) {
+  const sorted = (rawLevels || [])
+    .filter((x) => x && Number.isFinite(Number(x.price)))
+    .map((x) => ({ ...x, price: Number(x.price), minute: Number(x.minute || 0) }))
+    .sort((a, b) => Number(a.price) - Number(b.price));
+
+  const clusters = [];
+  for (const lvl of sorted) {
+    const price = Number(lvl.price);
+    const last = clusters[clusters.length - 1];
+    if (!last || Math.abs(price - last.price) > tolerance) {
+      clusters.push({
+        price,
+        touches: 1,
+        minutes: [Number(lvl.minute || 0)],
+        firstMinute: Number(lvl.minute || 0),
+        lastTouchMinute: Number(lvl.minute || 0),
+        zoneLow: price,
+        zoneHigh: price,
+        rawPrices: [price],
+      });
+    } else {
+      const total = Number(last.touches || 0) + 1;
+      last.price = (Number(last.price) * Number(last.touches || 1) + price) / total;
+      last.touches = total;
+      last.minutes.push(Number(lvl.minute || 0));
+      last.firstMinute = Math.min(Number(last.firstMinute || 0), Number(lvl.minute || 0));
+      last.lastTouchMinute = Math.max(Number(last.lastTouchMinute || 0), Number(lvl.minute || 0));
+      last.zoneLow = Math.min(Number(last.zoneLow), price);
+      last.zoneHigh = Math.max(Number(last.zoneHigh), price);
+      last.rawPrices.push(price);
+    }
+  }
+  return clusters.sort((a, b) => Number(a.price) - Number(b.price));
+}
+function getAutoBacktestSNRRoleForCandle(candle, zoneLow, zoneHigh, tolerance) {
+  const open = Number(candle?.open);
+  const close = Number(candle?.close);
+  const bodyLow = Math.min(open, close);
+  const bodyHigh = Math.max(open, close);
+  if (![open, close, bodyLow, bodyHigh].every(Number.isFinite)) return "";
+
+  const tol = Math.max(Number(tolerance || 0), 1e-12);
+  const touchedByBody = bodyHigh >= zoneLow - tol * 0.20 && bodyLow <= zoneHigh + tol * 0.20;
+  if (!touchedByBody) return "";
+
+  const center = (Number(zoneLow) + Number(zoneHigh)) / 2;
+
+  // Soporte: el precio termina arriba de la zona que testeó.
+  if (close >= zoneHigh + tol * 0.05) return "support";
+  // Resistencia: el precio termina abajo de la zona que testeó.
+  if (close <= zoneLow - tol * 0.05) return "resistance";
+
+  // Si el cierre quedó dentro de la zona, se usa desde qué lado llegó o el centro.
+  if (open >= zoneHigh + tol * 0.05) return "support";
+  if (open <= zoneLow - tol * 0.05) return "resistance";
+  return close >= center ? "support" : "resistance";
+}
+function buildAutoBacktestSNRRoleEvents(candles, zoneLow, zoneHigh, tolerance) {
+  const events = [];
+  const sorted = (candles || [])
+    .filter((c) => c && Number.isFinite(Number(c.minute)))
+    .slice()
+    .sort((a, b) => Number(a.minute) - Number(b.minute));
+
+  for (const candle of sorted) {
+    const role = getAutoBacktestSNRRoleForCandle(candle, zoneLow, zoneHigh, tolerance);
+    if (!role) continue;
+    const minute = Number(candle.minute || 0);
+    const prev = events[events.length - 1];
+
+    // Comprime repeticiones consecutivas del mismo rol. No cuenta 3 soportes seguidos como S-R-S.
+    if (prev && prev.role === role) {
+      prev.count = Number(prev.count || 1) + 1;
+      prev.lastMinute = minute;
+      prev.minutes ||= [];
+      prev.minutes.push(minute);
+    } else {
+      events.push({
+        role,
+        minute,
+        firstMinute: minute,
+        lastMinute: minute,
+        count: 1,
+        minutes: [minute],
+      });
+    }
+  }
+  return events;
+}
+function findAutoBacktestSNRAlternatingPattern(roleEvents) {
+  const events = Array.isArray(roleEvents) ? roleEvents : [];
+  for (let i = 0; i <= events.length - 3; i++) {
+    const a = events[i]?.role;
+    const b = events[i + 1]?.role;
+    const c = events[i + 2]?.role;
+    if (a === "support" && b === "resistance" && c === "support") {
+      return { ok: true, pattern: "S-R-S", startIndex: i, events: events.slice(i, i + 3) };
+    }
+    if (a === "resistance" && b === "support" && c === "resistance") {
+      return { ok: true, pattern: "R-S-R", startIndex: i, events: events.slice(i, i + 3) };
+    }
+  }
+  return { ok: false, pattern: "", startIndex: -1, events: [] };
+}
+function formatAutoBacktestSNRRole(role) {
+  return role === "support" ? "S" : role === "resistance" ? "R" : "?";
+}
+function getAutoBacktestSNRRoleSequenceText(roleEvents) {
+  return (Array.isArray(roleEvents) ? roleEvents : []).map((ev) => formatAutoBacktestSNRRole(ev?.role)).join("-");
+}
+function getAutoBacktestSNRAlternatingLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
+  const candles = getGiroPolarityCandles(symbol, minute, AUTO_BACKTEST_SNR_ROLE_LOOKBACK);
+  if (!candles.length) return [];
+
+  const tol = getGiroSNRBodyTolerance(symbol, currentRange);
+  const raw = [];
+  for (const c of candles) {
+    const open = Number(c.open);
+    const close = Number(c.close);
+    if (![open, close].every(Number.isFinite)) continue;
+    const bodyHigh = Math.max(open, close);
+    const bodyLow = Math.min(open, close);
+    raw.push({ price: bodyHigh, minute: Number(c.minute) });
+    raw.push({ price: bodyLow, minute: Number(c.minute) });
+  }
+
+  const clusters = clusterAutoBacktestSNRZones(raw, tol * 1.10);
+  const out = [];
+  for (const cluster of clusters) {
+    if (Number(cluster.touches || 0) < 3) continue;
+
+    const zoneLow = Number(cluster.zoneLow) - tol * 0.20;
+    const zoneHigh = Number(cluster.zoneHigh) + tol * 0.20;
+    if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh) || zoneHigh <= zoneLow) continue;
+
+    const roleEvents = buildAutoBacktestSNRRoleEvents(candles, zoneLow, zoneHigh, tol);
+    const pattern = findAutoBacktestSNRAlternatingPattern(roleEvents);
+    if (!pattern.ok) continue;
+
+    const lastRole = roleEvents[roleEvents.length - 1]?.role || "";
+    const firstRole = roleEvents[0]?.role || "";
+    out.push({
+      ...cluster,
+      levelMode: "snr_body",
+      level: Number(cluster.price),
+      price: Number(cluster.price),
+      tolerance: tol,
+      zoneLow,
+      zoneHigh,
+      bodyZoneLow: Number(cluster.zoneLow),
+      bodyZoneHigh: Number(cluster.zoneHigh),
+      roleEvents,
+      rolePattern: pattern.pattern,
+      roleSequence: getAutoBacktestSNRRoleSequenceText(roleEvents),
+      rolePatternEvents: pattern.events,
+      originalType: firstRole || "mixed",
+      currentRole: lastRole || "mixed",
+      levelType: lastRole || "mixed",
+      touches: roleEvents.reduce((acc, ev) => acc + Number(ev.count || 1), 0),
+      roleTurns: roleEvents.length,
+    });
+  }
+  return out.sort((a, b) =>
+    Number(b.roleTurns || 0) - Number(a.roleTurns || 0) ||
+    Number(b.touches || 0) - Number(a.touches || 0) ||
+    Math.abs(Number(a.level || 0)) - Math.abs(Number(b.level || 0))
+  );
+}
+function analyzeAutoBacktestSNRCloseCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 2) return null;
+
+  const pts = ensureTicksWithBoundary(ticks, 60000);
+  const p0 = Number(getPriceAtMs(pts, 0));
+  const p60 = Number(getPriceAtMs(pts, 60000));
+  if (!Number.isFinite(p0) || !Number.isFinite(p60)) return null;
+
+  const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (qs.length < 2) return null;
+  const high = Math.max(...qs);
+  const low = Math.min(...qs);
+  const range = Math.max(high - low, Math.abs(p60) * 0.000001, 1e-9);
+
+  const direction = p60 > p0 ? "PUT" : p60 < p0 ? "CALL" : "";
+  if (!direction) return null;
+  const formationSide = p60 > p0 ? "ALCISTA" : "BAJISTA";
+
+  const levels = getAutoBacktestSNRAlternatingLevels(candidate.symbol, minute, range, rules);
+  if (!levels.length) return null;
+
+  const matches = [];
+  for (const lvl of levels) {
+    const zoneLow = Number(lvl.zoneLow);
+    const zoneHigh = Number(lvl.zoneHigh);
+    if (![zoneLow, zoneHigh].every(Number.isFinite)) continue;
+    if (p60 < zoneLow || p60 > zoneHigh) continue;
+
+    const zoneWidth = Math.max(zoneHigh - zoneLow, 1e-9);
+    const center = (zoneLow + zoneHigh) / 2;
+    const closeInsideScore = Math.max(0, 1 - Math.abs(p60 - center) / Math.max(zoneWidth / 2, 1e-9));
+    const roleTurns = Number(lvl.roleTurns || 0);
+    const touches = Number(lvl.touches || 0);
+    const quality = 70 + Math.min(6, roleTurns) * 8 + Math.min(8, touches) * 3 + closeInsideScore * 18;
+
+    matches.push({
+      direction,
+      quality,
+      points: Math.round(quality / 12),
+      meta: {
+        level: Number(lvl.level),
+        levelMode: "snr_body",
+        originalType: lvl.originalType,
+        currentRole: lvl.currentRole,
+        levelType: lvl.levelType,
+        direction,
+        tolerance: Number(lvl.tolerance),
+        zone: zoneWidth,
+        zoneLow,
+        zoneHigh,
+        bodyZoneLow: Number(lvl.bodyZoneLow),
+        bodyZoneHigh: Number(lvl.bodyZoneHigh),
+        touches,
+        roleTurns,
+        rolePattern: lvl.rolePattern,
+        roleSequence: lvl.roleSequence,
+        roleEvents: lvl.roleEvents,
+        close60: p60,
+        open0: p0,
+        formationSide,
+        high,
+        low,
+        points: Math.round(quality / 12),
+        stage: "auto_60_snr_roles_close_inside",
+        movementFilter: "snr_roles_srs_or_rsr_close_inside",
+        status: `AUTO 60: cierre dentro del SNR + secuencia ${lvl.rolePattern}`,
+        logic: "SNR alternado mínimo S-R-S/R-S-R; sin doble rechazo; sin señal temprana 35/40/45.",
+      },
+    });
+  }
+
+  if (!matches.length) return null;
+  matches.sort((a, b) => b.quality - a.quality || Number(b.meta?.roleTurns || 0) - Number(a.meta?.roleTurns || 0));
+  return matches[0];
+}
+
 function sumAbsDeltaZ(arr, fromIdx, toIdx) {
   let acc = 0;
   const a = Math.max(0, Number(fromIdx || 0));
@@ -12971,6 +13329,10 @@ function evaluateMinute(minute) {
   let readySymbols = 0;
 
   for (const sym of SYMBOLS) {
+    // AUTO BACKTEST V3: no se permite crear señal con ticks vivos/incompletos.
+    // El símbolo tiene que estar confirmado por ticks_history del minuto cerrado.
+    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !isFullMinuteHydrated(minute, sym)) continue;
+
     const ticks = data[sym] || [];
     if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
@@ -12989,6 +13351,7 @@ function evaluateMinute(minute) {
       score: Math.abs(move) / (vol || 1e-9),
       ticks,
       vol,
+      close_confirmed_by_ticks_history: true,
     });
   }
 
@@ -12996,8 +13359,12 @@ function evaluateMinute(minute) {
 
   const matches = [];
   for (const c of candidates) {
-    const match = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
+    const match = analyzeAutoBacktestSNRCloseCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
     if (!match) continue;
+
+    const pseudoItemForMomentum = { minute, symbol: c.symbol, ticks: c.ticks, direction: match.direction, giroPolaridad: match.meta, mode: MODE_SNR_SEGUNDO_TOQUE };
+    const momentum = getMomentumRunBeforeSignal(pseudoItemForMomentum);
+    if (momentum.blocked) continue;
 
     matches.push({
       ...c,
@@ -13008,7 +13375,8 @@ function evaluateMinute(minute) {
       giroPolaridadScore: Math.round(match.quality),
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
-      matchSource: "SNR_SEGUNDO_TOQUE",
+      matchSource: "AUTO_60_SNR_ROLES_CLOSE_INSIDE",
+      autoBacktestMomentum: momentum,
     });
   }
 
@@ -13019,6 +13387,7 @@ function evaluateMinute(minute) {
     b.giroNivelScore - a.giroNivelScore
   );
 
+  // Si dos símbolos quedan casi empatados, no fuerza una operación dudosa.
   if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
 
   const bestMatch = matches[0];
@@ -13032,6 +13401,10 @@ function evaluateMinute(minute) {
     giroPolaridad: bestMatch.giroPolaridadMeta,
     aiLocalMatchSource: bestMatch.matchSource,
     signalConfirmations: [],
+    signalAutoEntry: null,
+    auto_backtest_signal_created_at_close: true,
+    close_confirmed_by_ticks_history: true,
+    autoBacktestMomentum: bestMatch.autoBacktestMomentum || null,
   });
   return true;
 }
@@ -13041,6 +13414,38 @@ function evaluateMinute(minute) {
 ========================= */
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
+}
+function validateAutoBacktestSignalCreatedAtClose(item) {
+  if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE) return true;
+  if (!item?.auto_backtest_signal_created_at_close) return false;
+  if (!item?.close_confirmed_by_ticks_history) return false;
+  if (!isFullMinuteHydrated(item.minute, item.symbol)) return false;
+
+  const meta = getSignalSNREntryMeta(item);
+  if (!meta) return false;
+
+  const pattern = String(meta.rolePattern || "").toUpperCase().trim();
+  const sequence = String(meta.roleSequence || "").toUpperCase().trim();
+  if (!(pattern === "S-R-S" || pattern === "R-S-R" || sequence.includes("S-R-S") || sequence.includes("R-S-R"))) return false;
+
+  const zoneLow = Number(meta.zoneLow);
+  const zoneHigh = Number(meta.zoneHigh);
+  if (![zoneLow, zoneHigh].every(Number.isFinite)) return false;
+  const zl = Math.min(zoneLow, zoneHigh);
+  const zh = Math.max(zoneLow, zoneHigh);
+
+  let close60 = Number(meta.close60);
+  if (!Number.isFinite(close60)) close60 = Number(getSignalClosePriceAt60(item));
+  if (!Number.isFinite(close60)) return false;
+  if (close60 < zl || close60 > zh) return false;
+
+  const candle = getAutoBacktestCandleDirection(item);
+  if (!candle.side || candle.side !== String(item.direction || "").toUpperCase()) return false;
+
+  const momentum = getMomentumRunBeforeSignal(item);
+  if (momentum.blocked) return false;
+
+  return true;
 }
 function addSignal(minute, symbol, direction, ticks, extra = {}) {
   if (areSignalsPaused()) return;
@@ -13067,6 +13472,10 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   };
 
   item.manualGiro = normalizeManualGiroState(item.manualGiro);
+
+  // AUTO BACKTEST V3: si no pasa el cierre 60 real dentro del SNR,
+  // directamente no se guarda ni se muestra la señal.
+  if (!validateAutoBacktestSignalCreatedAtClose(item)) return;
 
   if (history.some((x) => x.id === item.id)) return;
 

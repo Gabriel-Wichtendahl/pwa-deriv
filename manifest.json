@@ -1,6 +1,6 @@
 {
-  "name": "Deriv Signals Giro Auto Backtest Demo",
-  "short_name": "GiroAuto60",
+  "name": "Deriv Signals Giro Auto Backtest Demo V3",
+  "short_name": "GiroAutoV3",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#020617",
