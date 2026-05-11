@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals GIRO AUTO BACKTEST DEMO V1 */
 "use strict";
 
-const CACHE = "deriv-assets-base-v7-auto57-snr-cerca";
+const CACHE = "deriv-assets-giro-auto-backtest-demo-v1";
 
 const ASSETS = [
   "./",
@@ -18,7 +18,7 @@ const ASSETS = [
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    await cache.addAll(ASSETS);
+    await Promise.all(ASSETS.map((asset) => cache.add(asset).catch(() => null)));
   })());
   self.skipWaiting();
 });

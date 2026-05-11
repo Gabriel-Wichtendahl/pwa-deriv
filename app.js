@@ -21,13 +21,21 @@
 // ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 57 si ya hay 4 confirmaciones netas para COMPRA/VENTA
-// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 57
+// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 60 si ya hay 4 confirmaciones netas para COMPRA/VENTA
+// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 60
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
+// ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
+// ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V7_AUTO57_SNR_CERCA_20260511";
+const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V1_20260511";
+const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V1";
+const AUTO_BACKTEST_DEMO_ONLY = true;
+const AUTO_BACKTEST_FORCE_DEMO_ACCOUNT = true;
+const AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE = false;
+const AUTO_BACKTEST_MAX_CONSECUTIVE_MOMENTUM = 3;
+const AUTO_BACKTEST_MOMENTUM_LOOKBACK = 8;
 
 /*
   Mapa rápido de módulos:
@@ -50,7 +58,7 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
-const STORE_KEY = "derivSignalsHistory_v2";
+const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v1";
 const MAX_HISTORY = 200;
 
 const MIN_TICKS = 3;
@@ -62,20 +70,20 @@ const HISTORY_TIMEOUT_MS = 7000;
 /* =========================
    Trades Journal (estudio)
 ========================= */
-const TRADES_STORE_KEY = "derivTradesJournal_v1";
+const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v1";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
    Capturas de estudio
 ========================= */
-const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
+const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_giroAutoBacktest_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
 
 /* =========================
    Trade account config
 ========================= */
-const ACCOUNT_MODE_KEY = "derivTradingAccountMode_v1";
+const ACCOUNT_MODE_KEY = "derivTradingAccountMode_giroAutoBacktest_v1";
 const ACCOUNT_MODE_DEMO = "demo";
 const ACCOUNT_MODE_REAL = "real";
 const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
@@ -94,7 +102,7 @@ const DEFAULT_CURRENCY = "USD";
    - Nivel 2: stake + ganancia real del nivel 1
    - Después del nivel 2, gane o pierda, vuelve al nivel 1
 ========================= */
-const C100_STATE_KEY = "interesCompuesto2_state_v1";
+const C100_STATE_KEY = "interesCompuesto2_state_giroAutoBacktest_v1";
 const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no informa ganancia
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
@@ -105,17 +113,17 @@ const C100_LEVELS = [
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
-const EXECUTION_MODE_KEY = "executionMode_v1";
+const EXECUTION_MODE_KEY = "executionMode_giroAutoBacktest_v1";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v4_fixed_by_symbol";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_giroAutoBacktest_v1_fixed_by_symbol";
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
-const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_v1";
+const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_giroAutoBacktest_v1";
 const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
-const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_v1";
+const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_giroAutoBacktest_v1";
 const HIGHLOW_DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
 // Límite de pago total para High/Low: payout potencial / stake.
@@ -144,7 +152,7 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
 /* =========================
    Auto-open chart config
 ========================= */
-const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
+const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_giroAutoBacktest_v1";
 let autoOpenChartOnSignal = false;
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
@@ -153,11 +161,11 @@ let c100PanelEl = null;
 /* =========================
    Disciplina
 ========================= */
-const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_v1";
-const DISCIPLINE_WINS_KEY = "discipline_wins_v1";
-const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
-const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
-const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
+const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_giroAutoBacktest_v1";
+const DISCIPLINE_WINS_KEY = "discipline_wins_giroAutoBacktest_v1";
+const DISCIPLINE_LOSSES_KEY = "discipline_losses_giroAutoBacktest_v1";
+const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_giroAutoBacktest_v1";
+const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_giroAutoBacktest_v1";
 
 const DISCIPLINE_MAX_WINS = 3;
 const DISCIPLINE_MAX_LOSSES = 2;
@@ -173,7 +181,7 @@ let disciplineBannerEl = null; // banner visible para bloqueo/contador DEMO
 /* =========================
    Link contract_id -> signalId
 ========================= */
-const TRADE_LINKS_KEY = "trade_links_v1"; // contract_id -> signalId
+const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v1"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
 
 function loadTradeLinks() {
@@ -329,7 +337,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
   ctx.fillText("Captura de estudio PWA", 52, 48);
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.76)";
-  ctx.fillText(`${item?.symbol || "—"} · ${dir === "CALL" ? "COMPRA / CALL" : "VENTA / PUT"} · Entrada 57s · ${item?.time || ""}`, 52, 72);
+  ctx.fillText(`${item?.symbol || "—"} · ${dir === "CALL" ? "COMPRA / CALL" : "VENTA / PUT"} · Entrada 60s · ${item?.time || ""}`, 52, 72);
   studyDrawPill(ctx, W - 255, 32, 205, 38, `Resultado: ${result}`, tradeColor);
 
   const x0 = 54, y0 = 116, x1 = W - 54, y1 = H - 118;
@@ -413,7 +421,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     });
     ctx.stroke();
 
-    const entryMs = Number(item?.trade?.entry_ms || item?.signalAutoEntry?.ms || 57000);
+    const entryMs = Number(item?.trade?.entry_ms || item?.signalAutoEntry?.ms || 60000);
     const safeEntryMs = Math.min(60000, Math.max(0, entryMs));
     const entryQuote = Number(getPriceAtMs(signalTicks.length ? signalTicks : item.ticks, safeEntryMs));
     const ex = xOf(safeEntryMs);
@@ -455,7 +463,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     ctx.beginPath(); ctx.arc(0, -2, 5.5, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
-    const entryTag = isItm ? "T 57s" : isOtm ? "TM 57s" : `${dir} 57s`;
+    const entryTag = isItm ? "T 60s" : isOtm ? "TM 60s" : `${dir} 60s`;
     studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(ex - 18, cx1 - 108)), Math.max(cy0 + 12, pinY - 4), 96, 32, entryTag, tradeColor, "#07120d");
 
     // Línea horizontal de operación menos gruesa
@@ -518,7 +526,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.84)";
   const actionLabel = isItm ? "T" : isOtm ? "TM" : dir;
-  const note = `${isCall ? "Soporte" : "Resistencia"} respetad${isCall ? "o" : "a"} · entrada ${actionLabel} 57s · pin, línea, cierre y bandera en ${isItm ? "verde" : isOtm ? "rojo" : "amarillo"}`;
+  const note = `${isCall ? "Soporte" : "Resistencia"} respetad${isCall ? "o" : "a"} · entrada ${actionLabel} 60s · pin, línea, cierre y bandera en ${isItm ? "verde" : isOtm ? "rojo" : "amarillo"}`;
   ctx.fillText(note, 170, H - 58);
 }
 
@@ -679,7 +687,7 @@ const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
-const ANALYSIS_MODE_KEY = "analysisMode_v1";
+const ANALYSIS_MODE_KEY = "analysisMode_giroAutoBacktest_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
@@ -687,11 +695,11 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V7_AUTO57_SNR_CERCA_20260511";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
+const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_giroAutoBacktest_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
-const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
+const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_giroAutoBacktest_v1";
 const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
@@ -727,7 +735,7 @@ function nextSignalMode(mode) {
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
-const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
+const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_giroAutoBacktest_v1";
 function loadPracticeSavedSignals() {
   try {
     const raw = localStorage.getItem(PRACTICE_SAVED_STORE_KEY);
@@ -1501,6 +1509,11 @@ const modalOpenDerivBtn = $("modalOpenDerivBtn");
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
 const modalLiveBtn = pickEl("modalLiveBtn");
+const modalNavVoteBar = $("modalNavVoteBar");
+const modalPrevItemBtn = $("modalPrevItemBtn");
+const modalNextItemBtn = $("modalNextItemBtn");
+const modalLikeBtn = $("modalLikeBtn");
+const modalDislikeBtn = $("modalDislikeBtn");
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
 let signalConfirmCountEl = null;
@@ -1518,14 +1531,70 @@ let manualGiroSummaryEl = null;
 let manualGiroStateEl = null;
 let manualGiroButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
-const SIGNAL_AUTO_ENTRY_MS = 57000;
+const SIGNAL_AUTO_ENTRY_MS = 60000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
-// V7: aunque haya 4 puntos manuales, la entrada real solo se permite
-// si al segundo 57 el precio está dentro de la zona SNR o muy cerca.
+// Rama paralela AUTO BACKTEST:
+// la entrada automática se evalúa solo al cierre real de la vela (60s),
+// exige cierre DENTRO de la zona SNR y no usa la zona amarilla/cerca.
 const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
-const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
-const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0.35;
+const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0;
+const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0;
+
+function buildSNRNearAreaMetaFromLevel(meta) {
+  if (!meta || typeof meta !== "object") return null;
+  const level = Number(meta.level);
+  if (!Number.isFinite(level)) return null;
+
+  let zoneLow = Number(meta.zoneLow);
+  let zoneHigh = Number(meta.zoneHigh);
+  const bodyLow = Number(meta.bodyZoneLow);
+  const bodyHigh = Number(meta.bodyZoneHigh);
+  const tolerance = Number(meta.tolerance);
+  const zoneSize = Number(meta.zone);
+
+  // Misma reconstrucción usada por el filtro de entrada en 60s.
+  // Así lo que ves en el modal coincide con lo que la PWA acepta como "cerca".
+  if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
+    if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
+      zoneLow = Math.min(bodyLow, bodyHigh);
+      zoneHigh = Math.max(bodyLow, bodyHigh);
+    } else {
+      const fallback = Math.max(
+        Number.isFinite(tolerance) ? tolerance * 0.50 : 0,
+        Number.isFinite(zoneSize) ? zoneSize * 0.50 : 0,
+        Math.abs(level) * 0.000001,
+        1e-9
+      );
+      zoneLow = level - fallback;
+      zoneHigh = level + fallback;
+    }
+  }
+
+  const zl = Math.min(zoneLow, zoneHigh);
+  const zh = Math.max(zoneLow, zoneHigh);
+  const zoneWidth = Math.max(0, zh - zl);
+  const nearBuffer = Math.max(
+    Number.isFinite(tolerance) ? tolerance * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
+    zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
+    Number.isFinite(zoneSize) ? zoneSize * 0.25 : 0,
+    Math.abs(level) * 0.000001,
+    1e-9
+  );
+
+  return {
+    level,
+    zoneLow: zl,
+    zoneHigh: zh,
+    bodyZoneLow: Number.isFinite(bodyLow) ? bodyLow : null,
+    bodyZoneHigh: Number.isFinite(bodyHigh) ? bodyHigh : null,
+    tolerance: Number.isFinite(tolerance) ? tolerance : null,
+    zoneSize: Number.isFinite(zoneSize) ? zoneSize : null,
+    nearBuffer,
+    nearLow: zl - nearBuffer,
+    nearHigh: zh + nearBuffer,
+  };
+}
 
 let executionMode = EXECUTION_MODE_RISE_FALL;
 const executionPlanCache = new Map();
@@ -1675,6 +1744,7 @@ let lastQuoteBySymbol = {};
 let lastMinuteSeenBySymbol = {};
 
 let modalCurrentItem = null;
+let modalOpenContext = { source: "signals", signalId: "", journalId: "" };
 
 let modalLive = false;
 let modalDrawRaf = null;
@@ -1723,6 +1793,54 @@ function makeDerivTraderUrl(symbol) {
   return u.toString();
 }
 const labelDir = (d) => (d === "CALL" ? "COMPRA" : "VENTA");
+function formatNextCandleDirectionLabel(direction) {
+  const dir = String(direction || "").toUpperCase().trim();
+  if (dir === "CALL" || dir === "COMPRA" || dir === "BUY" || dir === "UP") return "PROX VELA ALCISTA";
+  if (dir === "PUT" || dir === "VENTA" || dir === "SELL" || dir === "DOWN") return "PROX VELA BAJISTA";
+  return "";
+}
+function getItemNextOutcomeValue(itemOrOutcome) {
+  if (itemOrOutcome && typeof itemOrOutcome === "object") return String(itemOrOutcome.nextOutcome || "").toLowerCase().trim();
+  return String(itemOrOutcome || "").toLowerCase().trim();
+}
+function formatNextCandleOutcomeLabel(itemOrOutcome, showPending = true) {
+  const out = getItemNextOutcomeValue(itemOrOutcome);
+  if (out === "up") return "PROX VELA ALCISTA";
+  if (out === "down") return "PROX VELA BAJISTA";
+  if (out === "flat" || out === "equal" || out === "neutral") return "PROX VELA NEUTRA";
+  return showPending ? "PROX VELA ⏳" : "";
+}
+function getNextCandleOutcomeTextColor(itemOrOutcome, fallback = "rgba(255,255,255,.74)") {
+  const out = getItemNextOutcomeValue(itemOrOutcome);
+  if (out === "up") return "#bbf7d0";
+  if (out === "down") return "#fecaca";
+  if (out === "flat" || out === "equal" || out === "neutral") return "rgba(229,231,235,.88)";
+  return fallback;
+}
+
+function formatCompactModeLabel(mode) {
+  const raw = String(mode || "NORMAL").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!raw) return "Normal";
+  const lower = raw.toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+function formatCompactScopeLabel() {
+  return String(getTradeScopeText ? getTradeScopeText() : "").replace(/\s+/g, " ").trim();
+}
+function setCompactModalHeader(item, ticksCount = null) {
+  if (!item) return;
+  if (modalTitle) {
+    const scope = formatCompactScopeLabel();
+    modalTitle.textContent = `${item.symbol || "—"} · ${labelDir(item.direction)}${scope ? " · " + scope : ""}`;
+  }
+  if (modalSub) {
+    const mode = formatCompactModeLabel(item.mode || "NORMAL");
+    const n = ticksCount == null ? (Array.isArray(item.ticks) ? item.ticks.length : 0) : Number(ticksCount) || 0;
+    const live = modalLive && isItemLiveMinute(item) ? " · LIVE" : "";
+    const nextOutcomeTxt = formatNextCandleOutcomeLabel(item, true);
+    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${nextOutcomeTxt ? " · " + nextOutcomeTxt : ""}${live}`;
+  }
+}
 
 function getTokenInputEl() {
   return pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
@@ -1780,6 +1898,15 @@ function ensureTradingAccountButton() {
   }
 
   btn.onclick = () => {
+    if (AUTO_BACKTEST_FORCE_DEMO_ACCOUNT) {
+      activeTradingAccount = ACCOUNT_MODE_DEMO;
+      saveTradingAccountMode();
+      syncAccountScopedSettingsUI();
+      applyTradingAccountUI();
+      applyTradingAccountBannerUI();
+      toast("🟢 Esta versión AUTO BACKTEST opera solo en DEMO", 1800);
+      return;
+    }
     activeTradingAccount = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_DEMO : ACCOUNT_MODE_REAL;
     saveTradingAccountMode();
     loadDiscipline();
@@ -1795,7 +1922,7 @@ function ensureTradingAccountButton() {
     updateDisciplineLockUI(false);
     if (chartModal && !chartModal.classList.contains("hidden")) {
       if (modalCurrentItem) {
-        modalTitle.textContent = `${modalCurrentItem.symbol} – ${labelDir(modalCurrentItem.direction)} | [${modalCurrentItem.mode || "NORMAL"}] | ${getTradeScopeText()}`;
+        setCompactModalHeader(modalCurrentItem);
       }
       updateModalCandleStatusUI();
       requestModalDraw(true);
@@ -1810,11 +1937,13 @@ function applyTradingAccountUI() {
   const btn = pickEl("tradingAccountBtn");
   if (!btn) return;
   const isReal = activeTradingAccount === ACCOUNT_MODE_REAL;
-  btn.textContent = isReal ? "🔴 Cuenta REAL" : "🟢 Cuenta DEMO";
-  btn.classList.toggle("active", isReal);
-  btn.title = isReal
-    ? "Estás configurando y operando con la cuenta REAL"
-    : "Estás configurando y operando con la cuenta DEMO";
+  btn.textContent = AUTO_BACKTEST_FORCE_DEMO_ACCOUNT ? "🟢 Cuenta DEMO · AUTO BACKTEST" : (isReal ? "🔴 Cuenta REAL" : "🟢 Cuenta DEMO");
+  btn.classList.toggle("active", isReal && !AUTO_BACKTEST_FORCE_DEMO_ACCOUNT);
+  btn.title = AUTO_BACKTEST_FORCE_DEMO_ACCOUNT
+    ? "Esta versión paralela fuerza DEMO y no permite operar REAL."
+    : (isReal
+      ? "Estás configurando y operando con la cuenta REAL"
+      : "Estás configurando y operando con la cuenta DEMO");
 }
 function ensureTradingAccountBanner() {
   let el = document.getElementById("tradingAccountBanner");
@@ -1993,8 +2122,8 @@ function ensureC100Panel() {
   const panel = document.createElement("div");
   panel.id = "c100Panel";
   panel.style.gridColumn = "1 / -1";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(34,211,238,.32)";
   panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.025))";
   panel.style.boxShadow = "0 0 22px rgba(34,211,238,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
@@ -3111,7 +3240,7 @@ function shouldAutoOpenChartNow() {
    🪫 Low power mode
 ========================= */
 let lowPowerMode = false;
-const LOWPOWER_KEY = "lowPowerMode_v1";
+const LOWPOWER_KEY = "lowPowerMode_giroAutoBacktest_v1";
 
 const UI_INTERVAL_NORMAL_MS = 500;
 const UI_INTERVAL_LOW_MS = 1200;
@@ -3148,8 +3277,8 @@ function startUiTimers() {
     updateCountdownUI();
     updateDisciplineLockUI(false);
     updateC100PanelUI();
-    // ✅ FIX AUTO 57 DEMO/REAL:
-    // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 57.
+    // ✅ FIX AUTO 60 DEMO/REAL:
+    // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 60.
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
     updateModalCandleStatusUI();
     scanSignalAutoEntriesAt57();
@@ -3286,7 +3415,7 @@ function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
 
-const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_v1";
+const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_giroAutoBacktest_v1";
 let liveAnalysisPaused = false;
 
 function loadLiveAnalysisPaused() {
@@ -3417,6 +3546,11 @@ function getTradingAccountTokenKey() {
   return activeTradingAccount === ACCOUNT_MODE_REAL ? DERIV_TOKEN_REAL_KEY : DERIV_TOKEN_DEMO_KEY;
 }
 function loadTradingAccountMode() {
+  if (AUTO_BACKTEST_FORCE_DEMO_ACCOUNT) {
+    activeTradingAccount = ACCOUNT_MODE_DEMO;
+    try { localStorage.setItem(ACCOUNT_MODE_KEY, ACCOUNT_MODE_DEMO); } catch {}
+    return;
+  }
   try {
     const saved = String(localStorage.getItem(ACCOUNT_MODE_KEY) || "").toLowerCase();
     activeTradingAccount = saved === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
@@ -3426,6 +3560,11 @@ function loadTradingAccountMode() {
 }
 function saveTradingAccountMode() {
   try {
+    if (AUTO_BACKTEST_FORCE_DEMO_ACCOUNT) {
+      activeTradingAccount = ACCOUNT_MODE_DEMO;
+      localStorage.setItem(ACCOUNT_MODE_KEY, ACCOUNT_MODE_DEMO);
+      return;
+    }
     localStorage.setItem(ACCOUNT_MODE_KEY, activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO);
   } catch {}
 }
@@ -3750,10 +3889,10 @@ function initTabs() {
 /* =========================
    Práctica
 ========================= */
-const PRACTICE_STATS_KEY = "practiceStats_v1";
-const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
-const PRACTICE_POOL_STATE_KEY = "practicePoolState_v2";
-const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_v1";
+const PRACTICE_STATS_KEY = "practiceStats_giroAutoBacktest_v1";
+const PRACTICE_FILTER_KEY = "practiceFilterMode_giroAutoBacktest_v1";
+const PRACTICE_POOL_STATE_KEY = "practicePoolState_giroAutoBacktest_v1";
+const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_giroAutoBacktest_v1";
 const PRACTICE_EXPORT_MAX = 150;
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
@@ -3779,7 +3918,7 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 let practiceImageModeBtnEl = null;
-const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_v1";
+const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_giroAutoBacktest_v1";
 const PRACTICE_DISPLAY_REPLAY = "REPLAY";
 const PRACTICE_DISPLAY_IMAGE = "IMAGE";
 let practiceDisplayMode = loadPracticeDisplayMode();
@@ -4297,8 +4436,8 @@ function ensurePracticeConfirmationControls() {
   panel.style.width = "100%";
   panel.style.boxSizing = "border-box";
   panel.style.margin = "12px 0 10px 0";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(255,255,255,.14)";
   panel.style.background = "linear-gradient(180deg, rgba(255,255,255,.075), rgba(255,255,255,.035))";
   panel.style.boxShadow = "0 12px 28px rgba(0,0,0,.20), inset 0 0 0 1px rgba(255,255,255,.045)";
@@ -4307,28 +4446,30 @@ function ensurePracticeConfirmationControls() {
   top.style.display = "flex";
   top.style.alignItems = "center";
   top.style.justifyContent = "space-between";
-  top.style.gap = "10px";
-  top.style.marginBottom = "10px";
+  top.style.gap = "8px";
+  top.style.marginBottom = "8px";
 
   const count = document.createElement("div");
   count.id = "practiceConfirmCount";
   count.style.fontWeight = "950";
   count.style.letterSpacing = ".25px";
-  count.style.fontSize = "15px";
-  count.style.padding = "8px 10px";
+  count.style.fontSize = "14px";
+  count.style.padding = "8px 11px";
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(255,255,255,.14)";
   count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "nowrap";
+  count.style.whiteSpace = "normal";
+  count.style.lineHeight = "1.15";
 
   const hint = document.createElement("div");
   hint.id = "practiceConfirmHint";
   hint.style.flex = "1";
   hint.style.textAlign = "right";
-  hint.style.fontSize = "12px";
+  hint.style.fontSize = "11.5px";
   hint.style.fontWeight = "800";
   hint.style.opacity = ".86";
-  hint.style.lineHeight = "1.25";
+  hint.style.lineHeight = "1.18";
+  hint.style.maxWidth = "150px";
 
   top.appendChild(count);
   top.appendChild(hint);
@@ -4336,7 +4477,7 @@ function ensurePracticeConfirmationControls() {
   const row = document.createElement("div");
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
 
   const buyBtn = document.createElement("button");
@@ -4345,8 +4486,8 @@ function ensurePracticeConfirmationControls() {
   buyBtn.className = "btn";
   buyBtn.textContent = "🟢 + COMPRA";
   buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
-  buyBtn.style.minHeight = "52px";
-  buyBtn.style.borderRadius = "16px";
+  buyBtn.style.minHeight = "48px";
+  buyBtn.style.borderRadius = "14px";
   buyBtn.style.fontWeight = "950";
   buyBtn.style.fontSize = "14px";
   buyBtn.style.letterSpacing = ".25px";
@@ -4361,8 +4502,8 @@ function ensurePracticeConfirmationControls() {
   sellBtn.className = "btn";
   sellBtn.textContent = "🔴 + VENTA";
   sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
-  sellBtn.style.minHeight = "52px";
-  sellBtn.style.borderRadius = "16px";
+  sellBtn.style.minHeight = "48px";
+  sellBtn.style.borderRadius = "14px";
   sellBtn.style.fontWeight = "950";
   sellBtn.style.fontSize = "14px";
   sellBtn.style.letterSpacing = ".25px";
@@ -4377,9 +4518,9 @@ function ensurePracticeConfirmationControls() {
   undoBtn.className = "btn btnGhost";
   undoBtn.textContent = "↩️";
   undoBtn.title = "Quitar última confirmación";
-  undoBtn.style.minHeight = "52px";
-  undoBtn.style.minWidth = "58px";
-  undoBtn.style.borderRadius = "16px";
+  undoBtn.style.minHeight = "48px";
+  undoBtn.style.minWidth = "52px";
+  undoBtn.style.borderRadius = "14px";
   undoBtn.style.fontWeight = "950";
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
@@ -4436,7 +4577,7 @@ function addPracticeConfirmation(side = "CALL") {
   // En modo imagen completa no se reproduce la formación: al llegar a 4 puntos netos, muestra resultado al instante.
   if (tryPracticeImageModeAutoResult("CONFIRMACION_IMAGEN_COMPLETA")) return;
 
-  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 57s,
+  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 60s,
   // también entra automáticamente sin esperar otro frame.
   tryPracticeAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -4821,7 +4962,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
   ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
   ctx.closePath();
-  ctx.globalAlpha = 0.18;
+  ctx.globalAlpha = 0.14;
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fill();
   ctx.globalAlpha = 1;
@@ -5373,7 +5514,7 @@ function practiceLoop(ts) {
   const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
   drawPracticeChart(practiceCanvas, visibleTicks, replayMs, practiceRound.segmentMarks);
 
-  // Auto-entrada de práctica: al segundo 57, si ya hay 4 puntos netos
+  // Auto-entrada de práctica: al segundo 60, si ya hay 4 puntos netos
   // para COMPRA o VENTA y no hubo decisión manual, se elige esa dirección.
   tryPracticeAutoEntryAt57("TIMER_57");
 
@@ -6124,7 +6265,7 @@ function openSignalFromNotification(signalId = "") {
     } catch {}
 
     try {
-      openChartModal(item);
+      openChartModal(item, { source: "signals", signalId: item.id || "" });
       if (isItemLiveMinute(item)) {
         modalLive = true;
         updateModalLiveUI();
@@ -6240,9 +6381,16 @@ function drawDerivLikeChart(canvas, ticks) {
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
   const modalPolarityLevel = modalCurrentItem?.giroPolaridad?.level;
+  const modalSNRNearArea = modalCurrentItem?.giroPolaridad
+    ? buildSNRNearAreaMetaFromLevel(modalCurrentItem.giroPolaridad)
+    : null;
   if (Number.isFinite(Number(modalPolarityLevel))) {
     min = Math.min(min, Number(modalPolarityLevel));
     max = Math.max(max, Number(modalPolarityLevel));
+  }
+  if (AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE && modalSNRNearArea) {
+    min = Math.min(min, Number(modalSNRNearArea.nearLow), Number(modalSNRNearArea.zoneLow));
+    max = Math.max(max, Number(modalSNRNearArea.nearHigh), Number(modalSNRNearArea.zoneHigh));
   }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
@@ -6321,8 +6469,39 @@ function drawDerivLikeChart(canvas, ticks) {
     const yLevel = yOf(level);
     const isSupport = pol.levelType === "support";
     const strokeCol = isSupport ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
-    const fillCol = isSupport ? "rgba(34,197,94,0.14)" : "rgba(248,113,113,0.14)";
+    const fillCol = isSupport ? "rgba(34,197,94,0.10)" : "rgba(248,113,113,0.10)";
     ctx.save();
+    if (AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE && pol.levelMode === "snr_body" && modalSNRNearArea) {
+      const nearLow = Number(modalSNRNearArea.nearLow);
+      const nearHigh = Number(modalSNRNearArea.nearHigh);
+      const zoneLow = Number(modalSNRNearArea.zoneLow);
+      const zoneHigh = Number(modalSNRNearArea.zoneHigh);
+
+      // Área amarilla desactivada en esta rama AUTO BACKTEST.
+      // Solo queda visible la zona SNR real.
+      if ([nearLow, nearHigh, zoneLow, zoneHigh].every(Number.isFinite)) {
+        const yNearHigh = yOf(nearHigh);
+        const yZoneHigh = yOf(zoneHigh);
+        const yZoneLow = yOf(zoneLow);
+        const yNearLow = yOf(nearLow);
+
+        ctx.fillStyle = "rgba(251,191,36,0.115)";
+        ctx.fillRect(8, Math.min(yNearHigh, yZoneHigh), w - 16, Math.max(3, Math.abs(yZoneHigh - yNearHigh)));
+        ctx.fillRect(8, Math.min(yZoneLow, yNearLow), w - 16, Math.max(3, Math.abs(yNearLow - yZoneLow)));
+
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = "rgba(251,191,36,0.54)";
+        ctx.lineWidth = 1.3;
+        ctx.beginPath();
+        ctx.moveTo(8, yNearHigh);
+        ctx.lineTo(w - 8, yNearHigh);
+        ctx.moveTo(8, yNearLow);
+        ctx.lineTo(w - 8, yNearLow);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
     if (pol.levelMode === "snr_body" && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))) {
       const yA = yOf(Number(pol.zoneHigh));
       const yB = yOf(Number(pol.zoneLow));
@@ -6339,17 +6518,9 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.lineTo(w - 8, yLevel);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = isSupport ? "rgba(187,247,208,0.98)" : "rgba(254,202,202,0.98)";
-    ctx.font = "12px system-ui, sans-serif";
-    const roleTxt = pol.levelMode === "sin_nivel"
-      ? "ZONA RECHAZO"
-      : (pol.levelMode === "snr_body"
-          ? `SNR ${pol.originalType === "support" ? "SOP." : "RES."}→${pol.levelType === "support" ? "SOP." : "RES."}`
-          : (pol.originalType ? `${pol.originalType === "support" ? "SOP." : "RES."}→${pol.levelType === "support" ? "SOP." : "RES."}` : `${pol.levelType === "support" ? "SOPORTE" : "RESIST."}`));
-    const txt = pol.levelMode === "snr_body" && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))
-      ? `${roleTxt} ${Number(pol.zoneLow).toFixed(6)}-${Number(pol.zoneHigh).toFixed(6)}`
-      : `${roleTxt} ${level.toFixed(6)}`;
-    ctx.fillText(txt, 12, Math.max(18, Math.min(h - 28, yLevel - 6)));
+    // Sin rótulos sobre la zona SNR ni sobre el área amarilla:
+    // se mantienen las bandas y líneas visuales, pero se quitan los textos
+    // para evitar contaminación visual dentro del modal.
     ctx.restore();
   }
 
@@ -6377,7 +6548,7 @@ function drawDerivLikeChart(canvas, ticks) {
   for (const p of pts) ctx.lineTo(xOf(p.ms), yOf(p.quote));
   ctx.lineTo(xOf(pts[pts.length - 1].ms), h - 20);
   ctx.closePath();
-  ctx.globalAlpha = 0.18;
+  ctx.globalAlpha = 0.14;
   ctx.fillStyle = "rgba(255,255,255,0.85)";
   ctx.fill();
   ctx.globalAlpha = 1;
@@ -6396,15 +6567,32 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // último punto
-  const lx = xOf(pts[pts.length - 1].ms);
-  const ly = yOf(pts[pts.length - 1].quote);
-  ctx.globalAlpha = 0.9;
-  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  // precio actual / último punto: guía horizontal suave + punto más visible
+  const lastPoint = pts[pts.length - 1];
+  const lx = xOf(lastPoint.ms);
+  const ly = yOf(lastPoint.quote);
+
+  ctx.save();
+  ctx.setLineDash([3, 5]);
+  ctx.strokeStyle = "rgba(255,255,255,0.30)";
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.arc(lx, ly, 3.5, 0, Math.PI * 2);
+  ctx.moveTo(8, ly);
+  ctx.lineTo(w - 8, ly);
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.shadowColor = "rgba(255,255,255,0.32)";
+  ctx.shadowBlur = 10;
+  ctx.fillStyle = "rgba(255,255,255,0.96)";
+  ctx.strokeStyle = "rgba(15,23,42,0.85)";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.arc(lx, ly, 5, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.stroke();
+  ctx.restore();
 }
 
 /* =========================
@@ -6455,7 +6643,7 @@ function ensureModalCandleStatusBar() {
     el.style.borderRadius = "14px";
     el.style.border = "1px solid rgba(255,255,255,.14)";
     el.style.fontWeight = "900";
-    el.style.fontSize = "14px";
+    el.style.fontSize = "13px";
     el.style.letterSpacing = "0.3px";
     el.style.textAlign = "center";
     el.style.transition = "opacity .12s ease, transform .12s ease";
@@ -6537,39 +6725,41 @@ function ensureSignalConfirmationControls() {
   panel.id = "signalConfirmPanel";
   panel.style.width = "100%";
   panel.style.boxSizing = "border-box";
-  panel.style.margin = "0 0 10px 0";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.margin = "0 0 8px 0";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(255,255,255,.14)";
-  panel.style.background = "linear-gradient(180deg, rgba(251,191,36,.105), rgba(255,255,255,.035))";
-  panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.18), inset 0 0 0 1px rgba(251,191,36,.045)";
+  panel.style.background = "linear-gradient(180deg, rgba(251,191,36,.075), rgba(255,255,255,.025))";
+  panel.style.boxShadow = "0 10px 22px rgba(0,0,0,.14), inset 0 0 0 1px rgba(251,191,36,.035)";
 
   const top = document.createElement("div");
   top.style.display = "flex";
   top.style.alignItems = "center";
   top.style.justifyContent = "space-between";
-  top.style.gap = "10px";
-  top.style.marginBottom = "10px";
+  top.style.gap = "8px";
+  top.style.marginBottom = "8px";
 
   const count = document.createElement("div");
   count.id = "signalConfirmCount";
   count.style.fontWeight = "950";
   count.style.letterSpacing = ".25px";
-  count.style.fontSize = "15px";
-  count.style.padding = "8px 10px";
+  count.style.fontSize = "14px";
+  count.style.padding = "8px 11px";
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(255,255,255,.14)";
   count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "nowrap";
+  count.style.whiteSpace = "normal";
+  count.style.lineHeight = "1.15";
 
   const hint = document.createElement("div");
   hint.id = "signalConfirmHint";
   hint.style.flex = "1";
   hint.style.textAlign = "right";
-  hint.style.fontSize = "12px";
+  hint.style.fontSize = "11.5px";
   hint.style.fontWeight = "850";
   hint.style.opacity = ".90";
-  hint.style.lineHeight = "1.25";
+  hint.style.lineHeight = "1.18";
+  hint.style.maxWidth = "150px";
 
   top.appendChild(count);
   top.appendChild(hint);
@@ -6577,7 +6767,7 @@ function ensureSignalConfirmationControls() {
   const row = document.createElement("div");
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0, 1fr) minmax(0, 1fr) auto";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
 
   const buyBtn = document.createElement("button");
@@ -6586,8 +6776,8 @@ function ensureSignalConfirmationControls() {
   buyBtn.className = "btn";
   buyBtn.textContent = "🟢 + COMPRA";
   buyBtn.title = "Sumar una confirmación a favor de COMPRA. Si había puntos de VENTA, primero los resta.";
-  buyBtn.style.minHeight = "52px";
-  buyBtn.style.borderRadius = "16px";
+  buyBtn.style.minHeight = "48px";
+  buyBtn.style.borderRadius = "14px";
   buyBtn.style.fontWeight = "950";
   buyBtn.style.fontSize = "14px";
   buyBtn.style.letterSpacing = ".25px";
@@ -6602,8 +6792,8 @@ function ensureSignalConfirmationControls() {
   sellBtn.className = "btn";
   sellBtn.textContent = "🔴 + VENTA";
   sellBtn.title = "Sumar una confirmación a favor de VENTA. Si había puntos de COMPRA, primero los resta.";
-  sellBtn.style.minHeight = "52px";
-  sellBtn.style.borderRadius = "16px";
+  sellBtn.style.minHeight = "48px";
+  sellBtn.style.borderRadius = "14px";
   sellBtn.style.fontWeight = "950";
   sellBtn.style.fontSize = "14px";
   sellBtn.style.letterSpacing = ".25px";
@@ -6618,9 +6808,9 @@ function ensureSignalConfirmationControls() {
   undoBtn.className = "btn btnGhost";
   undoBtn.textContent = "↩️";
   undoBtn.title = "Quitar última confirmación";
-  undoBtn.style.minHeight = "52px";
-  undoBtn.style.minWidth = "58px";
-  undoBtn.style.borderRadius = "16px";
+  undoBtn.style.minHeight = "48px";
+  undoBtn.style.minWidth = "52px";
+  undoBtn.style.borderRadius = "14px";
   undoBtn.style.fontWeight = "950";
   undoBtn.style.fontSize = "18px";
   undoBtn.style.touchAction = "manipulation";
@@ -6686,9 +6876,9 @@ function addSignalConfirmation(side = "CALL") {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 57s,
+  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 60s,
   // también se dispara la auto-entrada sin esperar otro tick/timer.
-  trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
+  trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_60");
 }
 function removeSignalConfirmation() {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
@@ -6710,26 +6900,32 @@ function updateSignalConfirmationUI() {
   const ok = !!enabled;
 
   if (signalConfirmCountEl) {
-    signalConfirmCountEl.textContent = getSignalConfirmationStatusText(modalCurrentItem);
+    const activePts = enabled === "CALL" ? buyPts : enabled === "PUT" ? sellPts : Math.max(buyPts, sellPts);
+    if (enabled === "CALL" || enabled === "PUT") {
+      signalConfirmCountEl.innerHTML = `${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada <span class="signalConfirmPts">${activePts}/${SIGNAL_CONFIRM_MIN} pts</span>`;
+    } else {
+      signalConfirmCountEl.textContent = getSignalConfirmationStatusText(modalCurrentItem);
+    }
     signalConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
-    signalConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.52)" : enabled === "PUT" ? "rgba(239,68,68,.52)" : "rgba(251,191,36,.28)";
-    signalConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.18)" : enabled === "PUT" ? "rgba(127,29,29,.22)" : "rgba(0,0,0,.16)";
-    signalConfirmCountEl.style.boxShadow = ok ? "0 0 18px rgba(255,255,255,.10)" : "none";
+    signalConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.46)" : enabled === "PUT" ? "rgba(239,68,68,.46)" : "rgba(251,191,36,.24)";
+    signalConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.16)" : enabled === "PUT" ? "rgba(127,29,29,.19)" : "rgba(0,0,0,.13)";
+    signalConfirmCountEl.style.boxShadow = ok ? "0 0 14px rgba(255,255,255,.07)" : "none";
   }
   if (signalConfirmHintEl) {
-    const scope = getTradeScopeText ? getTradeScopeText() : "";
+    const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
+    const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `Solo COMPRA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s si está en/cerca del SNR${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "#bbf7d0";
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `Solo VENTA habilitada · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s si está en/cerca del SNR${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "#fecaca";
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
       signalConfirmHintEl.textContent = score === 0
-        ? `Mínimo ${SIGNAL_CONFIRM_MIN} netas para un lado${scope ? " · " + scope : ""}`
-        : `Neto ${score > 0 ? "+" : ""}${score}${scope ? " · " + scope : ""}`;
-      signalConfirmHintEl.style.color = "rgba(255,255,255,.72)";
+        ? `Mínimo ${SIGNAL_CONFIRM_MIN} netas`
+        : `Neto ${score > 0 ? "+" : ""}${score}`;
+      signalConfirmHintEl.style.color = "rgba(255,255,255,.68)";
     }
   }
 
@@ -6800,11 +6996,51 @@ function getSignalLiveTicksForEntryGate(item) {
     ? minuteData[minute][symbol]
     : [];
   const saved = Array.isArray(item?.ticks) ? item.ticks : [];
-  // Si la señal sigue viva, minuteData tiene los ticks hasta el segundo actual.
-  // Si no, usamos los ticks guardados/hidratados.
   return live.length >= saved.length ? live.slice() : saved.slice();
 }
+function getSignalClosePriceAt60(item) {
+  const minute = Number(item?.minute);
+  const symbol = String(item?.symbol || "");
+  const ocClose = Number(candleOC?.[minute]?.[symbol]?.close);
+  if (Number.isFinite(ocClose)) return ocClose;
+
+  const ticks = getSignalLiveTicksForEntryGate(item)
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+
+  if (ticks.length) {
+    const q = Number(getPriceAtMs(ticks, 60000));
+    if (Number.isFinite(q)) return q;
+    const last = Number(ticks[ticks.length - 1]?.quote);
+    if (Number.isFinite(last)) return last;
+  }
+
+  return NaN;
+}
+function getSignalOpenPriceAt0(item) {
+  const minute = Number(item?.minute);
+  const symbol = String(item?.symbol || "");
+  const ocOpen = Number(candleOC?.[minute]?.[symbol]?.open);
+  if (Number.isFinite(ocOpen)) return ocOpen;
+
+  const ticks = getSignalLiveTicksForEntryGate(item)
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+
+  if (ticks.length) {
+    const first = Number(ticks[0]?.quote);
+    if (Number.isFinite(first)) return first;
+  }
+  return NaN;
+}
 function getSignalPriceAtEntryCheckMs(item, checkMs = SIGNAL_AUTO_SNR_CHECK_MS) {
+  if (Number(checkMs) >= 60000) {
+    const close = getSignalClosePriceAt60(item);
+    if (Number.isFinite(close)) return close;
+  }
+
   const ticks = getSignalLiveTicksForEntryGate(item)
     .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
     .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
@@ -6830,8 +7066,6 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
   const tolerance = Number(meta.tolerance);
   const zoneSize = Number(meta.zone);
 
-  // Preferimos zoneLow/zoneHigh porque ya incluyen la zona chica + tolerancia.
-  // Si falta, reconstruimos una franja razonable desde bodyZone o level.
   if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
     if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
       zoneLow = Math.min(bodyLow, bodyHigh);
@@ -6847,35 +7081,41 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
       zoneHigh = level + fallback;
     }
   }
-  zoneLow = Math.min(zoneLow, zoneHigh);
-  zoneHigh = Math.max(zoneLow, zoneHigh);
+  const zl = Math.min(zoneLow, zoneHigh);
+  const zh = Math.max(zoneLow, zoneHigh);
+  zoneLow = zl;
+  zoneHigh = zh;
   const zoneWidth = Math.max(0, zoneHigh - zoneLow);
 
-  const nearBuffer = Math.max(
-    Number.isFinite(tolerance) ? tolerance * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
-    zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
-    Number.isFinite(zoneSize) ? zoneSize * 0.25 : 0,
-    Math.abs(level) * 0.000001,
-    1e-9
-  );
+  const nearBuffer = AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE
+    ? Math.max(
+        Number.isFinite(tolerance) ? tolerance * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
+        zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
+        Number.isFinite(zoneSize) ? zoneSize * 0.25 : 0,
+        Math.abs(level) * 0.000001,
+        1e-9
+      )
+    : 0;
 
   const price = getSignalPriceAtEntryCheckMs(item, checkMs);
   if (!Number.isFinite(price)) {
-    return { ok: false, pending: true, reason: "sin_precio_57", message: "Todavía no hay precio suficiente para validar el SNR en 57s." };
+    return { ok: false, pending: true, reason: "sin_precio_60", message: "Todavía no hay cierre suficiente para validar el SNR en 60s." };
   }
 
   const distance = price < zoneLow ? zoneLow - price : price > zoneHigh ? price - zoneHigh : 0;
   const inside = distance <= 0;
-  const near = !inside && distance <= nearBuffer;
+  const near = !inside && AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE && distance <= nearBuffer;
   const ok = inside || near;
   const relation = inside ? "inside" : price < zoneLow ? (near ? "near_below" : "far_below") : (near ? "near_above" : "far_above");
+  const checkSec = Math.round(checkMs / 1000);
+
   return {
     ok,
     pending: false,
-    reason: ok ? (inside ? "inside_snr_zone" : "near_snr_zone") : "far_from_snr_zone",
+    reason: ok ? (inside ? "inside_snr_zone" : "near_snr_zone") : "close_outside_snr_zone",
     side: normalizeSignalConfirmationSide(side) || "",
     check_ms: checkMs,
-    check_sec: Math.round(checkMs / 1000),
+    check_sec: checkSec,
     price,
     level,
     zoneLow,
@@ -6889,17 +7129,18 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
     levelType: String(meta.levelType || ""),
     originalType: String(meta.originalType || ""),
     currentRole: String(meta.currentRole || ""),
+    strict_inside_only: !AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE,
     message: ok
-      ? `Precio 57s ${price.toFixed(6)} dentro/cerca del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)}`
-      : `Precio 57s ${price.toFixed(6)} lejos del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)} (dist ${distance.toFixed(6)})`,
+      ? `Precio ${checkSec}s ${price.toFixed(6)} dentro del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)}`
+      : `Precio ${checkSec}s ${price.toFixed(6)} fuera del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)} (dist ${distance.toFixed(6)})`,
   };
 }
 function formatSignalSNREntryGate(gate) {
   if (!gate || typeof gate !== "object") return "SNR no validado";
   if (gate.pending) return gate.message || "SNR pendiente";
   if (!Number.isFinite(Number(gate.price))) return gate.message || "SNR sin precio";
-  const status = gate.ok ? (gate.reason === "inside_snr_zone" ? "dentro" : "cerca") : "lejos";
-  return `57s ${status}: ${Number(gate.price).toFixed(6)} | zona ${Number(gate.zoneLow).toFixed(6)}-${Number(gate.zoneHigh).toFixed(6)}`;
+  const status = gate.ok ? "dentro" : "fuera";
+  return `60s ${status}: ${Number(gate.price).toFixed(6)} | zona ${Number(gate.zoneLow).toFixed(6)}-${Number(gate.zoneHigh).toFixed(6)}`;
 }
 function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   if (!SIGNAL_AUTO_SNR_GATE_ENABLED || !item) return null;
@@ -6915,58 +7156,216 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   return gate;
 }
 
-function trySignalAutoEntryAt57(reason = "AUTO_57", itemOverride = null) {
+function getAutoBacktestCandleDirection(item) {
+  const open = Number(getSignalOpenPriceAt0(item));
+  const close = Number(getSignalClosePriceAt60(item));
+  if (!Number.isFinite(open) || !Number.isFinite(close)) return { side: "", formation: "", open, close, bodyDir: 0 };
+  if (close > open) return { side: "PUT", formation: "ALCISTA", open, close, bodyDir: 1 };
+  if (close < open) return { side: "CALL", formation: "BAJISTA", open, close, bodyDir: -1 };
+  return { side: "", formation: "NEUTRA", open, close, bodyDir: 0 };
+}
+function getCandleDirectionFromOHLC(candle) {
+  const open = Number(candle?.open);
+  const close = Number(candle?.close);
+  if (!Number.isFinite(open) || !Number.isFinite(close)) return 0;
+  if (close > open) return 1;
+  if (close < open) return -1;
+  return 0;
+}
+function getClosedCandleForMomentum(symbol, minute) {
+  const m = Number(minute);
+  const sym = String(symbol || "");
+  if (!Number.isFinite(m) || !sym) return null;
+
+  const live = candleOC?.[m]?.[sym];
+  if (live && [live.open, live.close].map(Number).every(Number.isFinite)) return live;
+
+  const stored = (Array.isArray(giroPolarityCandles?.[sym]) ? giroPolarityCandles[sym] : [])
+    .find((c) => Number(c?.minute) === m);
+  if (stored && [stored.open, stored.close].map(Number).every(Number.isFinite)) return stored;
+  return null;
+}
+function getMomentumRunBeforeSignal(item, lookback = AUTO_BACKTEST_MOMENTUM_LOOKBACK) {
+  const symbol = String(item?.symbol || "");
+  const minute = Number(item?.minute);
+  const candles = [];
+  if (!symbol || !Number.isFinite(minute)) return { blocked: false, maxRun: 0, runDir: 0, candles: [] };
+
+  for (let i = Number(lookback || 8); i >= 1; i--) {
+    const m = minute - i;
+    const candle = getClosedCandleForMomentum(symbol, m);
+    if (!candle) continue;
+    candles.push({ minute: m, open: Number(candle.open), close: Number(candle.close), dir: getCandleDirectionFromOHLC(candle) });
+  }
+
+  let maxRun = 0;
+  let runDir = 0;
+  let curRun = 0;
+  let curDir = 0;
+
+  for (const c of candles) {
+    const d = Number(c.dir || 0);
+    if (!d) {
+      curRun = 0;
+      curDir = 0;
+      continue;
+    }
+    if (d === curDir) curRun += 1;
+    else {
+      curDir = d;
+      curRun = 1;
+    }
+    if (curRun > maxRun) {
+      maxRun = curRun;
+      runDir = curDir;
+    }
+  }
+
+  return {
+    blocked: maxRun > AUTO_BACKTEST_MAX_CONSECUTIVE_MOMENTUM,
+    maxRun,
+    runDir,
+    candles,
+  };
+}
+function isAutoBacktestGiroMode(item) {
+  return isGiroFamilyMode(normalizeSignalMode(item?.mode || ""));
+}
+function isAutoBacktestEntryWindowOpen(item) {
+  if (!item) return false;
+  const nowMinute = currentServerMinute();
+  const itemMinute = Number(item.minute);
+  if (!Number.isFinite(itemMinute)) return false;
+  // Opera justo después del cierre: al primer momento del minuto siguiente.
+  return itemMinute === nowMinute - 1;
+}
+function markAutoBacktestDecision(item, status, extra = {}) {
+  if (!item) return;
+  item.signalAutoEntry = {
+    type: "AUTO_BACKTEST_DEMO_60",
+    version: AUTO_BACKTEST_VERSION,
+    auto_backtest_demo: true,
+    attempted: true,
+    status,
+    ms: SIGNAL_AUTO_ENTRY_MS,
+    sec: SIGNAL_AUTO_ENTRY_SEC,
+    at: Date.now(),
+    strict_snr_close: true,
+    yellow_zone_used: false,
+    ...extra,
+  };
+  saveHistory(history);
+}
+function buildAutoBacktestDecision(item, reason = "AUTO_60") {
+  if (!item) return { ok: false, status: "sin_senal", message: "Sin señal" };
+  if (!AUTO_BACKTEST_DEMO_ONLY || activeTradingAccount !== ACCOUNT_MODE_DEMO) {
+    return { ok: false, status: "blocked_not_demo", message: "Esta versión solo opera en DEMO" };
+  }
+  if (!isAutoBacktestGiroMode(item)) {
+    return { ok: false, status: "blocked_not_giro", message: "No es señal GIRO/SNR" };
+  }
+  if (!isAutoBacktestEntryWindowOpen(item)) {
+    return { ok: false, status: "blocked_not_close_window", message: "La entrada se evalúa al cierre 60s del minuto anterior" };
+  }
+
+  const candle = getAutoBacktestCandleDirection(item);
+  if (!candle.side) {
+    return { ok: false, status: "blocked_unclear_formation", message: "Formación sin dirección clara al cierre", candle };
+  }
+
+  const momentum = getMomentumRunBeforeSignal(item);
+  if (momentum.blocked) {
+    return {
+      ok: false,
+      status: "blocked_momentum_gt_3",
+      message: `Momentum bloqueado: ${momentum.maxRun} velas consecutivas antes de la señal`,
+      side: candle.side,
+      formation_side: candle.formation,
+      candle,
+      momentum,
+    };
+  }
+
+  const gate = buildSignalSNREntryGate(item, candle.side, SIGNAL_AUTO_SNR_CHECK_MS);
+  if (gate.pending) {
+    return { ok: false, pending: true, status: "pending_close_price", message: gate.message || "Cierre 60s pendiente", side: candle.side, formation_side: candle.formation, candle, momentum, snr_entry_gate: gate };
+  }
+  if (!gate.ok || gate.reason !== "inside_snr_zone") {
+    return {
+      ok: false,
+      status: "blocked_close_outside_snr",
+      message: "El cierre 60s quedó fuera de la zona SNR",
+      side: candle.side,
+      formation_side: candle.formation,
+      candle,
+      momentum,
+      snr_entry_gate: gate,
+    };
+  }
+
+  return {
+    ok: true,
+    status: "ready",
+    message: `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`,
+    side: candle.side,
+    formation_side: candle.formation,
+    candle,
+    momentum,
+    snr_entry_gate: gate,
+    reason: String(reason || "AUTO_60"),
+  };
+}
+function isAutoBacktestAutoContext(item) {
+  return item?.signalAutoEntry?.type === "AUTO_BACKTEST_DEMO_60" && item?.signalAutoEntry?.auto_backtest_demo === true;
+}
+
+function trySignalAutoEntryAt57(reason = "AUTO_60", itemOverride = null) {
+  // Nombre legado para no tener que cambiar todos los llamados internos.
+  // En esta rama trabaja en 60s/cierre, no en 57s.
   const item = itemOverride || modalCurrentItem;
-  if (!item || !isTradeEntryOpen(item)) return false;
+  if (!item) return false;
   if (item?.trade?.badge) return false;
   if (tradeInFlight) return false;
   if (item?.signalAutoEntry?.attempted) return false;
 
-  const ms = getSignalConfirmationMs(item);
-  if (ms < SIGNAL_AUTO_ENTRY_MS) return false;
+  const decision = buildAutoBacktestDecision(item, reason);
+  if (decision.pending) return false;
 
-  const side = getSignalEnabledTradeSide(item);
-  if (!side) return false;
-
-  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-  if (gate.pending) return false;
-  const label = side === "CALL" ? "COMPRA" : "VENTA";
-
-  if (SIGNAL_AUTO_SNR_GATE_ENABLED && !gate.ok) {
-    item.signalAutoEntry = {
-      type: "AUTO_57_REAL",
-      attempted: true,
-      status: "blocked_snr_distance",
-      side,
-      ms,
-      sec: Math.round(ms / 1000),
-      reason: String(reason || "AUTO_57"),
-      at: Date.now(),
-      confirmation_status: getSignalConfirmationStatusText(item),
-      snr_entry_gate: gate,
-    };
-    saveHistory(history);
+  if (!decision.ok) {
+    markAutoBacktestDecision(item, decision.status || "blocked", {
+      reason: String(reason || "AUTO_60"),
+      message: decision.message || "Autoentrada bloqueada",
+      side: decision.side || "",
+      formation_side: decision.formation_side || decision?.candle?.formation || "",
+      candle: decision.candle || null,
+      momentum: decision.momentum || null,
+      snr_entry_gate: decision.snr_entry_gate || null,
+    });
     if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-    toast(`⛔ AUTO ${SIGNAL_AUTO_ENTRY_SEC}s cancelado: precio lejos del SNR`, 2600);
+    const msg = decision.status === "blocked_close_outside_snr"
+      ? "⛔ AUTO 60 cancelado: cierre fuera del SNR"
+      : decision.status === "blocked_momentum_gt_3"
+        ? "⛔ AUTO 60 cancelado: momentum > 3 velas"
+        : `⛔ AUTO 60 cancelado: ${decision.message || decision.status || "regla no cumplida"}`;
+    toast(msg, 2400);
     return true;
   }
 
-  item.signalAutoEntry = {
-    type: "AUTO_57_REAL",
-    attempted: true,
-    status: "sending",
+  const side = decision.side;
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+
+  markAutoBacktestDecision(item, "sending", {
+    reason: String(reason || "AUTO_60"),
     side,
-    ms,
-    sec: Math.round(ms / 1000),
-    reason: String(reason || "AUTO_57"),
-    at: Date.now(),
-    confirmation_status: getSignalConfirmationStatusText(item),
-    snr_entry_gate: gate,
-  };
-  saveHistory(history);
+    formation_side: decision.formation_side,
+    candle: decision.candle,
+    momentum: decision.momentum,
+    snr_entry_gate: decision.snr_entry_gate,
+    confirmation_status: "AUTO_BACKTEST_SIN_CONFIRMACIONES_MANUALES",
+  });
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO 60: enviando ${label} DEMO…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -6978,7 +7377,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_57", itemOverride = null) {
       item.signalAutoEntry.contract_id = cid ? String(cid) : "";
       item.signalAutoEntry.sent_at = Date.now();
       saveHistory(history);
-      toast(`✅ AUTO ${label} enviado ${cid ? "ID: " + cid : ""}`, 1800);
+      toast(`✅ AUTO ${label} DEMO enviado ${cid ? "ID: " + cid : ""}`, 1800);
     })
     .catch((e) => {
       item.signalAutoEntry.status = "error";
@@ -6998,16 +7397,18 @@ function trySignalAutoEntryAt57(reason = "AUTO_57", itemOverride = null) {
   return true;
 }
 
-function scanSignalAutoEntriesAt57() {
+function scanSignalAutoEntriesAt57(reasonOrMinute = null) {
+  // Nombre legado: escanea AUTO 60/cierre.
   try {
     if (tradeInFlight) return false;
     const nowMinute = currentServerMinute();
+    const closedMinute = Number.isFinite(Number(reasonOrMinute)) ? Number(reasonOrMinute) : nowMinute - 1;
     const candidates = (history || [])
-      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
-      .filter((it) => getSignalEnabledTradeSide(it));
+      .filter((it) => it && Number(it.minute) === closedMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => isAutoBacktestGiroMode(it));
 
     for (const it of candidates) {
-      if (trySignalAutoEntryAt57("TIMER_57_SCAN", it)) return true;
+      if (trySignalAutoEntryAt57("TIMER_60_CLOSE_SCAN", it)) return true;
     }
   } catch {}
   return false;
@@ -7050,6 +7451,7 @@ function updateModalCandleStatusUI() {
 
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
+    if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
     setSignalConfirmationControlsVisible(false);
     setGiroAprendizajeControlsVisible(false);
     return;
@@ -7068,12 +7470,11 @@ function updateModalCandleStatusUI() {
   const candleClosed = !isOpen;
 
   if (locked) {
-    const polarityTxtLocked = formatGiroPolarityLevel(modalCurrentItem);
-    bar.textContent = `🔒 DEMO BLOQUEADA | ${getDisciplineLockReasonText()} | ${getDisciplineCounterText()} | falta ${fmtRemaining(remain)}${polarityTxtLocked ? " | " + polarityTxtLocked : ""}${getC100ModalTag()}`;
+    bar.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     bar.style.color = "#fff";
-    bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.92), rgba(69,10,10,.92))";
-    bar.style.borderColor = "rgba(248,113,113,.72)";
-    bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.16) inset, 0 0 22px rgba(239,68,68,.24)";
+    bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.78), rgba(69,10,10,.78))";
+    bar.style.borderColor = "rgba(248,113,113,.50)";
+    bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.10) inset, 0 0 12px rgba(239,68,68,.12)";
   } else if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
     const autoTxt = shouldUseAutoHighLowExecution()
@@ -7089,17 +7490,18 @@ function updateModalCandleStatusUI() {
       else if (giroState.bodyDir < 0) giroTxt = " | SOLO GIRO: habilitada COMPRA";
       else giroTxt = " | SOLO GIRO: esperando definición";
     }
-    bar.textContent = `🟢 VELA ABIERTA | faltan ${sec}s | ${getSignalConfirmationStatusText(modalCurrentItem)} | AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${autoTxt}${giroTxt}${polarityTxt ? " | " + polarityTxt : ""}${getC100ModalTag()}`;
+    const enabled = getSignalEnabledTradeSide(modalCurrentItem);
+    const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
+    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     bar.style.color = "#dcfce7";
-    bar.style.background = "rgba(22,163,74,.18)";
-    bar.style.borderColor = "rgba(34,197,94,.34)";
-    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.06) inset";
+    bar.style.background = "rgba(22,163,74,.14)";
+    bar.style.borderColor = "rgba(34,197,94,.28)";
+    bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.05) inset";
   } else {
-    const polarityTxtClosed = formatGiroPolarityLevel(modalCurrentItem);
-    bar.textContent = `${getTradeScopeText()} | VELA CERRADA${polarityTxtClosed ? " | " + polarityTxtClosed : ""}${getC100ModalTag()}`;
-    bar.style.color = "rgba(229,231,235,.95)";
-    bar.style.background = "rgba(107,114,128,.20)";
-    bar.style.borderColor = "rgba(156,163,175,.28)";
+    bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
+    bar.style.color = "rgba(229,231,235,.92)";
+    bar.style.background = "rgba(107,114,128,.16)";
+    bar.style.borderColor = "rgba(156,163,175,.22)";
     bar.style.boxShadow = "none";
   }
 
@@ -7110,14 +7512,15 @@ function updateModalCandleStatusUI() {
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
+  updateModalNavVoteUI();
 
   applyModalExecutionButtonUI(locked, candleClosed);
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
 
-  // Auto-entrada real: igual que práctica, al segundo 57 si ya hay 4 puntos netos.
-  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_57");
+  // Auto-entrada real: igual que práctica, al segundo 60 si ya hay 4 puntos netos.
+  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_60_MODAL");
 }
 
 /* =========================
@@ -7149,21 +7552,11 @@ function requestModalDraw(force = false) {
 
     drawDerivLikeChart(minuteCanvas, ticks);
 
-    if (modalSub) {
-      const n = Array.isArray(ticks) ? ticks.length : 0;
-      const tagLive = modalLive && isItemLiveMinute(it) ? " | LIVE" : "";
-      const dTag = disciplineTagText();
-      const tBadge = it?.trade?.badge ? ` | TRADE:${it.trade.badge}` : "";
-      const autoExec = shouldUseAutoHighLowExecution() && it ? (it.autoHighLow || null) : null;
-      const autoTag = autoExec ? ` | HL C:${formatExecutionPlanMini(autoExec.call)} V:${formatExecutionPlanMini(autoExec.put)}` : "";
-      const confTag = ` | CONF:${getSignalConfirmationStatusText(it)} | AUTO:${SIGNAL_AUTO_ENTRY_SEC}s`;
-      const manualTag = "";
-      const c100Tag = getC100ModalTag();
-      const polarityTag = formatGiroPolarityLevel(it);
-      modalSub.textContent = `${it.time} | ${getTradeScopeText()} | ticks: ${n}${confTag}${tagLive}${dTag ? " | " + dTag : ""}${tBadge}${autoTag}${manualTag}${polarityTag ? " | " + polarityTag : ""}${c100Tag}`;
-    }
+    const n = Array.isArray(ticks) ? ticks.length : 0;
+    setCompactModalHeader(it, n);
 
     updateModalCandleStatusUI();
+    updateModalNavVoteUI();
   });
 }
 
@@ -7339,9 +7732,9 @@ function ensureGiroAprendizajeControls() {
   panel.id = "giroAprendizajePanel";
   panel.style.width = "100%";
   panel.style.boxSizing = "border-box";
-  panel.style.margin = "0 0 10px 0";
-  panel.style.padding = "12px";
-  panel.style.borderRadius = "18px";
+  panel.style.margin = "0 0 8px 0";
+  panel.style.padding = "10px";
+  panel.style.borderRadius = "16px";
   panel.style.border = "1px solid rgba(34,211,238,.24)";
   panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.030))";
   panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.16), inset 0 0 0 1px rgba(34,211,238,.035)";
@@ -7350,28 +7743,30 @@ function ensureGiroAprendizajeControls() {
   top.style.display = "flex";
   top.style.alignItems = "center";
   top.style.justifyContent = "space-between";
-  top.style.gap = "10px";
-  top.style.marginBottom = "10px";
+  top.style.gap = "8px";
+  top.style.marginBottom = "8px";
 
   const count = document.createElement("div");
   count.id = "giroAprendizajeCount";
   count.style.fontWeight = "950";
   count.style.letterSpacing = ".25px";
   count.style.fontSize = "14px";
-  count.style.padding = "8px 10px";
+  count.style.padding = "8px 11px";
   count.style.borderRadius = "999px";
   count.style.border = "1px solid rgba(34,211,238,.24)";
   count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "nowrap";
+  count.style.whiteSpace = "normal";
+  count.style.lineHeight = "1.15";
 
   const hint = document.createElement("div");
   hint.id = "giroAprendizajeHint";
   hint.style.flex = "1";
   hint.style.textAlign = "right";
-  hint.style.fontSize = "12px";
+  hint.style.fontSize = "11.5px";
   hint.style.fontWeight = "850";
   hint.style.opacity = ".88";
-  hint.style.lineHeight = "1.25";
+  hint.style.lineHeight = "1.18";
+  hint.style.maxWidth = "150px";
 
   top.appendChild(count);
   top.appendChild(hint);
@@ -7488,7 +7883,7 @@ function applyModalTradeButtonsLayout() {
 
   row.style.display = "grid";
   row.style.gridTemplateColumns = "minmax(0,1fr)";
-  row.style.gap = "10px";
+  row.style.gap = "8px";
   row.style.alignItems = "stretch";
   row.style.justifyContent = "stretch";
   row.style.width = "100%";
@@ -7644,15 +8039,15 @@ function ensureDisciplineBanner() {
     el.style.bottom = "14px";
     el.style.zIndex = "99999";
     el.style.display = "none";
-    el.style.padding = "13px 14px";
-    el.style.borderRadius = "18px";
+    el.style.padding = "10px 12px";
+    el.style.borderRadius = "16px";
     el.style.border = "1px solid rgba(248,113,113,.72)";
     el.style.background = "linear-gradient(180deg, rgba(127,29,29,.96), rgba(69,10,10,.96))";
     el.style.color = "#fff";
-    el.style.boxShadow = "0 18px 44px rgba(0,0,0,.55), 0 0 28px rgba(239,68,68,.28)";
+    el.style.boxShadow = "0 12px 30px rgba(0,0,0,.42), 0 0 16px rgba(239,68,68,.16)";
     el.style.fontWeight = "950";
-    el.style.fontSize = "14px";
-    el.style.lineHeight = "1.25";
+    el.style.fontSize = "13px";
+    el.style.lineHeight = "1.2";
     el.style.textAlign = "center";
     el.style.letterSpacing = ".15px";
     el.style.backdropFilter = "blur(10px)";
@@ -7672,15 +8067,21 @@ function updateDisciplineBannerUI() {
     return;
   }
 
+  const modalOpen = chartModal && !chartModal.classList.contains("hidden");
+  if (modalOpen) {
+    el.style.display = "none";
+    return;
+  }
+
   const locked = isTradeLockedNow();
   const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
 
   if (locked) {
     el.style.display = "block";
     el.style.borderColor = "rgba(248,113,113,.82)";
-    el.style.background = "linear-gradient(180deg, rgba(127,29,29,.98), rgba(69,10,10,.98))";
-    el.style.boxShadow = "0 18px 44px rgba(0,0,0,.55), 0 0 28px rgba(239,68,68,.34)";
-    el.innerHTML = `🔒 <b>DEMO BLOQUEADA POR DISCIPLINA</b><br>${getDisciplineLockReasonText()} · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
+    el.style.background = "linear-gradient(180deg, rgba(127,29,29,.92), rgba(69,10,10,.92))";
+    el.style.boxShadow = "0 12px 30px rgba(0,0,0,.42), 0 0 16px rgba(239,68,68,.16)";
+    el.innerHTML = `🔒 <b>DEMO bloqueada</b> · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     return;
   }
 
@@ -7804,31 +8205,258 @@ async function resubscribePendingContracts() {
   } catch {}
 }
 
+
+/* =========================
+   Modal navigation + like/dislike
+   - Las flechas no ocupan espacio sobre COMPRA/VENTA: van superpuestas al gráfico.
+   - La navegación respeta la pestaña desde la que se abrió: Señales o Trades.
+========================= */
+function hasResolvedNextArrow(item) {
+  const out = String(item?.nextOutcome || "").toLowerCase();
+  return out === "up" || out === "down" || out === "flat";
+}
+function normalizeModalContext(opts = {}, item = null) {
+  const active = localStorage.getItem("activeView") || "signals";
+  const source = String(opts.source || active || "signals") === "trades" ? "trades" : "signals";
+  return {
+    source,
+    signalId: String(opts.signalId || item?.id || ""),
+    journalId: String(opts.journalId || item?.journal_id || ""),
+  };
+}
+function buildModalItemFromTradeEntry(entry) {
+  if (!entry) return null;
+  const live = entry.id ? findHistoryItemById(String(entry.id)) : null;
+  const ticks = Array.isArray(entry.ticks) && entry.ticks.length
+    ? entry.ticks
+    : (Array.isArray(live?.ticks) ? live.ticks : []);
+  return {
+    id: entry.id || live?.id || "",
+    minute: entry.minute ?? live?.minute,
+    time: entry.time || live?.time || "",
+    symbol: entry.symbol || live?.symbol || "",
+    direction: entry.direction || live?.direction || "",
+    mode: entry.mode || live?.mode || "NORMAL",
+    mode_version: entry.mode_version || live?.mode_version || getModeVersion(entry.mode || live?.mode || "NORMAL") || "",
+    vote: entry.vote || "",
+    comment: entry.comment || "",
+    journal_id: entry.journal_id || makeJournalIdFromSignal(entry) || "",
+    feedback_at: entry.feedback_at || 0,
+    feedback_source: entry.feedback_source || "",
+    ticks,
+    nextOutcome: entry.nextOutcome || live?.nextOutcome || "",
+    minuteComplete: entry.minuteComplete !== false,
+    trade: entry.trade || live?.trade || null,
+    study_capture_id: entry.study_capture_id || entry?.trade?.study_capture_id || live?.study_capture_id || live?.trade?.study_capture_id || "",
+    manualGiro: normalizeManualGiroState(entry.manualGiro || live?.manualGiro),
+    giroPolaridad: entry.giroPolaridad || entry.snrLevel || live?.giroPolaridad || live?.snrLevel || live?.polarityLevel || null,
+  };
+}
+function getModalNavigationList() {
+  const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
+  if (source === "trades") {
+    return (tradesJournal || [])
+      .map((entry) => buildModalItemFromTradeEntry(entry))
+      .filter((item) => item && (item.minuteComplete || isItemLiveMinute(item)));
+  }
+  return [...(history || [])]
+    .reverse()
+    .filter((item) => item && (item.minuteComplete || isItemLiveMinute(item)));
+}
+function getModalItemKey(item, source = modalOpenContext?.source) {
+  if (!item) return "";
+  if (source === "trades") return String(item.journal_id || makeJournalIdFromSignal(item) || item.id || "");
+  return String(item.id || "");
+}
+function getModalCurrentIndex(list = getModalNavigationList()) {
+  const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
+  const ctxJournal = String(modalOpenContext?.journalId || "");
+  const ctxSignal = String(modalOpenContext?.signalId || modalCurrentItem?.id || "");
+  const currentKey = source === "trades"
+    ? String(ctxJournal || getModalItemKey(modalCurrentItem, source) || ctxSignal)
+    : String(ctxSignal || getModalItemKey(modalCurrentItem, source));
+  return list.findIndex((item) => {
+    if (!item) return false;
+    if (source === "trades") {
+      const jid = String(item.journal_id || makeJournalIdFromSignal(item) || "");
+      const sid = String(item.id || "");
+      return (!!currentKey && (jid === currentKey || sid === currentKey)) || (!!ctxSignal && sid === ctxSignal);
+    }
+    return String(item.id || "") === currentKey;
+  });
+}
+function findTradeJournalFeedbackEntry() {
+  const journalId = String(modalOpenContext?.journalId || modalCurrentItem?.journal_id || "");
+  if (journalId) {
+    const byJournal = (tradesJournal || []).find((x) => x && String(x.journal_id || "") === journalId);
+    if (byJournal) return byJournal;
+  }
+  const signalId = String(modalOpenContext?.signalId || modalCurrentItem?.id || "");
+  if (signalId) {
+    const bySignal = (tradesJournal || []).find((x) => x && String(x.id || "") === signalId);
+    if (bySignal) return bySignal;
+  }
+  return null;
+}
+function getModalCurrentVote() {
+  if (modalOpenContext?.source === "trades") {
+    const entry = findTradeJournalFeedbackEntry();
+    return String(entry?.vote || modalCurrentItem?.vote || "");
+  }
+  return String(modalCurrentItem?.vote || "");
+}
+function syncVisibleVoteRows(vote = getModalCurrentVote()) {
+  try {
+    const sid = String(modalOpenContext?.signalId || modalCurrentItem?.id || "");
+    const jid = String(modalOpenContext?.journalId || modalCurrentItem?.journal_id || "");
+    const rows = [];
+    if (sid) rows.push(...document.querySelectorAll(`.row[data-id="${cssEscape(sid)}"]`));
+    if (jid) rows.push(...document.querySelectorAll(`.row[data-journal-id="${cssEscape(jid)}"]`));
+    [...new Set(rows)].forEach((row) => applyVoteButtonsVisual(row, vote || "", { lock: false }));
+  } catch {}
+}
+function updateModalNavVoteUI() {
+  if (!modalNavVoteBar) return;
+  if (!modalCurrentItem || !chartModal || chartModal.classList.contains("hidden")) {
+    modalNavVoteBar.style.display = "none";
+    return;
+  }
+
+  modalNavVoteBar.style.display = "inline-flex";
+
+  const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
+  const list = getModalNavigationList();
+  const idx = getModalCurrentIndex(list);
+  const ready = hasResolvedNextArrow(modalCurrentItem);
+  const canPrev = ready && idx > 0;
+  const canNext = ready && idx >= 0 && idx < list.length - 1;
+
+  [modalPrevItemBtn, modalNextItemBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.style.display = ready ? "inline-flex" : "none";
+    btn.setAttribute("aria-hidden", ready ? "false" : "true");
+  });
+
+  if (modalPrevItemBtn) {
+    modalPrevItemBtn.disabled = !canPrev;
+    modalPrevItemBtn.title = ready
+      ? (canPrev ? `Anterior en ${source === "trades" ? "Trades" : "Señales"}` : "No hay anterior")
+      : "Disponible cuando NEXT esté resuelto";
+  }
+  if (modalNextItemBtn) {
+    modalNextItemBtn.disabled = !canNext;
+    modalNextItemBtn.title = ready
+      ? (canNext ? `Siguiente en ${source === "trades" ? "Trades" : "Señales"}` : "No hay siguiente")
+      : "Disponible cuando NEXT esté resuelto";
+  }
+
+  const vote = getModalCurrentVote();
+  [modalLikeBtn, modalDislikeBtn].forEach((btn) => {
+    if (!btn) return;
+    const selected = String(btn.dataset.v || "") === vote;
+    btn.classList.toggle("selected", selected);
+    btn.setAttribute("aria-pressed", selected ? "true" : "false");
+    btn.title = btn.dataset.v === "like"
+      ? (selected ? "Quitar me gusta" : "Me gusta / operación que quiero buscar")
+      : (selected ? "Quitar no me gusta" : "No me gusta / operación que quiero evitar");
+  });
+}
+function setModalFeedbackVote(selectedVote = "") {
+  if (!modalCurrentItem) return;
+  const selected = String(selectedVote || "");
+  if (selected !== "like" && selected !== "dislike") return;
+
+  const current = getModalCurrentVote();
+  const nextVote = current === selected ? "" : selected;
+
+  modalCurrentItem.vote = nextVote;
+  modalCurrentItem.comment = modalCurrentItem.comment || "";
+
+  if (modalOpenContext?.source === "trades") {
+    const entry = findTradeJournalFeedbackEntry();
+    if (entry) {
+      entry.vote = nextVote;
+      entry.comment = entry.comment || modalCurrentItem.comment || "";
+      entry.feedback_at = Date.now();
+      entry.feedback_source = "modal_trades";
+      modalCurrentItem.comment = entry.comment || "";
+      saveTradesJournal(tradesJournal);
+      updateExportTradesButtonUI();
+    } else {
+      persistRowFeedback(modalCurrentItem, {
+        source: "trades",
+        signalId: modalOpenContext?.signalId || modalCurrentItem.id || "",
+        journalId: modalOpenContext?.journalId || modalCurrentItem.journal_id || "",
+      });
+    }
+  } else {
+    const live = modalCurrentItem.id ? findHistoryItemById(String(modalCurrentItem.id)) : null;
+    if (live) {
+      live.vote = nextVote;
+      live.comment = live.comment || modalCurrentItem.comment || "";
+      modalCurrentItem = live;
+    }
+    saveHistory(history);
+    updateExportTradesButtonUI();
+  }
+
+  syncVisibleVoteRows(nextVote);
+  updateModalNavVoteUI();
+  toast(nextVote === "like" ? "👍 Me gusta guardado" : nextVote === "dislike" ? "👎 No me gusta guardado" : "Marca quitada", 1200);
+}
+function navigateModalItem(step = 1) {
+  if (!modalCurrentItem || !hasResolvedNextArrow(modalCurrentItem)) return;
+  const list = getModalNavigationList();
+  const idx = getModalCurrentIndex(list);
+  if (idx < 0) return;
+  const nextIdx = idx + Number(step || 0);
+  if (nextIdx < 0 || nextIdx >= list.length) return;
+  const nextItem = list[nextIdx];
+  if (!nextItem) return;
+  openChartModal(nextItem, {
+    source: modalOpenContext?.source === "trades" ? "trades" : "signals",
+    signalId: nextItem.id || "",
+    journalId: nextItem.journal_id || "",
+  });
+}
+
 /* =========================
    Chart modal
 ========================= */
-function openChartModal(item) {
+function openChartModal(item, opts = {}) {
   modalCurrentItem = item;
+  modalOpenContext = normalizeModalContext(opts, item);
   if (!chartModal || !modalTitle || !modalSub) return;
 
-  modalTitle.textContent = `${item.symbol} – ${labelDir(item.direction)} | [${item.mode || "NORMAL"}] | ${getTradeScopeText()}`;
+  if (modalOpenContext.source === "trades") {
+    const entry = findTradeJournalFeedbackEntry();
+    if (entry) {
+      modalCurrentItem.vote = entry.vote || "";
+      modalCurrentItem.comment = entry.comment || "";
+      modalCurrentItem.journal_id = entry.journal_id || modalCurrentItem.journal_id || "";
+      modalOpenContext.journalId = modalOpenContext.journalId || modalCurrentItem.journal_id || "";
+    }
+  }
 
-  modalLive = isItemLiveMinute(item);
+  setCompactModalHeader(modalCurrentItem);
+
+  modalLive = isItemLiveMinute(modalCurrentItem);
   updateModalLiveUI();
 
   chartModal.classList.remove("hidden");
   chartModal.setAttribute("aria-hidden", "false");
 
-  item.signalConfirmations ||= [];
+  modalCurrentItem.signalConfirmations ||= [];
   applyModalTradeButtonsLayout();
   setSignalConfirmationControlsVisible(true);
   ensureGiroAprendizajeControls();
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
-  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
+  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(modalCurrentItem);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
+  updateModalNavVoteUI();
 
   requestModalDraw(true);
 }
@@ -7840,7 +8468,10 @@ function closeChartModal() {
   modalLive = false;
   updateModalLiveUI();
   if (modalCandleStatusEl) modalCandleStatusEl.style.display = "none";
+  if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
+  setGiroAprendizajeControlsVisible(false);
+  updateDisciplineLockUI(false);
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
 if (modalCloseBackdrop) modalCloseBackdrop.onclick = closeChartModal;
@@ -7877,6 +8508,11 @@ if (modalLiveBtn) {
     requestModalDraw(true);
   };
 }
+
+if (modalPrevItemBtn) modalPrevItemBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(-1); };
+if (modalNextItemBtn) modalNextItemBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(1); };
+if (modalLikeBtn) modalLikeBtn.onclick = (e) => { e.stopPropagation(); setModalFeedbackVote("like"); };
+if (modalDislikeBtn) modalDislikeBtn.onclick = (e) => { e.stopPropagation(); setModalFeedbackVote("dislike"); };
 
 /* =========================
    Row helpers (global, para Señales)
@@ -7996,6 +8632,14 @@ function setNextOutcome(item, outcome) {
 
   updateRowNextArrow(item);
   updateCounter();
+  if (modalCurrentItem && String(modalCurrentItem.id || "") === String(item.id || "")) {
+    modalCurrentItem.nextOutcome = outcome;
+    setCompactModalHeader(modalCurrentItem);
+    updateSignalConfirmationUI();
+    updateModalCandleStatusUI();
+    updateModalNavVoteUI();
+    requestModalDraw(true);
+  }
 
   try {
     upsertTradeJournalFromSignal(item);
@@ -8270,7 +8914,7 @@ function buildRow(item, opts = {}) {
     }
 
     const canOpen = target.minuteComplete || isItemLiveMinute(target);
-    if (canOpen) openChartModal(target);
+    if (canOpen) openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
   };
 
   updateRowChartBtnOnRow(row, item);
@@ -8765,12 +9409,17 @@ function assertEntryWindowOpen(item = modalCurrentItem) {
 
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, itemOverride = null) {
   const itemCtx = itemOverride || modalCurrentItem;
+  const autoBacktestCtx = isAutoBacktestAutoContext(itemCtx);
   assertCanTrade();
-  assertEntryWindowOpen(itemCtx);
-  assertSignalMinimumConfirmations(side, itemCtx);
-  // V7: con SNR, aunque haya 4 puntos, la operación solo se permite
-  // si en el segundo 57 el precio está dentro de la zona SNR o muy cerca.
-  const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
+  if (!autoBacktestCtx) {
+    assertEntryWindowOpen(itemCtx);
+    assertSignalMinimumConfirmations(side, itemCtx);
+  }
+  // Rama AUTO BACKTEST: en auto se compra después del cierre 60s validado.
+  // Manualmente, se mantiene la validación estricta de SNR al segundo 60.
+  const snrEntryGate = autoBacktestCtx
+    ? (itemCtx?.signalAutoEntry?.snr_entry_gate || buildSignalSNREntryGate(itemCtx, side, SIGNAL_AUTO_SNR_CHECK_MS))
+    : assertSignalSNREntryGateAt57(side, itemCtx);
   assertC100CanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
@@ -8787,6 +9436,19 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     let contractLabel = side;
     let tradeExtra = { side, symbol, stake };
     if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
+    if (autoBacktestCtx) {
+      tradeExtra = {
+        ...tradeExtra,
+        auto_backtest_demo: true,
+        version: AUTO_BACKTEST_VERSION,
+        entry_sec: SIGNAL_AUTO_ENTRY_SEC,
+        entry_rule: "close_60_inside_snr_only",
+        yellow_zone_used: false,
+        formation_side: itemCtx?.signalAutoEntry?.formation_side || "",
+        momentum: itemCtx?.signalAutoEntry?.momentum || null,
+        candle: itemCtx?.signalAutoEntry?.candle || null,
+      };
+    }
 
     if (shouldUseAutoHighLowExecution() && itemCtx?.id) {
       ensureSignalAutoPrecalc(itemCtx);
@@ -9316,6 +9978,9 @@ function finalizeMinute(minute) {
     }
     if (changed) saveHistory(history);
 
+    // AUTO BACKTEST: cuando la vela cierra, recién ahí se evalúa cierre 60s dentro del SNR.
+    scanSignalAutoEntriesAt57(minute);
+
     if (modalCurrentItem && modalCurrentItem.minute === minute) {
       modalLive = false;
       updateModalLiveUI();
@@ -9405,7 +10070,7 @@ function onTick(tick) {
     for (const it of tail) updateRowChartBtn(it);
   }
 
-  // ✅ FIX AUTO 57: también revisar en cada tick, aunque el modal no haya redibujado.
+  // ✅ FIX AUTO 60: también revisar en cada tick, aunque el modal no haya redibujado.
   scanSignalAutoEntriesAt57();
 
   if (!areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
@@ -12427,7 +13092,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
     requestAnimationFrame(() => {
       try {
         setActiveView("signals");
-        openChartModal(item);
+        openChartModal(item, { source: "signals", signalId: item.id || "" });
 
         if (isItemLiveMinute(item)) {
           modalLive = true;
