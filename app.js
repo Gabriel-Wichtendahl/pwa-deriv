@@ -11097,22 +11097,21 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
     raw.push({ price: Math.max(open, close), type: "resistance", minute: Number(c.minute) });
     raw.push({ price: Math.min(open, close), type: "support", minute: Number(c.minute) });
   }
-  const clusters = clusterGiroSNRBodyLevels(raw, tol * 1.18);
+  const clusters = clusterGiroSNRBodyLevels(raw, tol * 1.02);
   const out = [];
   for (const cluster of clusters) {
     const touches = Number(cluster.touches || 0);
     const uniqueMinutes = Number(cluster.uniqueMinutes || 0);
     const bodyBand = Math.max(0, Number(cluster.zoneHigh) - Number(cluster.zoneLow));
     if (touches < 2 || uniqueMinutes < 2) continue;
-    if (touches < 3 && bodyBand > tol * 1.15) continue;
-    if (bodyBand > Math.max(tol * 3.1, Math.abs(Number(currentRange || 0)) * 0.24)) continue;
-    const breakInfo = getGiroPolarityBreakInfo(candles, cluster, tol * 0.86, { breakCloseTolMult: 0.44 });
+    if (touches < 3 && bodyBand > tol * 0.92) continue;
+    if (bodyBand > Math.max(tol * 2.55, Math.abs(Number(currentRange || 0)) * 0.20)) continue;
+    const breakInfo = getGiroPolarityBreakInfo(candles, cluster, tol * 0.78, { breakCloseTolMult: 0.40 });
     if (!breakInfo) continue;
-    // V16: zona SNR más parecida al marcado manual: dos líneas azules con ancho real.
-    // Evita que 2/3 cierres casi iguales dibujen una zona microscópica.
-    const minManualBand = Math.max(tol * 1.45, Math.abs(Number(currentRange || 0)) * 0.075, Math.abs(Number(cluster.price || 0)) * 0.0000015, 1e-9);
+    // V17: ancho intermedio. Evita micro-zonas, pero sin convertirlas en bandas demasiado grandes.
+    const minManualBand = Math.max(tol * 0.90, Math.abs(Number(currentRange || 0)) * 0.050, Math.abs(Number(cluster.price || 0)) * 0.0000010, 1e-9);
     const desiredPadFromMin = Math.max(0, (minManualBand - bodyBand) / 2);
-    const zonePad = Math.max(tol * 0.42, bodyBand * 0.32, desiredPadFromMin, 1e-9);
+    const zonePad = Math.max(tol * 0.14, bodyBand * 0.22, desiredPadFromMin, 1e-9);
     out.push({
       ...cluster,
       ...breakInfo,
