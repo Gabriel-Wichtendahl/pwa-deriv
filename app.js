@@ -689,7 +689,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_INTERACCION_NIVEL_20260512";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_INTERACCION_NIVEL_OPEN_LEJOS_20260512";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -11890,6 +11890,21 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     const interacting = distance <= interactionMargin;
     if (!interacting) continue;
 
+    // V15: la vela de señal NO puede nacer pegada al SNR.
+    // Debe abrir lejos de la zona y luego acercarse/interactuar al segundo seleccionado.
+    const openDistanceToZone = p0 < zoneLow ? zoneLow - p0 : p0 > zoneHigh ? p0 - zoneHigh : 0;
+    const minOpenDistanceToZone = Math.max(interactionMargin * 1.10, tol * 1.05, bodyBand * 0.75, range * 0.060, 1e-9);
+    const openTooNearSNR = openDistanceToZone < minOpenDistanceToZone;
+    if (openTooNearSNR) continue;
+
+    // También debe abrir del lado lógico del viaje hacia el nivel:
+    // resistencia => abre por debajo y viaja hacia arriba; soporte => abre por arriba y viaja hacia abajo.
+    const openOnTravelSide = isResistance ? p0 < zoneLow : p0 > zoneHigh;
+    if (!openOnTravelSide) continue;
+
+    const approachFromOpen = isResistance ? pE - p0 : p0 - pE;
+    if (approachFromOpen < Math.max(minOpenDistanceToZone * 0.35, tol * 0.40, 1e-9)) continue;
+
     // Para evitar tomar una ruptura sostenida como interacción:
     // - en resistencia, toleramos apenas arriba de la zona;
     // - en soporte, toleramos apenas abajo de la zona.
@@ -11908,13 +11923,16 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     if (touches >= 4) points += 1;
     if (compactBand >= 0.45) points += 1;
     if (sideScore >= 0.70) points += 1;
+    if (openDistanceToZone >= minOpenDistanceToZone * 1.35) points += 1;
 
+    const openDistanceScore = Math.min(1, openDistanceToZone / Math.max(minOpenDistanceToZone * 1.65, 1e-9));
     const quality =
       proximityScore * 55 +
       (inside ? 18 : 0) +
       Math.min(5, touches) * 8 +
       compactBand * 18 +
-      sideScore * 10 -
+      sideScore * 10 +
+      openDistanceScore * 12 -
       Math.max(0, wrongSide / Math.max(tol, 1e-9)) * 4;
 
     matches.push({
@@ -11948,15 +11966,21 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         interactionMargin,
         interactionDistance: distance,
         interactionInside: inside,
+        openDistanceToZone,
+        minOpenDistanceToZone,
+        openTooNearSNR,
+        openOnTravelSide,
+        approachFromOpen,
+        openDistanceScore,
         wrongSide,
         proximityScore,
         sideScore,
         stage: "snr_interaccion_nivel",
         movementFilter: "snr_cuerpos_interaccion_eval_sec",
-        status: `SNR interacción: precio ${Number(EVAL_SEC || 45)}s dentro/cerca del nivel`,
+        status: `SNR interacción: abre lejos y precio ${Number(EVAL_SEC || 45)}s dentro/cerca del nivel`,
         logic: isResistance
-          ? `precio en ${Number(EVAL_SEC || 45)}s interactúa con resistencia SNR => PUT`
-          : `precio en ${Number(EVAL_SEC || 45)}s interactúa con soporte SNR => CALL`,
+          ? `abre lejos por debajo y precio en ${Number(EVAL_SEC || 45)}s interactúa con resistencia SNR => PUT`
+          : `abre lejos por arriba y precio en ${Number(EVAL_SEC || 45)}s interactúa con soporte SNR => CALL`,
       },
     });
   }
