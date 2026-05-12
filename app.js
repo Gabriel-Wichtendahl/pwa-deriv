@@ -1313,11 +1313,11 @@ function makeJournalIdFromSignal(it) {
   return `${String(it.id || "")}::${cid}`.slice(0, 220);
 }
 
-// guarda/actualiza snapshot (solo ITM/OTM)
+// guarda/actualiza snapshot de trade: PENDING entra inmediatamente; ITM/OTM actualizan resultado.
 function upsertTradeJournalFromSignal(it) {
   if (!it?.trade?.badge) return;
-  const b = String(it.trade.badge || "");
-  if (b !== "ITM" && b !== "OTM") return;
+  const b = String(it.trade.badge || "").toUpperCase();
+  if (b !== "PENDING" && b !== "ITM" && b !== "OTM") return;
 
   const entry = {
     journal_id: makeJournalIdFromSignal(it),
@@ -1376,13 +1376,13 @@ function upsertTradeJournalFromSignal(it) {
   saveTradesJournal(tradesJournal);
 }
 
-// siembra (una vez) desde history por si existían ITM/OTM ya guardados
+// siembra (una vez) desde history por si existían trades ya guardados
 function seedTradesJournalFromHistory() {
   try {
     let changed = false;
     for (const it of history || []) {
-      const b = it?.trade?.badge || "";
-      if (b === "ITM" || b === "OTM") {
+      const b = String(it?.trade?.badge || "").toUpperCase();
+      if (b === "PENDING" || b === "ITM" || b === "OTM") {
         const id = makeJournalIdFromSignal(it);
         if (!tradesJournal.some((x) => x && x.journal_id === id)) {
           upsertTradeJournalFromSignal(it);
@@ -7102,7 +7102,20 @@ function getSignalCloseSNREntryGate(item) {
   if (!gate || gate.pending || !Number.isFinite(Number(gate.price))) return null;
   return gate;
 }
+function signalHasProtectedTrade(item) {
+  if (!item) return false;
+  const b = String(item?.trade?.badge || "").toUpperCase();
+  if (b === "PENDING" || b === "ITM" || b === "OTM") return true;
+  if (item?.trade?.contract_id) return true;
+  if (item?.signalAutoEntry?.contract_id) return true;
+  const autoStatus = String(item?.signalAutoEntry?.status || "").toLowerCase();
+  if (item?.signalAutoEntry?.attempted && ["sending", "sent"].includes(autoStatus)) return true;
+  return false;
+}
 function shouldRemoveSignalBecauseClosedAwayFromSNR(item) {
+  // No purgar señales que ya ejecutaron o están ejecutando un trade.
+  // Si se borra una señal con contrato, se pierde el vínculo para actualizar Trades.
+  if (signalHasProtectedTrade(item)) return false;
   const gate = getSignalCloseSNREntryGate(item);
   if (!gate) return false;
   item.closeSnrGate = {
@@ -9116,15 +9129,27 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
 
     try {
       const signalId = tradeLinks.get(cid) || "";
+      const outcomeExtra = {
+        profit: Number(poc.profit),
+        status: String(poc.status || ""),
+        sold_time: Number(poc.sell_time || 0),
+        contract_id: cid,
+        outcome_source: sourceLabel,
+      };
       const it = signalId ? findHistoryItemById(signalId) : null;
       if (it) {
-        setTradeBadge(it, isWin ? "ITM" : "OTM", {
-          profit: Number(poc.profit),
-          status: String(poc.status || ""),
-          sold_time: Number(poc.sell_time || 0),
-          contract_id: cid,
-          outcome_source: sourceLabel,
-        });
+        setTradeBadge(it, isWin ? "ITM" : "OTM", outcomeExtra);
+      } else {
+        // Salvavidas: si la señal fue purgada o no está en Signals, actualizamos el trade en Journal por contract_id.
+        const idx = tradesJournal.findIndex((x) => String(x?.trade?.contract_id || "") === cid);
+        if (idx >= 0) {
+          tradesJournal[idx].trade ||= {};
+          tradesJournal[idx].trade.badge = isWin ? "ITM" : "OTM";
+          Object.assign(tradesJournal[idx].trade, outcomeExtra);
+          tradesJournal[idx].saved_at = Date.now();
+          saveTradesJournal(tradesJournal);
+          try { if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView(); } catch {}
+        }
       }
     } catch {}
 
