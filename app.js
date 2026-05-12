@@ -7089,6 +7089,70 @@ function formatSignalSNREntryGate(gate) {
   const status = gate.ok ? (gate.reason === "inside_snr_zone" ? "dentro" : "cerca") : "lejos";
   return `57s ${status}: ${Number(gate.price).toFixed(6)} | zona ${Number(gate.zoneLow).toFixed(6)}-${Number(gate.zoneHigh).toFixed(6)}`;
 }
+
+const SIGNAL_CLOSE_SNR_FILTER_MS = 60000;
+function getSignalCloseSNREntryGate(item) {
+  if (!item || !item.minuteComplete) return null;
+  const meta = getSignalSNREntryMeta(item);
+  if (!meta) return null;
+  const ticks = Array.isArray(item.ticks) ? item.ticks : [];
+  // No borrar hasta tener la vela completa hidratada: evita falsos descartes por falta de ticks.
+  if (ticks.length < 2) return null;
+  const gate = buildSignalSNREntryGate(item, item.direction || "", SIGNAL_CLOSE_SNR_FILTER_MS);
+  if (!gate || gate.pending || !Number.isFinite(Number(gate.price))) return null;
+  return gate;
+}
+function shouldRemoveSignalBecauseClosedAwayFromSNR(item) {
+  const gate = getSignalCloseSNREntryGate(item);
+  if (!gate) return false;
+  item.closeSnrGate = {
+    ok: !!gate.ok,
+    reason: gate.reason,
+    price: gate.price,
+    zoneLow: gate.zoneLow,
+    zoneHigh: gate.zoneHigh,
+    nearBuffer: gate.nearBuffer,
+    distance: gate.distance,
+    checked_ms: SIGNAL_CLOSE_SNR_FILTER_MS,
+  };
+  return !gate.ok;
+}
+function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
+  if (!Array.isArray(history) || !history.length) return 0;
+  const removedIds = new Set();
+  const before = history.length;
+  history = history.filter((it) => {
+    if (shouldRemoveSignalBecauseClosedAwayFromSNR(it)) {
+      if (it && it.id) removedIds.add(String(it.id));
+      return false;
+    }
+    return true;
+  });
+  const removed = before - history.length;
+  if (!removed) return 0;
+
+  try { saveHistory(history); } catch {}
+  try {
+    for (const id of removedIds) {
+      const row = document.querySelector(`.row[data-id="${cssEscape(id)}"]`);
+      if (row && row.parentElement) row.parentElement.removeChild(row);
+    }
+  } catch {}
+
+  if (
+    modalCurrentItem &&
+    modalOpenContext?.source !== "trades" &&
+    removedIds.has(String(modalCurrentItem.id || ""))
+  ) {
+    try { closeChartModal(); } catch {}
+  }
+
+  updateCounter(localStorage.getItem("activeView") || "signals");
+  if ((localStorage.getItem("activeView") || "signals") === "signals") {
+    try { renderHistory(); } catch {}
+  }
+  return removed;
+}
 function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   if (!SIGNAL_AUTO_SNR_GATE_ENABLED || !item) return null;
   const meta = getSignalSNREntryMeta(item);
@@ -9628,6 +9692,7 @@ async function rehydrateHistoryOnBoot() {
         }
       }
       if (changed || anyMark) saveHistory(history);
+      purgeClosedSignalsOutsideSNRCloseZone("rehydrate_minute_complete");
     } catch {}
 
     await sleep(REHYDRATE_SLEEP_MS);
@@ -9746,6 +9811,7 @@ function finalizeMinute(minute) {
       }
     }
     if (changed) saveHistory(history);
+    purgeClosedSignalsOutsideSNRCloseZone("finalize_minute_complete");
 
     if (modalCurrentItem && modalCurrentItem.minute === minute) {
       modalLive = false;
