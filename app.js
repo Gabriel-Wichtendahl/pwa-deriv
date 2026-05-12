@@ -11163,8 +11163,8 @@ function clusterGiroSNRBodyLevels(rawLevels, tolerance) {
   for (const cluster of clusters) {
     const prices = (cluster.rawPrices || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
     if (prices.length >= 3) {
-      const trimmedLow = getArrayPercentileValue(prices, 0.08);
-      const trimmedHigh = getArrayPercentileValue(prices, 0.92);
+      const trimmedLow = getArrayPercentileValue(prices, 0.18);
+      const trimmedHigh = getArrayPercentileValue(prices, 0.82);
       if (Number.isFinite(trimmedLow) && Number.isFinite(trimmedHigh) && trimmedHigh >= trimmedLow) {
         cluster.zoneLow = trimmedLow;
         cluster.zoneHigh = trimmedHigh;
@@ -11188,21 +11188,21 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
     raw.push({ price: Math.max(open, close), type: "resistance", minute: Number(c.minute) });
     raw.push({ price: Math.min(open, close), type: "support", minute: Number(c.minute) });
   }
-  const clusters = clusterGiroSNRBodyLevels(raw, tol * 1.02);
+  const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.96);
   const out = [];
   for (const cluster of clusters) {
     const touches = Number(cluster.touches || 0);
     const uniqueMinutes = Number(cluster.uniqueMinutes || 0);
     const bodyBand = Math.max(0, Number(cluster.zoneHigh) - Number(cluster.zoneLow));
     if (touches < 2 || uniqueMinutes < 2) continue;
-    if (touches < 3 && bodyBand > tol * 0.92) continue;
-    if (bodyBand > Math.max(tol * 2.55, Math.abs(Number(currentRange || 0)) * 0.20)) continue;
-    const breakInfo = getGiroPolarityBreakInfo(candles, cluster, tol * 0.78, { breakCloseTolMult: 0.40 });
+    if (touches < 3 && bodyBand > tol * 0.82) continue;
+    if (bodyBand > Math.max(tol * 2.10, Math.abs(Number(currentRange || 0)) * 0.16)) continue;
+    const breakInfo = getGiroPolarityBreakInfo(candles, cluster, tol * 0.74, { breakCloseTolMult: 0.38 });
     if (!breakInfo) continue;
-    // V17: ancho intermedio. Evita micro-zonas, pero sin convertirlas en bandas demasiado grandes.
-    const minManualBand = Math.max(tol * 0.90, Math.abs(Number(currentRange || 0)) * 0.050, Math.abs(Number(cluster.price || 0)) * 0.0000010, 1e-9);
+    // V20: ancho más contenido. Evita micro-zonas, pero descarta/recorta bandas demasiado abiertas.
+    const minManualBand = Math.max(tol * 0.72, Math.abs(Number(currentRange || 0)) * 0.035, Math.abs(Number(cluster.price || 0)) * 0.0000008, 1e-9);
     const desiredPadFromMin = Math.max(0, (minManualBand - bodyBand) / 2);
-    const zonePad = Math.max(tol * 0.14, bodyBand * 0.22, desiredPadFromMin, 1e-9);
+    const zonePad = Math.max(tol * 0.10, bodyBand * 0.12, desiredPadFromMin, 1e-9);
     out.push({
       ...cluster,
       ...breakInfo,
@@ -11933,6 +11933,20 @@ function analyzeGiroPatronVisualCandidate(candidate, minute, rules = RULES_GIRO_
   };
 }
 
+function getCandidateRealOpenPrice(candidate, minute) {
+  const symbol = String(candidate?.symbol || "");
+  const cm = Number(minute);
+  const ocOpen = Number(candleOC?.[cm]?.[symbol]?.open);
+  if (Number.isFinite(ocOpen)) return ocOpen;
+  const liveOpen = Number(minuteData?.[cm]?.[symbol]?.[0]?.quote);
+  if (Number.isFinite(liveOpen)) return liveOpen;
+  const firstTick = (candidate?.ticks || [])
+    .map((t) => ({ ms: Number(t?.ms), quote: Number(t?.quote) }))
+    .filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
+    .sort((a, b) => a.ms - b.ms)[0];
+  return firstTick && Number.isFinite(firstTick.quote) ? Number(firstTick.quote) : NaN;
+}
+
 function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
   // V14: regla simplificada solicitada.
   // La señal sale cuando, al segundo seleccionado (EVAL_SEC), el precio está
@@ -11942,7 +11956,9 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
   if (ticks.length < 4) return null;
 
   const evalMs = Math.max(1000, Number(EVAL_SEC || 45) * 1000);
-  const p0 = Number(getPriceAtMs(ticks, 0));
+  const tickOpen = Number(getPriceAtMs(ticks, 0));
+  const realOpen = Number(getCandidateRealOpenPrice(candidate, minute));
+  const p0 = Number.isFinite(realOpen) ? realOpen : tickOpen;
   const pE = Number(getPriceAtMs(ticks, evalMs));
   if (!Number.isFinite(p0) || !Number.isFinite(pE)) return null;
 
@@ -11984,20 +12000,25 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     const interacting = distance <= interactionMargin;
     if (!interacting) continue;
 
-    // V15: la vela de señal NO puede nacer pegada al SNR.
-    // Debe abrir lejos de la zona y luego acercarse/interactuar al segundo seleccionado.
+    // V20: la vela de señal NO puede nacer dentro ni pegada al SNR.
+    // Usa apertura real de la vela (candleOC/minuteData), no solo el primer tick disponible.
+    const bodyLowRaw = Math.min(Number(lvl.bodyZoneLow), Number(lvl.bodyZoneHigh));
+    const bodyHighRaw = Math.max(Number(lvl.bodyZoneLow), Number(lvl.bodyZoneHigh));
+    const hasBodyZone = Number.isFinite(bodyLowRaw) && Number.isFinite(bodyHighRaw);
+    const openInsideSNRZone = p0 >= zoneLow && p0 <= zoneHigh;
+    const openInsideBodyZone = hasBodyZone && p0 >= bodyLowRaw && p0 <= bodyHighRaw;
     const openDistanceToZone = p0 < zoneLow ? zoneLow - p0 : p0 > zoneHigh ? p0 - zoneHigh : 0;
-    const minOpenDistanceToZone = Math.max(interactionMargin * 1.10, tol * 1.05, bodyBand * 0.75, range * 0.060, 1e-9);
-    const openTooNearSNR = openDistanceToZone < minOpenDistanceToZone;
+    const minOpenDistanceToZone = Math.max(interactionMargin * 1.20, tol * 1.15, bodyBand * 0.85, range * 0.070, 1e-9);
+    const openTooNearSNR = openInsideSNRZone || openInsideBodyZone || openDistanceToZone < minOpenDistanceToZone;
     if (openTooNearSNR) continue;
 
     // También debe abrir del lado lógico del viaje hacia el nivel:
-    // resistencia => abre por debajo y viaja hacia arriba; soporte => abre por arriba y viaja hacia abajo.
-    const openOnTravelSide = isResistance ? p0 < zoneLow : p0 > zoneHigh;
+    // resistencia => abre claramente por debajo y viaja hacia arriba; soporte => abre claramente por arriba y viaja hacia abajo.
+    const openOnTravelSide = isResistance ? p0 < zoneLow - Math.max(tol * 0.15, 1e-9) : p0 > zoneHigh + Math.max(tol * 0.15, 1e-9);
     if (!openOnTravelSide) continue;
 
     const approachFromOpen = isResistance ? pE - p0 : p0 - pE;
-    if (approachFromOpen < Math.max(minOpenDistanceToZone * 0.35, tol * 0.40, 1e-9)) continue;
+    if (approachFromOpen < Math.max(minOpenDistanceToZone * 0.42, tol * 0.50, 1e-9)) continue;
 
     // Para evitar tomar una ruptura sostenida como interacción:
     // - en resistencia, toleramos apenas arriba de la zona;
@@ -12055,6 +12076,8 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         high,
         low,
         p0,
+        tickOpen,
+        realOpen,
         pE,
         evalSec: Number(EVAL_SEC || 45),
         interactionMargin,
@@ -12062,6 +12085,8 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         interactionInside: inside,
         openDistanceToZone,
         minOpenDistanceToZone,
+        openInsideSNRZone,
+        openInsideBodyZone,
         openTooNearSNR,
         openOnTravelSide,
         approachFromOpen,
@@ -12071,10 +12096,10 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         sideScore,
         stage: "snr_interaccion_nivel",
         movementFilter: "snr_cuerpos_interaccion_eval_sec",
-        status: `SNR interacción: abre lejos y precio ${Number(EVAL_SEC || 45)}s dentro/cerca del nivel`,
+        status: `SNR interacción: apertura fuera/lejos del SNR y precio ${Number(EVAL_SEC || 45)}s dentro/cerca del nivel`,
         logic: isResistance
-          ? `abre lejos por debajo y precio en ${Number(EVAL_SEC || 45)}s interactúa con resistencia SNR => PUT`
-          : `abre lejos por arriba y precio en ${Number(EVAL_SEC || 45)}s interactúa con soporte SNR => CALL`,
+          ? `abre fuera/lejos por debajo y precio en ${Number(EVAL_SEC || 45)}s interactúa con resistencia SNR => PUT`
+          : `abre fuera/lejos por arriba y precio en ${Number(EVAL_SEC || 45)}s interactúa con soporte SNR => CALL`,
       },
     });
   }
