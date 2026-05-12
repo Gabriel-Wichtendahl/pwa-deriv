@@ -679,7 +679,7 @@ const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
 const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
-const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
+const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
@@ -689,7 +689,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_INTERACCION_NIVEL_20260512";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -723,7 +723,7 @@ function saveAnalysisMode(mode) {
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return "🎯 SNR 2º toque";
+  return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
   return MODE_SNR_SEGUNDO_TOQUE;
@@ -11840,24 +11840,25 @@ function analyzeGiroPatronVisualCandidate(candidate, minute, rules = RULES_GIRO_
 }
 
 function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
+  // V14: regla simplificada solicitada.
+  // La señal sale cuando, al segundo seleccionado (EVAL_SEC), el precio está
+  // interactuando con una zona SNR válida por cuerpos/cierres.
+  // Se quita la exigencia de secuencia: rechazo, respuesta débil y segundo rechazo.
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
-  if (ticks.length < 7) return null;
+  if (ticks.length < 4) return null;
 
-  const evalMs = Math.max(35000, EVAL_SEC * 1000);
+  const evalMs = Math.max(1000, Number(EVAL_SEC || 45) * 1000);
   const p0 = Number(getPriceAtMs(ticks, 0));
   const pE = Number(getPriceAtMs(ticks, evalMs));
   if (!Number.isFinite(p0) || !Number.isFinite(pE)) return null;
 
   const pts = ensureTicksWithBoundary(ticks, evalMs);
   const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (qs.length < 5) return null;
+  if (qs.length < 3) return null;
 
   const high = Math.max(...qs);
   const low = Math.min(...qs);
-  const range = Math.max(high - low, 1e-9);
-  const evalAbs = Math.abs(pE);
-  const minRangeForSymbol = Math.max(evalAbs * 0.000010, 1e-9);
-  if (range < minRangeForSymbol) return null;
+  const range = Math.max(high - low, Math.abs(pE) * 0.000001, 1e-9);
 
   const levels = getGiroSNRBodyCandidateLevels(candidate.symbol, minute, range, rules);
   if (!levels.length) return null;
@@ -11870,105 +11871,56 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
 
     const isResistance = (lvl.currentRole || lvl.levelType) === "resistance";
     const direction = isResistance ? "PUT" : "CALL";
-    const sign = isResistance ? 1 : -1;
-    const levelZ = sign * level;
-    const arr = pts
-      .map((p, idx) => ({ idx, ms: Number(p.ms || 0), q: Number(p.quote), z: sign * Number(p.quote) }))
-      .filter((p) => Number.isFinite(p.q) && Number.isFinite(p.z));
-    if (arr.length < 7) continue;
 
-    const bodyBand = Math.abs(Number(lvl.zoneHigh || level) - Number(lvl.zoneLow || level));
+    let zoneLow = Number(lvl.zoneLow);
+    let zoneHigh = Number(lvl.zoneHigh);
+    if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
+      zoneLow = level - tol * 0.35;
+      zoneHigh = level + tol * 0.35;
+    }
+    zoneLow = Math.min(zoneLow, zoneHigh);
+    zoneHigh = Math.max(zoneLow, zoneHigh);
+
+    const bodyBand = Math.max(0, zoneHigh - zoneLow);
     const compactBand = Math.max(0, 1 - bodyBand / Math.max(tol * 2.2, 1e-9));
-    const zone = Math.max(bodyBand * 0.52 + tol * 0.58, range * 0.045, tol * 0.72);
-    const openToLevel = levelZ - Number(arr[0].z);
-    const minOpenToLevel = Math.max(range * 0.30, tol * 1.35);
-    if (openToLevel < minOpenToLevel) continue;
+    const interactionMargin = Math.max(tol * 0.72, bodyBand * 0.55, range * 0.040, 1e-9);
 
-    const nearIndexes = [];
-    for (let i = 0; i < arr.length; i++) {
-      if (arr[i].z >= levelZ - zone) nearIndexes.push(i);
-    }
-    const clusters = clusterSequentialIndexes(nearIndexes).filter((cl) => cl.length >= 1);
-    if (clusters.length < 2) continue;
+    const distance = pE < zoneLow ? zoneLow - pE : pE > zoneHigh ? pE - zoneHigh : 0;
+    const inside = distance <= 1e-12;
+    const interacting = distance <= interactionMargin;
+    if (!interacting) continue;
 
-    let bestSeq = null;
-    for (let a = 0; a < clusters.length - 1; a++) {
-      for (let b = a + 1; b < clusters.length; b++) {
-        const c1 = clusters[a];
-        const c2 = clusters[b];
-        if ((c2[0] - c1[c1.length - 1]) < 2) continue;
+    // Para evitar tomar una ruptura sostenida como interacción:
+    // - en resistencia, toleramos apenas arriba de la zona;
+    // - en soporte, toleramos apenas abajo de la zona.
+    const wrongSide = isResistance ? Math.max(0, pE - zoneHigh) : Math.max(0, zoneLow - pE);
+    if (wrongSide > interactionMargin * 0.65) continue;
 
-        const firstTouchIdx = findMaxZIndex(arr, c1[0], c1[c1.length - 1]);
-        const secondTouchIdx = findMaxZIndex(arr, c2[0], c2[c2.length - 1]);
-        if (firstTouchIdx < 0 || secondTouchIdx < 0 || secondTouchIdx <= firstTouchIdx) continue;
-        if (arr[firstTouchIdx].ms < 9000) continue;
+    const touches = Number(lvl.touches || 0);
+    const proximityScore = Math.max(0, 1 - distance / Math.max(interactionMargin, 1e-9));
+    const sideScore = wrongSide <= 1e-12 ? 1 : Math.max(0, 1 - wrongSide / Math.max(interactionMargin * 0.65, 1e-9));
 
-        const minBetweenIdx = findMinZIndex(arr, c1[c1.length - 1], c2[0]);
-        if (minBetweenIdx < 0 || minBetweenIdx <= firstTouchIdx) continue;
-        const rejection1 = arr[firstTouchIdx].z - arr[minBetweenIdx].z;
-        const minReject = Math.max(range * 0.135, tol * 0.80);
-        if (rejection1 < minReject) continue;
+    let points = 0;
+    if (interacting) points += 2;
+    if (inside) points += 1;
+    if (touches >= 2) points += 1;
+    if (touches >= 3) points += 1;
+    if (touches >= 4) points += 1;
+    if (compactBand >= 0.45) points += 1;
+    if (sideScore >= 0.70) points += 1;
 
-        const retestMove = arr[secondTouchIdx].z - arr[minBetweenIdx].z;
-        const minRetest = Math.max(range * 0.060, tol * 0.55);
-        if (retestMove < minRetest) continue;
+    const quality =
+      proximityScore * 55 +
+      (inside ? 18 : 0) +
+      Math.min(5, touches) * 8 +
+      compactBand * 18 +
+      sideScore * 10 -
+      Math.max(0, wrongSide / Math.max(tol, 1e-9)) * 4;
 
-        // En el segundo toque no queremos que atraviese y sostenga la zona.
-        const secondBreakBeyond = arr[secondTouchIdx].z - levelZ;
-        if (secondBreakBeyond > Math.max(tol * 0.75, range * 0.060)) continue;
-
-        const attackMove = arr[firstTouchIdx].z - arr[0].z;
-        const attackPath = sumAbsDeltaZ(arr, 0, firstTouchIdx);
-        const attackEfficiency = attackMove / Math.max(attackPath, 1e-9);
-        if (attackMove < Math.max(range * 0.30, tol * 1.25)) continue;
-        if (attackEfficiency < 0.30) continue;
-
-        const rejectMs = Math.max(1, arr[minBetweenIdx].ms - arr[firstTouchIdx].ms);
-        const retestMs = Math.max(1, arr[secondTouchIdx].ms - arr[minBetweenIdx].ms);
-        const rejectionSlope = rejection1 / rejectMs;
-        const retestSlope = retestMove / retestMs;
-        const weakRetest = retestMove <= rejection1 * 0.82 || retestSlope <= rejectionSlope * 0.72;
-        if (!weakRetest) continue;
-
-        // Debe estar cerca del segundo toque al momento de evaluar, no muy alejado.
-        const lastZ = Number(arr[arr.length - 1].z);
-        const closeNearSecondTouch = Math.abs(lastZ - arr[secondTouchIdx].z) <= Math.max(zone * 1.40, range * 0.18);
-        const closeNearLevel = Math.abs(lastZ - levelZ) <= Math.max(zone * 1.75, range * 0.22);
-        if (!closeNearSecondTouch && !closeNearLevel) continue;
-
-        let points = 0;
-        if (Number(lvl.touches || 0) >= 2) points += 1;
-        if (Number(lvl.touches || 0) >= 3) points += 1;
-        if (Number(lvl.touches || 0) >= 4) points += 1;
-        if (compactBand >= 0.45) points += 1;
-        if (attackMove >= range * 0.34) points += 1;
-        if (attackEfficiency >= 0.38) points += 1;
-        if (rejection1 >= range * 0.15 || rejectionSlope >= retestSlope * 1.25) points += 1;
-        if (weakRetest) points += 2;
-        if (secondBreakBeyond <= tol * 0.35) points += 1;
-        if (closeNearSecondTouch || closeNearLevel) points += 1;
-        if (points < 6) continue;
-
-        const nearScore = Math.max(0, 1 - Math.abs(lastZ - levelZ) / Math.max(zone * 1.80, 1e-9));
-        const score =
-          points * 14 +
-          Math.min(1.6, attackMove / Math.max(range * 0.34, 1e-9)) * 16 +
-          Math.min(1.8, rejection1 / Math.max(range * 0.14, 1e-9)) * 18 +
-          Math.max(0, 1 - retestMove / Math.max(rejection1, 1e-9)) * 18 +
-          nearScore * 14 +
-          compactBand * 14 +
-          Math.min(5, Number(lvl.touches || 0)) * 6;
-
-        const seq = { firstTouchIdx, minBetweenIdx, secondTouchIdx, attackMove, attackEfficiency, rejection1, retestMove, rejectionSlope, retestSlope, weakRetest, secondBreakBeyond, points, score, nearScore };
-        if (!bestSeq || seq.score > bestSeq.score) bestSeq = seq;
-      }
-    }
-
-    if (!bestSeq) continue;
     matches.push({
       direction,
-      quality: bestSeq.score,
-      points: bestSeq.points,
+      quality,
+      points,
       meta: {
         level,
         levelMode: "snr_body",
@@ -11977,39 +11929,34 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         levelType: isResistance ? "resistance" : "support",
         direction,
         tolerance: tol,
-        zone,
-        zoneLow: Number(lvl.zoneLow),
-        zoneHigh: Number(lvl.zoneHigh),
+        zone: Math.max(bodyBand, interactionMargin),
+        zoneLow,
+        zoneHigh,
         bodyZoneLow: Number(lvl.bodyZoneLow),
         bodyZoneHigh: Number(lvl.bodyZoneHigh),
-        touches: Number(lvl.touches || 0),
+        touches,
         bodyBand,
         compactBodyBand: compactBand,
         brokenAt: Number(lvl.brokenAt || 0),
         breakDirection: lvl.breakDirection || "",
-        points: bestSeq.points,
+        points,
         high,
         low,
         p0,
         pE,
-        openToLevel,
-        attackMove: bestSeq.attackMove,
-        attackEfficiency: bestSeq.attackEfficiency,
-        firstRejection: bestSeq.rejection1,
-        rejectionHasForce: true,
-        retestMove: bestSeq.retestMove,
-        responseRatio: bestSeq.retestMove / Math.max(bestSeq.rejection1, 1e-9),
-        responseSlope: bestSeq.retestSlope,
-        weakResponse: true,
-        secondTouch: true,
-        secondTouchMs: Number(arr[bestSeq.secondTouchIdx]?.ms || 0),
-        closeNearLevel: bestSeq.nearScore,
-        stage: "snr_segundo_toque",
-        movementFilter: "snr_cuerpos_segundo_toque",
-        status: "SNR segundo toque: llega al nivel -> rechazo -> segundo toque habilita señal",
+        evalSec: Number(EVAL_SEC || 45),
+        interactionMargin,
+        interactionDistance: distance,
+        interactionInside: inside,
+        wrongSide,
+        proximityScore,
+        sideScore,
+        stage: "snr_interaccion_nivel",
+        movementFilter: "snr_cuerpos_interaccion_eval_sec",
+        status: `SNR interacción: precio ${Number(EVAL_SEC || 45)}s dentro/cerca del nivel`,
         logic: isResistance
-          ? "viejo soporte roto que pasa a resistencia; rechazo y segundo toque de resistencia => PUT"
-          : "vieja resistencia rota que pasa a soporte; rechazo y segundo toque de soporte => CALL",
+          ? `precio en ${Number(EVAL_SEC || 45)}s interactúa con resistencia SNR => PUT`
+          : `precio en ${Number(EVAL_SEC || 45)}s interactúa con soporte SNR => CALL`,
       },
     });
   }
@@ -12829,7 +12776,7 @@ function evaluateMinute(minute) {
       giroPolaridadScore: Math.round(match.quality),
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
-      matchSource: "SNR_SEGUNDO_TOQUE",
+      matchSource: "SNR_INTERACCION_NIVEL",
     });
   }
 
@@ -12840,7 +12787,7 @@ function evaluateMinute(minute) {
     b.giroNivelScore - a.giroNivelScore
   );
 
-  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
+  // V14: si hay interacción con nivel, se elige la mejor; no se cancela por empate de calidad.
 
   const bestMatch = matches[0];
   addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {

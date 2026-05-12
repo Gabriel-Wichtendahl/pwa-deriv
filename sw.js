@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-base-v13-snr-manual-style";
+const CACHE = "deriv-assets-base-v14-snr-interaccion-nivel";
 
 const ASSETS = [
   "./",
