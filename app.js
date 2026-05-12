@@ -23,14 +23,15 @@
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
 // ✅ NUEVO AUTO BACKTEST V6: prueba SNR con cambio de rol simple soporte→resistencia / resistencia→soporte
 // ✅ NUEVO AUTO BACKTEST V6: diagnóstico visible de cierres descartados: fuera de SNR, sin cambio de rol, sin memoria o momentum
+// ✅ NUEVO AUTO BACKTEST V7: tocar una tarjeta del diagnóstico abre gráfico de velas con nivel/zona SNR marcada
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V6_SAVE_AND_TRADE_FIX_20260511";
-const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V6_SAVE_AND_TRADE_FIX";
+const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V7_DIAG_CHART_20260511";
+const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V7_DIAG_CHART";
 const AUTO_BACKTEST_DEMO_ONLY = true;
 const AUTO_BACKTEST_FORCE_DEMO_ACCOUNT = true;
 const AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE = false;
@@ -61,7 +62,7 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
-const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v6";
+const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v7";
 const MAX_HISTORY = 200;
 
 const MIN_TICKS = 3;
@@ -73,20 +74,20 @@ const HISTORY_TIMEOUT_MS = 7000;
 /* =========================
    Trades Journal (estudio)
 ========================= */
-const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v6";
+const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v7";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
    Capturas de estudio
 ========================= */
-const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_giroAutoBacktest_v6";
+const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_giroAutoBacktest_v7";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
 
 /* =========================
    Trade account config
 ========================= */
-const ACCOUNT_MODE_KEY = "derivTradingAccountMode_giroAutoBacktest_v6";
+const ACCOUNT_MODE_KEY = "derivTradingAccountMode_giroAutoBacktest_v7";
 const ACCOUNT_MODE_DEMO = "demo";
 const ACCOUNT_MODE_REAL = "real";
 const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
@@ -105,7 +106,7 @@ const DEFAULT_CURRENCY = "USD";
    - Nivel 2: stake + ganancia real del nivel 1
    - Después del nivel 2, gane o pierda, vuelve al nivel 1
 ========================= */
-const C100_STATE_KEY = "interesCompuesto2_state_giroAutoBacktest_v6";
+const C100_STATE_KEY = "interesCompuesto2_state_giroAutoBacktest_v7";
 const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no informa ganancia
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
@@ -116,17 +117,17 @@ const C100_LEVELS = [
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
-const EXECUTION_MODE_KEY = "executionMode_giroAutoBacktest_v6";
+const EXECUTION_MODE_KEY = "executionMode_giroAutoBacktest_v7";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_giroAutoBacktest_v6_fixed_by_symbol";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_giroAutoBacktest_v7_fixed_by_symbol";
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
-const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_giroAutoBacktest_v6";
+const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_giroAutoBacktest_v7";
 const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
-const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_giroAutoBacktest_v6";
+const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_giroAutoBacktest_v7";
 const HIGHLOW_DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
 // Límite de pago total para High/Low: payout potencial / stake.
@@ -155,7 +156,7 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
 /* =========================
    Auto-open chart config
 ========================= */
-const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_giroAutoBacktest_v6";
+const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_giroAutoBacktest_v7";
 let autoOpenChartOnSignal = false;
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
@@ -164,11 +165,11 @@ let c100PanelEl = null;
 /* =========================
    Disciplina
 ========================= */
-const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_giroAutoBacktest_v6";
-const DISCIPLINE_WINS_KEY = "discipline_wins_giroAutoBacktest_v6";
-const DISCIPLINE_LOSSES_KEY = "discipline_losses_giroAutoBacktest_v6";
-const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_giroAutoBacktest_v6";
-const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_giroAutoBacktest_v6";
+const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_giroAutoBacktest_v7";
+const DISCIPLINE_WINS_KEY = "discipline_wins_giroAutoBacktest_v7";
+const DISCIPLINE_LOSSES_KEY = "discipline_losses_giroAutoBacktest_v7";
+const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_giroAutoBacktest_v7";
+const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_giroAutoBacktest_v7";
 
 const DISCIPLINE_MAX_WINS = 3;
 const DISCIPLINE_MAX_LOSSES = 2;
@@ -184,7 +185,7 @@ let disciplineBannerEl = null; // banner visible para bloqueo/contador DEMO
 /* =========================
    Link contract_id -> signalId
 ========================= */
-const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v6"; // contract_id -> signalId
+const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v7"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
 
 function loadTradeLinks() {
@@ -690,7 +691,7 @@ const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
-const ANALYSIS_MODE_KEY = "analysisMode_giroAutoBacktest_v6";
+const ANALYSIS_MODE_KEY = "analysisMode_giroAutoBacktest_v7";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
@@ -700,9 +701,9 @@ const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCA
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_giroAutoBacktest_v6";
+const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_giroAutoBacktest_v7";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
-const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_giroAutoBacktest_v6";
+const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_giroAutoBacktest_v7";
 const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
@@ -738,7 +739,7 @@ function nextSignalMode(mode) {
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
-const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_giroAutoBacktest_v6";
+const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_giroAutoBacktest_v7";
 function loadPracticeSavedSignals() {
   try {
     const raw = localStorage.getItem(PRACTICE_SAVED_STORE_KEY);
@@ -3246,7 +3247,7 @@ function shouldAutoOpenChartNow() {
    🪫 Low power mode
 ========================= */
 let lowPowerMode = false;
-const LOWPOWER_KEY = "lowPowerMode_giroAutoBacktest_v6";
+const LOWPOWER_KEY = "lowPowerMode_giroAutoBacktest_v7";
 
 const UI_INTERVAL_NORMAL_MS = 500;
 const UI_INTERVAL_LOW_MS = 1200;
@@ -3421,7 +3422,7 @@ function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
 
-const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_giroAutoBacktest_v6";
+const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_giroAutoBacktest_v7";
 let liveAnalysisPaused = false;
 
 function loadLiveAnalysisPaused() {
@@ -3895,10 +3896,10 @@ function initTabs() {
 /* =========================
    Práctica
 ========================= */
-const PRACTICE_STATS_KEY = "practiceStats_giroAutoBacktest_v6";
-const PRACTICE_FILTER_KEY = "practiceFilterMode_giroAutoBacktest_v6";
-const PRACTICE_POOL_STATE_KEY = "practicePoolState_giroAutoBacktest_v6";
-const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_giroAutoBacktest_v6";
+const PRACTICE_STATS_KEY = "practiceStats_giroAutoBacktest_v7";
+const PRACTICE_FILTER_KEY = "practiceFilterMode_giroAutoBacktest_v7";
+const PRACTICE_POOL_STATE_KEY = "practicePoolState_giroAutoBacktest_v7";
+const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_giroAutoBacktest_v7";
 const PRACTICE_EXPORT_MAX = 150;
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
@@ -3924,7 +3925,7 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 let practiceImageModeBtnEl = null;
-const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_giroAutoBacktest_v6";
+const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_giroAutoBacktest_v7";
 const PRACTICE_DISPLAY_REPLAY = "REPLAY";
 const PRACTICE_DISPLAY_IMAGE = "IMAGE";
 let practiceDisplayMode = loadPracticeDisplayMode();
@@ -11675,6 +11676,13 @@ function ensureAutoBacktestDiagnosticPanel() {
     <div id="autoBacktestDiagRows" style="display:grid;grid-template-columns:1fr;gap:6px;margin-top:7px;"></div>
   `;
 
+  panel.addEventListener("click", (event) => {
+    const row = event.target?.closest?.("[data-auto-diag-index]");
+    if (!row) return;
+    const idx = Number(row.getAttribute("data-auto-diag-index"));
+    openAutoBacktestSNRChartFromDiagnostic(idx);
+  });
+
   if (counterEl && counterEl.parentElement === host) counterEl.insertAdjacentElement("afterend", panel);
   else host.appendChild(panel);
   return panel;
@@ -11701,7 +11709,7 @@ function renderAutoBacktestDiagnosticPanel() {
     rows.innerHTML = `<div style="font-size:12px;color:rgba(148,163,184,.88);">Todavía no hay cierres diagnosticados.</div>`;
     return;
   }
-  rows.innerHTML = records.map((r) => {
+  rows.innerHTML = records.map((r, idx) => {
     const st = getAutoBacktestStatusStyle(r.status);
     const zone = r.closest
       ? `zona ${fmtAutoBacktestNumber(r.closest.zoneLow)}–${fmtAutoBacktestNumber(r.closest.zoneHigh)} · seq ${escapeHtml(r.closest.roleSequence || "—")} · toques ${Number(r.closest.touches || 0)}`
@@ -11709,7 +11717,7 @@ function renderAutoBacktestDiagnosticPanel() {
     const price = Number.isFinite(Number(r.close60)) ? `cierre ${fmtAutoBacktestNumber(r.close60)}` : "cierre —";
     const dir = r.direction ? ` → ${escapeHtml(r.direction)}` : "";
     return `
-      <div style="padding:7px 8px;border-radius:13px;border:1px solid ${st.border};background:${st.bg};color:${st.color};font-size:11.5px;line-height:1.25;">
+      <div data-auto-diag-index="${idx}" title="Tocar para ver el nivel en gráfico de velas" style="padding:7px 8px;border-radius:13px;border:1px solid ${st.border};background:${st.bg};color:${st.color};font-size:11.5px;line-height:1.25;cursor:pointer;">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
           <b style="font-size:12px;">${escapeHtml(r.symbol || "—")}${dir}</b>
           <span style="font-variant-numeric:tabular-nums;color:rgba(226,232,240,.82);">${price}</span>
@@ -11720,6 +11728,264 @@ function renderAutoBacktestDiagnosticPanel() {
     `;
   }).join("");
 }
+
+function ensureAutoBacktestSNRChartModal() {
+  let modal = document.getElementById("autoBacktestSNRChartModal");
+  if (modal) return modal;
+
+  modal = document.createElement("div");
+  modal.id = "autoBacktestSNRChartModal";
+  modal.className = "hidden";
+  modal.style.position = "fixed";
+  modal.style.inset = "0";
+  modal.style.zIndex = "9998";
+  modal.style.display = "none";
+  modal.style.alignItems = "center";
+  modal.style.justifyContent = "center";
+  modal.style.padding = "10px";
+  modal.style.background = "rgba(0,0,0,.78)";
+  modal.style.backdropFilter = "blur(6px)";
+  modal.innerHTML = `
+    <div style="width:min(96vw,760px);max-height:94dvh;overflow:auto;border-radius:20px;border:1px solid rgba(34,211,238,.28);background:linear-gradient(180deg, rgba(2,6,23,.98), rgba(15,23,42,.96));box-shadow:0 28px 90px rgba(0,0,0,.62);padding:12px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px;">
+        <div style="min-width:0;">
+          <div id="autoBacktestSNRChartTitle" style="font-size:15px;font-weight:950;color:#e0f2fe;line-height:1.2;">Nivel SNR</div>
+          <div id="autoBacktestSNRChartSub" style="font-size:12px;color:rgba(226,232,240,.72);line-height:1.25;margin-top:3px;">—</div>
+        </div>
+        <button id="autoBacktestSNRChartCloseBtn" class="btn btnGhost" type="button" style="min-width:42px;min-height:38px;padding:0;border-radius:13px;">✕</button>
+      </div>
+      <canvas id="autoBacktestSNRChartCanvas" style="display:block;width:100%;height:min(62dvh,460px);min-height:330px;border-radius:16px;border:1px solid rgba(148,163,184,.24);background:#020617;"></canvas>
+      <div id="autoBacktestSNRChartLegend" style="font-size:12px;line-height:1.35;color:rgba(226,232,240,.82);margin-top:8px;">—</div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  const close = () => closeAutoBacktestSNRChartModal();
+  modal.querySelector("#autoBacktestSNRChartCloseBtn")?.addEventListener("click", close);
+  modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+  return modal;
+}
+function closeAutoBacktestSNRChartModal() {
+  const modal = document.getElementById("autoBacktestSNRChartModal");
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.classList.add("hidden");
+}
+function getAutoBacktestDiagnosticRecord(index) {
+  const records = Array.isArray(autoBacktestDiagnosticState?.records) ? autoBacktestDiagnosticState.records : [];
+  return records[Number(index)] || null;
+}
+function buildAutoBacktestDiagnosticCandles(record) {
+  const symbol = String(record?.symbol || "");
+  const minute = Number(autoBacktestDiagnosticState?.minute ?? record?.minute);
+  if (!symbol || !Number.isFinite(minute)) return [];
+
+  const historyCandles = getGiroPolarityCandles(symbol, minute, AUTO_BACKTEST_SNR_ROLE_LOOKBACK)
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .slice(-26)
+    .map((c) => ({
+      minute: Number(c.minute),
+      open: Number(c.open),
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+      closed: true,
+      source: "history",
+    }));
+
+  const liveTicks = (minuteData?.[minute]?.[symbol] || [])
+    .slice()
+    .filter((p) => Number.isFinite(Number(p?.ms)) && Number.isFinite(Number(p?.quote)))
+    .sort((a, b) => Number(a.ms) - Number(b.ms));
+  const pts = liveTicks.length ? ensureTicksWithBoundary(liveTicks, 60000) : [];
+  const prices = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const open = Number(record?.open0);
+  const close = Number(record?.close60);
+  const high = prices.length ? Math.max(...prices, Number(record?.high || -Infinity)) : Number(record?.high);
+  const low = prices.length ? Math.min(...prices, Number(record?.low || Infinity)) : Number(record?.low);
+
+  if ([open, close, high, low].every(Number.isFinite)) {
+    historyCandles.push({
+      minute,
+      open,
+      high: Math.max(open, close, high),
+      low: Math.min(open, close, low),
+      close,
+      closed: true,
+      source: "signal",
+    });
+  }
+
+  return historyCandles;
+}
+function drawAutoBacktestSNRDiagnosticChart(canvas, record) {
+  if (!canvas || !record) return;
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const rect = canvas.getBoundingClientRect();
+  const cssW = Math.max(320, rect.width || 640);
+  const cssH = Math.max(300, rect.height || 400);
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const W = cssW;
+  const H = cssH;
+  ctx.clearRect(0, 0, W, H);
+
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, "#07111f");
+  bg.addColorStop(1, "#020617");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  const candles = buildAutoBacktestDiagnosticCandles(record);
+  const zone = record.closest || null;
+  const zoneLow = Number(zone?.zoneLow);
+  const zoneHigh = Number(zone?.zoneHigh);
+  const level = Number(zone?.level ?? ((zoneLow + zoneHigh) / 2));
+  const close60 = Number(record.close60);
+
+  const chart = { l: 46, r: 18, t: 28, b: 38 };
+  const x0 = chart.l, x1 = W - chart.r, y0 = chart.t, y1 = H - chart.b;
+  ctx.strokeStyle = "rgba(148,163,184,.22)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+
+  const allPrices = [];
+  candles.forEach((c) => allPrices.push(Number(c.high), Number(c.low), Number(c.open), Number(c.close)));
+  if (Number.isFinite(zoneLow)) allPrices.push(zoneLow);
+  if (Number.isFinite(zoneHigh)) allPrices.push(zoneHigh);
+  if (Number.isFinite(level)) allPrices.push(level);
+  if (Number.isFinite(close60)) allPrices.push(close60);
+
+  let min = Math.min(...allPrices.filter(Number.isFinite));
+  let max = Math.max(...allPrices.filter(Number.isFinite));
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    min = 0; max = 1;
+  }
+  let range = max - min;
+  if (!Number.isFinite(range) || range <= 0) range = Math.max(Math.abs(max) * 0.0001, 1e-9);
+  min -= range * 0.12;
+  max += range * 0.12;
+
+  const yOf = (price) => y1 - ((Number(price) - min) / (max - min)) * (y1 - y0);
+  const n = Math.max(1, candles.length);
+  const gap = 5;
+  const candleW = Math.max(5, Math.min(18, (x1 - x0 - gap * (n + 1)) / n));
+  const slot = (x1 - x0) / n;
+  const xCenter = (i) => x0 + slot * i + slot / 2;
+
+  for (let i = 1; i <= 4; i++) {
+    const y = y0 + ((y1 - y0) * i) / 5;
+    ctx.strokeStyle = "rgba(148,163,184,.10)";
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+  }
+
+  if (Number.isFinite(zoneLow) && Number.isFinite(zoneHigh)) {
+    const zy0 = yOf(zoneHigh);
+    const zy1 = yOf(zoneLow);
+    ctx.fillStyle = "rgba(251,191,36,.16)";
+    ctx.fillRect(x0, zy0, x1 - x0, Math.max(2, zy1 - zy0));
+    ctx.strokeStyle = "rgba(251,191,36,.72)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x0, zy0); ctx.lineTo(x1, zy0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0, zy1); ctx.lineTo(x1, zy1); ctx.stroke();
+    ctx.fillStyle = "rgba(251,191,36,.96)";
+    ctx.font = "800 11px system-ui, -apple-system, Segoe UI, sans-serif";
+    ctx.fillText("ZONA SNR", x0 + 8, Math.max(y0 + 14, zy0 - 5));
+  }
+
+  if (Number.isFinite(level)) {
+    const ly = yOf(level);
+    ctx.setLineDash([6, 5]);
+    ctx.strokeStyle = "rgba(34,211,238,.90)";
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(x0, ly); ctx.lineTo(x1, ly); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  candles.forEach((c, i) => {
+    const xc = xCenter(i);
+    const o = Number(c.open), h = Number(c.high), l = Number(c.low), cl = Number(c.close);
+    if (![o, h, l, cl].every(Number.isFinite)) return;
+    const up = cl >= o;
+    const isSignal = c.source === "signal";
+    const wickColor = isSignal ? "rgba(34,211,238,.92)" : up ? "rgba(34,197,94,.85)" : "rgba(239,68,68,.85)";
+    const bodyColor = isSignal ? "rgba(34,211,238,.82)" : up ? "rgba(34,197,94,.62)" : "rgba(239,68,68,.62)";
+    ctx.strokeStyle = wickColor;
+    ctx.lineWidth = isSignal ? 2.2 : 1.4;
+    ctx.beginPath(); ctx.moveTo(xc, yOf(h)); ctx.lineTo(xc, yOf(l)); ctx.stroke();
+    const by = Math.min(yOf(o), yOf(cl));
+    const bh = Math.max(2, Math.abs(yOf(o) - yOf(cl)));
+    ctx.fillStyle = bodyColor;
+    ctx.strokeStyle = wickColor;
+    ctx.lineWidth = isSignal ? 1.8 : 1;
+    ctx.beginPath();
+    ctx.roundRect(xc - candleW / 2, by, candleW, bh, Math.min(4, candleW / 2));
+    ctx.fill(); ctx.stroke();
+    if (isSignal) {
+      ctx.fillStyle = "rgba(224,242,254,.95)";
+      ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+      ctx.fillText("60s", Math.max(x0 + 2, xc - 14), y1 + 24);
+    }
+  });
+
+  if (Number.isFinite(close60) && candles.length) {
+    const idx = candles.length - 1;
+    const cx = xCenter(idx);
+    const cy = yOf(close60);
+    ctx.strokeStyle = "rgba(224,242,254,.45)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(x0, cy); ctx.lineTo(x1, cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#e0f2fe";
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "rgba(224,242,254,.95)";
+    ctx.font = "800 11px system-ui, -apple-system, Segoe UI, sans-serif";
+    ctx.fillText("cierre", Math.max(x0 + 4, cx - 36), Math.max(y0 + 12, cy - 8));
+  }
+
+  ctx.fillStyle = "rgba(226,232,240,.75)";
+  ctx.font = "11px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText(fmtAutoBacktestNumber(max, 6), 4, y0 + 8);
+  ctx.fillText(fmtAutoBacktestNumber(min, 6), 4, y1);
+}
+function openAutoBacktestSNRChartFromDiagnostic(index) {
+  const record = getAutoBacktestDiagnosticRecord(index);
+  if (!record) return;
+  if (!record.closest && !Number.isFinite(Number(record.close60))) {
+    toast("No hay nivel para graficar todavía", 1400);
+    return;
+  }
+
+  const modal = ensureAutoBacktestSNRChartModal();
+  const title = modal.querySelector("#autoBacktestSNRChartTitle");
+  const sub = modal.querySelector("#autoBacktestSNRChartSub");
+  const canvas = modal.querySelector("#autoBacktestSNRChartCanvas");
+  const legend = modal.querySelector("#autoBacktestSNRChartLegend");
+  const zone = record.closest || {};
+  const minute = Number(autoBacktestDiagnosticState?.minute ?? record.minute);
+  const seq = zone.roleSequence || "—";
+  const touches = Number(zone.touches || 0);
+  const closeTxt = fmtAutoBacktestNumber(record.close60, 6);
+  const zoneTxt = Number.isFinite(Number(zone.zoneLow)) && Number.isFinite(Number(zone.zoneHigh))
+    ? `${fmtAutoBacktestNumber(zone.zoneLow, 6)} – ${fmtAutoBacktestNumber(zone.zoneHigh, 6)}`
+    : "sin zona";
+
+  if (title) title.textContent = `${record.symbol || "—"}${record.direction ? " → " + record.direction : ""} · gráfico de velas SNR`;
+  if (sub) sub.textContent = `m${Number.isFinite(minute) ? minute : "—"} · cierre ${closeTxt} · zona ${zoneTxt}`;
+  if (legend) {
+    const inside = record.status === "candidate_ok" || record.status === "signal_created" || record.status === "signal_created_trade_attempted";
+    legend.innerHTML = `Franja amarilla = zona SNR. Línea celeste = nivel medio. Punto celeste = cierre 60s. <b>${inside ? "El cierre quedó dentro de la zona." : escapeHtml(record.message || "Diagnóstico")}</b><br>Secuencia: <b>${escapeHtml(seq)}</b> · toques: <b>${touches}</b>`;
+  }
+
+  modal.style.display = "flex";
+  modal.classList.remove("hidden");
+  setTimeout(() => drawAutoBacktestSNRDiagnosticChart(canvas, record), 0);
+}
+
 function setAutoBacktestDiagnostic(next = {}) {
   autoBacktestDiagnosticState = {
     ...autoBacktestDiagnosticState,

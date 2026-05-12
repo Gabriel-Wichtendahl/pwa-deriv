@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals GIRO AUTO BACKTEST DEMO V6 */
+/* sw.js — Deriv Signals GIRO AUTO BACKTEST DEMO V7 */
 "use strict";
 
-const CACHE = "deriv-assets-giro-auto-backtest-demo-v6-save-and-trade-fix";
+const CACHE = "deriv-assets-giro-auto-backtest-demo-v7-diag-chart";
 
 const ASSETS = [
   "./",
