@@ -689,7 +689,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_INTERACCION_NIVEL_OPEN_LEJOS_20260512";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_CIERRES_REACCION_V21_20260513";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -7035,8 +7035,12 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
       zoneHigh = level + fallback;
     }
   }
-  zoneLow = Math.min(zoneLow, zoneHigh);
-  zoneHigh = Math.max(zoneLow, zoneHigh);
+  {
+    const zA = zoneLow;
+    const zB = zoneHigh;
+    zoneLow = Math.min(zA, zB);
+    zoneHigh = Math.max(zA, zB);
+  }
   const zoneWidth = Math.max(0, zoneHigh - zoneLow);
 
   const nearBuffer = Math.max(
@@ -11091,7 +11095,7 @@ function getGiroNivelSimpleCandidateLevels(symbol, minute, currentRange, rules =
   }));
 }
 function getGiroSNRBodyTolerance(symbol, currentRange = 0) {
-  const candles = getGiroPolarityCandles(symbol, null, 60);
+  const candles = getGiroPolarityCandles(symbol, null, 70);
   const bodies = candles
     .map((c) => Math.abs(Number(c.close) - Number(c.open)))
     .filter((x) => Number.isFinite(x) && x > 0);
@@ -11109,7 +11113,10 @@ function getGiroSNRBodyTolerance(symbol, currentRange = 0) {
   const avgStep = steps.length
     ? steps.reduce((a, b) => a + b, 0) / steps.length
     : avgBody;
-  return Math.max(avgBody * 0.48, avgStep * 1.10, Math.abs(Number(currentRange || 0)) * 0.030, 1e-9);
+
+  // V21: tolerancia un poco más fina. El nivel se arma por CIERRES con reacción,
+  // no por todo el cuerpo de la vela. Por eso no necesitamos una banda tan grande.
+  return Math.max(avgBody * 0.38, avgStep * 0.92, Math.abs(Number(currentRange || 0)) * 0.024, 1e-9);
 }
 function getArrayPercentileValue(src, pct = 0.5) {
   const arr = (src || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
@@ -11122,21 +11129,85 @@ function getArrayPercentileValue(src, pct = 0.5) {
   const t = idx - lo;
   return arr[lo] * (1 - t) + arr[hi] * t;
 }
+function getGiroSNRCloseReactionRawLevels(candles, currentRange, tolerance) {
+  const out = [];
+  const src = (candles || []).filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite));
+  if (src.length < 4) return out;
+
+  const reactionMin = Math.max(Number(tolerance || 0) * 0.78, Math.abs(Number(currentRange || 0)) * 0.040, 1e-9);
+  const lookAhead = 4;
+
+  for (let i = 0; i < src.length - 1; i++) {
+    const c = src[i];
+    const close = Number(c.close);
+    const open = Number(c.open);
+    if (![open, close].every(Number.isFinite)) continue;
+
+    const future = src.slice(i + 1, Math.min(src.length, i + 1 + lookAhead));
+    if (!future.length) continue;
+
+    const futureHigh = Math.max(...future.map((x) => Number(x.high)).filter(Number.isFinite));
+    const futureLow = Math.min(...future.map((x) => Number(x.low)).filter(Number.isFinite));
+    const futureCloseHigh = Math.max(...future.map((x) => Number(x.close)).filter(Number.isFinite));
+    const futureCloseLow = Math.min(...future.map((x) => Number(x.close)).filter(Number.isFinite));
+    if (![futureHigh, futureLow, futureCloseHigh, futureCloseLow].every(Number.isFinite)) continue;
+
+    const pureDownMove = Math.max(0, close - futureLow, close - futureCloseLow);
+    const pureUpMove = Math.max(0, futureHigh - close, futureCloseHigh - close);
+
+    const body = Math.abs(close - open);
+    const bodyPenalty = body > reactionMin * 1.9 ? 0.90 : 1;
+
+    // Si desde ese cierre el precio reacciona hacia abajo, ese cierre cuenta como resistencia.
+    if (pureDownMove >= reactionMin && pureDownMove >= pureUpMove * 0.58) {
+      out.push({
+        price: close,
+        type: "resistance",
+        minute: Number(c.minute),
+        reactionMove: pureDownMove,
+        reactionScore: Math.max(0.01, (pureDownMove / reactionMin) * bodyPenalty),
+        source: "close_reaction_down",
+      });
+    }
+
+    // Si desde ese cierre el precio reacciona hacia arriba, ese cierre cuenta como soporte.
+    if (pureUpMove >= reactionMin && pureUpMove >= pureDownMove * 0.58) {
+      out.push({
+        price: close,
+        type: "support",
+        minute: Number(c.minute),
+        reactionMove: pureUpMove,
+        reactionScore: Math.max(0.01, (pureUpMove / reactionMin) * bodyPenalty),
+        source: "close_reaction_up",
+      });
+    }
+  }
+  return out;
+}
 function clusterGiroSNRBodyLevels(rawLevels, tolerance) {
   const clusters = [];
   for (const type of ["resistance", "support"]) {
     const sorted = (rawLevels || [])
       .filter((x) => x && x.type === type && Number.isFinite(Number(x.price)))
-      .map((x) => ({ ...x, price: Number(x.price), minute: Number(x.minute || 0) }))
+      .map((x) => ({
+        ...x,
+        price: Number(x.price),
+        minute: Number(x.minute || 0),
+        reactionScore: Number.isFinite(Number(x.reactionScore)) ? Number(x.reactionScore) : 1,
+        reactionMove: Number.isFinite(Number(x.reactionMove)) ? Number(x.reactionMove) : 0,
+      }))
       .sort((a, b) => Number(a.price) - Number(b.price));
 
     for (const lvl of sorted) {
       const price = Number(lvl.price);
+      const weight = Math.max(0.25, Math.min(3.5, Number(lvl.reactionScore || 1)));
       const sameType = clusters.filter((x) => x.originalType === type);
       const last = sameType[sameType.length - 1];
       if (!last || Math.abs(price - last.price) > tolerance) {
         clusters.push({
           price,
+          weightedPriceSum: price * weight,
+          weightSum: weight,
           originalType: type,
           type,
           touches: 1,
@@ -11146,79 +11217,132 @@ function clusterGiroSNRBodyLevels(rawLevels, tolerance) {
           zoneLow: price,
           zoneHigh: price,
           rawPrices: [price],
+          reactionSum: Number(lvl.reactionScore || 1),
+          reactionMax: Number(lvl.reactionScore || 1),
+          reactionMoveMax: Number(lvl.reactionMove || 0),
         });
       } else {
-        const total = last.touches + 1;
-        last.price = (last.price * last.touches + price) / total;
-        last.touches = total;
+        last.weightedPriceSum += price * weight;
+        last.weightSum += weight;
+        last.price = last.weightedPriceSum / Math.max(last.weightSum, 1e-9);
+        last.touches += 1;
         last.minutes.push(Number(lvl.minute || 0));
         last.firstMinute = Math.min(last.firstMinute, Number(lvl.minute || 0));
         last.lastTouchMinute = Math.max(last.lastTouchMinute, Number(lvl.minute || 0));
         last.zoneLow = Math.min(Number(last.zoneLow), price);
         last.zoneHigh = Math.max(Number(last.zoneHigh), price);
         last.rawPrices.push(price);
+        last.reactionSum += Number(lvl.reactionScore || 1);
+        last.reactionMax = Math.max(Number(last.reactionMax || 0), Number(lvl.reactionScore || 1));
+        last.reactionMoveMax = Math.max(Number(last.reactionMoveMax || 0), Number(lvl.reactionMove || 0));
       }
     }
   }
+
   for (const cluster of clusters) {
     const prices = (cluster.rawPrices || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
-    if (prices.length >= 3) {
-      const trimmedLow = getArrayPercentileValue(prices, 0.18);
-      const trimmedHigh = getArrayPercentileValue(prices, 0.82);
-      if (Number.isFinite(trimmedLow) && Number.isFinite(trimmedHigh) && trimmedHigh >= trimmedLow) {
-        cluster.zoneLow = trimmedLow;
-        cluster.zoneHigh = trimmedHigh;
-      }
-    }
+    const median = getArrayPercentileValue(prices, 0.50);
+    let coreLow = prices.length >= 3 ? getArrayPercentileValue(prices, 0.25) : getArrayPercentileValue(prices, 0.00);
+    let coreHigh = prices.length >= 3 ? getArrayPercentileValue(prices, 0.75) : getArrayPercentileValue(prices, 1.00);
+    if (!Number.isFinite(coreLow)) coreLow = Number(cluster.zoneLow);
+    if (!Number.isFinite(coreHigh)) coreHigh = Number(cluster.zoneHigh);
+    if (Number.isFinite(median)) cluster.price = median;
+    cluster.coreLow = Math.min(coreLow, coreHigh);
+    cluster.coreHigh = Math.max(coreLow, coreHigh);
+    cluster.zoneLow = cluster.coreLow;
+    cluster.zoneHigh = cluster.coreHigh;
     cluster.zoneSpan = Math.max(0, Number(cluster.zoneHigh) - Number(cluster.zoneLow));
     cluster.uniqueMinutes = new Set((cluster.minutes || []).map(Number).filter(Number.isFinite)).size;
-    cluster.compactness = Math.max(0, 1 - cluster.zoneSpan / Math.max(tolerance * 2.1, 1e-9));
+    cluster.reactionScore = Number(cluster.reactionSum || 0) / Math.max(1, Number(cluster.touches || 0));
+    cluster.compactness = Math.max(0, 1 - cluster.zoneSpan / Math.max(tolerance * 1.75, 1e-9));
   }
   return clusters.sort((a, b) => Number(a.price) - Number(b.price));
 }
 function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
-  const candles = getGiroPolarityCandles(symbol, minute, 120);
+  const candles = getGiroPolarityCandles(symbol, minute, 140);
   if (!candles.length) return [];
   const tol = getGiroSNRBodyTolerance(symbol, currentRange);
-  const raw = [];
-  for (const c of candles) {
-    const open = Number(c.open);
-    const close = Number(c.close);
-    if (![open, close].every(Number.isFinite)) continue;
-    raw.push({ price: Math.max(open, close), type: "resistance", minute: Number(c.minute) });
-    raw.push({ price: Math.min(open, close), type: "support", minute: Number(c.minute) });
-  }
-  const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.96);
+
+  // V21: niveles SNR por CIERRES + reacción posterior.
+  // Ya no se toma la parte alta/baja del cuerpo completo. El núcleo del nivel sale de
+  // cierres que funcionaron como pared y provocaron giro en las velas siguientes.
+  const raw = getGiroSNRCloseReactionRawLevels(candles, currentRange, tol);
+  const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.82);
+
   const out = [];
   for (const cluster of clusters) {
     const touches = Number(cluster.touches || 0);
     const uniqueMinutes = Number(cluster.uniqueMinutes || 0);
-    const bodyBand = Math.max(0, Number(cluster.zoneHigh) - Number(cluster.zoneLow));
-    if (touches < 2 || uniqueMinutes < 2) continue;
-    if (touches < 3 && bodyBand > tol * 0.82) continue;
-    if (bodyBand > Math.max(tol * 2.10, Math.abs(Number(currentRange || 0)) * 0.16)) continue;
-    const breakInfo = getGiroPolarityBreakInfo(candles, cluster, tol * 0.74, { breakCloseTolMult: 0.38 });
-    if (!breakInfo) continue;
-    // V20: ancho más contenido. Evita micro-zonas, pero descarta/recorta bandas demasiado abiertas.
-    const minManualBand = Math.max(tol * 0.72, Math.abs(Number(currentRange || 0)) * 0.035, Math.abs(Number(cluster.price || 0)) * 0.0000008, 1e-9);
-    const desiredPadFromMin = Math.max(0, (minManualBand - bodyBand) / 2);
-    const zonePad = Math.max(tol * 0.10, bodyBand * 0.12, desiredPadFromMin, 1e-9);
+    const reactionScore = Number(cluster.reactionScore || 0);
+    let coreLow = Number(cluster.zoneLow);
+    let coreHigh = Number(cluster.zoneHigh);
+    const center = Number(cluster.price);
+    if (![coreLow, coreHigh, center].every(Number.isFinite)) continue;
+    {
+      const cLow = coreLow;
+      const cHigh = coreHigh;
+      coreLow = Math.min(cLow, cHigh);
+      coreHigh = Math.max(cLow, cHigh);
+    }
+    let closeBand = Math.max(0, coreHigh - coreLow);
+
+    // Tiene que haber historia real de reacción. Dos cierres solo pasan si fueron muy claros.
+    if (uniqueMinutes < 2 || touches < 2) continue;
+    if (touches < 3 && reactionScore < 1.75) continue;
+
+    // Evita zonas gigantes como las que veníamos viendo.
+    const maxCloseBand = Math.max(tol * 1.55, Math.abs(Number(currentRange || 0)) * 0.090, 1e-9);
+    if (closeBand > maxCloseBand) {
+      coreLow = center - maxCloseBand / 2;
+      coreHigh = center + maxCloseBand / 2;
+      closeBand = maxCloseBand;
+    }
+
+    // Ancho mínimo visual/operativo, pero contenido.
+    const minCloseBand = Math.max(tol * 0.34, Math.abs(Number(currentRange || 0)) * 0.014, 1e-9);
+    if (closeBand < minCloseBand) {
+      coreLow = center - minCloseBand / 2;
+      coreHigh = center + minCloseBand / 2;
+      closeBand = minCloseBand;
+    }
+
+    const zonePad = Math.min(
+      Math.max(tol * 0.055, Math.abs(Number(currentRange || 0)) * 0.0045, 1e-9),
+      Math.max(tol * 0.16, 1e-9)
+    );
+
+    const role = cluster.originalType === "support" ? "support" : "resistance";
     out.push({
       ...cluster,
-      ...breakInfo,
       levelMode: "snr_body",
-      levelType: breakInfo.currentRole,
-      level: Number(cluster.price),
+      originalType: role,
+      currentRole: role,
+      levelType: role,
+      direction: role === "support" ? "CALL" : "PUT",
+      breakDirection: "",
+      brokenAt: NaN,
+      level: center,
+      price: center,
       tolerance: tol,
       compactness: Number(cluster.compactness || 0),
-      zoneLow: Number(cluster.zoneLow) - zonePad,
-      zoneHigh: Number(cluster.zoneHigh) + zonePad,
-      bodyZoneLow: Number(cluster.zoneLow),
-      bodyZoneHigh: Number(cluster.zoneHigh),
+      reactionScore,
+      reactionMax: Number(cluster.reactionMax || 0),
+      reactionMoveMax: Number(cluster.reactionMoveMax || 0),
+      zoneLow: coreLow - zonePad,
+      zoneHigh: coreHigh + zonePad,
+      bodyZoneLow: coreLow,
+      bodyZoneHigh: coreHigh,
+      closeReactionZoneLow: coreLow,
+      closeReactionZoneHigh: coreHigh,
+      closeBand,
       zonePad,
     });
   }
-  return out;
+  return out.sort((a, b) =>
+    Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
+    Number(b.touches || 0) - Number(a.touches || 0) ||
+    Number(a.zoneSpan || 0) - Number(b.zoneSpan || 0)
+  );
 }
 function sumAbsDeltaZ(arr, fromIdx, toIdx) {
   let acc = 0;
@@ -11988,8 +12112,12 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
       zoneLow = level - tol * 0.35;
       zoneHigh = level + tol * 0.35;
     }
-    zoneLow = Math.min(zoneLow, zoneHigh);
-    zoneHigh = Math.max(zoneLow, zoneHigh);
+    {
+      const zA = zoneLow;
+      const zB = zoneHigh;
+      zoneLow = Math.min(zA, zB);
+      zoneHigh = Math.max(zA, zB);
+    }
 
     const bodyBand = Math.max(0, zoneHigh - zoneLow);
     const compactBand = Math.max(0, 1 - bodyBand / Math.max(tol * 2.2, 1e-9));
@@ -12027,6 +12155,7 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     if (wrongSide > interactionMargin * 0.65) continue;
 
     const touches = Number(lvl.touches || 0);
+    const reactionStrength = Math.min(2.4, Math.max(0, Number(lvl.reactionScore || 0)));
     const proximityScore = Math.max(0, 1 - distance / Math.max(interactionMargin, 1e-9));
     const sideScore = wrongSide <= 1e-12 ? 1 : Math.max(0, 1 - wrongSide / Math.max(interactionMargin * 0.65, 1e-9));
 
@@ -12037,6 +12166,7 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     if (touches >= 3) points += 1;
     if (touches >= 4) points += 1;
     if (compactBand >= 0.45) points += 1;
+    if (reactionStrength >= 1.20) points += 1;
     if (sideScore >= 0.70) points += 1;
     if (openDistanceToZone >= minOpenDistanceToZone * 1.35) points += 1;
 
@@ -12046,6 +12176,7 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
       (inside ? 18 : 0) +
       Math.min(5, touches) * 8 +
       compactBand * 18 +
+      reactionStrength * 10 +
       sideScore * 10 +
       openDistanceScore * 12 -
       Math.max(0, wrongSide / Math.max(tol, 1e-9)) * 4;
@@ -12068,6 +12199,9 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         bodyZoneLow: Number(lvl.bodyZoneLow),
         bodyZoneHigh: Number(lvl.bodyZoneHigh),
         touches,
+        reactionScore: Number(lvl.reactionScore || 0),
+        reactionMax: Number(lvl.reactionMax || 0),
+        reactionMoveMax: Number(lvl.reactionMoveMax || 0),
         bodyBand,
         compactBodyBand: compactBand,
         brokenAt: Number(lvl.brokenAt || 0),
