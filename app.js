@@ -1533,7 +1533,7 @@ const SIGNAL_PREALERT_MIN_SEC = 35;
 const SIGNAL_PREALERT_MAX_SEC = 45;
 // V7: aunque haya 4 puntos manuales, la entrada real solo se permite
 // si al segundo 59 el precio está dentro de la zona SNR o muy cerca.
-const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
+const SIGNAL_AUTO_SNR_GATE_ENABLED = false;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
 const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
 const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0.35;
@@ -7179,17 +7179,19 @@ function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
   return removed;
 }
 function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
-  if (!SIGNAL_AUTO_SNR_GATE_ENABLED || !item) return null;
-  const meta = getSignalSNREntryMeta(item);
-  if (!meta) return null;
+  // V25: el SNR ya no bloquea la operación.
+  // La condición real para trade automático es: segundo 59 + 4 puntos netos.
+  if (!item) return null;
   const ms = getSignalConfirmationMs(item);
   if (ms < SIGNAL_AUTO_ENTRY_MS) {
-    throw new Error(`La entrada SNR se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
+    throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
   }
-  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-  if (gate.pending) throw new Error(gate.message || "SNR pendiente de precio");
-  if (!gate.ok) throw new Error(`Precio lejos del SNR: ${formatSignalSNREntryGate(gate)}`);
-  return gate;
+  try {
+    const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    return gate && !gate.pending ? gate : null;
+  } catch {
+    return null;
+  }
 }
 
 function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
@@ -7205,28 +7207,14 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
   const side = getSignalEnabledTradeSide(item);
   if (!side) return false;
 
-  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-  if (gate.pending) return false;
-  const label = side === "CALL" ? "COMPRA" : "VENTA";
-
-  if (SIGNAL_AUTO_SNR_GATE_ENABLED && !gate.ok) {
-    item.signalAutoEntry = {
-      type: "AUTO_59_REAL",
-      attempted: true,
-      status: "blocked_snr_distance",
-      side,
-      ms,
-      sec: Math.round(ms / 1000),
-      reason: String(reason || "AUTO_59"),
-      at: Date.now(),
-      confirmation_status: getSignalConfirmationStatusText(item),
-      snr_entry_gate: gate,
-    };
-    saveHistory(history);
-    if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-    toast(`⛔ AUTO ${SIGNAL_AUTO_ENTRY_SEC}s cancelado: precio lejos del SNR`, 2600);
-    return true;
+  let gate = null;
+  try {
+    gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    if (gate?.pending) gate = null;
+  } catch {
+    gate = null;
   }
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
 
   item.signalAutoEntry = {
     type: "AUTO_59_REAL",
@@ -8777,20 +8765,20 @@ function getSignalLifecycleStageInfo(item) {
       return {
         key: "auto_ready",
         label: `🟢 AUTO ${autoSec}s`,
-        title: `Listo para autoentrada: precio dentro/cerca del SNR y puntos completos. ${pointsTxt}`,
+        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos completos. El SNR no bloquea el trade. ${pointsTxt}`,
       };
     }
     if (gate?.ok) {
       return {
         key: "auto_zone",
         label: `🟢 ZONA ${autoSec}s`,
-        title: `Precio dentro/cerca del SNR. Falta completar puntos manuales. ${pointsTxt}`,
+        title: `Precio dentro/cerca del SNR como referencia. Para operar faltan 4 puntos. ${pointsTxt}`,
       };
     }
     return {
       key: "auto_wait",
-      label: `🟠 ${autoSec}s LEJOS`,
-      title: `En ${autoSec}s el precio no está dentro/cerca del SNR. ${pointsTxt}`,
+      label: `🟠 ${autoSec}s`,
+      title: `En ${autoSec}s el SNR queda solo como referencia. Para operar importan los 4 puntos. ${pointsTxt}`,
     };
   }
 
