@@ -7121,6 +7121,9 @@ function signalHasProtectedTrade(item) {
   if (item?.signalAutoEntry?.attempted && ["sending", "sent"].includes(autoStatus)) return true;
   return false;
 }
+function hasSignalTradeAssociated(item) {
+  return signalHasProtectedTrade(item);
+}
 function shouldRemoveSignalBecauseClosedAwayFromSNR(item) {
   // No purgar señales que ya ejecutaron o están ejecutando un trade.
   // Si se borra una señal con contrato, se pierde el vínculo para actualizar Trades.
