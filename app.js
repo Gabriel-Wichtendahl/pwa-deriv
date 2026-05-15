@@ -680,6 +680,7 @@ const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
+const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
@@ -690,6 +691,7 @@ const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RE
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_PREALERTA_35_45_AUTO59_V23_20260513";
+const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_AUTO59_4PTS_V26_20260515";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -698,35 +700,42 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
 function normalizeSignalMode(mode) {
-  // BASE V4: único motor activo. Cualquier modo viejo guardado se fuerza a SNR.
+  const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
+  if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
+function isDynamicLineMode(mode) {
+  return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
+}
 function isGiroFamilyMode(mode) {
-  return mode === MODE_SNR_SEGUNDO_TOQUE || mode === MODE_GIRO_NIVEL || mode === MODE_GIRO_POLARIDAD;
+  const m = normalizeSignalMode(mode);
+  return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
-  return GIRO_NIVEL_LOGIC_VERSION;
+  return isDynamicLineMode(mode) ? LINEA_DINAMICA_LOGIC_VERSION : GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
+    const stored = localStorage.getItem(ANALYSIS_MODE_KEY);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
+    return normalizeSignalMode(stored || MODE_SNR_SEGUNDO_TOQUE);
   } catch {}
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 function saveAnalysisMode(mode) {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
+    localStorage.setItem(ANALYSIS_MODE_KEY, normalizeSignalMode(mode));
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return "🎯 SNR interacción";
+  return isDynamicLineMode(mode) ? "📐 Línea dinámica" : "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
-  return MODE_SNR_SEGUNDO_TOQUE;
+  return isDynamicLineMode(mode) ? MODE_SNR_SEGUNDO_TOQUE : MODE_LINEA_DINAMICA;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -6132,24 +6141,26 @@ function applyTheme(theme) {
       })
   );
 
-  signalMode = MODE_NORMAL;
-  saveAnalysisMode(signalMode);
+  signalMode = loadAnalysisMode();
 
   const paintMode = () => {
     if (!modeBtn) return;
+    signalMode = normalizeSignalMode(signalMode);
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = "Base limpia: los motores de señal están desactivados.";
+    modeBtn.title = isDynamicLineMode(signalMode)
+      ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 59s con 4 puntos."
+      : "Modo SNR interacción: zonas horizontales por cierres/reacción.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = MODE_NORMAL;
+      signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast("⚪ Base limpia: sin motor de señales", 1500);
+      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : "🎯 Modo SNR interacción", 1500);
     };
 })();
 
@@ -6358,12 +6369,19 @@ function drawDerivLikeChart(canvas, ticks) {
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
   const modalPolarityLevel = modalCurrentItem?.giroPolaridad?.level;
+  const modalDynamicLine = getSignalDynamicLineMeta(modalCurrentItem);
   const modalSNRNearArea = modalCurrentItem?.giroPolaridad
     ? buildSNRNearAreaMetaFromLevel(modalCurrentItem.giroPolaridad)
     : null;
   if (Number.isFinite(Number(modalPolarityLevel))) {
     min = Math.min(min, Number(modalPolarityLevel));
     max = Math.max(max, Number(modalPolarityLevel));
+  }
+  if (modalDynamicLine) {
+    const dl0 = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 0));
+    const dl1 = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 60000));
+    if (Number.isFinite(dl0)) { min = Math.min(min, dl0); max = Math.max(max, dl0); }
+    if (Number.isFinite(dl1)) { min = Math.min(min, dl1); max = Math.max(max, dl1); }
   }
   if (modalSNRNearArea) {
     min = Math.min(min, Number(modalSNRNearArea.nearLow), Number(modalSNRNearArea.zoneLow));
@@ -6519,6 +6537,26 @@ function drawDerivLikeChart(canvas, ticks) {
     // se mantienen las bandas y líneas visuales, pero se quitan los textos
     // para evitar contaminación visual dentro del modal.
     ctx.restore();
+  }
+
+  // Línea dinámica de tendencia (soporte/resistencia inclinada)
+  if (modalDynamicLine) {
+    const y0v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 0));
+    const y1v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 60000));
+    if (Number.isFinite(y0v) && Number.isFinite(y1v)) {
+      const isSupportLine = String(modalDynamicLine.levelType || modalDynamicLine.lineType || "") === "support";
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = isSupportLine ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
+      ctx.lineWidth = 2.3;
+      ctx.shadowColor = isSupportLine ? "rgba(34,197,94,0.20)" : "rgba(248,113,113,0.20)";
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(xOf(0), yOf(y0v));
+      ctx.lineTo(xOf(60000), yOf(y1v));
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // línea de “ahora” en live
@@ -6912,10 +6950,10 @@ function updateSignalConfirmationUI() {
     const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
     const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "4 puntos"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "4 puntos"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
@@ -7179,13 +7217,23 @@ function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
   return removed;
 }
 function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
-  // V25: el SNR ya no bloquea la operación.
-  // La condición real para trade automático es: segundo 59 + 4 puntos netos.
   if (!item) return null;
   const ms = getSignalConfirmationMs(item);
   if (ms < SIGNAL_AUTO_ENTRY_MS) {
     throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
   }
+
+  // Modo Línea dinámica: acá la línea sí valida la entrada.
+  // Soporte dinámico => CALL solo si el precio respeta arriba.
+  // Resistencia dinámica => PUT solo si el precio respeta abajo.
+  if (isDynamicLineMode(item.mode)) {
+    const gate = buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS);
+    if (gate?.pending) throw new Error(gate.message || "Línea dinámica pendiente");
+    if (!gate?.ok) throw new Error(gate?.message || "La vela no respeta la línea dinámica");
+    return gate;
+  }
+
+  // V25: en SNR el nivel queda solo como referencia; no bloquea.
   try {
     const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
     return gate && !gate.pending ? gate : null;
@@ -7209,9 +7257,15 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
 
   let gate = null;
   try {
-    gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    gate = isDynamicLineMode(item.mode)
+      ? assertSignalSNREntryGateAt57(side, item)
+      : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
     if (gate?.pending) gate = null;
-  } catch {
+  } catch (err) {
+    if (isDynamicLineMode(item.mode)) {
+      toast(`⛔ ${err?.message || "La línea dinámica no habilita la entrada"}`, 1500);
+      return false;
+    }
     gate = null;
   }
   const label = side === "CALL" ? "COMPRA" : "VENTA";
@@ -8733,6 +8787,8 @@ function getSignalLifecycleStageInfo(item) {
   const attempted = !!item?.signalAutoEntry?.attempted;
   const status = String(item?.signalAutoEntry?.status || "");
 
+  const dynamicMode = isDynamicLineMode(item.mode);
+
   if (item.minuteComplete) {
     if (hasTrade || attempted) {
       const badge = item?.trade?.badge ? String(item.trade.badge) : status === "sent" ? "TRADE" : "AUTO";
@@ -8741,6 +8797,12 @@ function getSignalLifecycleStageInfo(item) {
         label: `📌 ${badge}`,
         title: `Operación asociada. No se elimina por filtro de cierre. ${pointsTxt}`,
       };
+    }
+    if (dynamicMode) {
+      const gate = buildSignalDynamicLineEntryGate(item, item.direction || "", 60000);
+      return gate?.ok
+        ? { key: "closed_line_ok", label: "✅ RESPETA LÍNEA", title: `La vela cerró respetando la línea dinámica. ${pointsTxt}` }
+        : { key: "closed_line_break", label: "❌ ROMPE LÍNEA", title: `La vela cerró del lado inválido de la línea dinámica. ${pointsTxt}` };
     }
     const gate = getSignalCloseSNREntryGate(item);
     if (gate?.ok) {
@@ -8760,7 +8822,13 @@ function getSignalLifecycleStageInfo(item) {
   const ms = getSignalConfirmationMs(item);
   if (ms >= SIGNAL_AUTO_ENTRY_MS) {
     const side = getSignalEnabledTradeSide(item) || item.direction || "";
-    const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    const gate = dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    if (dynamicMode) {
+      if (gate?.ok && getSignalEnabledTradeSide(item)) {
+        return { key: "auto_ready_line", label: `🟢 AUTO ${autoSec}s`, title: `Listo: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos + línea dinámica respetada. ${pointsTxt}` };
+      }
+      return { key: "auto_wait_line", label: gate?.ok ? `🟢 LÍNEA ${autoSec}s` : `⛔ LÍNEA ${autoSec}s`, title: `${gate?.message || "Línea dinámica pendiente"}. ${pointsTxt}` };
+    }
     if (gate?.ok && getSignalEnabledTradeSide(item)) {
       return {
         key: "auto_ready",
@@ -8784,8 +8852,10 @@ function getSignalLifecycleStageInfo(item) {
 
   return {
     key: "prealert",
-    label: "🟡 PREALERTA",
-    title: `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro/cerca del SNR. ${pointsTxt}`,
+    label: dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
+    title: dynamicMode
+      ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
+      : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos. ${pointsTxt}`,
   };
 }
 
@@ -9432,7 +9502,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     let res = null;
     let contractLabel = side;
     let tradeExtra = { side, symbol, stake };
-    if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
+    if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
+    if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
+    else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
 
     if (shouldUseAutoHighLowExecution() && itemCtx?.id) {
       ensureSignalAutoPrecalc(itemCtx);
@@ -13128,6 +13200,245 @@ function detectDebilidadPattern(candidate) {
   return call || put || null;
 }
 
+
+
+/* =========================
+   Línea dinámica — soporte/resistencia de tendencia
+========================= */
+function getDynamicLineAvgRange(candles, fallback = 0) {
+  const ranges = (candles || [])
+    .map((c) => Math.abs(Number(c.high) - Number(c.low)))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  if (ranges.length) return ranges.reduce((a, b) => a + b, 0) / ranges.length;
+  return Math.max(Math.abs(Number(fallback || 0)), 1e-9);
+}
+function getDynamicLineValue(meta, minute, ms = 0) {
+  if (!meta) return NaN;
+  if (Number.isFinite(Number(meta.anchorMinute)) && Number.isFinite(Number(meta.anchorValue)) && Number.isFinite(Number(meta.slopePerCandle))) {
+    return Number(meta.anchorValue) + Number(meta.slopePerCandle) * ((Number(minute) - Number(meta.anchorMinute)) + Number(ms || 0) / 60000);
+  }
+  if (Number.isFinite(Number(meta.lineAtMinuteStart)) && Number.isFinite(Number(meta.lineAtMinuteEnd))) {
+    return Number(meta.lineAtMinuteStart) + (Number(meta.lineAtMinuteEnd) - Number(meta.lineAtMinuteStart)) * (Number(ms || 0) / 60000);
+  }
+  return Number(meta.level);
+}
+function candlePivotPoints(candles, field, type) {
+  const arr = (candles || []).map((c, idx) => ({ ...c, idx, v: Number(c?.[field]) })).filter((p) => Number.isFinite(p.v));
+  if (arr.length < 4) return arr;
+  const out = [];
+  for (let i = 1; i < arr.length - 1; i++) {
+    const v = arr[i].v;
+    const prev = arr[i - 1].v;
+    const next = arr[i + 1].v;
+    if (type === "low") {
+      if (v <= prev && v <= next) out.push(arr[i]);
+    } else {
+      if (v >= prev && v >= next) out.push(arr[i]);
+    }
+  }
+  return out.length >= 2 ? out : arr;
+}
+function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, currentPrice, currentRange = 0) {
+  if (!pA || !pB || pB.idx <= pA.idx) return null;
+  const avgRange = getDynamicLineAvgRange(candles.slice(-40), currentRange);
+  const minGap = 4;
+  const gap = pB.idx - pA.idx;
+  if (gap < minGap) return null;
+  const slope = (Number(pB.v) - Number(pA.v)) / gap;
+  const slopeAbs = Math.abs(slope);
+  const minSlope = Math.max(avgRange * 0.006, Math.abs(Number(currentPrice || pB.v)) * 0.00000005, 1e-12);
+  const maxSlope = Math.max(avgRange * 0.95, minSlope * 4);
+  if (isSupport && slope <= minSlope) return null;
+  if (!isSupport && slope >= -minSlope) return null;
+  if (slopeAbs > maxSlope) return null;
+
+  const tol = Math.max(avgRange * 0.23, Math.abs(Number(currentPrice || pB.v)) * 0.0000035, 1e-9);
+  const reboundNeed = Math.max(avgRange * 0.55, Math.abs(Number(currentRange || 0)) * 0.18, tol * 1.7, 1e-9);
+  const anchorIdx = pA.idx;
+  const anchorMinute = Number(pA.minute);
+  const anchorValue = Number(pA.v);
+  const valueAtIdx = (idx) => anchorValue + slope * (idx - anchorIdx);
+  const valueAtMinute = (m) => anchorValue + slope * (Number(m) - anchorMinute);
+
+  const touches = [];
+  let wrongCloses = 0;
+  let crosses = 0;
+  let reboundScore = 0;
+  let lastTouchIdx = -999;
+  for (let i = pA.idx; i < candles.length; i++) {
+    const c = candles[i];
+    const line = valueAtIdx(i);
+    const low = Number(c.low), high = Number(c.high), close = Number(c.close);
+    if (![low, high, close, line].every(Number.isFinite)) continue;
+    const sideDistance = isSupport ? Math.abs(low - line) : Math.abs(high - line);
+    const closeWrong = isSupport ? close < line - tol * 1.15 : close > line + tol * 1.15;
+    if (closeWrong) wrongCloses++;
+    if (isSupport ? low < line - tol * 1.75 : high > line + tol * 1.75) crosses++;
+    if (sideDistance <= tol && i - lastTouchIdx >= 3) {
+      const next = candles.slice(i + 1, Math.min(candles.length, i + 5));
+      const excursion = next.length
+        ? (isSupport
+            ? Math.max(...next.map((x) => Number(x.high)).filter(Number.isFinite)) - line
+            : line - Math.min(...next.map((x) => Number(x.low)).filter(Number.isFinite)))
+        : 0;
+      if (Number.isFinite(excursion) && excursion >= reboundNeed) reboundScore += Math.min(2.2, excursion / Math.max(reboundNeed, 1e-9));
+      touches.push({ idx: i, minute: Number(c.minute), price: isSupport ? low : high, line, excursion: Number(excursion || 0) });
+      lastTouchIdx = i;
+    }
+  }
+  if (touches.length < 2) return null;
+  const separatedTouches = touches[touches.length - 1].idx - touches[0].idx;
+  if (separatedTouches < 6) return null;
+  if (wrongCloses > Math.max(2, Math.floor((candles.length - pA.idx) * 0.22))) return null;
+  if (crosses > Math.max(3, Math.floor((candles.length - pA.idx) * 0.28))) return null;
+
+  const projectedStart = valueAtMinute(currentMinute);
+  const projectedEnd = valueAtMinute(Number(currentMinute) + 1);
+  const price = Number(currentPrice);
+  const distance = Math.abs(price - projectedStart);
+  const nearLimit = Math.max(avgRange * 1.15, Math.abs(Number(currentRange || 0)) * 0.45, tol * 2.8);
+  const respects = isSupport ? price >= projectedStart - tol * 0.25 : price <= projectedStart + tol * 0.25;
+  const near = distance <= nearLimit;
+  if (!near || !respects) return null;
+  const quality =
+    touches.length * 24 +
+    Math.min(3, reboundScore) * 16 +
+    Math.min(28, separatedTouches) +
+    Math.max(0, 1 - distance / Math.max(nearLimit, 1e-9)) * 28 +
+    Math.min(18, slopeAbs / Math.max(avgRange * 0.04, 1e-9)) -
+    wrongCloses * 12 -
+    crosses * 8;
+  return {
+    direction: isSupport ? "CALL" : "PUT",
+    quality,
+    points: Math.min(6, 2 + touches.length + Math.floor(reboundScore)),
+    meta: {
+      levelMode: "dynamic_line",
+      levelType: isSupport ? "support" : "resistance",
+      lineType: isSupport ? "support" : "resistance",
+      direction: isSupport ? "CALL" : "PUT",
+      anchorMinute,
+      anchorValue,
+      anchorIdx,
+      slopePerCandle: slope,
+      tolerance: tol,
+      avgRange,
+      touches: touches.length,
+      touchMinutes: touches.map((t) => t.minute),
+      firstTouchMinute: touches[0]?.minute,
+      lastTouchMinute: touches[touches.length - 1]?.minute,
+      reboundScore,
+      wrongCloses,
+      crosses,
+      level: projectedStart,
+      lineAtEval: projectedStart,
+      lineAtMinuteStart: projectedStart,
+      lineAtMinuteEnd: projectedEnd,
+      currentPrice: price,
+      distanceToLine: distance,
+      nearLimit,
+      respectsLine: respects,
+      stage: "linea_dinamica_visual",
+      movementFilter: "linea_tendencia_toques_recorrido",
+      status: isSupport
+        ? "Soporte dinámico: línea alcista con toques y rebotes. Solo COMPRA si respeta arriba."
+        : "Resistencia dinámica: línea bajista con toques y rechazos. Solo VENTA si respeta abajo.",
+      logic: isSupport
+        ? "soporte dinámico comprador: mínimos ascendentes + recorrido desde la línea => CALL"
+        : "resistencia dinámica vendedora: máximos descendentes + recorrido desde la línea => PUT",
+    },
+  };
+}
+function findBestDynamicLine(symbol, minute, currentPrice, currentRange = 0) {
+  const candles = getGiroPolarityCandles(symbol, minute, 70);
+  if (!candles || candles.length < 12) return null;
+  const lows = candlePivotPoints(candles, "low", "low").slice(-18);
+  const highs = candlePivotPoints(candles, "high", "high").slice(-18);
+  const matches = [];
+  for (let a = 0; a < lows.length - 1; a++) {
+    for (let b = a + 1; b < lows.length; b++) {
+      const m = scoreDynamicTrendLine(candles, lows[a], lows[b], true, minute, currentPrice, currentRange);
+      if (m) matches.push(m);
+    }
+  }
+  for (let a = 0; a < highs.length - 1; a++) {
+    for (let b = a + 1; b < highs.length; b++) {
+      const m = scoreDynamicTrendLine(candles, highs[a], highs[b], false, minute, currentPrice, currentRange);
+      if (m) matches.push(m);
+    }
+  }
+  if (!matches.length) return null;
+  matches.sort((a, b) => b.quality - a.quality || Number(b.meta?.touches || 0) - Number(a.meta?.touches || 0));
+  return matches[0];
+}
+function analyzeDynamicLineCandidate(candidate, minute) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 3) return null;
+  const evalMs = Math.max(1000, Number(EVAL_SEC || 45) * 1000);
+  const pE = Number(getPriceAtMs(ticks, evalMs));
+  if (!Number.isFinite(pE)) return null;
+  const qs = ensureTicksWithBoundary(ticks, evalMs).map((p) => Number(p.quote)).filter(Number.isFinite);
+  const range = qs.length ? Math.max(Math.max(...qs) - Math.min(...qs), Math.abs(pE) * 0.000001, 1e-9) : Math.abs(pE) * 0.000001;
+  const match = findBestDynamicLine(candidate.symbol, minute, pE, range);
+  if (!match) return null;
+  match.meta.pE = pE;
+  match.meta.evalSec = Number(EVAL_SEC || 45);
+  return match;
+}
+function getSignalDynamicLineMeta(item) {
+  const meta = item?.dynamicLine || item?.giroPolaridad || item?.lineaDinamica || null;
+  if (!meta || typeof meta !== "object") return null;
+  if (String(meta.levelMode || "") !== "dynamic_line") return null;
+  if (!Number.isFinite(Number(meta.lineAtMinuteStart)) && !Number.isFinite(Number(meta.anchorValue))) return null;
+  return meta;
+}
+function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_ENTRY_MS) {
+  const meta = getSignalDynamicLineMeta(item);
+  if (!meta) return { ok: false, pending: false, reason: "sin_linea_dinamica", message: "La señal no trae línea dinámica válida." };
+  const price = getSignalPriceAtEntryCheckMs(item, checkMs);
+  if (!Number.isFinite(price)) return { ok: false, pending: true, reason: "sin_precio_59", message: "Todavía no hay precio suficiente para validar la línea en 59s." };
+  const line = getDynamicLineValue(meta, item?.minute, checkMs);
+  if (!Number.isFinite(line)) return { ok: false, pending: false, reason: "linea_invalida", message: "No se pudo proyectar la línea dinámica." };
+  const wanted = normalizeSignalConfirmationSide(side) || String(meta.direction || item?.direction || "").toUpperCase();
+  const expected = normalizeSignalConfirmationSide(meta.direction || item?.direction || "");
+  if (wanted && expected && wanted !== expected) {
+    return {
+      ok: false,
+      pending: false,
+      reason: "direccion_invalida_linea_dinamica",
+      side: wanted,
+      expectedSide: expected,
+      check_ms: checkMs,
+      check_sec: Math.round(checkMs / 1000),
+      price,
+      line,
+      distance: Math.abs(price - line),
+      levelType: String(meta.levelType || meta.lineType || ""),
+      message: expected === "CALL"
+        ? "Esta línea es soporte dinámico: solo habilita COMPRA."
+        : "Esta línea es resistencia dinámica: solo habilita VENTA.",
+    };
+  }
+  const isSupport = String(meta.levelType || meta.lineType || "") === "support" || expected === "CALL";
+  const eps = Math.max(Math.abs(line) * 0.00000002, 1e-9);
+  const ok = isSupport ? price >= line - eps : price <= line + eps;
+  return {
+    ok,
+    pending: false,
+    reason: ok ? "respeta_linea_dinamica" : "rompe_linea_dinamica",
+    side: wanted || expected,
+    check_ms: checkMs,
+    check_sec: Math.round(checkMs / 1000),
+    price,
+    line,
+    distance: Math.abs(price - line),
+    levelType: isSupport ? "support" : "resistance",
+    message: ok
+      ? `Precio ${Math.round(checkMs / 1000)}s respeta línea dinámica (${price.toFixed(6)} vs ${line.toFixed(6)})`
+      : `Precio ${Math.round(checkMs / 1000)}s rompió línea dinámica (${price.toFixed(6)} vs ${line.toFixed(6)})`,
+  };
+}
+
 function evaluateMinute(minute) {
   if (areSignalsPaused()) return true;
 
@@ -13161,9 +13472,12 @@ function evaluateMinute(minute) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return true;
 
+  const activeMode = normalizeSignalMode(signalMode);
   const matches = [];
   for (const c of candidates) {
-    const match = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
+    const match = isDynamicLineMode(activeMode)
+      ? analyzeDynamicLineCandidate(c, minute)
+      : analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
     if (!match) continue;
 
     matches.push({
@@ -13175,7 +13489,8 @@ function evaluateMinute(minute) {
       giroPolaridadScore: Math.round(match.quality),
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
-      matchSource: "SNR_INTERACCION_NIVEL",
+      dynamicLineMeta: String(match.meta?.levelMode || "") === "dynamic_line" ? match.meta : null,
+      matchSource: isDynamicLineMode(activeMode) ? "LINEA_DINAMICA" : "SNR_INTERACCION_NIVEL",
     });
   }
 
@@ -13190,13 +13505,14 @@ function evaluateMinute(minute) {
 
   const bestMatch = matches[0];
   addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-    mode: MODE_SNR_SEGUNDO_TOQUE,
-    mode_version: GIRO_NIVEL_LOGIC_VERSION,
+    mode: activeMode,
+    mode_version: getModeVersion(activeMode),
     giroNivelScore: bestMatch.giroNivelScore,
     giroNivelPoints: bestMatch.giroNivelPoints,
     giroPolaridadScore: bestMatch.giroPolaridadScore,
     giroPolaridadPoints: bestMatch.giroPolaridadPoints,
     giroPolaridad: bestMatch.giroPolaridadMeta,
+    dynamicLine: bestMatch.dynamicLineMeta,
     aiLocalMatchSource: bestMatch.matchSource,
     signalLifecycleStage: "prealert",
     signalPrealertAtSec: Number(EVAL_SEC || 45),
