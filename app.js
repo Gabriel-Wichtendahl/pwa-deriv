@@ -7707,33 +7707,35 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
   const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
 
-  // V32: las velas vienen de OHLC 1m reales. La línea dinámica se proyecta recta
-  // sobre el eje visual para que se vea como una línea de tendencia limpia.
+  // V33: la vista Velas 1m debe usar EXACTAMENTE la misma proyección
+  // que el gráfico de línea intraminuto. Antes se reconstruía la pendiente
+  // con touchDetails y eso podía desplazar el nivel: la línea de velas no
+  // coincidía con la línea del gráfico normal. Ahora cada vela pregunta el
+  // valor real de la línea para su minuto con getDynamicLineValue(meta,...).
   const buildDynamicLineVisual = () => {
     if (!meta || !candles.length) return null;
-    const minuteToIdx = new Map(candles.map((c, i) => [Number(c.minute), i]));
-    const detail = Array.isArray(meta.touchDetails) ? meta.touchDetails : [];
-    let pts = detail
-      .map((t) => ({ idx: minuteToIdx.get(Number(t.minute)), minute: Number(t.minute), line: Number(t.line) }))
-      .filter((t) => Number.isFinite(t.idx) && Number.isFinite(t.line));
-    if (pts.length < 2) {
-      pts = (Array.isArray(meta.touchMinutes) ? meta.touchMinutes : [])
-        .map((m) => ({ idx: minuteToIdx.get(Number(m)), minute: Number(m), line: Number(getDynamicLineValue(meta, Number(m), 0)) }))
-        .filter((t) => Number.isFinite(t.idx) && Number.isFinite(t.line));
+    const projected = candles.map((c) => Number(getDynamicLineValue(meta, Number(c.minute), 0)));
+    if (projected.filter(Number.isFinite).length < 2) return null;
+
+    // Si algún minuto aislado no proyecta, interpolamos entre vecinos válidos
+    // solo para dibujar continuo, sin cambiar la lógica de entrada.
+    const filled = projected.slice();
+    for (let i = 0; i < filled.length; i++) {
+      if (Number.isFinite(filled[i])) continue;
+      let l = i - 1;
+      while (l >= 0 && !Number.isFinite(filled[l])) l--;
+      let r = i + 1;
+      while (r < filled.length && !Number.isFinite(filled[r])) r++;
+      if (l >= 0 && r < filled.length && Number.isFinite(filled[l]) && Number.isFinite(filled[r])) {
+        const t = (i - l) / Math.max(1, r - l);
+        filled[i] = filled[l] + (filled[r] - filled[l]) * t;
+      } else if (l >= 0 && Number.isFinite(filled[l])) {
+        filled[i] = filled[l];
+      } else if (r < filled.length && Number.isFinite(filled[r])) {
+        filled[i] = filled[r];
+      }
     }
-    let iA = 0, iB = Math.max(1, candles.length - 1);
-    let vA = Number(getDynamicLineValue(meta, Number(candles[0]?.minute), 0));
-    let vB = Number(getDynamicLineValue(meta, Number(candles[candles.length - 1]?.minute), 0));
-    if (pts.length >= 2) {
-      pts.sort((a, b) => a.idx - b.idx);
-      iA = pts[0].idx;
-      iB = pts[pts.length - 1].idx;
-      vA = pts[0].line;
-      vB = pts[pts.length - 1].line;
-    }
-    if (!Number.isFinite(vA) || !Number.isFinite(vB) || iA === iB) return null;
-    const slopeVisible = (vB - vA) / Math.max(1, iB - iA);
-    return (i) => vA + slopeVisible * (i - iA);
+    return (i) => Number(filled[i]);
   };
   const dynamicLineVisualAt = buildDynamicLineVisual();
 
