@@ -1507,6 +1507,7 @@ const modalCloseBackdrop = $("modalCloseBackdrop");
 const modalTitle = $("modalTitle");
 const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
+const modalCandle1mBtn = $("modalCandle1mBtn");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
@@ -1755,6 +1756,7 @@ let modalOpenContext = { source: "signals", signalId: "", journalId: "" };
 let modalLive = false;
 let modalDrawRaf = null;
 let modalLastDrawAt = 0;
+let modalChartView = "line"; // "line" | "candles1m"
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
 // Mantener separados los modos históricos.
@@ -7441,6 +7443,254 @@ function updateModalCandleStatusUI() {
   if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_59");
 }
 
+
+/* =========================
+   Modal: vista mini velas 1m
+========================= */
+function updateModalChartViewBtnUI() {
+  if (!modalCandle1mBtn) return;
+  const isCandles = modalChartView === "candles1m";
+  modalCandle1mBtn.setAttribute("aria-pressed", isCandles ? "true" : "false");
+  modalCandle1mBtn.textContent = isCandles ? "📈 Línea" : "🕯️ Velas 1m";
+  modalCandle1mBtn.title = isCandles
+    ? "Volver al gráfico de línea intraminuto"
+    : "Ver mini gráfico de velas de 1 minuto con el nivel marcado";
+}
+function setModalChartView(view) {
+  modalChartView = view === "candles1m" ? "candles1m" : "line";
+  updateModalChartViewBtnUI();
+  requestModalDraw(true);
+}
+if (modalCandle1mBtn) {
+  modalCandle1mBtn.onclick = (e) => {
+    e.stopPropagation();
+    setModalChartView(modalChartView === "candles1m" ? "line" : "candles1m");
+  };
+}
+function candleFromTicks(symbol, minute, ticks = []) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (!pts.length) return null;
+  const prices = pts.map((p) => p.quote);
+  const open = prices[0];
+  const close = prices[prices.length - 1];
+  const high = Math.max(...prices);
+  const low = Math.min(...prices);
+  if (![open, high, low, close].every(Number.isFinite)) return null;
+  return { symbol, minute: Number(minute), open, high, low, close, fromTicks: true };
+}
+function getStoredCandleByMinute(symbol, minute) {
+  const arr = Array.isArray(giroPolarityCandles?.[symbol]) ? giroPolarityCandles[symbol] : [];
+  return arr.find((c) => Number(c?.minute) === Number(minute)) || null;
+}
+function buildModalOneMinuteCandles(item, liveTicks = []) {
+  if (!item) return [];
+  const symbol = item.symbol;
+  const minute = Number(item.minute);
+  const prev = getGiroPolarityCandles(symbol, minute, 34);
+  let current = null;
+
+  if (modalLive && isItemLiveMinute(item)) {
+    const lt = minuteData?.[minute]?.[symbol];
+    current = candleFromTicks(symbol, minute, Array.isArray(lt) && lt.length ? lt : liveTicks);
+  }
+  if (!current) current = candleFromTicks(symbol, minute, liveTicks || item.ticks || []);
+  if (!current) current = getStoredCandleByMinute(symbol, minute);
+  if (!current && candleOC?.[minute]?.[symbol]) current = { symbol, minute, ...candleOC[minute][symbol] };
+
+  const byMinute = new Map();
+  for (const c of prev) {
+    if (!c) continue;
+    const m = Number(c.minute);
+    const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
+    if (![m, open, high, low, close].every(Number.isFinite)) continue;
+    byMinute.set(m, { symbol, minute: m, open, high, low, close });
+  }
+  if (current) {
+    const m = Number(current.minute);
+    const open = Number(current.open), high = Number(current.high), low = Number(current.low), close = Number(current.close);
+    if ([m, open, high, low, close].every(Number.isFinite)) byMinute.set(m, { symbol, minute: m, open, high, low, close, current: true });
+  }
+  return [...byMinute.values()].sort((a, b) => Number(a.minute) - Number(b.minute)).slice(-34);
+}
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(2,6,23,0.94)";
+  ctx.fillRect(0, 0, w, h);
+
+  const candles = buildModalOneMinuteCandles(item, ticks);
+  if (!candles.length) {
+    drawDerivLikeChart(canvas, ticks);
+    return;
+  }
+
+  const padL = 34;
+  const padR = 12;
+  const padT = 12;
+  const padB = 24;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const meta = getSignalDynamicLineMeta(item);
+  const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
+  const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
+
+  const values = [];
+  for (const c of candles) values.push(Number(c.high), Number(c.low), Number(c.open), Number(c.close));
+  if (meta) {
+    for (const c of candles) {
+      values.push(Number(getDynamicLineValue(meta, Number(c.minute), 0)));
+      values.push(Number(getDynamicLineValue(meta, Number(c.minute), 60000)));
+    }
+  }
+  if (snrArea) values.push(Number(snrArea.nearLow), Number(snrArea.nearHigh), Number(snrArea.zoneLow), Number(snrArea.zoneHigh));
+  else if (pol && Number.isFinite(Number(pol.level))) values.push(Number(pol.level));
+  let min = Math.min(...values.filter(Number.isFinite));
+  let max = Math.max(...values.filter(Number.isFinite));
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  if (min === max) { min -= Math.abs(min || 1) * 0.00001; max += Math.abs(max || 1) * 0.00001; }
+  const padding = (max - min) * 0.12;
+  min -= padding;
+  max += padding;
+
+  const yOf = (v) => padT + (max - Number(v)) / Math.max(max - min, 1e-12) * plotH;
+  const step = plotW / Math.max(candles.length, 1);
+  const xOf = (i) => padL + step * i + step / 2;
+  const candleW = Math.max(4, Math.min(16, step * 0.56));
+
+  // Grilla tipo Deriv, suave.
+  ctx.save();
+  ctx.strokeStyle = "rgba(148,163,184,0.14)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (plotH * i) / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  const vStep = Math.max(4, Math.floor(candles.length / 6));
+  for (let i = 0; i < candles.length; i += vStep) {
+    const x = xOf(i);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Zona SNR horizontal si la señal la trae.
+  if (snrArea) {
+    const yNearA = yOf(Number(snrArea.nearLow));
+    const yNearB = yOf(Number(snrArea.nearHigh));
+    const yZoneA = yOf(Number(snrArea.zoneLow));
+    const yZoneB = yOf(Number(snrArea.zoneHigh));
+    const yTopNear = Math.min(yNearA, yNearB), hNear = Math.abs(yNearB - yNearA);
+    const yTopZone = Math.min(yZoneA, yZoneB), hZone = Math.abs(yZoneB - yZoneA);
+    ctx.save();
+    ctx.fillStyle = "rgba(250,204,21,0.12)";
+    ctx.fillRect(padL, yTopNear, plotW, Math.max(1, hNear));
+    ctx.fillStyle = "rgba(59,130,246,0.18)";
+    ctx.fillRect(padL, yTopZone, plotW, Math.max(1, hZone));
+    ctx.strokeStyle = "rgba(96,165,250,0.80)";
+    ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(padL, yZoneA); ctx.lineTo(w - padR, yZoneA); ctx.moveTo(padL, yZoneB); ctx.lineTo(w - padR, yZoneB); ctx.stroke();
+    ctx.restore();
+  } else if (pol && Number.isFinite(Number(pol.level))) {
+    const y = yOf(Number(pol.level));
+    ctx.save();
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = "rgba(96,165,250,0.86)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Velas 1 minuto.
+  candles.forEach((c, i) => {
+    const x = xOf(i);
+    const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
+    const up = close >= open;
+    const col = up ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
+    const yH = yOf(high), yL = yOf(low), yO = yOf(open), yC = yOf(close);
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
+    const bodyTop = Math.min(yO, yC);
+    const bodyH = Math.max(2, Math.abs(yC - yO));
+    ctx.fillStyle = col;
+    drawRoundedRect(ctx, x - candleW / 2, bodyTop, candleW, bodyH, Math.min(3, candleW / 3));
+    ctx.fill();
+    if (Number(c.minute) === Number(item?.minute)) {
+      ctx.strokeStyle = "rgba(255,255,255,0.45)";
+      ctx.lineWidth = 1.2;
+      drawRoundedRect(ctx, x - candleW / 2 - 2, bodyTop - 2, candleW + 4, bodyH + 4, 4);
+      ctx.stroke();
+    }
+    ctx.restore();
+  });
+
+  // Línea dinámica marcada sobre las velas de 1 minuto.
+  if (meta) {
+    const isSupportLine = String(meta.levelType || meta.lineType || "") === "support";
+    ctx.save();
+    ctx.strokeStyle = isSupportLine ? "rgba(34,197,94,0.96)" : "rgba(248,113,113,0.96)";
+    ctx.lineWidth = 2.2;
+    ctx.shadowColor = isSupportLine ? "rgba(34,197,94,0.22)" : "rgba(248,113,113,0.22)";
+    ctx.shadowBlur = 9;
+    ctx.beginPath();
+    candles.forEach((c, i) => {
+      const y = yOf(getDynamicLineValue(meta, Number(c.minute), 0));
+      const x = xOf(i);
+      if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    const touchSet = new Set((Array.isArray(meta.touchMinutes) ? meta.touchMinutes : []).map((m) => Number(m)));
+    if (touchSet.size) {
+      ctx.fillStyle = isSupportLine ? "rgba(187,247,208,0.95)" : "rgba(254,202,202,0.95)";
+      ctx.strokeStyle = "rgba(2,6,23,0.70)";
+      ctx.lineWidth = 1.2;
+      candles.forEach((c, i) => {
+        if (!touchSet.has(Number(c.minute))) return;
+        const x = xOf(i);
+        const y = yOf(getDynamicLineValue(meta, Number(c.minute), 0));
+        ctx.beginPath(); ctx.arc(x, y, 4.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      });
+    }
+    ctx.restore();
+  }
+
+  // Línea del último cierre.
+  const last = candles[candles.length - 1];
+  if (last) {
+    const y = yOf(Number(last.close));
+    ctx.save();
+    ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,0.26)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.restore();
+  }
+}
+
 /* =========================
    LIVE modal draw
 ========================= */
@@ -7468,7 +7718,8 @@ function requestModalDraw(force = false) {
       if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
     }
 
-    drawDerivLikeChart(minuteCanvas, ticks);
+    if (modalChartView === "candles1m") drawDerivLikeOneMinuteCandles(minuteCanvas, it, ticks);
+    else drawDerivLikeChart(minuteCanvas, ticks);
 
     const n = Array.isArray(ticks) ? ticks.length : 0;
     setCompactModalHeader(it, n);
@@ -8375,6 +8626,7 @@ function openChartModal(item, opts = {}) {
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
   updateModalNavVoteUI();
+  updateModalChartViewBtnUI();
 
   requestModalDraw(true);
 }
@@ -8458,6 +8710,7 @@ function updateRowChartBtnOnRow(row, item) {
   if (!row) return;
   const btn = row.querySelector(".chartBtn");
   if (!btn) return;
+  const candleBtn = row.querySelector(".rowCandleBtn");
 
   const liveEligible = isItemLiveMinute(item);
   const ready = !!item.minuteComplete || liveEligible;
@@ -8471,6 +8724,11 @@ function updateRowChartBtnOnRow(row, item) {
   } else {
     btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
     btn.title = "Esperando cierre del minuto…";
+  }
+
+  if (candleBtn) {
+    candleBtn.disabled = !ready;
+    candleBtn.title = ready ? "Ver mini gráfico de velas de 1 minuto" : "Esperando cierre del minuto…";
   }
 }
 function updateRowTradeBadgeOnRow(row, item) {
@@ -8952,6 +9210,7 @@ function buildRow(item, opts = {}) {
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <span class="signalStageBadge" title=""></span>
       <button class="chartBtn" type="button"></button>
+      <button class="rowCandleBtn" type="button" title="Ver mini gráfico de velas 1m">🕯️</button>
       <span class="tradeBadge hidden" title=""></span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -8973,8 +9232,30 @@ function buildRow(item, opts = {}) {
     }
 
     const canOpen = target.minuteComplete || isItemLiveMinute(target);
-    if (canOpen) openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
+    if (canOpen) {
+      modalChartView = "line";
+      openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
+    }
   };
+
+  const rowCandleBtn = row.querySelector(".rowCandleBtn");
+  if (rowCandleBtn) {
+    rowCandleBtn.onclick = (e) => {
+      e.stopPropagation();
+
+      let target = item;
+      if (opts.source === "trades" && opts.signalId) {
+        const real = findHistoryItemById(String(opts.signalId));
+        if (real) target = real;
+      }
+
+      const canOpen = target.minuteComplete || isItemLiveMinute(target);
+      if (canOpen) {
+        modalChartView = "candles1m";
+        openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
+      }
+    };
+  }
 
   updateRowChartBtnOnRow(row, item);
   updateRowTradeBadgeOnRow(row, item);
