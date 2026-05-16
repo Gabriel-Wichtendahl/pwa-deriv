@@ -26,6 +26,7 @@
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
+// ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 
 "use strict";
 
@@ -1508,6 +1509,7 @@ const modalTitle = $("modalTitle");
 const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
 const modalCandle1mBtn = $("modalCandle1mBtn");
+const modalReplayBtn = $("modalReplayBtn");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
@@ -1757,6 +1759,7 @@ let modalLive = false;
 let modalDrawRaf = null;
 let modalLastDrawAt = 0;
 let modalChartView = "line"; // "line" | "candles1m"
+let modalReplayState = { open: false, playing: false, speed: 1, currentMs: 0, lastFrameTs: 0, raf: null };
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
 // V32: caché específica para la vista Velas 1m del modal.
@@ -7455,16 +7458,22 @@ function updateModalCandleStatusUI() {
    Modal: vista mini velas 1m
 ========================= */
 function updateModalChartViewBtnUI() {
-  if (!modalCandle1mBtn) return;
   const isCandles = modalChartView === "candles1m";
-  modalCandle1mBtn.setAttribute("aria-pressed", isCandles ? "true" : "false");
-  modalCandle1mBtn.textContent = isCandles ? "📈 Línea" : "🕯️ Velas 1m";
-  modalCandle1mBtn.title = isCandles
-    ? "Volver al gráfico de línea intraminuto"
-    : "Ver mini gráfico de velas de 1 minuto con el nivel marcado";
+  if (modalCandle1mBtn) {
+    modalCandle1mBtn.setAttribute("aria-pressed", isCandles ? "true" : "false");
+    modalCandle1mBtn.textContent = isCandles ? "📈 Línea" : "🕯️ Velas 1m";
+    modalCandle1mBtn.title = isCandles
+      ? "Volver al gráfico de línea intraminuto"
+      : "Ver mini gráfico de velas de 1 minuto con el nivel marcado";
+  }
+  if (modalReplayBtn) {
+    modalReplayBtn.classList.toggle("hidden", !isCandles);
+    modalReplayBtn.title = "Abrir zoom y reproducir tick por tick la vela de la señal";
+  }
 }
 function setModalChartView(view) {
   modalChartView = view === "candles1m" ? "candles1m" : "line";
+  if (modalChartView !== "candles1m") closeModalReplay();
   updateModalChartViewBtnUI();
   requestModalDraw(true);
 }
@@ -7472,6 +7481,13 @@ if (modalCandle1mBtn) {
   modalCandle1mBtn.onclick = (e) => {
     e.stopPropagation();
     setModalChartView(modalChartView === "candles1m" ? "line" : "candles1m");
+  };
+}
+if (modalReplayBtn) {
+  modalReplayBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (modalChartView !== "candles1m") setModalChartView("candles1m");
+    openModalReplay();
   };
 }
 function candleFromTicks(symbol, minute, ticks = []) {
@@ -7868,6 +7884,298 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
     ctx.restore();
+  }
+}
+
+
+/* =========================
+   Replay vela señal — zoom tick por tick
+========================= */
+function getModalReplayTicks(item = modalCurrentItem) {
+  if (!item) return [];
+  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
+  if (modalLive && isItemLiveMinute(item)) {
+    const liveTicks = minuteData?.[item.minute]?.[item.symbol];
+    if (Array.isArray(liveTicks) && liveTicks.length >= ticks.length) ticks = liveTicks.slice();
+  }
+  return ticks
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .map((p) => ({ ms: Math.max(0, Math.min(60000, p.ms)), quote: p.quote }))
+    .sort((a, b) => a.ms - b.ms);
+}
+function ensureModalReplayBox() {
+  let box = document.getElementById("modalReplayBox");
+  if (box) return box;
+  const host = document.querySelector("#chartModal .minuteCanvasWrap") || (chartModal ? chartModal.querySelector(".minuteCanvasWrap") : null);
+  if (!host) return null;
+  box = document.createElement("div");
+  box.id = "modalReplayBox";
+  box.className = "modalReplayBox hidden";
+  box.innerHTML = `
+    <div class="modalReplayHead">
+      <div class="modalReplayTitle">🔎 Replay vela de señal</div>
+      <button id="modalReplayCloseBtn" class="modalReplayClose" type="button" aria-label="Cerrar replay">✖</button>
+    </div>
+    <canvas id="modalReplayCanvas"></canvas>
+    <div id="modalReplayInfo" class="modalReplayInfo">—</div>
+    <div class="modalReplayControls">
+      <button id="modalReplayPlayBtn" class="modalReplayControlBtn" type="button">▶️</button>
+      <button id="modalReplayResetBtn" class="modalReplayControlBtn" type="button">↺</button>
+      <button id="modalReplaySpeedBtn" class="modalReplayControlBtn" type="button">1x</button>
+      <input id="modalReplaySeek" type="range" min="0" max="60000" step="250" value="0" aria-label="Tiempo del replay" />
+    </div>`;
+  host.appendChild(box);
+
+  const closeBtn = box.querySelector("#modalReplayCloseBtn");
+  const playBtn = box.querySelector("#modalReplayPlayBtn");
+  const resetBtn = box.querySelector("#modalReplayResetBtn");
+  const speedBtn = box.querySelector("#modalReplaySpeedBtn");
+  const seek = box.querySelector("#modalReplaySeek");
+  if (closeBtn) closeBtn.onclick = (e) => { e.stopPropagation(); closeModalReplay(); };
+  if (playBtn) playBtn.onclick = (e) => {
+    e.stopPropagation();
+    modalReplayState.playing = !modalReplayState.playing;
+    modalReplayState.lastFrameTs = 0;
+    if (modalReplayState.playing && modalReplayState.currentMs >= 60000) modalReplayState.currentMs = 0;
+    startModalReplayLoop();
+    updateModalReplayControlsUI();
+  };
+  if (resetBtn) resetBtn.onclick = (e) => {
+    e.stopPropagation();
+    modalReplayState.currentMs = 0;
+    modalReplayState.lastFrameTs = 0;
+    modalReplayState.playing = true;
+    startModalReplayLoop();
+    drawModalReplayFrame();
+  };
+  if (speedBtn) speedBtn.onclick = (e) => {
+    e.stopPropagation();
+    const speeds = [1, 2, 4];
+    const idx = speeds.indexOf(Number(modalReplayState.speed || 1));
+    modalReplayState.speed = speeds[(idx + 1) % speeds.length];
+    updateModalReplayControlsUI();
+  };
+  if (seek) seek.oninput = (e) => {
+    e.stopPropagation();
+    modalReplayState.currentMs = Math.max(0, Math.min(60000, Number(seek.value) || 0));
+    modalReplayState.lastFrameTs = 0;
+    drawModalReplayFrame();
+  };
+  box.addEventListener("click", (e) => e.stopPropagation());
+  return box;
+}
+function updateModalReplayControlsUI() {
+  const box = document.getElementById("modalReplayBox");
+  if (!box) return;
+  const playBtn = box.querySelector("#modalReplayPlayBtn");
+  const speedBtn = box.querySelector("#modalReplaySpeedBtn");
+  const seek = box.querySelector("#modalReplaySeek");
+  if (playBtn) {
+    playBtn.textContent = modalReplayState.playing ? "⏸️" : "▶️";
+    playBtn.classList.toggle("active", !!modalReplayState.playing);
+  }
+  if (speedBtn) speedBtn.textContent = `${Number(modalReplayState.speed || 1)}x`;
+  if (seek) seek.value = String(Math.max(0, Math.min(60000, Number(modalReplayState.currentMs || 0))));
+}
+function openModalReplay() {
+  if (!modalCurrentItem) return;
+  const ticks = getModalReplayTicks(modalCurrentItem);
+  if (ticks.length < 2) {
+    toast("⚠️ Sin ticks suficientes para replay", 1600);
+    return;
+  }
+  const box = ensureModalReplayBox();
+  if (!box) return;
+  box.classList.remove("hidden");
+  modalReplayState.open = true;
+  modalReplayState.playing = true;
+  modalReplayState.speed = 1;
+  modalReplayState.currentMs = 0;
+  modalReplayState.lastFrameTs = 0;
+  updateModalReplayControlsUI();
+  startModalReplayLoop();
+}
+function closeModalReplay() {
+  modalReplayState.open = false;
+  modalReplayState.playing = false;
+  modalReplayState.lastFrameTs = 0;
+  if (modalReplayState.raf) cancelAnimationFrame(modalReplayState.raf);
+  modalReplayState.raf = null;
+  const box = document.getElementById("modalReplayBox");
+  if (box) box.classList.add("hidden");
+}
+function startModalReplayLoop() {
+  if (!modalReplayState.open) return;
+  if (modalReplayState.raf) cancelAnimationFrame(modalReplayState.raf);
+  modalReplayState.raf = requestAnimationFrame(modalReplayLoop);
+}
+function modalReplayLoop(ts) {
+  if (!modalReplayState.open) return;
+  if (modalReplayState.playing) {
+    if (!modalReplayState.lastFrameTs) modalReplayState.lastFrameTs = ts;
+    const dt = Math.max(0, ts - modalReplayState.lastFrameTs);
+    modalReplayState.lastFrameTs = ts;
+    modalReplayState.currentMs = Math.min(60000, Number(modalReplayState.currentMs || 0) + dt * Number(modalReplayState.speed || 1));
+    if (modalReplayState.currentMs >= 60000) {
+      modalReplayState.currentMs = 60000;
+      modalReplayState.playing = false;
+    }
+  } else {
+    modalReplayState.lastFrameTs = 0;
+  }
+  drawModalReplayFrame();
+  modalReplayState.raf = requestAnimationFrame(modalReplayLoop);
+}
+function drawModalReplayFrame() {
+  const box = document.getElementById("modalReplayBox");
+  if (!box || box.classList.contains("hidden") || !modalCurrentItem) return;
+  const canvas = box.querySelector("#modalReplayCanvas");
+  const info = box.querySelector("#modalReplayInfo");
+  drawModalReplayCanvas(canvas, modalCurrentItem, Number(modalReplayState.currentMs || 0), info);
+  updateModalReplayControlsUI();
+}
+function drawModalReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
+  if (!canvas || !item) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = cssW, h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(2,6,23,0.96)";
+  ctx.fillRect(0, 0, w, h);
+
+  const ticks = getModalReplayTicks(item);
+  if (ticks.length < 2) {
+    drawMiniCandlesLoading(ctx, w, h, "Sin ticks suficientes para replay");
+    if (infoEl) infoEl.textContent = "Sin ticks suficientes para reproducir la vela.";
+    return;
+  }
+
+  const ms = Math.max(0, Math.min(60000, Number(replayMs || 0)));
+  let lastIdx = ticks.findIndex((p) => Number(p.ms) > ms) - 1;
+  if (lastIdx < 0) lastIdx = 0;
+  if (lastIdx >= ticks.length) lastIdx = ticks.length - 1;
+  const seen = ticks.slice(0, lastIdx + 1);
+  const open = Number(ticks[0].quote);
+  const cur = Number(seen[seen.length - 1]?.quote ?? open);
+  const highs = seen.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const high = Math.max(open, cur, ...highs);
+  const low = Math.min(open, cur, ...highs);
+  const close = cur;
+
+  const meta = getSignalDynamicLineMeta(item);
+  const line0 = meta ? Number(getDynamicLineValue(meta, item.minute, 0)) : NaN;
+  const line1 = meta ? Number(getDynamicLineValue(meta, item.minute, 60000)) : NaN;
+  const values = ticks.map((p) => p.quote).filter(Number.isFinite);
+  if (Number.isFinite(line0)) values.push(line0);
+  if (Number.isFinite(line1)) values.push(line1);
+  let min = Math.min(...values), max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  if (min === max) { min -= Math.abs(min || 1) * 0.00001; max += Math.abs(max || 1) * 0.00001; }
+  const pad = (max - min) * 0.12;
+  min -= pad; max += pad;
+
+  const plotX = 12;
+  const plotY = 12;
+  const plotW = Math.max(80, w * 0.68 - 20);
+  const plotH = Math.max(100, h - 28);
+  const candleX = Math.max(plotX + plotW + 18, w * 0.82);
+  const candleTop = plotY + 10;
+  const candleBot = plotY + plotH - 10;
+  const yOf = (q) => plotY + (max - Number(q)) / Math.max(max - min, 1e-12) * plotH;
+  const xOf = (m) => plotX + (Number(m) / 60000) * plotW;
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(148,163,184,.16)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = plotY + (plotH * i) / 4;
+    ctx.beginPath(); ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotW, y); ctx.stroke();
+  }
+  for (const mark of [0, 15000, 30000, 45000, 60000]) {
+    const x = xOf(mark);
+    ctx.setLineDash(mark === 60000 ? [] : [4, 6]);
+    ctx.beginPath(); ctx.moveTo(x, plotY); ctx.lineTo(x, plotY + plotH); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  if (meta && Number.isFinite(line0) && Number.isFinite(line1)) {
+    const isSupport = String(meta.levelType || meta.lineType || "") === "support";
+    ctx.save();
+    ctx.strokeStyle = isSupport ? "rgba(34,197,94,.90)" : "rgba(248,113,113,.90)";
+    ctx.lineWidth = 1.8;
+    ctx.shadowColor = isSupport ? "rgba(34,197,94,.20)" : "rgba(248,113,113,.20)";
+    ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.moveTo(xOf(0), yOf(line0)); ctx.lineTo(xOf(60000), yOf(line1)); ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.82)";
+  ctx.lineWidth = 2.2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  seen.forEach((p, i) => {
+    const x = xOf(p.ms), y = yOf(p.quote);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,.90)";
+  for (const p of seen) {
+    ctx.beginPath(); ctx.arc(xOf(p.ms), yOf(p.quote), 1.5, 0, Math.PI * 2); ctx.fill();
+  }
+  const cx = xOf(seen[seen.length - 1].ms), cy = yOf(cur);
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  ctx.strokeStyle = "rgba(15,23,42,.85)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+
+  // Vela grande formándose con el mismo recorrido ya visto.
+  const yH = yOf(high), yL = yOf(low), yO = yOf(open), yC = yOf(close);
+  const up = close >= open;
+  const col = up ? "rgba(34,197,94,.96)" : "rgba(248,113,113,.96)";
+  const bodyTop = Math.min(yO, yC);
+  const bodyH = Math.max(3, Math.abs(yC - yO));
+  const bodyW = Math.min(34, Math.max(20, w * 0.085));
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(candleX, yH); ctx.lineTo(candleX, yL); ctx.stroke();
+  ctx.fillStyle = col;
+  drawRoundedRect(ctx, candleX - bodyW / 2, bodyTop, bodyW, bodyH, 5);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.30)";
+  ctx.lineWidth = 1;
+  drawRoundedRect(ctx, candleX - bodyW / 2 - 3, bodyTop - 3, bodyW + 6, bodyH + 6, 6);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(226,232,240,.72)";
+  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("VELA", candleX, Math.max(10, candleTop - 2));
+  ctx.restore();
+
+  ctx.save();
+  ctx.fillStyle = "rgba(226,232,240,.74)";
+  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("0s", xOf(0), h - 5);
+  ctx.textAlign = "center";
+  ctx.fillText(`${Math.round(ms / 1000)}s`, xOf(ms), h - 5);
+  ctx.textAlign = "right";
+  ctx.fillText("60s", xOf(60000), h - 5);
+  ctx.restore();
+
+  if (infoEl) {
+    const tickTxt = `${lastIdx + 1}/${ticks.length} ticks`;
+    infoEl.textContent = `${(ms / 1000).toFixed(1)}s · ${tickTxt} · precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
   }
 }
 
@@ -8773,6 +9081,7 @@ function navigateModalItem(step = 1) {
    Chart modal
 ========================= */
 function openChartModal(item, opts = {}) {
+  closeModalReplay();
   modalCurrentItem = item;
   modalOpenContext = normalizeModalContext(opts, item);
   if (!chartModal || !modalTitle || !modalSub) return;
@@ -8811,6 +9120,7 @@ function openChartModal(item, opts = {}) {
   requestModalDraw(true);
 }
 function closeChartModal() {
+  closeModalReplay();
   if (!chartModal) return;
   chartModal.classList.add("hidden");
   chartModal.setAttribute("aria-hidden", "true");
@@ -8843,6 +9153,7 @@ window.addEventListener("resize", () => {
   applyModalTradeButtonsLayout();
   updateModalCandleStatusUI();
   requestModalDraw(true);
+  if (modalReplayState.open) drawModalReplayFrame();
 });
 if (modalLiveBtn) {
   modalLiveBtn.onclick = () => {
