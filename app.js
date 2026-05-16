@@ -1759,6 +1759,13 @@ let modalLastDrawAt = 0;
 let modalChartView = "line"; // "line" | "candles1m"
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 
+// V32: caché específica para la vista Velas 1m del modal.
+// La vista debe usar OHLC reales de Deriv y no velas inventadas/rellenadas.
+const MODAL_CANDLES_1M_COUNT = 34;
+const modalOHLC1mCache = new Map();
+const modalOHLC1mPending = new Map();
+const modalOHLC1mFailed = new Set();
+
 // Mantener separados los modos históricos.
 // GIRO debe seguir siendo GIRO y los modos viejos no deben mezclarse con GIRO.
 function migrateHistoryModesToGiro() {
@@ -7485,91 +7492,176 @@ function getStoredCandleByMinute(symbol, minute) {
   const arr = Array.isArray(giroPolarityCandles?.[symbol]) ? giroPolarityCandles[symbol] : [];
   return arr.find((c) => Number(c?.minute) === Number(minute)) || null;
 }
-function normalizeMiniCandlesNoVisualGaps(rawCandles, symbol, endMinute, maxCount = 34) {
-  const clean = (Array.isArray(rawCandles) ? rawCandles : [])
-    .map((c) => {
-      const m = Number(c?.minute);
-      const open = Number(c?.open), high = Number(c?.high), low = Number(c?.low), close = Number(c?.close);
-      if (![m, open, high, low, close].every(Number.isFinite)) return null;
-      return { ...c, symbol, minute: m, open, high, low, close };
-    })
-    .filter(Boolean)
-    .sort((a, b) => Number(a.minute) - Number(b.minute));
-
-  if (!clean.length) return [];
-
+function sanitizeMiniCandle(symbol, candle, opts = {}) {
+  const m = Number(candle?.minute);
+  const open = Number(candle?.open);
+  const high = Number(candle?.high);
+  const low = Number(candle?.low);
+  const close = Number(candle?.close);
+  if (![m, open, high, low, close].every(Number.isFinite)) return null;
+  return {
+    ...candle,
+    ...opts,
+    symbol,
+    minute: m,
+    open,
+    high: Math.max(open, high, low, close),
+    low: Math.min(open, high, low, close),
+    close,
+  };
+}
+function modalOHLC1mCacheKey(symbol, endMinute, count = MODAL_CANDLES_1M_COUNT) {
+  return `${symbol || ""}::${Number(endMinute)}::${Number(count) || MODAL_CANDLES_1M_COUNT}`;
+}
+function normalizeDerivOHLC1mCandles(symbol, candles, endMinute, maxCount = MODAL_CANDLES_1M_COUNT) {
+  const endM = Number(endMinute);
+  const minM = Number.isFinite(endM) ? endM - maxCount + 1 : -Infinity;
   const byMinute = new Map();
-  for (const c of clean) byMinute.set(Number(c.minute), c);
 
-  // V31: la vista de velas 1m es solo visual. Para que se parezca más a Deriv,
-  // forzamos continuidad entre cierres/aperturas y rellenamos minutos faltantes
-  // con una vela plana. Así no aparecen gaps falsos por historial incompleto o
-  // porque el primer tick disponible de un minuto no coincide con el cierre previo.
-  const lastMinute = Number.isFinite(Number(endMinute))
-    ? Number(endMinute)
-    : Number(clean[clean.length - 1].minute);
-  const firstAvailable = Number(clean[0].minute);
-  const startMinute = Math.max(firstAvailable, lastMinute - maxCount + 1);
-  const out = [];
-  let prevClose = null;
+  for (const c of Array.isArray(candles) ? candles : []) {
+    const epoch = Number(c?.epoch ?? c?.time ?? c?.timestamp);
+    const minute = Number.isFinite(epoch) ? Math.floor(epoch / 60) : Number(c?.minute);
+    if (!Number.isFinite(minute)) continue;
+    if (Number.isFinite(endM) && (minute < minM || minute > endM)) continue;
 
-  for (let m = startMinute; m <= lastMinute; m++) {
-    const src = byMinute.get(m);
-    if (src) {
-      let open = Number(src.open);
-      let high = Number(src.high);
-      let low = Number(src.low);
-      let close = Number(src.close);
-
-      if (Number.isFinite(prevClose)) {
-        // Continuidad visual: la apertura de la vela siguiente nace del cierre previo.
-        open = prevClose;
-        high = Math.max(high, open, close);
-        low = Math.min(low, open, close);
-      }
-
-      out.push({ ...src, symbol, minute: m, open, high, low, close, filled: false });
-      prevClose = close;
-    } else if (Number.isFinite(prevClose)) {
-      // Minuto faltante: vela plana puente para no mostrar un salto artificial.
-      out.push({ symbol, minute: m, open: prevClose, high: prevClose, low: prevClose, close: prevClose, filled: true });
-    }
+    const clean = sanitizeMiniCandle(symbol, { ...c, minute }, { source: "deriv_ohlc" });
+    if (!clean) continue;
+    byMinute.set(Number(clean.minute), clean);
   }
 
-  return out.slice(-maxCount);
+  return [...byMinute.values()]
+    .sort((a, b) => Number(a.minute) - Number(b.minute))
+    .slice(-maxCount);
 }
+async function fetchDerivOHLC1mCandles(symbol, endMinute, maxCount = MODAL_CANDLES_1M_COUNT) {
+  const endM = Number(endMinute);
+  if (!symbol || !Number.isFinite(endM)) return [];
 
-function buildModalOneMinuteCandles(item, liveTicks = []) {
+  const start = minuteToEpochSec(endM - maxCount + 1);
+  const end = minuteToEpochSec(endM + 1);
+
+  const res = await wsRequest({
+    ticks_history: symbol,
+    start,
+    end,
+    style: "candles",
+    granularity: 60,
+    adjust_start_time: 1,
+  });
+
+  return normalizeDerivOHLC1mCandles(symbol, res?.candles, endM, maxCount);
+}
+function requestModalOHLC1mCandles(item, maxCount = MODAL_CANDLES_1M_COUNT) {
+  if (!item) return false;
+  const symbol = item.symbol;
+  const endMinute = Number(item.minute);
+  if (!symbol || !Number.isFinite(endMinute)) return false;
+
+  const key = modalOHLC1mCacheKey(symbol, endMinute, maxCount);
+  if (modalOHLC1mCache.has(key) || modalOHLC1mPending.has(key)) return true;
+  if (!ws || ws.readyState !== 1) {
+    modalOHLC1mFailed.add(key);
+    return false;
+  }
+
+  const promise = fetchDerivOHLC1mCandles(symbol, endMinute, maxCount)
+    .then((candles) => {
+      if (Array.isArray(candles) && candles.length) {
+        modalOHLC1mCache.set(key, candles);
+        modalOHLC1mFailed.delete(key);
+      } else {
+        modalOHLC1mFailed.add(key);
+      }
+    })
+    .catch(() => {
+      modalOHLC1mFailed.add(key);
+    })
+    .finally(() => {
+      modalOHLC1mPending.delete(key);
+      if (
+        modalCurrentItem &&
+        modalChartView === "candles1m" &&
+        modalCurrentItem.symbol === symbol &&
+        Number(modalCurrentItem.minute) === endMinute
+      ) {
+        requestModalDraw(true);
+      }
+    });
+
+  modalOHLC1mPending.set(key, promise);
+  return true;
+}
+function getCachedModalOHLC1mCandles(symbol, endMinute, maxCount = MODAL_CANDLES_1M_COUNT) {
+  const key = modalOHLC1mCacheKey(symbol, endMinute, maxCount);
+  const cached = modalOHLC1mCache.get(key);
+  return Array.isArray(cached) ? cached.slice() : [];
+}
+function buildLocalOneMinuteCandlesFallback(item, liveTicks = [], maxCount = MODAL_CANDLES_1M_COUNT) {
   if (!item) return [];
   const symbol = item.symbol;
   const minute = Number(item.minute);
-  const prev = getGiroPolarityCandles(symbol, minute, 34);
-  let current = null;
+  const byMinute = new Map();
 
+  // Fallback solo con velas disponibles localmente. No rellena huecos y no fuerza
+  // aperturas/cierres, para evitar las velas falsas que se veían en v31.
+  for (const c of getGiroPolarityCandles(symbol, minute, maxCount) || []) {
+    const clean = sanitizeMiniCandle(symbol, c, { source: "local_ohlc" });
+    if (clean) byMinute.set(Number(clean.minute), clean);
+  }
+
+  let current = null;
   if (modalLive && isItemLiveMinute(item)) {
     const lt = minuteData?.[minute]?.[symbol];
     current = candleFromTicks(symbol, minute, Array.isArray(lt) && lt.length ? lt : liveTicks);
   }
-  if (!current) current = candleFromTicks(symbol, minute, liveTicks || item.ticks || []);
-  if (!current) current = getStoredCandleByMinute(symbol, minute);
-  if (!current && candleOC?.[minute]?.[symbol]) current = { symbol, minute, ...candleOC[minute][symbol] };
+  if (!current && !modalLive) current = getStoredCandleByMinute(symbol, minute);
+  if (!current && candleOC?.[minute]?.[symbol]) current = { symbol, minute, ...candleOC[minute][symbol], current: modalLive && isItemLiveMinute(item) };
+  if (!current && Array.isArray(item?.ticks) && item.ticks.length) current = candleFromTicks(symbol, minute, item.ticks);
 
-  const byMinute = new Map();
-  for (const c of prev) {
-    if (!c) continue;
-    const m = Number(c.minute);
-    const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
-    if (![m, open, high, low, close].every(Number.isFinite)) continue;
-    byMinute.set(m, { symbol, minute: m, open, high, low, close });
-  }
-  if (current) {
-    const m = Number(current.minute);
-    const open = Number(current.open), high = Number(current.high), low = Number(current.low), close = Number(current.close);
-    if ([m, open, high, low, close].every(Number.isFinite)) byMinute.set(m, { symbol, minute: m, open, high, low, close, current: true });
+  const cleanCurrent = current ? sanitizeMiniCandle(symbol, current, { current: modalLive && isItemLiveMinute(item), source: current.fromTicks ? "ticks" : "local_current" }) : null;
+  if (cleanCurrent) byMinute.set(Number(cleanCurrent.minute), cleanCurrent);
+
+  return [...byMinute.values()]
+    .sort((a, b) => Number(a.minute) - Number(b.minute))
+    .slice(-maxCount);
+}
+function buildModalOneMinuteCandles(item, liveTicks = []) {
+  if (!item) return [];
+  const symbol = item.symbol;
+  const minute = Number(item.minute);
+  const count = MODAL_CANDLES_1M_COUNT;
+  const key = modalOHLC1mCacheKey(symbol, minute, count);
+
+  let candles = getCachedModalOHLC1mCandles(symbol, minute, count);
+
+  if (!candles.length) {
+    requestModalOHLC1mCandles(item, count);
+    // Mientras llegan las velas reales, solo usamos fallback local si ya falló el pedido.
+    // Así no se vuelve a mostrar el gráfico deformado por datos incompletos.
+    if (modalOHLC1mFailed.has(key)) candles = buildLocalOneMinuteCandlesFallback(item, liveTicks, count);
   }
 
-  const raw = [...byMinute.values()].sort((a, b) => Number(a.minute) - Number(b.minute)).slice(-34);
-  return normalizeMiniCandlesNoVisualGaps(raw, symbol, minute, 34);
+  if (candles.length && modalLive && isItemLiveMinute(item)) {
+    const lt = minuteData?.[minute]?.[symbol];
+    const current = candleFromTicks(symbol, minute, Array.isArray(lt) && lt.length ? lt : liveTicks);
+    const cleanCurrent = current ? sanitizeMiniCandle(symbol, current, { current: true, source: "ticks_live" }) : null;
+    if (cleanCurrent) {
+      const byMinute = new Map(candles.map((c) => [Number(c.minute), c]));
+      byMinute.set(Number(cleanCurrent.minute), cleanCurrent);
+      candles = [...byMinute.values()].sort((a, b) => Number(a.minute) - Number(b.minute)).slice(-count);
+    }
+  }
+
+  return candles;
+}
+function drawMiniCandlesLoading(ctx, w, h, text = "Cargando velas 1m reales…") {
+  ctx.save();
+  ctx.fillStyle = "rgba(148,163,184,0.92)";
+  ctx.font = "800 15px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, w / 2, h / 2);
+  ctx.restore();
 }
 function drawRoundedRect(ctx, x, y, w, h, r) {
   const rr = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
@@ -7599,7 +7691,9 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
 
   const candles = buildModalOneMinuteCandles(item, ticks);
   if (!candles.length) {
-    drawDerivLikeChart(canvas, ticks);
+    const pendingKey = item ? modalOHLC1mCacheKey(item.symbol, item.minute, MODAL_CANDLES_1M_COUNT) : "";
+    const isPending = pendingKey && modalOHLC1mPending.has(pendingKey);
+    drawMiniCandlesLoading(ctx, w, h, isPending ? "Cargando velas 1m reales…" : "Sin velas 1m reales disponibles");
     return;
   }
 
@@ -7613,9 +7707,8 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
   const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
 
-  // V29: para la vista de velas 1m, la línea dinámica debe verse como una línea recta
-  // sobre velas equiespaciadas. Si hay huecos en el historial, no usamos la diferencia
-  // real de minutos para dibujar porque genera saltos visuales tipo escalón.
+  // V32: las velas vienen de OHLC 1m reales. La línea dinámica se proyecta recta
+  // sobre el eje visual para que se vea como una línea de tendencia limpia.
   const buildDynamicLineVisual = () => {
     if (!meta || !candles.length) return null;
     const minuteToIdx = new Map(candles.map((c, i) => [Number(c.minute), i]));
@@ -7706,7 +7799,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
     ctx.restore();
   }
 
-  // Velas 1 minuto.
+  // Velas 1 minuto reales de Deriv.
   candles.forEach((c, i) => {
     const x = xOf(i);
     const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
