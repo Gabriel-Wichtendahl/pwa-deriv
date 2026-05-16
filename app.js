@@ -13871,8 +13871,11 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
   const slopeAbs = Math.abs(slope);
   const minSlope = Math.max(avgRange * 0.0045, Math.abs(Number(currentPrice || pB.v)) * 0.000000045, 1e-12);
   const maxSlope = Math.max(avgRange * 1.18, minSlope * 4);
-  if (isSupport && slope <= minSlope) return null;
-  if (!isSupport && slope >= -minSlope) return null;
+  // V35: soporte/resistencia se define por BORDE externo, no por la pendiente.
+  // Un soporte puede ir subiendo o bajando si sostiene por debajo; una resistencia
+  // puede ir subiendo o bajando si techa por arriba. No convertir soportes rotos
+  // en resistencia ni resistencias rotas en soporte.
+  if (slopeAbs < minSlope) return null;
   if (slopeAbs > maxSlope) return null;
 
   // Tolerancia de toque: permite que el nivel se forme por cierres, cuerpos o mechas,
@@ -13891,6 +13894,11 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
   let bodyCuts = 0;
   let middleCuts = 0;
   let oppositeSide = 0;
+  let envelopeFails = 0;
+  let recentWrongRun = 0;
+  let maxRecentWrongRun = 0;
+  let lastHardBreakIdx = -1;
+  let lastReentryIdx = -1;
   let reboundScore = 0;
   let sourceScore = 0;
   let lastTouchIdx = -999;
@@ -13911,6 +13919,22 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
     const cutsBody = bodyBottom < line - tol * 0.12 && bodyTop > line + tol * 0.12;
     const cutsMiddle = line > low + range * 0.30 && line < high - range * 0.30;
     const wrongSideBody = isSupport ? bodyTop < line - tol * 0.25 : bodyBottom > line + tol * 0.25;
+    // V35: filtro de borde externo.
+    // Soporte: la línea debe sostener por debajo; si varios cuerpos quedan claramente
+    // debajo, el soporte fue roto y no se permite usarlo como venta/polaridad.
+    // Resistencia: la línea debe techar por arriba; si varios cuerpos quedan claramente
+    // encima, la resistencia fue rota y no se permite usarla como compra/polaridad.
+    const envelopeFail = isSupport ? bodyBottom < line - tol * 0.42 : bodyTop > line + tol * 0.42;
+    const correctClose = isSupport ? close >= line - tol * 0.16 : close <= line + tol * 0.16;
+    if (envelopeFail) envelopeFails++;
+    if (closeWrong || envelopeFail) {
+      recentWrongRun++;
+      if (recentWrongRun > maxRecentWrongRun) maxRecentWrongRun = recentWrongRun;
+    } else if (correctClose) {
+      recentWrongRun = 0;
+      lastReentryIdx = i;
+    }
+    if (hardBreak) lastHardBreakIdx = i;
     if (closeWrong) wrongCloses++;
     if (hardBreak) hardBreaks++;
     if (cutsBody) bodyCuts++;
@@ -13957,15 +13981,22 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
   const separatedTouches = touches[touches.length - 1].idx - touches[0].idx;
   if (separatedTouches < 7) return null;
   const span = Math.max(1, candles.length - Math.max(0, pA.idx));
-  const closeBreakLimit = Math.max(1, Math.floor(span * 0.12));
-  const hardBreakLimit = Math.max(1, Math.floor(span * 0.11));
-  const bodyCutLimit = Math.max(1, Math.floor(span * 0.14));
-  const middleCutLimit = Math.max(2, Math.floor(span * 0.20));
+  const closeBreakLimit = Math.max(1, Math.floor(span * 0.08));
+  const hardBreakLimit = Math.max(1, Math.floor(span * 0.075));
+  const bodyCutLimit = Math.max(1, Math.floor(span * 0.07));
+  const middleCutLimit = Math.max(1, Math.floor(span * 0.10));
+  const envelopeFailLimit = Math.max(1, Math.floor(span * 0.075));
   if (wrongCloses > closeBreakLimit) return null;
   if (hardBreaks > hardBreakLimit) return null;
   if (bodyCuts > bodyCutLimit) return null;
   if (middleCuts > middleCutLimit) return null;
-  if (oppositeSide > Math.max(1, Math.floor(span * 0.10))) return null;
+  if (envelopeFails > envelopeFailLimit) return null;
+  if (maxRecentWrongRun >= 2) {
+    // Si rompe y queda 2 velas del lado incorrecto, el nivel queda inválido.
+    // Para volver a usarlo debe reingresar al lado correcto y retestear desde ese lado.
+    if (lastReentryIdx <= lastHardBreakIdx || touches[touches.length - 1].idx <= lastReentryIdx) return null;
+  }
+  if (oppositeSide > Math.max(1, Math.floor(span * 0.08))) return null;
 
   const projectedStart = valueAtMinute(currentMinute);
   const projectedEnd = valueAtMinute(Number(currentMinute) + 1);
@@ -13973,8 +14004,10 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
   const distance = Math.abs(price - projectedStart);
   if ((candles.length - 1) - touches[touches.length - 1].idx > 26) return null;
   const nearLimit = Math.max(avgRange * 0.82, Math.abs(Number(currentRange || 0)) * 0.36, tol * 2.35);
-  const respects = isSupport ? price >= projectedStart - tol * 0.24 : price <= projectedStart + tol * 0.24;
+  const respects = isSupport ? price >= projectedStart - tol * 0.10 : price <= projectedStart + tol * 0.10;
   const near = distance <= nearLimit;
+  // V35: sin polaridad. Soporte solo existe si el precio está arriba y lo testea
+  // desde arriba; resistencia solo si el precio está abajo y la testea desde abajo.
   if (!near || !respects) return null;
 
   const closeTouches = touches.filter((t) => t.source === "close" || t.closeDist <= tol * 1.05).length;
@@ -14023,6 +14056,11 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
       hardBreaks,
       bodyCuts,
       middleCuts,
+      envelopeFails,
+      maxRecentWrongRun,
+      lastHardBreakIdx,
+      lastReentryIdx,
+      noPolarity: true,
       crosses: hardBreaks,
       level: projectedStart,
       lineAtEval: projectedStart,
@@ -14032,14 +14070,14 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
       distanceToLine: distance,
       nearLimit,
       respectsLine: respects,
-      stage: "linea_dinamica_extrema_v34",
-      movementFilter: "extremos_cierres_mechas_cuerpo_recorrido",
+      stage: "linea_dinamica_extrema_no_polaridad_v35",
+      movementFilter: "extremos_cierres_mechas_cuerpo_recorrido_sin_polaridad",
       status: isSupport
-        ? "Soporte dinámico extremo: piso alcista por mínimos/cierres/mechas. Solo COMPRA si respeta arriba."
-        : "Resistencia dinámica extrema: techo bajista por máximos/cierres/mechas. Solo VENTA si respeta abajo.",
+        ? "Soporte dinámico extremo: piso por mínimos/cierres/mechas. Solo COMPRA si el precio está arriba y retestea desde arriba; si rompe abajo se invalida hasta reingreso."
+        : "Resistencia dinámica extrema: techo por máximos/cierres/mechas. Solo VENTA si el precio está abajo y retestea desde abajo; si rompe arriba se invalida hasta reingreso.",
       logic: isSupport
-        ? "soporte dinámico extremo comprador: mínimos externos + cierres/mechas/cuerpo + recorrido => CALL"
-        : "resistencia dinámica extrema vendedora: máximos externos + cierres/mechas/cuerpo + recorrido => PUT",
+        ? "soporte dinámico extremo comprador sin polaridad: mínimos externos + cierres/mechas/cuerpo + recorrido + precio arriba => CALL"
+        : "resistencia dinámica extrema vendedora sin polaridad: máximos externos + cierres/mechas/cuerpo + recorrido + precio abajo => PUT",
     },
   };
 }
@@ -14136,7 +14174,7 @@ function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_
     levelType: isSupport ? "support" : "resistance",
     message: ok
       ? `Precio ${Math.round(checkMs / 1000)}s respeta línea dinámica (${price.toFixed(6)} vs ${line.toFixed(6)})`
-      : `Precio ${Math.round(checkMs / 1000)}s rompió línea dinámica (${price.toFixed(6)} vs ${line.toFixed(6)})`,
+      : `${isSupport ? "Soporte dinámico roto: precio debajo de la línea, no se convierte en venta" : "Resistencia dinámica rota: precio encima de la línea, no se convierte en compra"} (${price.toFixed(6)} vs ${line.toFixed(6)})`,
   };
 }
 
