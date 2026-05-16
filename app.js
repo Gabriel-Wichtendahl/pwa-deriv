@@ -691,7 +691,7 @@ const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RE
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_PREALERTA_35_45_AUTO59_V23_20260513";
-const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_AUTO59_4PTS_V26_20260515";
+const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
@@ -13684,6 +13684,9 @@ function getDynamicLineValue(meta, minute, ms = 0) {
   return Number(meta.level);
 }
 function candlePivotPoints(candles, field, type) {
+  // V34: pivotes extremos, no internos. Para línea dinámica ya no usamos
+  // solamente high/low crudo: armamos candidatos externos combinando mecha,
+  // cuerpo y cierre. Esta función queda como fallback para código viejo.
   const arr = (candles || []).map((c, idx) => ({ ...c, idx, v: Number(c?.[field]) })).filter((p) => Number.isFinite(p.v));
   if (arr.length < 4) return arr;
   const out = [];
@@ -13699,83 +13702,302 @@ function candlePivotPoints(candles, field, type) {
   }
   return out.length >= 2 ? out : arr;
 }
+function getDynamicLineBodyTop(c) {
+  return Math.max(Number(c?.open), Number(c?.close));
+}
+function getDynamicLineBodyBottom(c) {
+  return Math.min(Number(c?.open), Number(c?.close));
+}
+function getDynamicLineExtremeValue(c, isSupport, source = "wick") {
+  const open = Number(c?.open), high = Number(c?.high), low = Number(c?.low), close = Number(c?.close);
+  const bodyTop = Math.max(open, close);
+  const bodyBottom = Math.min(open, close);
+  if (source === "close") return close;
+  if (source === "body") return isSupport ? bodyBottom : bodyTop;
+  if (source === "open") return open;
+  return isSupport ? low : high;
+}
+function getDynamicLineBestTouch(c, line, isSupport) {
+  const open = Number(c?.open), high = Number(c?.high), low = Number(c?.low), close = Number(c?.close);
+  if (![open, high, low, close, line].every(Number.isFinite)) return null;
+  const bodyTop = Math.max(open, close);
+  const bodyBottom = Math.min(open, close);
+  const items = isSupport
+    ? [
+        { source: "wick", value: low, weight: 0.98 },
+        { source: "body", value: bodyBottom, weight: 1.10 },
+        { source: "close", value: close, weight: 1.18 },
+        { source: "open", value: open, weight: 0.92 },
+      ]
+    : [
+        { source: "wick", value: high, weight: 0.98 },
+        { source: "body", value: bodyTop, weight: 1.10 },
+        { source: "close", value: close, weight: 1.18 },
+        { source: "open", value: open, weight: 0.92 },
+      ];
+  let best = null;
+  for (const it of items) {
+    if (!Number.isFinite(it.value)) continue;
+    const dist = Math.abs(Number(it.value) - Number(line));
+    if (!best || dist < best.dist || (dist === best.dist && it.weight > best.weight)) {
+      best = { ...it, dist };
+    }
+  }
+  if (!best) return null;
+  const wickDist = Math.abs((isSupport ? low : high) - line);
+  const closeDist = Math.abs(close - line);
+  const bodyDist = Math.abs((isSupport ? bodyBottom : bodyTop) - line);
+  return {
+    ...best,
+    wickDist,
+    closeDist,
+    bodyDist,
+    closeValue: close,
+    wickValue: isSupport ? low : high,
+    bodyValue: isSupport ? bodyBottom : bodyTop,
+  };
+}
+function buildDynamicLineExtremeCandidates(candles, isSupport, maxCount = 34) {
+  const src = Array.isArray(candles) ? candles : [];
+  const n = src.length;
+  if (n < 5) return [];
+  const avgRange = getDynamicLineAvgRange(src.slice(-40), 0);
+  const local = [];
+  for (let i = 1; i < n - 1; i++) {
+    const c = src[i];
+    const prev = src[i - 1];
+    const next = src[i + 1];
+    const high = Number(c.high), low = Number(c.low), close = Number(c.close), open = Number(c.open);
+    if (![high, low, close, open].every(Number.isFinite)) continue;
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+    const side = isSupport ? low : high;
+    const prevSide = isSupport ? Number(prev.low) : Number(prev.high);
+    const nextSide = isSupport ? Number(next.low) : Number(next.high);
+    const bodySide = isSupport ? bodyBottom : bodyTop;
+    const closeSide = close;
+    const pivotByWick = isSupport ? (side <= prevSide && side <= nextSide) : (side >= prevSide && side >= nextSide);
+    const pivotByBody = isSupport
+      ? (bodySide <= getDynamicLineBodyBottom(prev) && bodySide <= getDynamicLineBodyBottom(next))
+      : (bodySide >= getDynamicLineBodyTop(prev) && bodySide >= getDynamicLineBodyTop(next));
+    // Se permiten cierres fuertes como parte del nivel si están en el borde.
+    const pivotByClose = isSupport
+      ? (closeSide <= Number(prev.close) && closeSide <= Number(next.close))
+      : (closeSide >= Number(prev.close) && closeSide >= Number(next.close));
+    if (!pivotByWick && !pivotByBody && !pivotByClose) continue;
+    const left = src.slice(Math.max(0, i - 4), i);
+    const right = src.slice(i + 1, Math.min(n, i + 5));
+    const neigh = left.concat(right);
+    const neighVals = neigh
+      .map((x) => isSupport ? Number(x.low) : Number(x.high))
+      .filter(Number.isFinite);
+    const extremeGap = neighVals.length
+      ? (isSupport ? Math.min(...neighVals) - side : side - Math.max(...neighVals))
+      : 0;
+    const bodyGap = neigh.length
+      ? (isSupport
+          ? Math.min(...neigh.map(getDynamicLineBodyBottom).filter(Number.isFinite)) - bodySide
+          : bodySide - Math.max(...neigh.map(getDynamicLineBodyTop).filter(Number.isFinite)))
+      : 0;
+    const prominence = Math.max(0, extremeGap, bodyGap, avgRange * 0.02);
+    // Cuanto más exterior, más prioridad. El cierre/cuerpo también suma para que
+    // puedan coincidir cierre+mecha, cierre+cierre o mezcla cierre/mecha.
+    const baseRank = prominence / Math.max(avgRange, 1e-9);
+    local.push({ idx: i, candle: c, side, bodySide, closeSide, bodyTop, bodyBottom, baseRank, pivotByWick, pivotByBody, pivotByClose });
+  }
+  if (local.length < 2) {
+    for (let i = 0; i < n; i++) {
+      const c = src[i];
+      const side = isSupport ? Number(c.low) : Number(c.high);
+      if (Number.isFinite(side)) local.push({ idx: i, candle: c, side, bodySide: getDynamicLineExtremeValue(c, isSupport, "body"), closeSide: Number(c.close), baseRank: 0.05, pivotByWick: true });
+    }
+  }
+  const candidates = [];
+  for (const p of local) {
+    const c = p.candle;
+    const minute = Number(c.minute);
+    const wick = isSupport ? Number(c.low) : Number(c.high);
+    const body = isSupport ? Number(p.bodyBottom) : Number(p.bodyTop);
+    const close = Number(c.close);
+    const open = Number(c.open);
+    const vals = [
+      { source: "wick", v: wick, sourceWeight: 1.00 + (p.pivotByWick ? 0.18 : 0) },
+      { source: "body", v: body, sourceWeight: 1.12 + (p.pivotByBody ? 0.18 : 0) },
+      { source: "close", v: close, sourceWeight: 1.18 + (p.pivotByClose ? 0.20 : 0) },
+    ];
+    // El open se usa con menos peso solo si también coincide con borde del cuerpo.
+    if (Number.isFinite(open)) vals.push({ source: "open", v: open, sourceWeight: 0.88 });
+    for (const it of vals) {
+      if (!Number.isFinite(it.v)) continue;
+      // Para soporte, no queremos candidatos de cierre muy arriba de la vela; para
+      // resistencia, no queremos cierres muy abajo: serían puntos internos.
+      const edgeDistance = Math.abs(it.v - wick);
+      const bodyRange = Math.max(Math.abs(Number(c.high) - Number(c.low)), avgRange * 0.25, 1e-9);
+      if ((it.source === "close" || it.source === "open") && edgeDistance > bodyRange * 0.86) continue;
+      candidates.push({
+        idx: p.idx,
+        minute,
+        v: Number(it.v),
+        source: it.source,
+        sourceWeight: it.sourceWeight,
+        exteriorRank: p.baseRank + (it.source === "close" ? 0.10 : it.source === "body" ? 0.07 : 0.03),
+        candle: c,
+      });
+    }
+  }
+  candidates.sort((a, b) =>
+    Number(a.idx) - Number(b.idx) ||
+    (Number(b.exteriorRank || 0) + Number(b.sourceWeight || 0)) - (Number(a.exteriorRank || 0) + Number(a.sourceWeight || 0))
+  );
+  // Reducir duplicados: máximo 2 candidatos por vela para no favorecer líneas internas.
+  const perIdx = new Map();
+  const compact = [];
+  for (const c of candidates) {
+    const arr = perIdx.get(c.idx) || [];
+    if (arr.length >= 2) continue;
+    arr.push(c);
+    perIdx.set(c.idx, arr);
+    compact.push(c);
+  }
+  return compact.slice(-maxCount);
+}
 function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, currentPrice, currentRange = 0) {
   if (!pA || !pB || pB.idx <= pA.idx) return null;
   const avgRange = getDynamicLineAvgRange(candles.slice(-40), currentRange);
-  const minGap = 4;
+  const minGap = 5;
   const gap = pB.idx - pA.idx;
   if (gap < minGap) return null;
   const slope = (Number(pB.v) - Number(pA.v)) / gap;
   const slopeAbs = Math.abs(slope);
-  const minSlope = Math.max(avgRange * 0.006, Math.abs(Number(currentPrice || pB.v)) * 0.00000005, 1e-12);
-  const maxSlope = Math.max(avgRange * 0.95, minSlope * 4);
+  const minSlope = Math.max(avgRange * 0.0045, Math.abs(Number(currentPrice || pB.v)) * 0.000000045, 1e-12);
+  const maxSlope = Math.max(avgRange * 1.18, minSlope * 4);
   if (isSupport && slope <= minSlope) return null;
   if (!isSupport && slope >= -minSlope) return null;
   if (slopeAbs > maxSlope) return null;
 
-  const tol = Math.max(avgRange * 0.23, Math.abs(Number(currentPrice || pB.v)) * 0.0000035, 1e-9);
-  const reboundNeed = Math.max(avgRange * 0.55, Math.abs(Number(currentRange || 0)) * 0.18, tol * 1.7, 1e-9);
-  const anchorIdx = pA.idx;
+  // Tolerancia de toque: permite que el nivel se forme por cierres, cuerpos o mechas,
+  // pero sigue siendo exigente para evitar líneas internas.
+  const tol = Math.max(avgRange * 0.26, Math.abs(Number(currentPrice || pB.v)) * 0.0000038, 1e-9);
+  const reboundNeed = Math.max(avgRange * 0.52, Math.abs(Number(currentRange || 0)) * 0.17, tol * 1.55, 1e-9);
+  const anchorIdx = Number(pA.idx);
   const anchorMinute = Number(pA.minute);
   const anchorValue = Number(pA.v);
-  const valueAtIdx = (idx) => anchorValue + slope * (idx - anchorIdx);
+  const valueAtIdx = (idx) => anchorValue + slope * (Number(idx) - anchorIdx);
   const valueAtMinute = (m) => anchorValue + slope * (Number(m) - anchorMinute);
 
   const touches = [];
   let wrongCloses = 0;
-  let crosses = 0;
+  let hardBreaks = 0;
+  let bodyCuts = 0;
+  let middleCuts = 0;
+  let oppositeSide = 0;
   let reboundScore = 0;
+  let sourceScore = 0;
   let lastTouchIdx = -999;
-  for (let i = pA.idx; i < candles.length; i++) {
+  let evaluated = 0;
+  for (let i = Math.max(0, pA.idx); i < candles.length; i++) {
     const c = candles[i];
     const line = valueAtIdx(i);
-    const low = Number(c.low), high = Number(c.high), close = Number(c.close);
-    if (![low, high, close, line].every(Number.isFinite)) continue;
-    const sideDistance = isSupport ? Math.abs(low - line) : Math.abs(high - line);
-    const closeWrong = isSupport ? close < line - tol * 1.15 : close > line + tol * 1.15;
+    const low = Number(c.low), high = Number(c.high), open = Number(c.open), close = Number(c.close);
+    if (![low, high, open, close, line].every(Number.isFinite)) continue;
+    evaluated++;
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+    const range = Math.max(Math.abs(high - low), avgRange * 0.25, 1e-9);
+
+    // Línea externa: resistencia debe techar; soporte debe sostener.
+    const closeWrong = isSupport ? close < line - tol * 0.48 : close > line + tol * 0.48;
+    const hardBreak = isSupport ? low < line - tol * 1.28 : high > line + tol * 1.28;
+    const cutsBody = bodyBottom < line - tol * 0.12 && bodyTop > line + tol * 0.12;
+    const cutsMiddle = line > low + range * 0.30 && line < high - range * 0.30;
+    const wrongSideBody = isSupport ? bodyTop < line - tol * 0.25 : bodyBottom > line + tol * 0.25;
     if (closeWrong) wrongCloses++;
-    if (isSupport ? low < line - tol * 1.75 : high > line + tol * 1.75) crosses++;
-    if (sideDistance <= tol && i - lastTouchIdx >= 3) {
-      const next = candles.slice(i + 1, Math.min(candles.length, i + 5));
+    if (hardBreak) hardBreaks++;
+    if (cutsBody) bodyCuts++;
+    if (cutsMiddle) middleCuts++;
+    if (wrongSideBody) oppositeSide++;
+
+    const best = getDynamicLineBestTouch(c, line, isSupport);
+    if (!best) continue;
+    const multiConfirm =
+      (best.wickDist <= tol * 1.05 ? 1 : 0) +
+      (best.closeDist <= tol * 1.05 ? 1 : 0) +
+      (best.bodyDist <= tol * 1.05 ? 1 : 0);
+    const touchOk = best.dist <= tol || (best.closeDist <= tol * 1.18 && best.bodyDist <= tol * 1.22);
+    if (touchOk && i - lastTouchIdx >= 3) {
+      const next = candles.slice(i + 1, Math.min(candles.length, i + 6));
       const excursion = next.length
         ? (isSupport
             ? Math.max(...next.map((x) => Number(x.high)).filter(Number.isFinite)) - line
             : line - Math.min(...next.map((x) => Number(x.low)).filter(Number.isFinite)))
         : 0;
-      if (Number.isFinite(excursion) && excursion >= reboundNeed) reboundScore += Math.min(2.2, excursion / Math.max(reboundNeed, 1e-9));
-      touches.push({ idx: i, minute: Number(c.minute), price: isSupport ? low : high, line, excursion: Number(excursion || 0) });
+      const reacted = Number.isFinite(excursion) && excursion >= reboundNeed;
+      if (reacted) reboundScore += Math.min(2.4, excursion / Math.max(reboundNeed, 1e-9));
+      // Un toque sin reacción vale menos, pero sirve si otros cierres/mechas refuerzan el nivel.
+      const srcW = best.source === "close" ? 1.28 : best.source === "body" ? 1.14 : best.source === "wick" ? 1.02 : 0.86;
+      const comboW = multiConfirm >= 2 ? 0.36 : 0;
+      sourceScore += srcW + comboW + (reacted ? 0.58 : 0);
+      touches.push({
+        idx: i,
+        minute: Number(c.minute),
+        price: best.value,
+        line,
+        source: best.source,
+        multiConfirm,
+        wickDist: Number(best.wickDist || 0),
+        closeDist: Number(best.closeDist || 0),
+        bodyDist: Number(best.bodyDist || 0),
+        excursion: Number(excursion || 0),
+        reacted,
+      });
       lastTouchIdx = i;
     }
   }
   if (touches.length < 2) return null;
   const separatedTouches = touches[touches.length - 1].idx - touches[0].idx;
-  if (separatedTouches < 6) return null;
-  if (wrongCloses > Math.max(2, Math.floor((candles.length - pA.idx) * 0.22))) return null;
-  if (crosses > Math.max(3, Math.floor((candles.length - pA.idx) * 0.28))) return null;
+  if (separatedTouches < 7) return null;
+  const span = Math.max(1, candles.length - Math.max(0, pA.idx));
+  const closeBreakLimit = Math.max(1, Math.floor(span * 0.12));
+  const hardBreakLimit = Math.max(1, Math.floor(span * 0.11));
+  const bodyCutLimit = Math.max(1, Math.floor(span * 0.14));
+  const middleCutLimit = Math.max(2, Math.floor(span * 0.20));
+  if (wrongCloses > closeBreakLimit) return null;
+  if (hardBreaks > hardBreakLimit) return null;
+  if (bodyCuts > bodyCutLimit) return null;
+  if (middleCuts > middleCutLimit) return null;
+  if (oppositeSide > Math.max(1, Math.floor(span * 0.10))) return null;
 
   const projectedStart = valueAtMinute(currentMinute);
   const projectedEnd = valueAtMinute(Number(currentMinute) + 1);
   const price = Number(currentPrice);
   const distance = Math.abs(price - projectedStart);
-  // V29: la línea solo debe aparecer si el precio realmente vuelve a la zona dinámica.
-  // Antes era muy permisivo y podía marcar líneas lejanas o poco útiles.
-  if ((candles.length - 1) - touches[touches.length - 1].idx > 24) return null;
-  const nearLimit = Math.max(avgRange * 0.72, Math.abs(Number(currentRange || 0)) * 0.34, tol * 2.15);
-  const respects = isSupport ? price >= projectedStart - tol * 0.18 : price <= projectedStart + tol * 0.18;
+  if ((candles.length - 1) - touches[touches.length - 1].idx > 26) return null;
+  const nearLimit = Math.max(avgRange * 0.82, Math.abs(Number(currentRange || 0)) * 0.36, tol * 2.35);
+  const respects = isSupport ? price >= projectedStart - tol * 0.24 : price <= projectedStart + tol * 0.24;
   const near = distance <= nearLimit;
   if (!near || !respects) return null;
+
+  const closeTouches = touches.filter((t) => t.source === "close" || t.closeDist <= tol * 1.05).length;
+  const wickTouches = touches.filter((t) => t.source === "wick" || t.wickDist <= tol * 1.05).length;
+  const bodyTouches = touches.filter((t) => t.source === "body" || t.bodyDist <= tol * 1.05).length;
+  const reactedTouches = touches.filter((t) => t.reacted).length;
+  const endpointExterior = Number(pA.exteriorRank || 0) + Number(pB.exteriorRank || 0) + Number(pA.sourceWeight || 0) * 0.18 + Number(pB.sourceWeight || 0) * 0.18;
+  const externalPenalty = wrongCloses * 17 + hardBreaks * 16 + bodyCuts * 13 + middleCuts * 8 + oppositeSide * 12;
   const quality =
-    touches.length * 24 +
-    Math.min(3, reboundScore) * 16 +
-    Math.min(28, separatedTouches) +
-    Math.max(0, 1 - distance / Math.max(nearLimit, 1e-9)) * 28 +
-    Math.min(18, slopeAbs / Math.max(avgRange * 0.04, 1e-9)) -
-    wrongCloses * 12 -
-    crosses * 8;
+    touches.length * 25 +
+    Math.min(3.4, reboundScore) * 18 +
+    Math.min(30, separatedTouches) +
+    Math.max(0, 1 - distance / Math.max(nearLimit, 1e-9)) * 30 +
+    Math.min(18, slopeAbs / Math.max(avgRange * 0.04, 1e-9)) +
+    Math.min(18, sourceScore * 2.2) +
+    Math.min(16, endpointExterior * 8) +
+    Math.min(12, closeTouches * 3 + bodyTouches * 2 + wickTouches * 1.6) +
+    Math.min(10, reactedTouches * 3.5) -
+    externalPenalty;
   return {
     direction: isSupport ? "CALL" : "PUT",
     quality,
-    points: Math.min(6, 2 + touches.length + Math.floor(reboundScore)),
+    points: Math.min(6, 2 + touches.length + Math.floor(reboundScore) + (closeTouches >= 2 ? 1 : 0)),
     meta: {
       levelMode: "dynamic_line",
       levelType: isSupport ? "support" : "resistance",
@@ -13788,13 +14010,20 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
       tolerance: tol,
       avgRange,
       touches: touches.length,
+      closeTouches,
+      wickTouches,
+      bodyTouches,
+      touchSources: touches.map((t) => t.source),
       touchMinutes: touches.map((t) => t.minute),
-      touchDetails: touches.map((t) => ({ idx: t.idx, minute: t.minute, line: t.line, price: t.price, excursion: t.excursion })),
+      touchDetails: touches.map((t) => ({ idx: t.idx, minute: t.minute, line: t.line, price: t.price, source: t.source, multiConfirm: t.multiConfirm, excursion: t.excursion, reacted: t.reacted })),
       firstTouchMinute: touches[0]?.minute,
       lastTouchMinute: touches[touches.length - 1]?.minute,
       reboundScore,
       wrongCloses,
-      crosses,
+      hardBreaks,
+      bodyCuts,
+      middleCuts,
+      crosses: hardBreaks,
       level: projectedStart,
       lineAtEval: projectedStart,
       lineAtMinuteStart: projectedStart,
@@ -13803,37 +14032,44 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
       distanceToLine: distance,
       nearLimit,
       respectsLine: respects,
-      stage: "linea_dinamica_visual",
-      movementFilter: "linea_tendencia_toques_recorrido",
+      stage: "linea_dinamica_extrema_v34",
+      movementFilter: "extremos_cierres_mechas_cuerpo_recorrido",
       status: isSupport
-        ? "Soporte dinámico: línea alcista con toques y rebotes. Solo COMPRA si respeta arriba."
-        : "Resistencia dinámica: línea bajista con toques y rechazos. Solo VENTA si respeta abajo.",
+        ? "Soporte dinámico extremo: piso alcista por mínimos/cierres/mechas. Solo COMPRA si respeta arriba."
+        : "Resistencia dinámica extrema: techo bajista por máximos/cierres/mechas. Solo VENTA si respeta abajo.",
       logic: isSupport
-        ? "soporte dinámico comprador: mínimos ascendentes + recorrido desde la línea => CALL"
-        : "resistencia dinámica vendedora: máximos descendentes + recorrido desde la línea => PUT",
+        ? "soporte dinámico extremo comprador: mínimos externos + cierres/mechas/cuerpo + recorrido => CALL"
+        : "resistencia dinámica extrema vendedora: máximos externos + cierres/mechas/cuerpo + recorrido => PUT",
     },
   };
 }
 function findBestDynamicLine(symbol, minute, currentPrice, currentRange = 0) {
-  const candles = getGiroPolarityCandles(symbol, minute, 70);
-  if (!candles || candles.length < 12) return null;
-  const lows = candlePivotPoints(candles, "low", "low").slice(-18);
-  const highs = candlePivotPoints(candles, "high", "high").slice(-18);
+  const candles = getGiroPolarityCandles(symbol, minute, 80);
+  if (!candles || candles.length < 14) return null;
+  const lows = buildDynamicLineExtremeCandidates(candles, true, 36);
+  const highs = buildDynamicLineExtremeCandidates(candles, false, 36);
   const matches = [];
   for (let a = 0; a < lows.length - 1; a++) {
     for (let b = a + 1; b < lows.length; b++) {
+      if (lows[a].idx === lows[b].idx) continue;
       const m = scoreDynamicTrendLine(candles, lows[a], lows[b], true, minute, currentPrice, currentRange);
       if (m) matches.push(m);
     }
   }
   for (let a = 0; a < highs.length - 1; a++) {
     for (let b = a + 1; b < highs.length; b++) {
+      if (highs[a].idx === highs[b].idx) continue;
       const m = scoreDynamicTrendLine(candles, highs[a], highs[b], false, minute, currentPrice, currentRange);
       if (m) matches.push(m);
     }
   }
   if (!matches.length) return null;
-  matches.sort((a, b) => b.quality - a.quality || Number(b.meta?.touches || 0) - Number(a.meta?.touches || 0));
+  matches.sort((a, b) =>
+    b.quality - a.quality ||
+    Number(b.meta?.touches || 0) - Number(a.meta?.touches || 0) ||
+    Number(b.meta?.closeTouches || 0) - Number(a.meta?.closeTouches || 0) ||
+    Number(b.meta?.wickTouches || 0) - Number(a.meta?.wickTouches || 0)
+  );
   return matches[0];
 }
 function analyzeDynamicLineCandidate(candidate, minute) {
