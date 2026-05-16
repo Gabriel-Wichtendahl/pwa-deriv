@@ -7557,13 +7557,41 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
   const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
 
+  // V29: para la vista de velas 1m, la línea dinámica debe verse como una línea recta
+  // sobre velas equiespaciadas. Si hay huecos en el historial, no usamos la diferencia
+  // real de minutos para dibujar porque genera saltos visuales tipo escalón.
+  const buildDynamicLineVisual = () => {
+    if (!meta || !candles.length) return null;
+    const minuteToIdx = new Map(candles.map((c, i) => [Number(c.minute), i]));
+    const detail = Array.isArray(meta.touchDetails) ? meta.touchDetails : [];
+    let pts = detail
+      .map((t) => ({ idx: minuteToIdx.get(Number(t.minute)), minute: Number(t.minute), line: Number(t.line) }))
+      .filter((t) => Number.isFinite(t.idx) && Number.isFinite(t.line));
+    if (pts.length < 2) {
+      pts = (Array.isArray(meta.touchMinutes) ? meta.touchMinutes : [])
+        .map((m) => ({ idx: minuteToIdx.get(Number(m)), minute: Number(m), line: Number(getDynamicLineValue(meta, Number(m), 0)) }))
+        .filter((t) => Number.isFinite(t.idx) && Number.isFinite(t.line));
+    }
+    let iA = 0, iB = Math.max(1, candles.length - 1);
+    let vA = Number(getDynamicLineValue(meta, Number(candles[0]?.minute), 0));
+    let vB = Number(getDynamicLineValue(meta, Number(candles[candles.length - 1]?.minute), 0));
+    if (pts.length >= 2) {
+      pts.sort((a, b) => a.idx - b.idx);
+      iA = pts[0].idx;
+      iB = pts[pts.length - 1].idx;
+      vA = pts[0].line;
+      vB = pts[pts.length - 1].line;
+    }
+    if (!Number.isFinite(vA) || !Number.isFinite(vB) || iA === iB) return null;
+    const slopeVisible = (vB - vA) / Math.max(1, iB - iA);
+    return (i) => vA + slopeVisible * (i - iA);
+  };
+  const dynamicLineVisualAt = buildDynamicLineVisual();
+
   const values = [];
   for (const c of candles) values.push(Number(c.high), Number(c.low), Number(c.open), Number(c.close));
-  if (meta) {
-    for (const c of candles) {
-      values.push(Number(getDynamicLineValue(meta, Number(c.minute), 0)));
-      values.push(Number(getDynamicLineValue(meta, Number(c.minute), 60000)));
-    }
+  if (meta && dynamicLineVisualAt) {
+    for (let i = 0; i < candles.length; i++) values.push(Number(dynamicLineVisualAt(i)));
   }
   if (snrArea) values.push(Number(snrArea.nearLow), Number(snrArea.nearHigh), Number(snrArea.zoneLow), Number(snrArea.zoneHigh));
   else if (pol && Number.isFinite(Number(pol.level))) values.push(Number(pol.level));
@@ -7648,7 +7676,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   });
 
   // Línea dinámica marcada sobre las velas de 1 minuto.
-  if (meta) {
+  if (meta && dynamicLineVisualAt) {
     const isSupportLine = String(meta.levelType || meta.lineType || "") === "support";
     ctx.save();
     ctx.strokeStyle = isSupportLine ? "rgba(34,197,94,0.96)" : "rgba(248,113,113,0.96)";
@@ -7656,11 +7684,12 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
     ctx.shadowColor = isSupportLine ? "rgba(34,197,94,0.22)" : "rgba(248,113,113,0.22)";
     ctx.shadowBlur = 9;
     ctx.beginPath();
-    candles.forEach((c, i) => {
-      const y = yOf(getDynamicLineValue(meta, Number(c.minute), 0));
-      const x = xOf(i);
-      if (!i) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
+    const x0 = xOf(0);
+    const y0 = yOf(dynamicLineVisualAt(0));
+    const x1 = xOf(candles.length - 1);
+    const y1 = yOf(dynamicLineVisualAt(candles.length - 1));
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
     ctx.stroke();
 
     const touchSet = new Set((Array.isArray(meta.touchMinutes) ? meta.touchMinutes : []).map((m) => Number(m)));
@@ -7671,7 +7700,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
       candles.forEach((c, i) => {
         if (!touchSet.has(Number(c.minute))) return;
         const x = xOf(i);
-        const y = yOf(getDynamicLineValue(meta, Number(c.minute), 0));
+        const y = yOf(dynamicLineVisualAt(i));
         ctx.beginPath(); ctx.arc(x, y, 4.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       });
     }
@@ -13577,8 +13606,11 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
   const projectedEnd = valueAtMinute(Number(currentMinute) + 1);
   const price = Number(currentPrice);
   const distance = Math.abs(price - projectedStart);
-  const nearLimit = Math.max(avgRange * 1.15, Math.abs(Number(currentRange || 0)) * 0.45, tol * 2.8);
-  const respects = isSupport ? price >= projectedStart - tol * 0.25 : price <= projectedStart + tol * 0.25;
+  // V29: la línea solo debe aparecer si el precio realmente vuelve a la zona dinámica.
+  // Antes era muy permisivo y podía marcar líneas lejanas o poco útiles.
+  if ((candles.length - 1) - touches[touches.length - 1].idx > 24) return null;
+  const nearLimit = Math.max(avgRange * 0.72, Math.abs(Number(currentRange || 0)) * 0.34, tol * 2.15);
+  const respects = isSupport ? price >= projectedStart - tol * 0.18 : price <= projectedStart + tol * 0.18;
   const near = distance <= nearLimit;
   if (!near || !respects) return null;
   const quality =
@@ -13606,6 +13638,7 @@ function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, curren
       avgRange,
       touches: touches.length,
       touchMinutes: touches.map((t) => t.minute),
+      touchDetails: touches.map((t) => ({ idx: t.idx, minute: t.minute, line: t.line, price: t.price, excursion: t.excursion })),
       firstTouchMinute: touches[0]?.minute,
       lastTouchMinute: touches[touches.length - 1]?.minute,
       reboundScore,
