@@ -7485,6 +7485,60 @@ function getStoredCandleByMinute(symbol, minute) {
   const arr = Array.isArray(giroPolarityCandles?.[symbol]) ? giroPolarityCandles[symbol] : [];
   return arr.find((c) => Number(c?.minute) === Number(minute)) || null;
 }
+function normalizeMiniCandlesNoVisualGaps(rawCandles, symbol, endMinute, maxCount = 34) {
+  const clean = (Array.isArray(rawCandles) ? rawCandles : [])
+    .map((c) => {
+      const m = Number(c?.minute);
+      const open = Number(c?.open), high = Number(c?.high), low = Number(c?.low), close = Number(c?.close);
+      if (![m, open, high, low, close].every(Number.isFinite)) return null;
+      return { ...c, symbol, minute: m, open, high, low, close };
+    })
+    .filter(Boolean)
+    .sort((a, b) => Number(a.minute) - Number(b.minute));
+
+  if (!clean.length) return [];
+
+  const byMinute = new Map();
+  for (const c of clean) byMinute.set(Number(c.minute), c);
+
+  // V31: la vista de velas 1m es solo visual. Para que se parezca más a Deriv,
+  // forzamos continuidad entre cierres/aperturas y rellenamos minutos faltantes
+  // con una vela plana. Así no aparecen gaps falsos por historial incompleto o
+  // porque el primer tick disponible de un minuto no coincide con el cierre previo.
+  const lastMinute = Number.isFinite(Number(endMinute))
+    ? Number(endMinute)
+    : Number(clean[clean.length - 1].minute);
+  const firstAvailable = Number(clean[0].minute);
+  const startMinute = Math.max(firstAvailable, lastMinute - maxCount + 1);
+  const out = [];
+  let prevClose = null;
+
+  for (let m = startMinute; m <= lastMinute; m++) {
+    const src = byMinute.get(m);
+    if (src) {
+      let open = Number(src.open);
+      let high = Number(src.high);
+      let low = Number(src.low);
+      let close = Number(src.close);
+
+      if (Number.isFinite(prevClose)) {
+        // Continuidad visual: la apertura de la vela siguiente nace del cierre previo.
+        open = prevClose;
+        high = Math.max(high, open, close);
+        low = Math.min(low, open, close);
+      }
+
+      out.push({ ...src, symbol, minute: m, open, high, low, close, filled: false });
+      prevClose = close;
+    } else if (Number.isFinite(prevClose)) {
+      // Minuto faltante: vela plana puente para no mostrar un salto artificial.
+      out.push({ symbol, minute: m, open: prevClose, high: prevClose, low: prevClose, close: prevClose, filled: true });
+    }
+  }
+
+  return out.slice(-maxCount);
+}
+
 function buildModalOneMinuteCandles(item, liveTicks = []) {
   if (!item) return [];
   const symbol = item.symbol;
@@ -7513,7 +7567,9 @@ function buildModalOneMinuteCandles(item, liveTicks = []) {
     const open = Number(current.open), high = Number(current.high), low = Number(current.low), close = Number(current.close);
     if ([m, open, high, low, close].every(Number.isFinite)) byMinute.set(m, { symbol, minute: m, open, high, low, close, current: true });
   }
-  return [...byMinute.values()].sort((a, b) => Number(a.minute) - Number(b.minute)).slice(-34);
+
+  const raw = [...byMinute.values()].sort((a, b) => Number(a.minute) - Number(b.minute)).slice(-34);
+  return normalizeMiniCandlesNoVisualGaps(raw, symbol, minute, 34);
 }
 function drawRoundedRect(ctx, x, y, w, h, r) {
   const rr = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
