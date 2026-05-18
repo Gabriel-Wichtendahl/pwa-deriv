@@ -28,7 +28,7 @@
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
-// ✅ V39: agrega modo separado “SNR POLARIDAD” (ruptura + retesteo + cierre/reacción de zona)
+// ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
 
 "use strict";
 
@@ -695,7 +695,7 @@ const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RE
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_EFECTIVO_RADAR_35_40_V38_20260518";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_RUPTURA_RETEST_V39_20260518";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_RUPTURA_RETEST_AUTO59_ZONA_V40_20260518";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -1562,7 +1562,7 @@ const SIGNAL_PREALERT_MIN_SEC = 35;
 const SIGNAL_PREALERT_MAX_SEC = 45;
 // V7: aunque haya 4 puntos manuales, la entrada real solo se permite
 // si al segundo 59 el precio está dentro de la zona SNR o muy cerca.
-const SIGNAL_AUTO_SNR_GATE_ENABLED = false;
+const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
 const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
 const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0.35;
@@ -6986,10 +6986,10 @@ function updateSignalConfirmationUI() {
     const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
     const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "4 puntos"}${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "4 puntos"}${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
@@ -7269,13 +7269,11 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
     return gate;
   }
 
-  // V25: en SNR el nivel queda solo como referencia; no bloquea.
-  try {
-    const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-    return gate && !gate.pending ? gate : null;
-  } catch {
-    return null;
-  }
+  // V40: en modos SNR, el precio al segundo 59 debe estar dentro de la zona azul o amarilla.
+  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+  if (gate?.pending) throw new Error(gate.message || "SNR pendiente");
+  if (!gate?.ok) throw new Error(gate?.message || "El precio no está dentro de la zona azul/amarilla al segundo 59");
+  return gate;
 }
 
 function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
@@ -7293,16 +7291,11 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
 
   let gate = null;
   try {
-    gate = isDynamicLineMode(item.mode)
-      ? assertSignalSNREntryGateAt57(side, item)
-      : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-    if (gate?.pending) gate = null;
+    gate = assertSignalSNREntryGateAt57(side, item);
   } catch (err) {
-    if (isDynamicLineMode(item.mode)) {
-      toast(`⛔ ${err?.message || "La línea dinámica no habilita la entrada"}`, 1500);
-      return false;
-    }
-    gate = null;
+    const msg = err?.message || (isDynamicLineMode(item.mode) ? "La línea dinámica no habilita la entrada" : "El precio no está dentro de la zona azul/amarilla");
+    if (!itemOverride || (modalCurrentItem && modalCurrentItem.id === item.id)) toast(`⛔ ${msg}`, 1500);
+    return false;
   }
   const label = side === "CALL" ? "COMPRA" : "VENTA";
 
@@ -9606,7 +9599,7 @@ function getSignalLifecycleStageInfo(item) {
       return {
         key: "auto_ready",
         label: `🟢 AUTO ${autoSec}s`,
-        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos completos. El SNR no bloquea el trade. ${pointsTxt}`,
+        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos completos + precio dentro de zona azul/amarilla. ${pointsTxt}`,
       };
     }
     if (gate?.ok) {
@@ -9628,7 +9621,7 @@ function getSignalLifecycleStageInfo(item) {
     label: dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
     title: dynamicMode
       ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
-      : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos. ${pointsTxt}`,
+      : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro de zona azul/amarilla. ${pointsTxt}`,
   };
 }
 
