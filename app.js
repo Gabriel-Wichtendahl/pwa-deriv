@@ -7587,7 +7587,7 @@ async function fetchDerivOHLC1mCandles(symbol, endMinute, maxCount = MODAL_CANDL
 function requestModalOHLC1mCandles(item, maxCount = MODAL_CANDLES_1M_COUNT) {
   if (!item) return false;
   const symbol = item.symbol;
-  const endMinute = Number(item.minute);
+  const endMinute = getModalOneMinuteCandlesEndMinute(item);
   if (!symbol || !Number.isFinite(endMinute)) return false;
 
   const key = modalOHLC1mCacheKey(symbol, endMinute, maxCount);
@@ -7615,7 +7615,7 @@ function requestModalOHLC1mCandles(item, maxCount = MODAL_CANDLES_1M_COUNT) {
         modalCurrentItem &&
         modalChartView === "candles1m" &&
         modalCurrentItem.symbol === symbol &&
-        Number(modalCurrentItem.minute) === endMinute
+        Number(getModalOneMinuteCandlesEndMinute(modalCurrentItem)) === endMinute
       ) {
         requestModalDraw(true);
       }
@@ -7629,15 +7629,33 @@ function getCachedModalOHLC1mCandles(symbol, endMinute, maxCount = MODAL_CANDLES
   const cached = modalOHLC1mCache.get(key);
   return Array.isArray(cached) ? cached.slice() : [];
 }
-function buildLocalOneMinuteCandlesFallback(item, liveTicks = [], maxCount = MODAL_CANDLES_1M_COUNT) {
+function hasResolvedNextResultCandle(item) {
+  const out = getItemNextOutcomeValue(item);
+  return out === "up" || out === "down" || out === "flat" || out === "equal" || out === "neutral";
+}
+function getModalOneMinuteCandlesEndMinute(item) {
+  const m = Number(item?.minute);
+  if (!Number.isFinite(m)) return m;
+  // V42: si la señal ya tiene resultado de próxima vela, el modal de Velas 1m
+  // debe mostrar también esa vela siguiente, después de la vela señal remarcada.
+  return hasResolvedNextResultCandle(item) ? m + 1 : m;
+}
+function isModalSignalCandle(item, candle) {
+  return Number(candle?.minute) === Number(item?.minute);
+}
+function isModalNextResultCandle(item, candle) {
+  return hasResolvedNextResultCandle(item) && Number(candle?.minute) === Number(item?.minute) + 1;
+}
+function buildLocalOneMinuteCandlesFallback(item, liveTicks = [], maxCount = MODAL_CANDLES_1M_COUNT, endMinuteOverride = null) {
   if (!item) return [];
   const symbol = item.symbol;
   const minute = Number(item.minute);
+  const endMinute = Number.isFinite(Number(endMinuteOverride)) ? Number(endMinuteOverride) : getModalOneMinuteCandlesEndMinute(item);
   const byMinute = new Map();
 
   // Fallback solo con velas disponibles localmente. No rellena huecos y no fuerza
   // aperturas/cierres, para evitar las velas falsas que se veían en v31.
-  for (const c of getGiroPolarityCandles(symbol, minute, maxCount) || []) {
+  for (const c of getGiroPolarityCandles(symbol, endMinute, maxCount) || []) {
     const clean = sanitizeMiniCandle(symbol, c, { source: "local_ohlc" });
     if (clean) byMinute.set(Number(clean.minute), clean);
   }
@@ -7654,6 +7672,14 @@ function buildLocalOneMinuteCandlesFallback(item, liveTicks = [], maxCount = MOD
   const cleanCurrent = current ? sanitizeMiniCandle(symbol, current, { current: modalLive && isItemLiveMinute(item), source: current.fromTicks ? "ticks" : "local_current" }) : null;
   if (cleanCurrent) byMinute.set(Number(cleanCurrent.minute), cleanCurrent);
 
+  if (hasResolvedNextResultCandle(item)) {
+    const nextMinute = Number(minute) + 1;
+    const nextStored = getStoredCandleByMinute(symbol, nextMinute);
+    const nextOC = candleOC?.[nextMinute]?.[symbol] ? { symbol, minute: nextMinute, ...candleOC[nextMinute][symbol] } : null;
+    const cleanNext = sanitizeMiniCandle(symbol, nextStored || nextOC || {}, { source: nextStored ? "local_next_result" : "candle_oc_next_result" });
+    if (cleanNext) byMinute.set(Number(cleanNext.minute), cleanNext);
+  }
+
   return [...byMinute.values()]
     .sort((a, b) => Number(a.minute) - Number(b.minute))
     .slice(-maxCount);
@@ -7663,15 +7689,16 @@ function buildModalOneMinuteCandles(item, liveTicks = []) {
   const symbol = item.symbol;
   const minute = Number(item.minute);
   const count = MODAL_CANDLES_1M_COUNT;
-  const key = modalOHLC1mCacheKey(symbol, minute, count);
+  const endMinute = getModalOneMinuteCandlesEndMinute(item);
+  const key = modalOHLC1mCacheKey(symbol, endMinute, count);
 
-  let candles = getCachedModalOHLC1mCandles(symbol, minute, count);
+  let candles = getCachedModalOHLC1mCandles(symbol, endMinute, count);
 
   if (!candles.length) {
     requestModalOHLC1mCandles(item, count);
     // Mientras llegan las velas reales, solo usamos fallback local si ya falló el pedido.
     // Así no se vuelve a mostrar el gráfico deformado por datos incompletos.
-    if (modalOHLC1mFailed.has(key)) candles = buildLocalOneMinuteCandlesFallback(item, liveTicks, count);
+    if (modalOHLC1mFailed.has(key)) candles = buildLocalOneMinuteCandlesFallback(item, liveTicks, count, endMinute);
   }
 
   if (candles.length && modalLive && isItemLiveMinute(item)) {
@@ -7724,7 +7751,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
 
   const candles = buildModalOneMinuteCandles(item, ticks);
   if (!candles.length) {
-    const pendingKey = item ? modalOHLC1mCacheKey(item.symbol, item.minute, MODAL_CANDLES_1M_COUNT) : "";
+    const pendingKey = item ? modalOHLC1mCacheKey(item.symbol, getModalOneMinuteCandlesEndMinute(item), MODAL_CANDLES_1M_COUNT) : "";
     const isPending = pendingKey && modalOHLC1mPending.has(pendingKey);
     drawMiniCandlesLoading(ctx, w, h, isPending ? "Cargando velas 1m reales…" : "Sin velas 1m reales disponibles");
     return;
@@ -7850,11 +7877,27 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
     ctx.fillStyle = col;
     drawRoundedRect(ctx, x - candleW / 2, bodyTop, candleW, bodyH, Math.min(3, candleW / 3));
     ctx.fill();
-    if (Number(c.minute) === Number(item?.minute)) {
-      ctx.strokeStyle = "rgba(255,255,255,0.45)";
-      ctx.lineWidth = 1.2;
+    if (isModalSignalCandle(item, c)) {
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 1.25;
       drawRoundedRect(ctx, x - candleW / 2 - 2, bodyTop - 2, candleW + 4, bodyH + 4, 4);
       ctx.stroke();
+    }
+    if (isModalNextResultCandle(item, c)) {
+      const out = getItemNextOutcomeValue(item);
+      const outCol = out === "up" ? "rgba(34,197,94,0.98)" : out === "down" ? "rgba(248,113,113,0.98)" : "rgba(229,231,235,0.92)";
+      ctx.strokeStyle = outCol;
+      ctx.lineWidth = 2.15;
+      ctx.shadowColor = outCol;
+      ctx.shadowBlur = 8;
+      drawRoundedRect(ctx, x - candleW / 2 - 3, bodyTop - 3, candleW + 6, bodyH + 6, 5);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = outCol;
+      ctx.font = "900 13px system-ui, -apple-system, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(out === "up" ? "▲" : out === "down" ? "▼" : "=" , x, Math.max(8, Math.min(bodyTop - 9, padT + 9)));
     }
     ctx.restore();
   });
