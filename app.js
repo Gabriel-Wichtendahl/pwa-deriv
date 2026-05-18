@@ -28,7 +28,7 @@
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
-// ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
+// ✅ V41: filtros abre en zona + momentum espera ruptura/retest + AUTO 59 con zona
 
 "use strict";
 
@@ -694,8 +694,8 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_EFECTIVO_RADAR_35_40_V38_20260518";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_RUPTURA_RETEST_AUTO59_ZONA_V40_20260518";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_EFECTIVO_RADAR_35_40_FILTROS_V41_20260518";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_RUPTURA_RETEST_AUTO59_ZONA_FILTROS_V41_20260518";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -1566,6 +1566,14 @@ const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
 const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
 const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0.35;
+// V41: no crear señal si la vela nace dentro del área SNR (azul o amarilla).
+// V41: si llega al nivel con momentum y lo empieza a atravesar, se espera ruptura + retesteo/polaridad.
+const SIGNAL_BLOCK_OPEN_IN_SNR_AREA_ENABLED = true;
+const SIGNAL_MOMENTUM_WAIT_RETEST_ENABLED = true;
+const SIGNAL_MOMENTUM_MIN_APPROACH_RATIO = 0.78;
+const SIGNAL_MOMENTUM_MAX_REJECTION_RATIO = 0.16;
+const SIGNAL_MOMENTUM_MIN_PATH_EFFICIENCY = 0.38;
+const SIGNAL_MOMENTUM_MIN_DIRECTIONAL_TICK_RATIO = 0.52;
 
 function buildSNRNearAreaMetaFromLevel(meta) {
   if (!meta || typeof meta !== "object") return null;
@@ -7052,6 +7060,155 @@ function assertSignalMinimumConfirmations(side = null, item = modalCurrentItem) 
     throw new Error(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${label}`);
   }
 }
+
+function buildSNRSignalOpenAreaGate({
+  p0,
+  level = NaN,
+  zoneLow,
+  zoneHigh,
+  bodyZoneLow = NaN,
+  bodyZoneHigh = NaN,
+  tolerance = NaN,
+  zoneSize = NaN,
+  range = NaN,
+  interactionMargin = NaN,
+} = {}) {
+  const open = Number(p0);
+  let zLow = Number(zoneLow);
+  let zHigh = Number(zoneHigh);
+  const lvl = Number(level);
+  if (!Number.isFinite(open) || !Number.isFinite(zLow) || !Number.isFinite(zHigh)) {
+    return { blocked: false, insideBlue: false, insideBody: false, insideYellow: false, distance: NaN, buffer: NaN };
+  }
+  if (zLow > zHigh) {
+    const tmp = zLow;
+    zLow = zHigh;
+    zHigh = tmp;
+  }
+  const bLowRaw = Math.min(Number(bodyZoneLow), Number(bodyZoneHigh));
+  const bHighRaw = Math.max(Number(bodyZoneLow), Number(bodyZoneHigh));
+  const hasBody = Number.isFinite(bLowRaw) && Number.isFinite(bHighRaw);
+  const zoneWidth = Math.max(0, zHigh - zLow);
+  const tol = Number(tolerance);
+  const zSize = Number(zoneSize);
+  const rng = Number(range);
+  const im = Number(interactionMargin);
+  const ref = Number.isFinite(lvl) ? Math.abs(lvl) : Math.max(Math.abs(zLow), Math.abs(zHigh), 1);
+  const buffer = Math.max(
+    Number.isFinite(tol) ? tol * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
+    zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
+    Number.isFinite(zSize) ? Math.abs(zSize) * 0.25 : 0,
+    Number.isFinite(rng) ? Math.abs(rng) * 0.030 : 0,
+    Number.isFinite(im) ? Math.abs(im) * 0.45 : 0,
+    ref * 0.000001,
+    1e-9
+  );
+  const distance = open < zLow ? zLow - open : open > zHigh ? open - zHigh : 0;
+  const insideBlue = distance <= 1e-12;
+  const insideBody = hasBody && open >= bLowRaw && open <= bHighRaw;
+  const insideYellow = !insideBlue && distance <= buffer;
+  const blocked = !!SIGNAL_BLOCK_OPEN_IN_SNR_AREA_ENABLED && (insideBlue || insideBody || insideYellow);
+  return {
+    blocked,
+    insideBlue,
+    insideBody,
+    insideYellow,
+    distance,
+    buffer,
+    zoneLow: zLow,
+    zoneHigh: zHigh,
+    bodyZoneLow: hasBody ? bLowRaw : null,
+    bodyZoneHigh: hasBody ? bHighRaw : null,
+    relation: insideBlue ? "open_inside_blue" : insideBody ? "open_inside_body" : insideYellow ? (open < zLow ? "open_inside_yellow_below" : "open_inside_yellow_above") : (open < zLow ? "open_outside_below" : "open_outside_above"),
+  };
+}
+
+function detectSNRMomentumWaitRetest({
+  pts,
+  role,
+  p0,
+  pE,
+  zoneLow,
+  zoneHigh,
+  tolerance = NaN,
+  range = NaN,
+  evalMs = NaN,
+} = {}) {
+  if (!SIGNAL_MOMENTUM_WAIT_RETEST_ENABLED) return { blocked: false };
+  const currentRole = String(role || "") === "resistance" ? "resistance" : "support";
+  const isResistance = currentRole === "resistance";
+  const open = Number(p0);
+  const evalPrice = Number(pE);
+  let zLow = Number(zoneLow);
+  let zHigh = Number(zoneHigh);
+  if (zLow > zHigh) {
+    const tmp = zLow;
+    zLow = zHigh;
+    zHigh = tmp;
+  }
+  if (![open, evalPrice, zLow, zHigh].every(Number.isFinite)) return { blocked: false };
+  const evalLimit = Number.isFinite(Number(evalMs)) ? Number(evalMs) : Infinity;
+  const arr = (pts || [])
+    .map((p) => ({ ms: Number(p?.ms || 0), q: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.q) && Number.isFinite(p.ms) && p.ms <= evalLimit)
+    .sort((a, b) => a.ms - b.ms);
+  if (arr.length < 4) return { blocked: false };
+
+  const qs = arr.map((x) => x.q);
+  const high = Math.max(...qs);
+  const low = Math.min(...qs);
+  const rng = Math.max(Number(range || 0), high - low, Math.abs(evalPrice) * 0.000001, 1e-9);
+  const tol = Math.max(Number(tolerance || 0), Math.abs(evalPrice) * 0.000001, 1e-9);
+  const zoneWidth = Math.max(0, zHigh - zLow, tol * 0.10);
+
+  // Movimiento neto hacia el nivel: resistencia = sube fuerte; soporte = cae fuerte.
+  const approach = isResistance ? evalPrice - open : open - evalPrice;
+  if (!(approach > 0)) return { blocked: false };
+
+  const wrongSide = isResistance ? Math.max(0, evalPrice - zHigh) : Math.max(0, zLow - evalPrice);
+  const penetrationMin = Math.max(tol * 0.020, zoneWidth * 0.040, rng * 0.0020, 1e-9);
+  const penetratedThroughLevel = wrongSide > penetrationMin;
+  if (!penetratedThroughLevel) return { blocked: false };
+
+  const rejection = isResistance ? Math.max(0, high - evalPrice) : Math.max(0, evalPrice - low);
+  const approachRatio = approach / rng;
+  const rejectionRatio = rejection / rng;
+
+  let path = 0;
+  let directionalSteps = 0;
+  for (let i = 1; i < qs.length; i++) {
+    const d = qs[i] - qs[i - 1];
+    path += Math.abs(d);
+    if (isResistance ? d > 0 : d < 0) directionalSteps += 1;
+  }
+  const pathEfficiency = path > 0 ? Math.abs(evalPrice - open) / path : 0;
+  const directionalTickRatio = directionalSteps / Math.max(1, qs.length - 1);
+
+  const blocked =
+    approachRatio >= SIGNAL_MOMENTUM_MIN_APPROACH_RATIO &&
+    rejectionRatio <= SIGNAL_MOMENTUM_MAX_REJECTION_RATIO &&
+    pathEfficiency >= SIGNAL_MOMENTUM_MIN_PATH_EFFICIENCY &&
+    directionalTickRatio >= SIGNAL_MOMENTUM_MIN_DIRECTIONAL_TICK_RATIO;
+
+  return {
+    blocked,
+    reason: blocked ? "momentum_wait_break_retest" : "",
+    role: currentRole,
+    approach,
+    approachRatio,
+    rejection,
+    rejectionRatio,
+    pathEfficiency,
+    directionalTickRatio,
+    wrongSide,
+    penetrationMin,
+    penetratedThroughLevel,
+    message: blocked
+      ? "Momentum fuerte contra el giro: esperar ruptura + retesteo/polaridad."
+      : "",
+  };
+}
+
 function getSignalSNREntryMeta(item) {
   const meta = getSignalLevelMeta(item);
   if (!meta || typeof meta !== "object") return null;
@@ -7273,6 +7430,28 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
   if (gate?.pending) throw new Error(gate.message || "SNR pendiente");
   if (!gate?.ok) throw new Error(gate?.message || "El precio no está dentro de la zona azul/amarilla al segundo 59");
+
+  // V41: seguridad extra. Aunque una señal vieja/histórica haya quedado creada,
+  // no permitir autoentrada si la vela nació dentro del área azul/amarilla.
+  const meta = getSignalSNREntryMeta(item);
+  const openPrice = Number(getItemMinuteOpenPrice(item));
+  if (meta && Number.isFinite(openPrice)) {
+    const openGate = buildSNRSignalOpenAreaGate({
+      p0: openPrice,
+      level: Number(meta.level),
+      zoneLow: gate.zoneLow,
+      zoneHigh: gate.zoneHigh,
+      bodyZoneLow: Number(meta.bodyZoneLow),
+      bodyZoneHigh: Number(meta.bodyZoneHigh),
+      tolerance: Number(meta.tolerance),
+      zoneSize: Number(meta.zone),
+      interactionMargin: Number(gate.nearBuffer),
+    });
+    if (openGate.blocked) {
+      throw new Error("La vela abrió dentro del área SNR/amarilla; no se opera.");
+    }
+  }
+
   return gate;
 }
 
@@ -12780,6 +12959,30 @@ function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBL
     const interacting = distance <= interactionMargin;
     if (!interacting) continue;
 
+    // V41: si la vela abre en zona azul o amarilla, no hay viaje limpio hacia el nivel.
+    // No crear señal de polaridad cuando la vela nace en el área.
+    const openAreaGate = buildSNRSignalOpenAreaGate({
+      p0,
+      level,
+      zoneLow,
+      zoneHigh,
+      bodyZoneLow: Number(lvl.bodyZoneLow),
+      bodyZoneHigh: Number(lvl.bodyZoneHigh),
+      tolerance: tol,
+      zoneSize: zoneWidth,
+      range,
+      interactionMargin,
+    });
+    if (openAreaGate.blocked) continue;
+
+    // V41: el retesteo de polaridad debe empezar desde el lado correcto.
+    // Resistencia rota -> soporte: la vela debe venir desde arriba.
+    // Soporte roto -> resistencia: la vela debe venir desde abajo.
+    const openOnRoleSide = currentRole === "support"
+      ? p0 > zoneHigh + Math.max(openAreaGate.buffer * 0.22, tol * 0.08, 1e-9)
+      : p0 < zoneLow - Math.max(openAreaGate.buffer * 0.22, tol * 0.08, 1e-9);
+    if (!openOnRoleSide) continue;
+
     const roleSideOk = currentRole === "support" ? pE >= zoneLow - interactionMargin * 0.32 : pE <= zoneHigh + interactionMargin * 0.32;
     if (!roleSideOk) continue;
 
@@ -12793,6 +12996,21 @@ function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBL
 
     const wrongSide = currentRole === "support" ? Math.max(0, zoneLow - pE) : Math.max(0, pE - zoneHigh);
     if (wrongSide > interactionMargin * 0.40) continue;
+
+    // V41: si llega con momentum y empieza a atravesar el nivel, no tomar giro inmediato.
+    // Se deja para una futura ruptura + retesteo.
+    const momentumGate = detectSNRMomentumWaitRetest({
+      pts,
+      role: currentRole,
+      p0,
+      pE,
+      zoneLow,
+      zoneHigh,
+      tolerance: tol,
+      range,
+      evalMs,
+    });
+    if (momentumGate.blocked) continue;
 
     const rejection = currentRole === "support" ? Math.max(0, pE - low) : Math.max(0, high - pE);
     const rejectRatio = rejection / Math.max(range, 1e-9);
@@ -12875,6 +13093,15 @@ function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBL
         wrongSide,
         roleSideOk,
         traveledFromRoleSide,
+        openOnRoleSide,
+        openAreaGate,
+        openInsideSNRZone: !!openAreaGate.insideBlue,
+        openInsideYellowArea: !!openAreaGate.insideYellow,
+        openInsideBodyZone: !!openAreaGate.insideBody,
+        openAreaDistance: Number(openAreaGate.distance),
+        openAreaBuffer: Number(openAreaGate.buffer),
+        momentumGate,
+        momentumWaitRetest: !!momentumGate.blocked,
         rejection,
         rejectRatio,
         proximityScore,
@@ -13693,6 +13920,22 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     const openInsideSNRZone = p0 >= zoneLow && p0 <= zoneHigh;
     const openInsideBodyZone = hasBodyZone && p0 >= bodyLowRaw && p0 <= bodyHighRaw;
     const openDistanceToZone = p0 < zoneLow ? zoneLow - p0 : p0 > zoneHigh ? p0 - zoneHigh : 0;
+
+    // V41: bloqueo explícito de "abre en la zona": azul o amarilla.
+    const openAreaGate = buildSNRSignalOpenAreaGate({
+      p0,
+      level,
+      zoneLow,
+      zoneHigh,
+      bodyZoneLow: bodyLowRaw,
+      bodyZoneHigh: bodyHighRaw,
+      tolerance: tol,
+      zoneSize: bodyBand,
+      range,
+      interactionMargin,
+    });
+    if (openAreaGate.blocked) continue;
+
     const minOpenDistanceToZone = Math.max(interactionMargin * 1.20, tol * 1.15, bodyBand * 0.85, range * 0.070, 1e-9);
     const openTooNearSNR = openInsideSNRZone || openInsideBodyZone || openDistanceToZone < minOpenDistanceToZone;
     if (openTooNearSNR) continue;
@@ -13710,6 +13953,21 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
     // - en soporte, toleramos apenas abajo de la zona.
     const wrongSide = isResistance ? Math.max(0, pE - zoneHigh) : Math.max(0, zoneLow - pE);
     if (wrongSide > interactionMargin * 0.65) continue;
+
+    // V41: si el precio llega con momentum y empieza a romper el nivel,
+    // no se busca giro inmediato. Se espera ruptura + retesteo/polaridad.
+    const momentumGate = detectSNRMomentumWaitRetest({
+      pts,
+      role: isResistance ? "resistance" : "support",
+      p0,
+      pE,
+      zoneLow,
+      zoneHigh,
+      tolerance: tol,
+      range,
+      evalMs,
+    });
+    if (momentumGate.blocked) continue;
 
     const touches = Number(lvl.touches || 0);
     const reactionStrength = Math.min(2.4, Math.max(0, Number(lvl.reactionScore || 0)));
@@ -13782,8 +14040,14 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         openInsideSNRZone,
         openInsideBodyZone,
         openTooNearSNR,
+        openInsideYellowArea: !!openAreaGate.insideYellow,
+        openAreaGate,
+        openAreaDistance: Number(openAreaGate.distance),
+        openAreaBuffer: Number(openAreaGate.buffer),
         openOnTravelSide,
         approachFromOpen,
+        momentumGate,
+        momentumWaitRetest: !!momentumGate.blocked,
         openDistanceScore,
         wrongSide,
         proximityScore,
