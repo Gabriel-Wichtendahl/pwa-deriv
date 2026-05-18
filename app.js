@@ -27,6 +27,7 @@
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
+// ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
 
 "use strict";
 
@@ -691,7 +692,7 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_PREALERTA_35_45_AUTO59_V23_20260513";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_EFECTIVO_RADAR_35_40_V38_20260518";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -1730,6 +1731,10 @@ let vibrateEnabled = true;
 
 let EVAL_SEC = 45;
 let PRACTICE_EVAL_SEC = 45;
+
+// V38: en modo SNR los botones 35/40/45 pasan a ser el FIN del radar.
+// El radar arranca siempre en 35s y busca prealerta hasta el segundo elegido.
+const SNR_RADAR_START_SEC = 35;
 
 // Estado principal: NORMAL vs GIRO vs GIRO FLEX
 let signalMode = MODE_NORMAL;
@@ -6129,7 +6134,7 @@ function applyTheme(theme) {
 (function initEvalMode() {
   ensureSignal35EvalButton();
 
-  const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
+  const savedSec = parseInt(localStorage.getItem("evalSec") || "40", 10);
   EVAL_SEC = [35, 40, 45].includes(savedSec) ? savedSec : 45;
 
   const savedPracticeSec = parseInt(localStorage.getItem("practiceEvalSec") || "45", 10);
@@ -6139,6 +6144,7 @@ function applyTheme(theme) {
     getSignalEvalButtons().forEach((b) => {
       const sec = parseInt(b.dataset.sec || "0", 10);
       b.classList.toggle("active", sec === EVAL_SEC);
+      b.title = sec === 35 ? "SNR: chequeo en 35s. Línea dinámica: evalúa en 35s." : `SNR: radar 35-${sec}s. Línea dinámica: evalúa en ${sec}s.`;
     });
   paintEval();
   try { paintPracticeSecButtons(); } catch {}
@@ -6163,7 +6169,7 @@ function applyTheme(theme) {
     modeBtn.classList.add("active");
     modeBtn.title = isDynamicLineMode(signalMode)
       ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 59s con 4 puntos."
-      : "Modo SNR interacción: zonas horizontales por cierres/reacción.";
+      : "Modo SNR interacción: radar de prealerta desde 35s hasta el segundo elegido + SNR 70% efectivo.";
   };
   paintMode();
 
@@ -10900,19 +10906,50 @@ function onTick(tick) {
   // ✅ FIX AUTO 59: también revisar en cada tick, aunque el modal no haya redibujado.
   scanSignalAutoEntriesAt57();
 
-  if (!areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
+  if (!areSignalsPaused()) {
+    const activeModeForTick = normalizeSignalMode(signalMode);
 
-    // En GIRO / GIRO FLEX no hay retry: evalúan solo en el segundo elegido
-    if (!ok && signalMode === MODE_NORMAL) scheduleRetry(minute);
+    if (isDynamicLineMode(activeModeForTick)) {
+      // Línea dinámica queda igual: evalúa una sola vez en el segundo elegido.
+      if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(1000, Number(EVAL_SEC || 45) * 1000),
+          evalSec: Number(EVAL_SEC || 45),
+          radar: false,
+        });
+
+        if (!ok && signalMode === MODE_NORMAL) scheduleRetry(minute);
+      }
+    } else {
+      // V38 SNR RADAR:
+      // En SNR ya no evalúa solo en un segundo exacto.
+      // Desde 35s hasta el segundo elegido escanea en cada tick.
+      // Si encuentra interacción válida con el SNR, crea la prealerta y deja de escanear esa vela.
+      const radarStartSec = SNR_RADAR_START_SEC;
+      const radarEndSec = Math.max(radarStartSec, Math.min(45, Number(EVAL_SEC || 40)));
+
+      if (sec >= radarStartSec && sec <= radarEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(radarStartSec * 1000, Math.min(msInMinute, radarEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec,
+          radarEndSec,
+        });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > radarEndSec && lastEvaluatedMinute !== minute) {
+        // Se terminó la ventana de radar sin señal. No volver a evaluar esta vela.
+        lastEvaluatedMinute = minute;
+      }
+    }
   }
 }
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
     if (areSignalsPaused()) return;
-    if (Math.floor(Date.now() / 60000) === minute) evaluateMinute(minute);
+    if (Math.floor(Date.now() / 60000) === minute) evaluateMinute(minute, { evalMs: Math.max(1000, Number(EVAL_SEC || 45) * 1000), evalSec: Number(EVAL_SEC || 45), radar: false });
   }, RETRY_DELAY_MS);
 }
 
@@ -12224,14 +12261,134 @@ function clusterGiroSNRBodyLevels(rawLevels, tolerance) {
   }
   return clusters.sort((a, b) => Number(a.price) - Number(b.price));
 }
-function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
-  const candles = getGiroPolarityCandles(symbol, minute, 140);
+const SNR_EFFECTIVENESS_MIN_RATIO = 0.70;
+const SNR_EFFECTIVENESS_MIN_TESTS = 3;
+
+function getGiroSNREffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange) {
+  const out = [];
+  const src = (candles || [])
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  if (src.length < 5) return out;
+
+  const zLow = Math.min(Number(zoneLow), Number(zoneHigh));
+  const zHigh = Math.max(Number(zoneLow), Number(zoneHigh));
+  if (![zLow, zHigh].every(Number.isFinite)) return out;
+
+  const isSupport = role === "support";
+  const reactionNeed = Math.max(Number(tolerance || 0) * 0.55, Math.abs(Number(currentRange || 0)) * 0.030, 1e-9);
+  const lookAhead = 3;
+
+  for (let i = 0; i < src.length - 1; i++) {
+    const c = src[i];
+    const close = Number(c.close);
+    if (!Number.isFinite(close) || close < zLow || close > zHigh) continue;
+
+    const future = src.slice(i + 1, Math.min(src.length, i + 1 + lookAhead));
+    if (!future.length) continue;
+    const futureHigh = Math.max(...future.map((x) => Number(x.high)).filter(Number.isFinite));
+    const futureLow = Math.min(...future.map((x) => Number(x.low)).filter(Number.isFinite));
+    const futureClose = Number(future[future.length - 1]?.close);
+    if (![futureHigh, futureLow, futureClose].every(Number.isFinite)) continue;
+
+    const goodMove = isSupport
+      ? Math.max(0, futureHigh - close, futureClose - close)
+      : Math.max(0, close - futureLow, close - futureClose);
+    const badMove = isSupport
+      ? Math.max(0, close - futureLow, close - futureClose)
+      : Math.max(0, futureHigh - close, futureClose - close);
+
+    // Si cierra en el nivel y no gira, cuenta como fallo. No se permite “decorar”
+    // un SNR con cierres que lo atraviesan o no reaccionan.
+    const success = goodMove >= reactionNeed && goodMove >= badMove * 0.75;
+    out.push({
+      minute: Number(c.minute || 0),
+      close,
+      success,
+      goodMove,
+      badMove,
+      reactionNeed,
+    });
+  }
+  return out;
+}
+
+function scoreGiroSNREffectiveness(candles, role, zoneLow, zoneHigh, tolerance, currentRange) {
+  const tests = getGiroSNREffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange);
+  const total = tests.length;
+  const wins = tests.filter((x) => x.success).length;
+  const ratio = total > 0 ? wins / total : 0;
+  const lastTestMinute = tests.reduce((m, x) => Math.max(m, Number(x.minute || 0)), 0);
+  return {
+    tests,
+    total,
+    wins,
+    fails: Math.max(0, total - wins),
+    ratio,
+    pct: Math.round(ratio * 100),
+    lastTestMinute,
+    ok: total >= SNR_EFFECTIVENESS_MIN_TESTS && ratio >= SNR_EFFECTIVENESS_MIN_RATIO,
+  };
+}
+
+function adjustGiroSNRZoneToEffectiveCloses(candles, role, center, coreLow, coreHigh, tolerance, currentRange) {
+  const tol = Math.max(Number(tolerance || 0), 1e-9);
+  let zLow = Math.min(Number(coreLow), Number(coreHigh));
+  let zHigh = Math.max(Number(coreLow), Number(coreHigh));
+  const baseCenter = Number(center);
+  if (![zLow, zHigh, baseCenter].every(Number.isFinite)) {
+    zLow = baseCenter - tol * 0.35;
+    zHigh = baseCenter + tol * 0.35;
+  }
+
+  let best = {
+    zoneLow: zLow,
+    zoneHigh: zHigh,
+    adjusted: false,
+    effectiveness: scoreGiroSNREffectiveness(candles, role, zLow, zHigh, tol, currentRange),
+  };
+
+  // Si la zona actual no llega a 70%, se recalibra alrededor de los cierres que sí
+  // respetaron el nivel. Esto evita mantener un SNR viejo cuando los cierres actuales
+  // dejaron de girar desde ahí.
+  if (best.effectiveness.ok) return best;
+
+  const expandedLow = baseCenter - tol * 1.25;
+  const expandedHigh = baseCenter + tol * 1.25;
+  const broadTests = getGiroSNREffectivenessTests(candles, role, expandedLow, expandedHigh, tol, currentRange);
+  const successfulCloses = broadTests
+    .filter((x) => x.success && Number.isFinite(Number(x.close)))
+    .map((x) => Number(x.close))
+    .sort((a, b) => a - b);
+
+  if (successfulCloses.length >= 2) {
+    const median = getArrayPercentileValue(successfulCloses, 0.50);
+    const q1 = getArrayPercentileValue(successfulCloses, 0.25);
+    const q3 = getArrayPercentileValue(successfulCloses, 0.75);
+    const successfulSpan = Math.max(0, Number(q3) - Number(q1));
+    const width = Math.max(successfulSpan + tol * 0.18, tol * 0.42, Math.abs(Number(currentRange || 0)) * 0.016, 1e-9);
+    const newLow = Number(median) - width / 2;
+    const newHigh = Number(median) + width / 2;
+    const eff = scoreGiroSNREffectiveness(candles, role, newLow, newHigh, tol, currentRange);
+    const candidate = { zoneLow: newLow, zoneHigh: newHigh, adjusted: true, effectiveness: eff };
+    if (
+      (candidate.effectiveness.ok && !best.effectiveness.ok) ||
+      Number(candidate.effectiveness.ratio || 0) > Number(best.effectiveness.ratio || 0) ||
+      (Number(candidate.effectiveness.ratio || 0) === Number(best.effectiveness.ratio || 0) && Number(candidate.effectiveness.total || 0) > Number(best.effectiveness.total || 0))
+    ) {
+      best = candidate;
+    }
+  }
+
+  return best;
+}
+
+function buildGiroSNRBodyCandidateLevelsForCandles(symbol, candles, currentRange, lookbackLabel = "") {
   if (!candles.length) return [];
   const tol = getGiroSNRBodyTolerance(symbol, currentRange);
 
-  // V21: niveles SNR por CIERRES + reacción posterior.
-  // Ya no se toma la parte alta/baja del cuerpo completo. El núcleo del nivel sale de
-  // cierres que funcionaron como pared y provocaron giro en las velas siguientes.
+  // Niveles SNR por cierres + reacción posterior, pero ahora con auditoría:
+  // solo sobreviven si al menos el 70% de los cierres que caen en la zona giran.
   const raw = getGiroSNRCloseReactionRawLevels(candles, currentRange, tol);
   const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.82);
 
@@ -12242,7 +12399,7 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
     const reactionScore = Number(cluster.reactionScore || 0);
     let coreLow = Number(cluster.zoneLow);
     let coreHigh = Number(cluster.zoneHigh);
-    const center = Number(cluster.price);
+    let center = Number(cluster.price);
     if (![coreLow, coreHigh, center].every(Number.isFinite)) continue;
     {
       const cLow = coreLow;
@@ -12252,11 +12409,9 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
     }
     let closeBand = Math.max(0, coreHigh - coreLow);
 
-    // Tiene que haber historia real de reacción. Dos cierres solo pasan si fueron muy claros.
     if (uniqueMinutes < 2 || touches < 2) continue;
     if (touches < 3 && reactionScore < 1.75) continue;
 
-    // Evita zonas gigantes como las que veníamos viendo.
     const maxCloseBand = Math.max(tol * 1.55, Math.abs(Number(currentRange || 0)) * 0.090, 1e-9);
     if (closeBand > maxCloseBand) {
       coreLow = center - maxCloseBand / 2;
@@ -12264,7 +12419,6 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
       closeBand = maxCloseBand;
     }
 
-    // Ancho mínimo visual/operativo, pero contenido.
     const minCloseBand = Math.max(tol * 0.34, Math.abs(Number(currentRange || 0)) * 0.014, 1e-9);
     if (closeBand < minCloseBand) {
       coreLow = center - minCloseBand / 2;
@@ -12272,12 +12426,24 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
       closeBand = minCloseBand;
     }
 
+    const role = cluster.originalType === "support" ? "support" : "resistance";
+    const adjusted = adjustGiroSNRZoneToEffectiveCloses(candles, role, center, coreLow, coreHigh, tol, currentRange);
+    const eff = adjusted.effectiveness || scoreGiroSNREffectiveness(candles, role, coreLow, coreHigh, tol, currentRange);
+
+    // Regla nueva: mínimo 70% efectivo. Si los cierres en esa zona no giran,
+    // se descarta el nivel y se busca el próximo candidato.
+    if (!eff.ok) continue;
+
+    coreLow = Math.min(Number(adjusted.zoneLow), Number(adjusted.zoneHigh));
+    coreHigh = Math.max(Number(adjusted.zoneLow), Number(adjusted.zoneHigh));
+    center = (coreLow + coreHigh) / 2;
+    closeBand = Math.max(0, coreHigh - coreLow);
+
     const zonePad = Math.min(
       Math.max(tol * 0.055, Math.abs(Number(currentRange || 0)) * 0.0045, 1e-9),
       Math.max(tol * 0.16, 1e-9)
     );
 
-    const role = cluster.originalType === "support" ? "support" : "resistance";
     out.push({
       ...cluster,
       levelMode: "snr_body",
@@ -12302,9 +12468,55 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
       closeReactionZoneHigh: coreHigh,
       closeBand,
       zonePad,
+      snrEffectivenessRatio: Number(eff.ratio || 0),
+      snrEffectivenessPct: Number(eff.pct || 0),
+      snrEffectivenessWins: Number(eff.wins || 0),
+      snrEffectivenessTests: Number(eff.total || 0),
+      snrEffectivenessFails: Number(eff.fails || 0),
+      snrEffectivenessMinPct: 70,
+      snrAdjustedToEffectiveCloses: !!adjusted.adjusted,
+      snrLookbackLabel: lookbackLabel,
+      lastTouchMinute: Math.max(Number(cluster.lastTouchMinute || 0), Number(eff.lastTestMinute || 0)),
     });
   }
-  return out.sort((a, b) =>
+
+  return out;
+}
+
+function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
+  const allCandles = getGiroPolarityCandles(symbol, minute, 160);
+  if (!allCandles.length) return [];
+
+  // V37: si un SNR viejo dejó de funcionar, la PWA prueba ventanas más actuales
+  // antes de descartarlo. Prioridad: 60/90/140 velas, todas auditadas al 70%.
+  const windows = [60, 90, 140];
+  const gathered = [];
+  for (const w of windows) {
+    const slice = allCandles.slice(Math.max(0, allCandles.length - w));
+    gathered.push(...buildGiroSNRBodyCandidateLevelsForCandles(symbol, slice, currentRange, `${w}m`));
+  }
+
+  const deduped = [];
+  for (const lvl of gathered.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
+    Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
+    Number(b.lastTouchMinute || 0) - Number(a.lastTouchMinute || 0)
+  )) {
+    const role = String(lvl.levelType || lvl.currentRole || lvl.originalType || "");
+    const level = Number(lvl.level || lvl.price);
+    const tol = Math.max(Number(lvl.tolerance || 0), 1e-9);
+    if (!Number.isFinite(level)) continue;
+    const duplicate = deduped.find((x) =>
+      String(x.levelType || x.currentRole || x.originalType || "") === role &&
+      Math.abs(Number(x.level || x.price) - level) <= tol * 0.72
+    );
+    if (!duplicate) deduped.push(lvl);
+  }
+
+  return deduped.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
     Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
     Number(b.touches || 0) - Number(a.touches || 0) ||
     Number(a.zoneSpan || 0) - Number(b.zoneSpan || 0)
@@ -13037,7 +13249,7 @@ function getCandidateRealOpenPrice(candidate, minute) {
   return firstTick && Number.isFinite(firstTick.quote) ? Number(firstTick.quote) : NaN;
 }
 
-function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
+function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO, opts = {}) {
   // V14: regla simplificada solicitada.
   // La señal sale cuando, al segundo seleccionado (EVAL_SEC), el precio está
   // interactuando con una zona SNR válida por cuerpos/cierres.
@@ -13045,7 +13257,12 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
   if (ticks.length < 4) return null;
 
-  const evalMs = Math.max(1000, Number(EVAL_SEC || 45) * 1000);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(1000, Math.min(59000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
+  const evalSecUsed = Number.isFinite(Number(opts?.evalSec)) ? Number(opts.evalSec) : Math.round(evalMs / 1000);
+  const radarStartSec = Number.isFinite(Number(opts?.radarStartSec)) ? Number(opts.radarStartSec) : SNR_RADAR_START_SEC;
+  const radarEndSec = Number.isFinite(Number(opts?.radarEndSec)) ? Number(opts.radarEndSec) : Number(EVAL_SEC || 45);
+  const usingRadar = !!opts?.radar;
   const tickOpen = Number(getPriceAtMs(ticks, 0));
   const realOpen = Number(getCandidateRealOpenPrice(candidate, minute));
   const p0 = Number.isFinite(realOpen) ? realOpen : tickOpen;
@@ -13179,7 +13396,10 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         tickOpen,
         realOpen,
         pE,
-        evalSec: Number(EVAL_SEC || 45),
+        evalSec: evalSecUsed,
+        radar: usingRadar,
+        radarStartSec,
+        radarEndSec,
         interactionMargin,
         interactionDistance: distance,
         interactionInside: inside,
@@ -13196,10 +13416,12 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         sideScore,
         stage: "snr_prealerta_cierre_snr",
         movementFilter: "snr_cierres_reaccion_prealerta_eval_sec",
-        status: `PREALERTA SNR: apertura fuera/lejos del SNR y precio ${Number(EVAL_SEC || 45)}s dentro/cerca del nivel. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`,
+        status: usingRadar
+          ? `PREALERTA SNR RADAR ${radarStartSec}-${radarEndSec}s: apertura fuera/lejos del SNR y precio ${evalSecUsed}s dentro/cerca del nivel. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`
+          : `PREALERTA SNR: apertura fuera/lejos del SNR y precio ${evalSecUsed}s dentro/cerca del nivel. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`,
         logic: isResistance
-          ? `abre fuera/lejos por debajo y precio en ${Number(EVAL_SEC || 45)}s interactúa con resistencia SNR => PUT`
-          : `abre fuera/lejos por arriba y precio en ${Number(EVAL_SEC || 45)}s interactúa con soporte SNR => CALL`,
+          ? `abre fuera/lejos por debajo y precio en ${evalSecUsed}s interactúa con resistencia SNR => PUT`
+          : `abre fuera/lejos por arriba y precio en ${evalSecUsed}s interactúa con soporte SNR => CALL`,
       },
     });
   }
@@ -14489,11 +14711,12 @@ function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_
   };
 }
 
-function evaluateMinute(minute) {
-  if (areSignalsPaused()) return true;
+function evaluateMinute(minute, opts = {}) {
+  if (areSignalsPaused()) return false;
 
+  const evalOptions = opts && typeof opts === "object" ? opts : {};
   const data = minuteData[minute];
-  if (!data) return true;
+  if (!data) return false;
 
   const candidates = [];
   let readySymbols = 0;
@@ -14520,14 +14743,14 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return true;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
 
   const activeMode = normalizeSignalMode(signalMode);
   const matches = [];
   for (const c of candidates) {
     const match = isDynamicLineMode(activeMode)
       ? analyzeDynamicLineCandidate(c, minute)
-      : analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
+      : analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
     if (!match) continue;
 
     matches.push({
@@ -14544,7 +14767,7 @@ function evaluateMinute(minute) {
     });
   }
 
-  if (!matches.length) return true;
+  if (!matches.length) return false;
   matches.sort((a, b) =>
     b.quality - a.quality ||
     b.giroNivelPoints - a.giroNivelPoints ||
@@ -14554,7 +14777,8 @@ function evaluateMinute(minute) {
   // V14: si hay interacción con nivel, se elige la mejor; no se cancela por empate de calidad.
 
   const bestMatch = matches[0];
-  addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+  const prealertSec = Number(bestMatch?.giroPolaridadMeta?.evalSec || evalOptions.evalSec || EVAL_SEC || 45);
+  const added = addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
     mode: activeMode,
     mode_version: getModeVersion(activeMode),
     giroNivelScore: bestMatch.giroNivelScore,
@@ -14565,12 +14789,15 @@ function evaluateMinute(minute) {
     dynamicLine: bestMatch.dynamicLineMeta,
     aiLocalMatchSource: bestMatch.matchSource,
     signalLifecycleStage: "prealert",
-    signalPrealertAtSec: Number(EVAL_SEC || 45),
+    signalPrealertAtSec: prealertSec,
+    signalRadar: !isDynamicLineMode(activeMode) && !!evalOptions.radar,
+    signalRadarStartSec: !isDynamicLineMode(activeMode) ? Number(evalOptions.radarStartSec || SNR_RADAR_START_SEC) : null,
+    signalRadarEndSec: !isDynamicLineMode(activeMode) ? Number(evalOptions.radarEndSec || EVAL_SEC || 45) : null,
     signalAutoEntrySec: SIGNAL_AUTO_ENTRY_SEC,
     signalRequiresManualPoints: SIGNAL_CONFIRM_MIN,
     signalConfirmations: [],
   });
-  return true;
+  return !!added;
 }
 
 /* =========================
@@ -14580,7 +14807,7 @@ function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
 function addSignal(minute, symbol, direction, ticks, extra = {}) {
-  if (areSignalsPaused()) return;
+  if (areSignalsPaused()) return null;
   const modeLabel = normalizeSignalMode(signalMode);
   const modeId = modeLabel.replace(/\s+/g, "_").replace(/[^A-Z0-9_]/gi, "");
   const item = {
@@ -14605,7 +14832,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 
   item.manualGiro = normalizeManualGiroState(item.manualGiro);
 
-  if (history.some((x) => x.id === item.id)) return;
+  if (history.some((x) => x.id === item.id)) return null;
 
   history.push(item);
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -14639,6 +14866,8 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
       } catch {}
     });
   }
+
+  return item;
 }
 
 /* =========================
