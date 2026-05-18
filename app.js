@@ -28,6 +28,7 @@
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
+// ✅ V39: agrega modo separado “SNR POLARIDAD” (ruptura + retesteo + cierre/reacción de zona)
 
 "use strict";
 
@@ -682,6 +683,7 @@ const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
+const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
@@ -693,6 +695,7 @@ const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RE
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_EFECTIVO_RADAR_35_40_V38_20260518";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_RUPTURA_RETEST_V39_20260518";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -704,18 +707,25 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
+  if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 function isDynamicLineMode(mode) {
   return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
 }
+function isSNRPolaridadMode(mode) {
+  return normalizeSignalMode(mode) === MODE_SNR_POLARIDAD;
+}
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
-  return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
+  return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
-  return isDynamicLineMode(mode) ? LINEA_DINAMICA_LOGIC_VERSION : GIRO_NIVEL_LOGIC_VERSION;
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
+  if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
+  return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
   try {
@@ -734,10 +744,16 @@ function saveAnalysisMode(mode) {
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return isDynamicLineMode(mode) ? "📐 Línea dinámica" : "🎯 SNR interacción";
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
+  if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
+  return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
-  return isDynamicLineMode(mode) ? MODE_SNR_SEGUNDO_TOQUE : MODE_LINEA_DINAMICA;
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
+  if (m === MODE_SNR_POLARIDAD) return MODE_LINEA_DINAMICA;
+  return MODE_SNR_SEGUNDO_TOQUE;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -1084,7 +1100,7 @@ function getGiroPolarityCandidateLevels(symbol, minute, currentRange, rules = RU
 function getGiroPolarityRoleText(pol) {
   if (!pol) return "";
   if (pol.levelMode === "sin_nivel") return "ZONA INTRAVELA";
-  if (pol.levelMode === "snr_body") {
+  if (pol.levelMode === "snr_body" || pol.levelMode === "snr_polaridad") {
     const original = pol.originalType === "support" ? "SOP" : "RES";
     const role = pol.currentRole === "support" || pol.levelType === "support" ? "SOP" : "RES";
     return `SNR ${original}→${role}`;
@@ -1107,7 +1123,7 @@ function formatGiroPolarityLevel(item) {
   if (pol.levelMode === "sin_nivel") {
     return `⚡ Zona intravela · ${roleText}: ${Number(pol.level).toFixed(6)} → ${dir}${pts}`;
   }
-  if (pol.levelMode === "snr_body") {
+  if (pol.levelMode === "snr_body" || pol.levelMode === "snr_polaridad") {
     const low = Number(pol.zoneLow);
     const high = Number(pol.zoneHigh);
     const zoneTxt = Number.isFinite(low) && Number.isFinite(high)
@@ -6169,7 +6185,9 @@ function applyTheme(theme) {
     modeBtn.classList.add("active");
     modeBtn.title = isDynamicLineMode(signalMode)
       ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 59s con 4 puntos."
-      : "Modo SNR interacción: radar de prealerta desde 35s hasta el segundo elegido + SNR 70% efectivo.";
+      : isSNRPolaridadMode(signalMode)
+        ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
+        : "Modo SNR interacción: radar de prealerta desde 35s hasta el segundo elegido + SNR 70% efectivo.";
   };
   paintMode();
 
@@ -6178,7 +6196,7 @@ function applyTheme(theme) {
       signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : "🎯 Modo SNR interacción", 1500);
+      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
     };
 })();
 
@@ -6484,7 +6502,7 @@ function drawDerivLikeChart(canvas, ticks) {
     const strokeCol = isSupport ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
     const fillCol = isSupport ? "rgba(34,197,94,0.10)" : "rgba(248,113,113,0.10)";
     ctx.save();
-    if (pol.levelMode === "snr_body" && modalSNRNearArea) {
+    if (["snr_body", "snr_polaridad"].includes(String(pol.levelMode || "")) && modalSNRNearArea) {
       const nearLow = Number(modalSNRNearArea.nearLow);
       const nearHigh = Number(modalSNRNearArea.nearHigh);
       const zoneLow = Number(modalSNRNearArea.zoneLow);
@@ -6515,7 +6533,7 @@ function drawDerivLikeChart(canvas, ticks) {
         ctx.restore();
       }
     }
-    if (pol.levelMode === "snr_body" && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))) {
+    if (["snr_body", "snr_polaridad"].includes(String(pol.levelMode || "")) && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))) {
       const yA = yOf(Number(pol.zoneHigh));
       const yB = yOf(Number(pol.zoneLow));
       const top = Math.min(yA, yB);
@@ -7037,7 +7055,7 @@ function assertSignalMinimumConfirmations(side = null, item = modalCurrentItem) 
 function getSignalSNREntryMeta(item) {
   const meta = getSignalLevelMeta(item);
   if (!meta || typeof meta !== "object") return null;
-  if (String(meta.levelMode || "") !== "snr_body") return null;
+  if (!["snr_body", "snr_polaridad"].includes(String(meta.levelMode || ""))) return null;
   const level = Number(meta.level);
   if (!Number.isFinite(level)) return null;
   return meta;
@@ -12522,6 +12540,369 @@ function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RUL
     Number(a.zoneSpan || 0) - Number(b.zoneSpan || 0)
   );
 }
+
+// =========================
+// Modo SNR POLARIDAD v39
+// Nivel horizontal de polaridad: resistencia rota -> soporte, soporte roto -> resistencia.
+// La señal no sale por ruptura: sale por retesteo de la zona después de cambiar de lado.
+// =========================
+const SNR_POLARIDAD_EFFECTIVENESS_MIN_RATIO = 0.70;
+const SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS = 2;
+
+function getSNRPolarityEffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange, afterMinute = null) {
+  const src = (candles || [])
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .filter((c) => !Number.isFinite(Number(afterMinute)) || Number(c.minute || 0) > Number(afterMinute))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  return getGiroSNREffectivenessTests(src, role, zoneLow, zoneHigh, tolerance, currentRange);
+}
+
+function scoreSNRPolarityEffectiveness(candles, role, zoneLow, zoneHigh, tolerance, currentRange, afterMinute = null) {
+  const tests = getSNRPolarityEffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange, afterMinute);
+  const total = tests.length;
+  const wins = tests.filter((x) => x.success).length;
+  const ratio = total > 0 ? wins / total : 0;
+  return {
+    tests,
+    total,
+    wins,
+    fails: Math.max(0, total - wins),
+    ratio,
+    pct: Math.round(ratio * 100),
+    ok: total >= SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS && ratio >= SNR_POLARIDAD_EFFECTIVENESS_MIN_RATIO,
+  };
+}
+
+function buildSNRPolarityCandidateLevelsForCandles(symbol, candles, currentRange, lookbackLabel = "") {
+  const src = (candles || [])
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  if (src.length < 12) return [];
+
+  const tol = getGiroSNRBodyTolerance(symbol, currentRange);
+  const raw = getGiroSNRCloseReactionRawLevels(src, currentRange, tol);
+  const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.82);
+  const out = [];
+
+  for (const cluster of clusters) {
+    const originalType = cluster.originalType === "support" ? "support" : "resistance";
+    const touches = Number(cluster.touches || 0);
+    const uniqueMinutes = Number(cluster.uniqueMinutes || 0);
+    const reactionScore = Number(cluster.reactionScore || 0);
+    if (touches < 2 || uniqueMinutes < 2) continue;
+    if (touches < 3 && reactionScore < 1.45) continue;
+
+    let coreLow = Math.min(Number(cluster.zoneLow), Number(cluster.zoneHigh));
+    let coreHigh = Math.max(Number(cluster.zoneLow), Number(cluster.zoneHigh));
+    let center = Number(cluster.price);
+    if (![coreLow, coreHigh, center].every(Number.isFinite)) continue;
+
+    const maxCloseBand = Math.max(tol * 1.75, Math.abs(Number(currentRange || 0)) * 0.095, 1e-9);
+    if (coreHigh - coreLow > maxCloseBand) {
+      coreLow = center - maxCloseBand / 2;
+      coreHigh = center + maxCloseBand / 2;
+    }
+    const minCloseBand = Math.max(tol * 0.34, Math.abs(Number(currentRange || 0)) * 0.014, 1e-9);
+    if (coreHigh - coreLow < minCloseBand) {
+      coreLow = center - minCloseBand / 2;
+      coreHigh = center + minCloseBand / 2;
+    }
+
+    const zonePad = Math.min(
+      Math.max(tol * 0.12, Math.abs(Number(currentRange || 0)) * 0.006, 1e-9),
+      Math.max(tol * 0.26, 1e-9)
+    );
+    const zoneLow = coreLow - zonePad;
+    const zoneHigh = coreHigh + zonePad;
+    const breakMargin = Math.max(tol * 0.42, (zoneHigh - zoneLow) * 0.32, 1e-9);
+    const lastOriginalTouch = Math.max(...(cluster.minutes || []).map(Number).filter(Number.isFinite), 0);
+
+    let breakCandle = null;
+    for (const c of src) {
+      const m = Number(c.minute || 0);
+      if (!Number.isFinite(m) || m <= lastOriginalTouch) continue;
+      const close = Number(c.close);
+      const high = Number(c.high);
+      const low = Number(c.low);
+      if (![close, high, low].every(Number.isFinite)) continue;
+
+      if (originalType === "resistance") {
+        // Resistencia rota hacia arriba: puede convertirse en soporte.
+        if (close >= zoneHigh + breakMargin && high >= zoneHigh + breakMargin * 0.55) {
+          breakCandle = c;
+          break;
+        }
+      } else {
+        // Soporte roto hacia abajo: puede convertirse en resistencia.
+        if (close <= zoneLow - breakMargin && low <= zoneLow - breakMargin * 0.55) {
+          breakCandle = c;
+          break;
+        }
+      }
+    }
+    if (!breakCandle) continue;
+
+    const brokenAt = Number(breakCandle.minute || 0);
+    const afterBreak = src.filter((c) => Number(c.minute || 0) > brokenAt);
+    if (!afterBreak.length) continue;
+
+    const currentRole = originalType === "resistance" ? "support" : "resistance";
+    const direction = currentRole === "support" ? "CALL" : "PUT";
+    const breakDirection = originalType === "resistance" ? "up" : "down";
+
+    // Confirmación de cambio de lado: no alcanza con una mecha o una ruptura aislada.
+    // Debe existir al menos un cierre del lado nuevo antes del retesteo actual.
+    const sideClose = afterBreak.find((c) => {
+      const close = Number(c.close);
+      if (!Number.isFinite(close)) return false;
+      return currentRole === "support" ? close >= zoneHigh + tol * 0.18 : close <= zoneLow - tol * 0.18;
+    });
+    if (!sideClose) continue;
+
+    const eff = scoreSNRPolarityEffectiveness(src, currentRole, zoneLow, zoneHigh, tol, currentRange, brokenAt);
+    // Si ya hay suficientes retesteos después de la ruptura, debe sostener 70%.
+    // Si todavía hay pocos, se permite la señal, pero con menor puntaje.
+    const enoughTests = Number(eff.total || 0) >= SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS;
+    if (enoughTests && Number(eff.ratio || 0) < SNR_POLARIDAD_EFFECTIVENESS_MIN_RATIO) continue;
+
+    out.push({
+      ...cluster,
+      levelMode: "snr_polaridad",
+      originalType,
+      currentRole,
+      levelType: currentRole,
+      direction,
+      breakDirection,
+      brokenAt,
+      breakClose: Number(breakCandle.close),
+      breakHigh: Number(breakCandle.high),
+      breakLow: Number(breakCandle.low),
+      sideConfirmedAt: Number(sideClose.minute || 0),
+      level: (zoneLow + zoneHigh) / 2,
+      price: (zoneLow + zoneHigh) / 2,
+      tolerance: tol,
+      zoneLow,
+      zoneHigh,
+      bodyZoneLow: coreLow,
+      bodyZoneHigh: coreHigh,
+      closeReactionZoneLow: coreLow,
+      closeReactionZoneHigh: coreHigh,
+      closeBand: Math.max(0, coreHigh - coreLow),
+      zonePad,
+      reactionScore,
+      reactionMax: Number(cluster.reactionMax || 0),
+      reactionMoveMax: Number(cluster.reactionMoveMax || 0),
+      snrEffectivenessRatio: Number(eff.ratio || 0),
+      snrEffectivenessPct: Number(eff.pct || 0),
+      snrEffectivenessWins: Number(eff.wins || 0),
+      snrEffectivenessTests: Number(eff.total || 0),
+      snrEffectivenessFails: Number(eff.fails || 0),
+      snrEffectivenessMinPct: 70,
+      snrLookbackLabel: lookbackLabel,
+      touches,
+      polarityReady: true,
+      lastTouchMinute: Math.max(Number(cluster.lastTouchMinute || 0), brokenAt, Number(sideClose.minute || 0)),
+    });
+  }
+
+  return out;
+}
+
+function getSNRPolarityCandidateLevels(symbol, minute, currentRange) {
+  const allCandles = getGiroPolarityCandles(symbol, minute, 170);
+  if (!allCandles.length) return [];
+  const windows = [70, 100, 150];
+  const gathered = [];
+  for (const w of windows) {
+    const slice = allCandles.slice(Math.max(0, allCandles.length - w));
+    gathered.push(...buildSNRPolarityCandidateLevelsForCandles(symbol, slice, currentRange, `${w}m`));
+  }
+  const deduped = [];
+  for (const lvl of gathered.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
+    Number(b.touches || 0) - Number(a.touches || 0) ||
+    Number(b.lastTouchMinute || 0) - Number(a.lastTouchMinute || 0)
+  )) {
+    const role = String(lvl.currentRole || lvl.levelType || "");
+    const level = Number(lvl.level || lvl.price);
+    const tol = Math.max(Number(lvl.tolerance || 0), 1e-9);
+    if (!Number.isFinite(level)) continue;
+    const duplicate = deduped.find((x) =>
+      String(x.currentRole || x.levelType || "") === role &&
+      Math.abs(Number(x.level || x.price) - level) <= tol * 0.72
+    );
+    if (!duplicate) deduped.push(lvl);
+  }
+  return deduped.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
+    Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
+    Number(b.touches || 0) - Number(a.touches || 0)
+  );
+}
+
+function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 4) return null;
+
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(1000, Math.min(59000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
+  const evalSecUsed = Number.isFinite(Number(opts?.evalSec)) ? Number(opts.evalSec) : Math.round(evalMs / 1000);
+  const radarStartSec = Number.isFinite(Number(opts?.radarStartSec)) ? Number(opts.radarStartSec) : SNR_RADAR_START_SEC;
+  const radarEndSec = Number.isFinite(Number(opts?.radarEndSec)) ? Number(opts.radarEndSec) : Number(EVAL_SEC || 45);
+  const usingRadar = !!opts?.radar;
+
+  const tickOpen = Number(getPriceAtMs(ticks, 0));
+  const realOpen = Number(getCandidateRealOpenPrice(candidate, minute));
+  const p0 = Number.isFinite(realOpen) ? realOpen : tickOpen;
+  const pE = Number(getPriceAtMs(ticks, evalMs));
+  if (!Number.isFinite(p0) || !Number.isFinite(pE)) return null;
+
+  const pts = ensureTicksWithBoundary(ticks, evalMs);
+  const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (qs.length < 3) return null;
+
+  const high = Math.max(...qs);
+  const low = Math.min(...qs);
+  const range = Math.max(high - low, Math.abs(pE) * 0.000001, 1e-9);
+  const levels = getSNRPolarityCandidateLevels(candidate.symbol, minute, range);
+  if (!levels.length) return null;
+
+  const matches = [];
+  for (const lvl of levels) {
+    const level = Number(lvl.level || lvl.price);
+    const tol = Math.max(Number(lvl.tolerance || getGiroSNRBodyTolerance(candidate.symbol, range)), 1e-9);
+    let zoneLow = Math.min(Number(lvl.zoneLow), Number(lvl.zoneHigh));
+    let zoneHigh = Math.max(Number(lvl.zoneLow), Number(lvl.zoneHigh));
+    if (![level, tol, zoneLow, zoneHigh].every(Number.isFinite)) continue;
+
+    const currentRole = lvl.currentRole === "support" ? "support" : "resistance";
+    const direction = currentRole === "support" ? "CALL" : "PUT";
+    const zoneWidth = Math.max(zoneHigh - zoneLow, tol * 0.45, 1e-9);
+    const interactionMargin = Math.max(tol * 0.82, zoneWidth * 0.55, range * 0.045, 1e-9);
+
+    const distance = pE < zoneLow ? zoneLow - pE : pE > zoneHigh ? pE - zoneHigh : 0;
+    const inside = distance <= 1e-12;
+    const interacting = distance <= interactionMargin;
+    if (!interacting) continue;
+
+    const roleSideOk = currentRole === "support" ? pE >= zoneLow - interactionMargin * 0.32 : pE <= zoneHigh + interactionMargin * 0.32;
+    if (!roleSideOk) continue;
+
+    // Retesteo desde el lado correcto:
+    // resistencia rota -> soporte: el precio tuvo que estar arriba y volver hacia la zona.
+    // soporte roto -> resistencia: el precio tuvo que estar abajo y volver hacia la zona.
+    const traveledFromRoleSide = currentRole === "support"
+      ? (p0 > zoneHigh + tol * 0.10 || high > zoneHigh + interactionMargin * 0.45)
+      : (p0 < zoneLow - tol * 0.10 || low < zoneLow - interactionMargin * 0.45);
+    if (!traveledFromRoleSide) continue;
+
+    const wrongSide = currentRole === "support" ? Math.max(0, zoneLow - pE) : Math.max(0, pE - zoneHigh);
+    if (wrongSide > interactionMargin * 0.40) continue;
+
+    const rejection = currentRole === "support" ? Math.max(0, pE - low) : Math.max(0, high - pE);
+    const rejectRatio = rejection / Math.max(range, 1e-9);
+    const proximityScore = Math.max(0, 1 - distance / Math.max(interactionMargin, 1e-9));
+    const sideScore = Math.max(0, 1 - wrongSide / Math.max(interactionMargin * 0.40, 1e-9));
+    const effRatio = Number(lvl.snrEffectivenessRatio || 0);
+    const effTests = Number(lvl.snrEffectivenessTests || 0);
+    const touches = Number(lvl.touches || 0);
+
+    let points = 0;
+    if (interacting) points += 2;
+    if (inside) points += 1;
+    if (Number.isFinite(Number(lvl.brokenAt))) points += 2;
+    if (traveledFromRoleSide) points += 1;
+    if (touches >= 2) points += 1;
+    if (touches >= 3) points += 1;
+    if (effTests >= 2 && effRatio >= 0.70) points += 2;
+    else if (effTests >= 1) points += 1;
+    if (rejectRatio >= 0.07) points += 1;
+    if (sideScore >= 0.70) points += 1;
+
+    const minutesAfterBreak = Number(minute || 0) - Number(lvl.brokenAt || 0);
+    const quality =
+      proximityScore * 48 +
+      (inside ? 18 : 0) +
+      Math.min(5, touches) * 6 +
+      Math.min(28, effRatio * 28) +
+      Math.min(12, effTests * 3) +
+      sideScore * 14 +
+      rejectRatio * 20 +
+      Math.min(12, Math.max(0, minutesAfterBreak) * 0.8) -
+      Math.max(0, wrongSide / tol) * 10;
+
+    matches.push({
+      direction,
+      quality,
+      points,
+      meta: {
+        level,
+        levelMode: "snr_polaridad",
+        originalType: lvl.originalType,
+        currentRole,
+        levelType: currentRole,
+        direction,
+        tolerance: tol,
+        zone: Math.max(zoneWidth, interactionMargin),
+        zoneLow,
+        zoneHigh,
+        bodyZoneLow: Number(lvl.bodyZoneLow),
+        bodyZoneHigh: Number(lvl.bodyZoneHigh),
+        touches,
+        reactionScore: Number(lvl.reactionScore || 0),
+        reactionMax: Number(lvl.reactionMax || 0),
+        reactionMoveMax: Number(lvl.reactionMoveMax || 0),
+        brokenAt: Number(lvl.brokenAt || 0),
+        breakDirection: lvl.breakDirection || "",
+        breakClose: Number(lvl.breakClose),
+        sideConfirmedAt: Number(lvl.sideConfirmedAt || 0),
+        snrEffectivenessRatio: effRatio,
+        snrEffectivenessPct: Number(lvl.snrEffectivenessPct || Math.round(effRatio * 100)),
+        snrEffectivenessWins: Number(lvl.snrEffectivenessWins || 0),
+        snrEffectivenessTests: effTests,
+        snrEffectivenessFails: Number(lvl.snrEffectivenessFails || 0),
+        snrEffectivenessMinPct: 70,
+        snrLookbackLabel: lvl.snrLookbackLabel || "",
+        points,
+        high,
+        low,
+        p0,
+        tickOpen,
+        realOpen,
+        pE,
+        evalSec: evalSecUsed,
+        radar: usingRadar,
+        radarStartSec,
+        radarEndSec,
+        interactionMargin,
+        interactionDistance: distance,
+        interactionInside: inside,
+        wrongSide,
+        roleSideOk,
+        traveledFromRoleSide,
+        rejection,
+        rejectRatio,
+        proximityScore,
+        sideScore,
+        stage: "snr_polaridad_retest",
+        movementFilter: "snr_polaridad_ruptura_retest_cierre_zona",
+        status: usingRadar
+          ? `PREALERTA SNR POLARIDAD RADAR ${radarStartSec}-${radarEndSec}s: ruptura previa + cambio de lado + retesteo de zona. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`
+          : `PREALERTA SNR POLARIDAD: ruptura previa + cambio de lado + retesteo de zona. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`,
+        logic: currentRole === "support"
+          ? "resistencia rota hacia arriba -> retesteo desde arriba como soporte de polaridad => CALL"
+          : "soporte roto hacia abajo -> retesteo desde abajo como resistencia de polaridad => PUT",
+      },
+    });
+  }
+
+  if (!matches.length) return null;
+  matches.sort((a, b) => b.quality - a.quality || b.points - a.points || Number(b.meta?.snrEffectivenessTests || 0) - Number(a.meta?.snrEffectivenessTests || 0));
+  return matches[0];
+}
+
 function sumAbsDeltaZ(arr, fromIdx, toIdx) {
   let acc = 0;
   const a = Math.max(0, Number(fromIdx || 0));
@@ -14748,9 +15129,17 @@ function evaluateMinute(minute, opts = {}) {
   const activeMode = normalizeSignalMode(signalMode);
   const matches = [];
   for (const c of candidates) {
-    const match = isDynamicLineMode(activeMode)
-      ? analyzeDynamicLineCandidate(c, minute)
-      : analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
+    let match = null;
+    let matchSource = "SNR_INTERACCION_NIVEL";
+    if (isDynamicLineMode(activeMode)) {
+      match = analyzeDynamicLineCandidate(c, minute);
+      matchSource = "LINEA_DINAMICA";
+    } else if (isSNRPolaridadMode(activeMode)) {
+      match = analyzeSNRPolaridadCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
+      matchSource = "SNR_POLARIDAD";
+    } else {
+      match = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
+    }
     if (!match) continue;
 
     matches.push({
@@ -14763,7 +15152,7 @@ function evaluateMinute(minute, opts = {}) {
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
       dynamicLineMeta: String(match.meta?.levelMode || "") === "dynamic_line" ? match.meta : null,
-      matchSource: isDynamicLineMode(activeMode) ? "LINEA_DINAMICA" : "SNR_INTERACCION_NIVEL",
+      matchSource,
     });
   }
 
