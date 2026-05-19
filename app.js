@@ -30,6 +30,7 @@
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
 // ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
 // ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
+// ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
 
 "use strict";
 
@@ -64,6 +65,9 @@ const MIN_SYMBOLS_READY = 2;
 const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
+
+const KEEP_CLOSED_AWAY_SIGNALS_KEY = "keepClosedAwaySignals_v1";
+let keepClosedAwaySignals = false;
 
 /* =========================
    Trades Journal (estudio)
@@ -695,8 +699,8 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_V44_20260519";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_V44_20260519";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_V45_20260519";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_V45_20260519";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -3598,6 +3602,59 @@ function getTradeExecutionTitle() {
   return `Operar ${getTradingAccountLabel()} 1m`;
 }
 
+
+function loadKeepClosedAwaySignals() {
+  try {
+    keepClosedAwaySignals = localStorage.getItem(KEEP_CLOSED_AWAY_SIGNALS_KEY) === "1";
+  } catch {
+    keepClosedAwaySignals = false;
+  }
+}
+function saveKeepClosedAwaySignals() {
+  try {
+    localStorage.setItem(KEEP_CLOSED_AWAY_SIGNALS_KEY, keepClosedAwaySignals ? "1" : "0");
+  } catch {}
+}
+function updateKeepClosedAwaySignalsButton() {
+  const btn = document.getElementById("keepClosedAwaySignalsBtn");
+  if (!btn) return;
+
+  btn.textContent = keepClosedAwaySignals ? "🧪 Guardar fuera SNR: SÍ" : "🧪 Guardar fuera SNR: NO";
+  btn.title = keepClosedAwaySignals
+    ? "Las señales que cierren fuera de zona azul/amarilla se conservan para testeo."
+    : "Las señales sin trade que cierren fuera de zona azul/amarilla se eliminan como antes.";
+  btn.setAttribute("aria-pressed", keepClosedAwaySignals ? "true" : "false");
+  btn.style.borderColor = keepClosedAwaySignals ? "rgba(34,211,238,.75)" : "rgba(255,255,255,.16)";
+  btn.style.background = keepClosedAwaySignals
+    ? "linear-gradient(180deg, rgba(34,211,238,.18), rgba(59,130,246,.10))"
+    : "";
+  btn.style.boxShadow = keepClosedAwaySignals
+    ? "0 0 0 1px rgba(34,211,238,.18) inset, 0 0 16px rgba(34,211,238,.18)"
+    : "";
+}
+function toggleKeepClosedAwaySignals() {
+  keepClosedAwaySignals = !keepClosedAwaySignals;
+  saveKeepClosedAwaySignals();
+  updateKeepClosedAwaySignalsButton();
+
+  if (keepClosedAwaySignals) {
+    toast("🧪 Test activo: se conservan señales fuera de zona", 1900);
+  } else {
+    const removed = purgeClosedSignalsOutsideSNRCloseZone("toggle_keep_outside_off");
+    toast(removed ? `🧹 Test apagado: ${removed} señal(es) fuera de zona eliminadas` : "🧹 Test apagado", 2000);
+  }
+}
+function ensureKeepClosedAwaySignalsToggle() {
+  const btn = ensureViewActionButton("signals", {
+    id: "keepClosedAwaySignalsBtn",
+    text: keepClosedAwaySignals ? "🧪 Guardar fuera SNR: SÍ" : "🧪 Guardar fuera SNR: NO",
+    title: "Conserva o elimina señales sin trade que cierran fuera de zona azul/amarilla",
+    onClick: toggleKeepClosedAwaySignals,
+  });
+  updateKeepClosedAwaySignalsButton();
+  return btn;
+}
+
 function getSignalEvalButtons() {
   return qsAll(".evalBtn");
 }
@@ -3844,8 +3901,10 @@ function ensureViewActionButton(viewName, opts) {
 function updatePerViewClearButtonsVisibility(activeView) {
   const wSignals = document.getElementById("clearSignalsInlineBtnWrap");
   const wTrades = document.getElementById("clearTradesInlineBtnWrap");
+  const wKeepOutside = document.getElementById("keepClosedAwaySignalsBtnWrap");
 
   if (wSignals) wSignals.style.display = activeView === "signals" ? "flex" : "none";
+  if (wKeepOutside) wKeepOutside.style.display = activeView === "signals" ? "flex" : "none";
   if (wTrades) wTrades.style.display = "none";
 }
 
@@ -3859,6 +3918,8 @@ function ensureInlineClearButtons() {
       clearSignalsOnly();
     },
   });
+
+  ensureKeepClosedAwaySignalsToggle();
 
   const oldTradesWrap = document.getElementById("clearTradesInlineBtnWrap");
   if (oldTradesWrap) oldTradesWrap.remove();
@@ -7242,22 +7303,41 @@ function shouldRemoveSignalBecauseClosedAwayFromSNR(item) {
     nearBuffer: gate.nearBuffer,
     distance: gate.distance,
     checked_ms: SIGNAL_CLOSE_SNR_FILTER_MS,
+    keptByTestMode: keepClosedAwaySignals && !gate.ok,
   };
+
+  // V45: modo test. Si está activo, las señales que cierran fuera de zona se conservan
+  // en Señales para que el usuario pueda revisarlas, marcarlas y exportarlas.
+  if (keepClosedAwaySignals && !gate.ok) {
+    item.keepClosedAwayByUser = true;
+    item.keepClosedAwaySavedAt = Date.now();
+    return false;
+  }
+
   return !gate.ok;
 }
 function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
   if (!Array.isArray(history) || !history.length) return 0;
   const removedIds = new Set();
   const before = history.length;
+  let keptOutsideChanged = false;
   history = history.filter((it) => {
+    const prevKept = !!it?.keepClosedAwayByUser;
     if (shouldRemoveSignalBecauseClosedAwayFromSNR(it)) {
       if (it && it.id) removedIds.add(String(it.id));
       return false;
     }
+    if (!prevKept && !!it?.keepClosedAwayByUser) keptOutsideChanged = true;
     return true;
   });
   const removed = before - history.length;
-  if (!removed) return 0;
+  if (!removed) {
+    if (keptOutsideChanged) {
+      try { saveHistory(history); } catch {}
+      try { renderHistory(); } catch {}
+    }
+    return 0;
+  }
 
   try { saveHistory(history); } catch {}
   try {
@@ -9652,8 +9732,8 @@ function getSignalLifecycleStageInfo(item) {
     }
     return {
       key: "closed_far",
-      label: "❌ FUERA SNR",
-      title: `Cierre fuera del SNR/amarilla. Si no hay trade, se descarta. ${pointsTxt}`,
+      label: keepClosedAwaySignals || item.keepClosedAwayByUser ? "🧪 FUERA SNR" : "❌ FUERA SNR",
+      title: `${keepClosedAwaySignals || item.keepClosedAwayByUser ? "Cierre fuera del SNR/amarilla conservado para testeo." : "Cierre fuera del SNR/amarilla. Si no hay trade, se descarta."} ${pointsTxt}`,
     };
   }
 
@@ -15731,6 +15811,7 @@ loadDiscipline();
 startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
 loadExecutionMode();
+loadKeepClosedAwaySignals();
 
 renderHistory();
 initNotificationOpenRouting();
