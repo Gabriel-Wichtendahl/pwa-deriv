@@ -29,6 +29,7 @@
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
 // ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
+// ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
 
 "use strict";
 
@@ -694,8 +695,8 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_EFECTIVO_RADAR_35_40_V38_20260518";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_RECIENTE_SIN_ROTURA_V43_20260519";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_V44_20260519";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_V44_20260519";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -12348,7 +12349,8 @@ const SNR_EFFECTIVENESS_MIN_TESTS = 3;
 const SNR_RECENT_EFFECTIVENESS_MIN_RATIO = 0.70;
 const SNR_RECENT_EFFECTIVENESS_MIN_TESTS = 3;
 const SNR_RECENT_EFFECTIVENESS_MAX_TESTS = 5;
-const SNR_MAX_CONSECUTIVE_RECENT_FAILS = 2;
+const SNR_REVIEW_CONSECUTIVE_RECENT_FAILS = 2;
+const SNR_MAX_CONSECUTIVE_RECENT_FAILS = 3;
 
 function buildSNRRecentEffectivenessAudit(tests) {
   const src = (tests || [])
@@ -12377,6 +12379,7 @@ function buildSNRRecentEffectivenessAudit(tests) {
     recentRatio,
     recentPct: Math.round(recentRatio * 100),
     consecutiveRecentFails,
+    reviewNeeded: consecutiveRecentFails >= SNR_REVIEW_CONSECUTIVE_RECENT_FAILS,
     recentOk,
     consecutiveFailsOk,
     ok: recentOk && consecutiveFailsOk,
@@ -12519,6 +12522,7 @@ function scoreGiroSNREffectiveness(candles, role, zoneLow, zoneHigh, tolerance, 
     recentRatio: audit.recentRatio,
     recentPct: audit.recentPct,
     consecutiveRecentFails: audit.consecutiveRecentFails,
+    reviewNeeded: audit.reviewNeeded,
     recentOk: audit.recentOk,
     consecutiveFailsOk: audit.consecutiveFailsOk,
     ok: total >= SNR_EFFECTIVENESS_MIN_TESTS && ratio >= SNR_EFFECTIVENESS_MIN_RATIO && audit.ok,
@@ -12545,7 +12549,7 @@ function adjustGiroSNRZoneToEffectiveCloses(candles, role, center, coreLow, core
   // Si la zona actual no llega a 70%, se recalibra alrededor de los cierres que sí
   // respetaron el nivel. Esto evita mantener un SNR viejo cuando los cierres actuales
   // dejaron de girar desde ahí.
-  if (best.effectiveness.ok) return best;
+  if (best.effectiveness.ok && !best.effectiveness.reviewNeeded) return best;
 
   const expandedLow = baseCenter - tol * 1.25;
   const expandedHigh = baseCenter + tol * 1.25;
@@ -12627,6 +12631,9 @@ function buildGiroSNRBodyCandidateLevelsForCandles(symbol, candles, currentRange
     // Regla nueva: mínimo 70% efectivo. Si los cierres en esa zona no giran,
     // se descarta el nivel y se busca el próximo candidato.
     if (!eff.ok) continue;
+    // V44: 2 fallos recientes seguidos no descartan el nivel de una, pero obligan a reajustar.
+    // Si luego del reajuste el nivel sigue debilitado, no genera señal nueva.
+    if (eff.reviewNeeded) continue;
 
     coreLow = Math.min(Number(adjusted.zoneLow), Number(adjusted.zoneHigh));
     coreHigh = Math.max(Number(adjusted.zoneLow), Number(adjusted.zoneHigh));
@@ -12673,6 +12680,7 @@ function buildGiroSNRBodyCandidateLevelsForCandles(symbol, candles, currentRange
       snrRecentEffectivenessTests: Number(eff.recentTotal || 0),
       snrRecentEffectivenessFails: Number(eff.recentFails || 0),
       snrRecentConsecutiveFails: Number(eff.consecutiveRecentFails || 0),
+      snrRecentReviewNeeded: !!eff.reviewNeeded,
       snrEffectivenessMinPct: 70,
       snrAdjustedToEffectiveCloses: !!adjusted.adjusted,
       snrLookbackLabel: lookbackLabel,
@@ -12759,6 +12767,7 @@ function scoreSNRPolarityEffectiveness(candles, role, zoneLow, zoneHigh, toleran
     recentRatio: audit.recentRatio,
     recentPct: audit.recentPct,
     consecutiveRecentFails: audit.consecutiveRecentFails,
+    reviewNeeded: audit.reviewNeeded,
     recentOk: audit.recentOk,
     consecutiveFailsOk: audit.consecutiveFailsOk,
     ok: total >= SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS && ratio >= SNR_POLARIDAD_EFFECTIVENESS_MIN_RATIO && audit.ok,
@@ -12866,6 +12875,9 @@ function buildSNRPolarityCandidateLevelsForCandles(symbol, candles, currentRange
     // permite que el primer retesteo vivo sea evaluado por la vela actual.
     const enoughTests = Number(eff.total || 0) >= SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS;
     if (enoughTests && !eff.ok) continue;
+    // V44: si ya hay retesteos y aparecen 2 fallos seguidos, el nivel queda en revisión.
+    // En polaridad no se reajusta automáticamente el rol nuevo, así que por seguridad no genera señal.
+    if (enoughTests && eff.reviewNeeded) continue;
     if (Number(eff.consecutiveRecentFails || 0) >= SNR_MAX_CONSECUTIVE_RECENT_FAILS) continue;
 
     out.push({
@@ -12906,6 +12918,7 @@ function buildSNRPolarityCandidateLevelsForCandles(symbol, candles, currentRange
       snrRecentEffectivenessTests: Number(eff.recentTotal || 0),
       snrRecentEffectivenessFails: Number(eff.recentFails || 0),
       snrRecentConsecutiveFails: Number(eff.consecutiveRecentFails || 0),
+      snrRecentReviewNeeded: !!eff.reviewNeeded,
       snrOriginalEffectivenessRatio: Number(originalEff.ratio || 0),
       snrOriginalEffectivenessPct: Number(originalEff.pct || 0),
       snrOriginalEffectivenessWins: Number(originalEff.wins || 0),
@@ -12914,6 +12927,7 @@ function buildSNRPolarityCandidateLevelsForCandles(symbol, candles, currentRange
       snrOriginalRecentEffectivenessRatio: Number(originalEff.recentRatio || 0),
       snrOriginalRecentEffectivenessPct: Number(originalEff.recentPct || 0),
       snrOriginalRecentConsecutiveFails: Number(originalEff.consecutiveRecentFails || 0),
+      snrOriginalRecentReviewNeeded: !!originalEff.reviewNeeded,
       snrEffectivenessMinPct: 70,
       snrLookbackLabel: lookbackLabel,
       touches,
@@ -13093,6 +13107,7 @@ function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBL
         snrRecentEffectivenessTests: Number(lvl.snrRecentEffectivenessTests || 0),
         snrRecentEffectivenessFails: Number(lvl.snrRecentEffectivenessFails || 0),
         snrRecentConsecutiveFails: Number(lvl.snrRecentConsecutiveFails || 0),
+        snrRecentReviewNeeded: !!lvl.snrRecentReviewNeeded,
         snrRoleHardBreakInfo: candleBreakInfo || null,
         snrEffectivenessMinPct: 70,
         snrLookbackLabel: lvl.snrLookbackLabel || "",
