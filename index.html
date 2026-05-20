@@ -59,6 +59,11 @@
           <div id="liveSymbolBar" class="liveSymbolBar" aria-label="Elegir par en vivo"></div>
         </div>
         <canvas id="liveReplayCanvas"></canvas>
+        <div class="liveTradeBar" aria-label="Operar desde gráfico en vivo">
+          <button id="liveBuyCallBtn" class="liveTradeBtn liveTradeCall" type="button">🟢 COMPRA</button>
+          <button id="liveBuyPutBtn" class="liveTradeBtn liveTradePut" type="button">🔴 VENTA</button>
+        </div>
+        <div id="liveTradeStatus" class="liveTradeStatus">Modo en vivo: las señales quedan pausadas mientras estás en esta pestaña.</div>
         <div id="liveReplayInfo" class="modalReplayInfo liveReplayInfo">Esperando ticks…</div>
       </div>
     </section>

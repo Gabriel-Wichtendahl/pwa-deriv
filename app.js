@@ -32,7 +32,7 @@
 // ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
 // ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
-// ✅ V47: nueva pestaña En vivo con vela actual estilo Replay de vela
+// ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
 
 "use strict";
 
@@ -1524,6 +1524,9 @@ const liveReplayCanvas = $("liveReplayCanvas");
 const liveReplayInfoEl = $("liveReplayInfo");
 const liveReplaySubEl = $("liveReplaySub");
 const liveSymbolBarEl = $("liveSymbolBar");
+const liveBuyCallBtn = $("liveBuyCallBtn");
+const liveBuyPutBtn = $("liveBuyPutBtn");
+const liveTradeStatusEl = $("liveTradeStatus");
 const feedbackView = $("feedbackView"); // compat
 
 // Config modal existente (engrane y modal)
@@ -3478,10 +3481,18 @@ function saveLiveAnalysisPaused() {
     localStorage.setItem(LIVE_ANALYSIS_PAUSED_KEY, liveAnalysisPaused ? "1" : "0");
   } catch {}
 }
+function getActiveViewName() {
+  try { return localStorage.getItem("activeView") || "signals"; } catch { return "signals"; }
+}
+function isLiveStandaloneViewActive() {
+  return getActiveViewName() === "live";
+}
 function areSignalsPaused(viewName = null) {
-  // Pausa manual global: visible en Señales, Trades y Práctica.
-  // Solo frena NUEVOS análisis/señales en vivo. No borra historial ni corta WebSocket.
-  return !!liveAnalysisPaused;
+  // Pausa manual global + pausa automática cuando se abre la pestaña En vivo.
+  // En vivo es un modo aparte: sigue recibiendo ticks para dibujar, pero no crea nuevas señales
+  // ni dispara autoentradas de señales mientras esa pestaña está activa.
+  const view = viewName || getActiveViewName();
+  return !!liveAnalysisPaused || view === "live";
 }
 function applyLiveAnalysisPauseUI() {
   const btn = document.getElementById("liveAnalysisPauseBtn");
@@ -3935,30 +3946,38 @@ function saveLiveReplaySymbol(sym) {
   updateCounter("live");
   requestLiveReplayDraw(true);
 }
-function getLiveReplayMinute() {
+function getLiveReplayMinute(sym = liveReplaySymbol) {
+  // Usar la última vela vista del símbolo elegido. Antes dependía del último tick global;
+  // si otro par actualizaba el reloj, el replay live podía quedar con ms desfasado y dibujar solo 1 tick.
+  const bySymbol = Number(lastMinuteSeenBySymbol?.[sym]);
+  if (Number.isFinite(bySymbol) && bySymbol > 0) return bySymbol;
   return currentServerMinute();
 }
-function getLiveReplayMsInMinute() {
-  try {
-    const now = serverNowMs();
-    const start = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
-      ? currentMinuteStartMs
-      : Math.floor(now / 60000) * 60000;
-    return Math.max(0, Math.min(60000, ((now - start) % 60000 + 60000) % 60000));
-  } catch {
-    return 0;
-  }
-}
 function getLiveReplayTicks(sym = liveReplaySymbol) {
-  const minute = getLiveReplayMinute();
+  const minute = getLiveReplayMinute(sym);
   const arr = minuteData?.[minute]?.[sym];
   return (Array.isArray(arr) ? arr : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .map((p) => ({ ms: Math.max(0, Math.min(60000, Number(p.ms))), quote: Number(p.quote) }))
     .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
     .sort((a, b) => a.ms - b.ms);
 }
+function getLiveReplayMsInMinute(sym = liveReplaySymbol) {
+  try {
+    const minute = getLiveReplayMinute(sym);
+    const now = serverNowMs();
+    const byClock = Math.max(0, Math.min(60000, now - minute * 60000));
+    const ticks = getLiveReplayTicks(sym);
+    const lastTickMs = ticks.length ? Number(ticks[ticks.length - 1].ms) : 0;
+    // En vivo debe dibujar todos los ticks recibidos del símbolo, aunque el reloj global
+    // venga de otro par o esté algunos segundos corrido.
+    return Math.max(0, Math.min(60000, Math.max(byClock, lastTickMs)));
+  } catch {
+    const ticks = getLiveReplayTicks(sym);
+    return ticks.length ? Number(ticks[ticks.length - 1].ms) || 0 : 0;
+  }
+}
 function buildLiveReplayItem(sym = liveReplaySymbol) {
-  const minute = getLiveReplayMinute();
+  const minute = getLiveReplayMinute(sym);
   return {
     id: `LIVE::${sym}::${minute}`,
     symbol: sym,
@@ -3993,13 +4012,13 @@ function drawLiveReplayNow(force = false) {
 
   paintLiveSymbolButtons();
   const item = buildLiveReplayItem(liveReplaySymbol);
-  const ms = getLiveReplayMsInMinute();
   const ticks = item.ticks || [];
+  const ms = getLiveReplayMsInMinute(liveReplaySymbol);
 
   if (liveReplaySubEl) {
     const sec = Math.floor(ms / 1000);
     const last = ticks.length ? Number(ticks[ticks.length - 1].quote) : Number(lastQuoteBySymbol?.[liveReplaySymbol]);
-    liveReplaySubEl.textContent = `${liveReplaySymbol} · vela actual · ${sec}s/60s${Number.isFinite(last) ? " · " + last.toFixed(6) : ""}`;
+    liveReplaySubEl.textContent = `${liveReplaySymbol} · vela actual · ${sec}s/60s${Number.isFinite(last) ? " · " + last.toFixed(6) : ""} · señales pausadas`;
   }
 
   if (ticks.length < 2) {
@@ -4021,6 +4040,86 @@ function drawLiveReplayNow(force = false) {
   // Usa el mismo motor visual que Replay de vela, pero con la vela viva y el tiempo actual.
   drawModalReplayCanvas(liveReplayCanvas, item, ms, liveReplayInfoEl);
 }
+function setLiveTradeButtonsBusy(busy = false) {
+  [liveBuyCallBtn, liveBuyPutBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = !!busy;
+    btn.style.opacity = busy ? ".55" : "1";
+  });
+}
+function setLiveTradeStatus(text, tone = "") {
+  if (!liveTradeStatusEl) return;
+  liveTradeStatusEl.textContent = text || "";
+  liveTradeStatusEl.dataset.tone = tone || "";
+}
+function buildLiveManualTradeItem(side = "CALL") {
+  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+  const minute = getLiveReplayMinute(sym);
+  const ticks = getLiveReplayTicks(sym);
+  const safeSide = normalizeSignalConfirmationSide(side) || "CALL";
+  const confirmations = [];
+  for (let i = 0; i < SIGNAL_CONFIRM_MIN; i++) confirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(sym), at: Date.now(), source: "live_tab_manual" });
+  return {
+    id: `LIVE_TRADE-${minute}-${sym}-${safeSide}-${Date.now()}`,
+    minute,
+    time: `${new Date(minute * 60000).toISOString().slice(11, 19)} UTC`,
+    symbol: sym,
+    direction: safeSide,
+    mode: "EN VIVO",
+    mode_version: "V48_LIVE_TAB_MANUAL",
+    ticks: ticks.slice(),
+    minuteComplete: false,
+    signalConfirmations: confirmations,
+    liveManualTrade: true,
+  };
+}
+async function liveManualTrade(side = "CALL") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return;
+  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+  const item = buildLiveManualTradeItem(safeSide);
+  try {
+    setLiveTradeButtonsBusy(true);
+    setLiveTradeStatus(`Enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+    // Guardar el item antes de comprar para que, si Deriv acepta el contrato, pueda quedar vinculado y pasar a Trades.
+    history.push(item);
+    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    saveHistory(history);
+    const res = await Promise.race([
+      buyOneClick(safeSide, sym, item),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade en vivo")), 22000)),
+    ]);
+    const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
+    setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviada${cid ? " · ID " + cid : ""}`, "ok");
+    toast(`✅ Trade en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
+  } catch (e) {
+    // Si no llegó a comprar, quitamos el item auxiliar para no ensuciar Señales.
+    try {
+      if (!item?.trade?.contract_id && !item?.signalAutoEntry?.contract_id) {
+        history = (history || []).filter((it) => it?.id !== item.id);
+        saveHistory(history);
+      }
+    } catch {}
+    const msg = e?.message || String(e);
+    setLiveTradeStatus(`⚠️ No se pudo enviar: ${msg}`, "error");
+    toast(`⚠️ Trade en vivo falló: ${msg}`, 2600);
+  } finally {
+    setLiveTradeButtonsBusy(false);
+    updateCounter(getActiveViewName());
+  }
+}
+function initLiveTradeButtons() {
+  if (liveBuyCallBtn && !liveBuyCallBtn.dataset.ready) {
+    liveBuyCallBtn.onclick = () => liveManualTrade("CALL");
+    liveBuyCallBtn.dataset.ready = "1";
+  }
+  if (liveBuyPutBtn && !liveBuyPutBtn.dataset.ready) {
+    liveBuyPutBtn.onclick = () => liveManualTrade("PUT");
+    liveBuyPutBtn.dataset.ready = "1";
+  }
+  setLiveTradeStatus("Modo en vivo: señales pausadas. Botones COMPRA/VENTA operan el par seleccionado.");
+}
+
 function requestLiveReplayDraw(force = false) {
   if ((localStorage.getItem("activeView") || "signals") !== "live") return;
   drawLiveReplayNow(force);
@@ -4035,6 +4134,7 @@ function liveReplayLoop() {
 }
 function startLiveReplayLoop() {
   stopLiveReplayLoop();
+  initLiveTradeButtons();
   paintLiveSymbolButtons();
   drawLiveReplayNow(true);
   liveReplayRaf = requestAnimationFrame(liveReplayLoop);
@@ -4097,8 +4197,12 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isPractice) ensurePracticeReady();
-  if (isLive) startLiveReplayLoop();
-  else stopLiveReplayLoop();
+  if (isLive) {
+    startLiveReplayLoop();
+    setLiveTradeStatus("Modo en vivo activo: señales pausadas. Podés mirar la vela y operar manualmente el par seleccionado.");
+  } else {
+    stopLiveReplayLoop();
+  }
   updateCounter(name);
   updatePerViewClearButtonsVisibility(name);
   ensureLiveAnalysisPauseButton();
@@ -7513,6 +7617,25 @@ function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
 }
 function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   if (!item) return null;
+
+  // V48: operaciones manuales desde la pestaña En vivo son independientes de señales/SNR/AUTO 59.
+  // Se registran como estudio, pero no se bloquean por zona ni por segundo 59.
+  if (item?.liveManualTrade) {
+    const sym = item.symbol || liveReplaySymbol || "";
+    const ticks = Array.isArray(item.ticks) ? item.ticks : getLiveReplayTicks(sym);
+    const last = ticks.length ? Number(ticks[ticks.length - 1].quote) : Number(lastQuoteBySymbol?.[sym]);
+    return {
+      ok: true,
+      pending: false,
+      reason: "live_manual_trade",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: Math.round(getLiveReplayMsInMinute(sym)),
+      check_sec: Math.round(getLiveReplayMsInMinute(sym) / 1000),
+      price: Number.isFinite(last) ? last : null,
+      message: "Trade manual desde pestaña En vivo; señales/SNR pausadas y no bloquean esta entrada.",
+    };
+  }
+
   const ms = getSignalConfirmationMs(item);
   if (ms < SIGNAL_AUTO_ENTRY_MS) {
     throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
@@ -7630,6 +7753,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
 
 function scanSignalAutoEntriesAt57() {
   try {
+    if (areSignalsPaused()) return false;
     if (tradeInFlight) return false;
     const nowMinute = currentServerMinute();
     const candidates = (history || [])
@@ -11244,8 +11368,9 @@ function onTick(tick) {
     for (const it of tail) updateRowChartBtn(it);
   }
 
-  // ✅ FIX AUTO 59: también revisar en cada tick, aunque el modal no haya redibujado.
-  scanSignalAutoEntriesAt57();
+  // ✅ FIX AUTO 59: también revisar en cada tick, salvo cuando el análisis está pausado
+  // o la pestaña En vivo está activa (modo aparte).
+  if (!areSignalsPaused()) scanSignalAutoEntriesAt57();
 
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
