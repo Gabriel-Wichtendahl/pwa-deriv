@@ -31,6 +31,7 @@
 // ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
 // ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
+// ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
 
 "use strict";
 
@@ -699,8 +700,8 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_V45_20260519";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_V45_20260519";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V46_20260520";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V46_20260520";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -7378,11 +7379,34 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
     return gate;
   }
 
-  // V40: en modos SNR, el precio al segundo 59 debe estar dentro de la zona azul o amarilla.
+  // V46: en modos SNR/SNR polaridad NO se exige que la vela cierre dentro del SNR
+  // ni se bloquea la autoentrada por estar lejos de la zona al check de 59s.
+  // La operación se decide por: vela viva + 4 puntos netos + disciplina OK.
+  // Igual calculamos el gate SNR para registrar si el precio estaba dentro/cerca/lejos,
+  // pero no lo usamos como bloqueo operativo.
   const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-  if (gate?.pending) throw new Error(gate.message || "SNR pendiente");
-  if (!gate?.ok) throw new Error(gate?.message || "El precio no está dentro de la zona azul/amarilla al segundo 59");
-  return gate;
+  if (gate?.pending) {
+    return {
+      ok: true,
+      pending: false,
+      reason: "auto59_4pts_snr_sin_cierre_zona",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: SIGNAL_AUTO_SNR_CHECK_MS,
+      check_sec: SIGNAL_AUTO_ENTRY_SEC,
+      message: "AUTO 59 habilitado por 4 puntos; cierre/zona SNR no bloquean la entrada.",
+      original_gate: gate,
+    };
+  }
+  return Object.assign({}, gate || {}, {
+    ok: true,
+    pending: false,
+    reason: gate?.reason ? `auto59_4pts_sin_bloqueo_${gate.reason}` : "auto59_4pts_sin_cierre_zona",
+    original_ok: !!gate?.ok,
+    original_reason: gate?.reason || "sin_snr_gate",
+    message: gate?.ok
+      ? (gate.message || "AUTO 59 por 4 puntos; precio dentro/cerca del SNR.")
+      : `AUTO 59 por 4 puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
+  });
 }
 
 function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
@@ -7402,7 +7426,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
   try {
     gate = assertSignalSNREntryGateAt57(side, item);
   } catch (err) {
-    const msg = err?.message || (isDynamicLineMode(item.mode) ? "La línea dinámica no habilita la entrada" : "El precio no está dentro de la zona azul/amarilla");
+    const msg = err?.message || (isDynamicLineMode(item.mode) ? "La línea dinámica no habilita la entrada" : "La entrada SNR no está habilitada");
     if (!itemOverride || (modalCurrentItem && modalCurrentItem.id === item.id)) toast(`⛔ ${msg}`, 1500);
     return false;
   }
@@ -10425,8 +10449,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   assertCanTrade();
   assertEntryWindowOpen(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
-  // V7: con SNR, aunque haya 4 puntos, la operación solo se permite
-  // si en el segundo 59 el precio está dentro de la zona SNR o muy cerca.
+  // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 59.
+  // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
+  // En Línea dinámica se mantiene su validación específica.
   const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
   assertC100CanTrade();
 
