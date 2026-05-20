@@ -34,6 +34,7 @@
 // ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
+// ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
 "use strict";
 
@@ -4050,14 +4051,15 @@ function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   let min = low;
   let max = high;
   if (!Number.isFinite(min) || !Number.isFinite(max)) return;
-  if (min === max) {
-    const bump = Math.max(Math.abs(min || 1) * 0.00002, 0.000001);
-    min -= bump;
-    max += bump;
-  }
-  const pad = Math.max((max - min) * 0.16, Math.abs(close || 1) * 0.000005);
-  min -= pad;
-  max += pad;
+
+  // V50: en En vivo el auto-zoom anterior dejaba cualquier movimiento chico muy alto.
+  // Abrimos más la escala vertical para que el recorrido y la vela se vean más parecidos
+  // al Replay/Deriv y no ocupen todo el panel por pocos ticks.
+  const center = (min + max) / 2;
+  const rawRange = Math.max(max - min, Math.abs(close || 1) * 0.000001, 0.000001);
+  const minVisualRange = Math.max(Math.abs(close || 1) * 0.00055, rawRange * 2.7);
+  min = center - minVisualRange / 2;
+  max = center + minVisualRange / 2;
 
   const plotX = 12;
   const plotY = 12;

@@ -1638,8 +1638,8 @@ body.light .settingsModalHeader{
 }
 #liveReplayCanvas{
   width:100%;
-  height:min(58vh, 460px);
-  min-height:330px;
+  height:min(48vh, 420px);
+  min-height:280px;
   display:block;
   border-radius:18px;
   border:1px solid rgba(148,163,184,.16);
@@ -1653,7 +1653,7 @@ body.light .settingsModalHeader{
   .liveReplayHead{display:block;}
   .liveSymbolBar{justify-content:flex-start;margin-top:10px;}
   .liveSymbolBtn{padding:7px 9px;font-size:11px;min-width:40px;}
-  #liveReplayCanvas{height:54vh;min-height:300px;}
+  #liveReplayCanvas{height:44vh;min-height:260px;}
 }
 
 /* =========================
