@@ -1576,3 +1576,82 @@ body.light .settingsModalHeader{
     display:block;
   }
 }
+
+
+/* =========================
+   Pestaña En vivo — estilo Replay de vela
+========================= */
+.liveView{
+  padding-bottom:calc(24px + env(safe-area-inset-bottom));
+}
+.liveReplayCard{
+  width:min(980px, 100%);
+  margin:0 auto;
+  border:1px solid rgba(148,163,184,.18);
+  background:linear-gradient(180deg, rgba(15,23,42,.92), rgba(2,6,23,.88));
+  box-shadow:0 0 0 1px rgba(34,211,238,.08) inset, 0 18px 48px rgba(0,0,0,.34);
+  border-radius:24px;
+  padding:12px;
+  box-sizing:border-box;
+}
+.liveReplayHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+.liveReplayTitle{
+  font-weight:950;
+  font-size:15px;
+  letter-spacing:.25px;
+  color:#e5f7ff;
+}
+.liveReplaySub{
+  margin-top:3px;
+  font-size:12px;
+  font-weight:800;
+  color:rgba(203,213,225,.72);
+  font-variant-numeric:tabular-nums;
+}
+.liveSymbolBar{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:6px;
+}
+.liveSymbolBtn{
+  border:1px solid rgba(148,163,184,.22);
+  background:rgba(15,23,42,.76);
+  color:rgba(226,232,240,.86);
+  border-radius:999px;
+  padding:8px 10px;
+  font-weight:950;
+  font-size:12px;
+  min-width:44px;
+}
+.liveSymbolBtn.active{
+  border-color:rgba(34,211,238,.78);
+  background:linear-gradient(180deg, rgba(34,211,238,.24), rgba(59,130,246,.15));
+  color:#ecfeff;
+  box-shadow:0 0 0 1px rgba(34,211,238,.16) inset, 0 0 18px rgba(34,211,238,.20);
+}
+#liveReplayCanvas{
+  width:100%;
+  height:min(58vh, 460px);
+  min-height:330px;
+  display:block;
+  border-radius:18px;
+  border:1px solid rgba(148,163,184,.16);
+  background:rgba(2,6,23,.96);
+}
+.liveReplayInfo{
+  margin-top:10px;
+}
+@media (max-width: 520px){
+  .liveReplayCard{padding:10px;border-radius:20px;}
+  .liveReplayHead{display:block;}
+  .liveSymbolBar{justify-content:flex-start;margin-top:10px;}
+  .liveSymbolBtn{padding:7px 9px;font-size:11px;min-width:40px;}
+  #liveReplayCanvas{height:54vh;min-height:300px;}
+}

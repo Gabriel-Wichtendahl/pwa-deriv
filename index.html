@@ -33,6 +33,7 @@
     <div class="tabsBar">
       <div class="tabs" role="tablist" aria-label="Secciones">
         <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true" aria-controls="signalsView">Señales</button>
+        <button class="tab" type="button" data-view="live" role="tab" aria-selected="false" aria-controls="liveView">En vivo</button>
         <button class="tab" type="button" data-view="trades" role="tab" aria-selected="false" aria-controls="tradesView">Trades</button>
         <button class="tab" type="button" data-view="practice" role="tab" aria-selected="false" aria-controls="practiceView">Práctica</button>
       </div>
@@ -46,6 +47,20 @@
   <main class="main">
     <section id="signalsView" role="tabpanel">
       <div id="signals" class="signals"></div>
+    </section>
+
+    <section id="liveView" class="liveView hidden" role="tabpanel">
+      <div class="liveReplayCard">
+        <div class="liveReplayHead">
+          <div>
+            <div class="liveReplayTitle">📡 Gráfico en vivo</div>
+            <div id="liveReplaySub" class="liveReplaySub">Vela actual · estilo replay</div>
+          </div>
+          <div id="liveSymbolBar" class="liveSymbolBar" aria-label="Elegir par en vivo"></div>
+        </div>
+        <canvas id="liveReplayCanvas"></canvas>
+        <div id="liveReplayInfo" class="modalReplayInfo liveReplayInfo">Esperando ticks…</div>
+      </div>
     </section>
 
     <section id="tradesView" class="hidden" role="tabpanel">

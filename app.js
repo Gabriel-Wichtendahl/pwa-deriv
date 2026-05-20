@@ -32,6 +32,7 @@
 // ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
 // ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
+// ✅ V47: nueva pestaña En vivo con vela actual estilo Replay de vela
 
 "use strict";
 
@@ -69,6 +70,8 @@ const HISTORY_TIMEOUT_MS = 7000;
 
 const KEEP_CLOSED_AWAY_SIGNALS_KEY = "keepClosedAwaySignals_v1";
 let keepClosedAwaySignals = false;
+
+const LIVE_REPLAY_SYMBOL_KEY = "liveReplaySymbol_v1";
 
 /* =========================
    Trades Journal (estudio)
@@ -1516,6 +1519,11 @@ const modeBtn = $("modeBtn");
 
 // Tabs existentes (del HTML)
 const signalsView = $("signalsView");
+const liveView = $("liveView");
+const liveReplayCanvas = $("liveReplayCanvas");
+const liveReplayInfoEl = $("liveReplayInfo");
+const liveReplaySubEl = $("liveReplaySub");
+const liveSymbolBarEl = $("liveSymbolBar");
 const feedbackView = $("feedbackView"); // compat
 
 // Config modal existente (engrane y modal)
@@ -1788,6 +1796,11 @@ let modalLastDrawAt = 0;
 let modalChartView = "line"; // "line" | "candles1m"
 let modalReplayState = { open: false, playing: false, speed: 1, currentMs: 0, lastFrameTs: 0, raf: null };
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
+
+let liveReplaySymbol = loadLiveReplaySymbol();
+let liveReplayRaf = null;
+let liveReplayLastDrawAt = 0;
+const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 
 // V32: caché específica para la vista Velas 1m del modal.
 // La vista debe usar OHLC reales de Deriv y no velas inventadas/rellenadas.
@@ -3556,6 +3569,10 @@ function updateCounter(viewName = null) {
     counterEl.textContent = `Práctica: ${practiceSessionStats.total}`;
     return;
   }
+  if (activeView === "live") {
+    counterEl.textContent = `En vivo: ${liveReplaySymbol || SYMBOLS[0] || "—"}`;
+    return;
+  }
   counterEl.textContent = `Señales: ${history.length}`;
 }
 
@@ -3899,6 +3916,134 @@ function ensureViewActionButton(viewName, opts) {
   return btn;
 }
 
+
+/* =========================
+   Pestaña En vivo — vela actual estilo Replay
+========================= */
+function loadLiveReplaySymbol() {
+  try {
+    const saved = String(localStorage.getItem(LIVE_REPLAY_SYMBOL_KEY) || "");
+    return SYMBOLS.includes(saved) ? saved : (SYMBOLS[0] || "R_10");
+  } catch {
+    return SYMBOLS[0] || "R_10";
+  }
+}
+function saveLiveReplaySymbol(sym) {
+  liveReplaySymbol = SYMBOLS.includes(String(sym || "")) ? String(sym) : (SYMBOLS[0] || "R_10");
+  try { localStorage.setItem(LIVE_REPLAY_SYMBOL_KEY, liveReplaySymbol); } catch {}
+  paintLiveSymbolButtons();
+  updateCounter("live");
+  requestLiveReplayDraw(true);
+}
+function getLiveReplayMinute() {
+  return currentServerMinute();
+}
+function getLiveReplayMsInMinute() {
+  try {
+    const now = serverNowMs();
+    const start = Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs
+      ? currentMinuteStartMs
+      : Math.floor(now / 60000) * 60000;
+    return Math.max(0, Math.min(60000, ((now - start) % 60000 + 60000) % 60000));
+  } catch {
+    return 0;
+  }
+}
+function getLiveReplayTicks(sym = liveReplaySymbol) {
+  const minute = getLiveReplayMinute();
+  const arr = minuteData?.[minute]?.[sym];
+  return (Array.isArray(arr) ? arr : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+}
+function buildLiveReplayItem(sym = liveReplaySymbol) {
+  const minute = getLiveReplayMinute();
+  return {
+    id: `LIVE::${sym}::${minute}`,
+    symbol: sym,
+    minute,
+    time: "Vela actual",
+    mode: "EN VIVO",
+    direction: "",
+    ticks: getLiveReplayTicks(sym),
+  };
+}
+function paintLiveSymbolButtons() {
+  if (!liveSymbolBarEl) return;
+  if (!liveSymbolBarEl.dataset.ready) {
+    liveSymbolBarEl.innerHTML = SYMBOLS.map((sym) => `<button class="liveSymbolBtn" type="button" data-symbol="${escapeHtml(sym)}">${escapeHtml(sym.replace("R_", "R"))}</button>`).join("");
+    liveSymbolBarEl.querySelectorAll(".liveSymbolBtn").forEach((btn) => {
+      btn.onclick = () => saveLiveReplaySymbol(btn.dataset.symbol || SYMBOLS[0]);
+    });
+    liveSymbolBarEl.dataset.ready = "1";
+  }
+  liveSymbolBarEl.querySelectorAll(".liveSymbolBtn").forEach((btn) => {
+    const active = btn.dataset.symbol === liveReplaySymbol;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+function drawLiveReplayNow(force = false) {
+  if (!liveView || liveView.classList.contains("hidden")) return;
+  if (!liveReplayCanvas) return;
+  const now = Date.now();
+  if (!force && now - liveReplayLastDrawAt < LIVE_REPLAY_DRAW_MIN_INTERVAL_MS) return;
+  liveReplayLastDrawAt = now;
+
+  paintLiveSymbolButtons();
+  const item = buildLiveReplayItem(liveReplaySymbol);
+  const ms = getLiveReplayMsInMinute();
+  const ticks = item.ticks || [];
+
+  if (liveReplaySubEl) {
+    const sec = Math.floor(ms / 1000);
+    const last = ticks.length ? Number(ticks[ticks.length - 1].quote) : Number(lastQuoteBySymbol?.[liveReplaySymbol]);
+    liveReplaySubEl.textContent = `${liveReplaySymbol} · vela actual · ${sec}s/60s${Number.isFinite(last) ? " · " + last.toFixed(6) : ""}`;
+  }
+
+  if (ticks.length < 2) {
+    const ctx = liveReplayCanvas.getContext("2d");
+    const cssW = liveReplayCanvas.clientWidth || 1;
+    const cssH = liveReplayCanvas.clientHeight || 1;
+    const dpr = window.devicePixelRatio || 1;
+    liveReplayCanvas.width = Math.floor(cssW * dpr);
+    liveReplayCanvas.height = Math.floor(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.fillStyle = "rgba(2,6,23,0.96)";
+    ctx.fillRect(0, 0, cssW, cssH);
+    drawMiniCandlesLoading(ctx, cssW, cssH, "Esperando ticks en vivo…");
+    if (liveReplayInfoEl) liveReplayInfoEl.textContent = `${liveReplaySymbol} · esperando ticks de la vela actual`;
+    return;
+  }
+
+  // Usa el mismo motor visual que Replay de vela, pero con la vela viva y el tiempo actual.
+  drawModalReplayCanvas(liveReplayCanvas, item, ms, liveReplayInfoEl);
+}
+function requestLiveReplayDraw(force = false) {
+  if ((localStorage.getItem("activeView") || "signals") !== "live") return;
+  drawLiveReplayNow(force);
+}
+function liveReplayLoop() {
+  if ((localStorage.getItem("activeView") || "signals") !== "live") {
+    stopLiveReplayLoop();
+    return;
+  }
+  drawLiveReplayNow(false);
+  liveReplayRaf = requestAnimationFrame(liveReplayLoop);
+}
+function startLiveReplayLoop() {
+  stopLiveReplayLoop();
+  paintLiveSymbolButtons();
+  drawLiveReplayNow(true);
+  liveReplayRaf = requestAnimationFrame(liveReplayLoop);
+}
+function stopLiveReplayLoop() {
+  if (liveReplayRaf) cancelAnimationFrame(liveReplayRaf);
+  liveReplayRaf = null;
+}
+
 function updatePerViewClearButtonsVisibility(activeView) {
   const wSignals = document.getElementById("clearSignalsInlineBtnWrap");
   const wTrades = document.getElementById("clearTradesInlineBtnWrap");
@@ -3931,12 +4076,14 @@ function ensureInlineClearButtons() {
 
 function setActiveView(name) {
   const isSignals = name === "signals";
+  const isLive = name === "live";
   const isTrades = name === "trades";
   const isPractice = name === "practice";
 
   const tv = ensureTradesView();
 
   if (signalsView) signalsView.classList.toggle("hidden", !isSignals);
+  if (liveView) liveView.classList.toggle("hidden", !isLive);
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (practiceView) practiceView.classList.toggle("hidden", !isPractice);
 
@@ -3950,6 +4097,8 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isPractice) ensurePracticeReady();
+  if (isLive) startLiveReplayLoop();
+  else stopLiveReplayLoop();
   updateCounter(name);
   updatePerViewClearButtonsVisibility(name);
   ensureLiveAnalysisPauseButton();
@@ -3964,7 +4113,7 @@ function initTabs() {
   qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 
   const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
+  const initial = ["signals", "live", "trades", "practice"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 }
 
@@ -11086,6 +11235,10 @@ function onTick(tick) {
     requestModalDraw(false);
   }
 
+  if ((localStorage.getItem("activeView") || "signals") === "live" && symbol === liveReplaySymbol) {
+    requestLiveReplayDraw(false);
+  }
+
   if (history && history.length) {
     const tail = history.slice(-12);
     for (const it of tail) updateRowChartBtn(it);
@@ -15870,6 +16023,7 @@ updateDisciplineLockUI(false);
 seedTradesJournalFromHistory();
 
 initTabs();
+paintLiveSymbolButtons();
 ensureInlineClearButtons();
 ensureLiveAnalysisPauseButton();
 applyLiveAnalysisPauseUI();
