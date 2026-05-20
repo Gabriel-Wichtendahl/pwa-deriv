@@ -33,6 +33,7 @@
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
 // ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
+// ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 
 "use strict";
 
@@ -4003,6 +4004,184 @@ function paintLiveSymbolButtons() {
     btn.setAttribute("aria-pressed", active ? "true" : "false");
   });
 }
+
+function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
+  if (!canvas || !item) return;
+
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(2,6,23,0.96)";
+  ctx.fillRect(0, 0, w, h);
+
+  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
+  ticks = ticks
+    .map((p, idx) => ({
+      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
+      quote: Number(p?.quote),
+      idx,
+    }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
+
+  if (ticks.length < 2) {
+    drawMiniCandlesLoading(ctx, w, h, "Esperando ticks en vivo…");
+    if (infoEl) infoEl.textContent = `${item.symbol || "—"} · esperando ticks suficientes`;
+    return;
+  }
+
+  // En vivo no debe mostrar solo los ticks <= replayMs si por un desfase de reloj
+  // replayMs quedó atrás. Los ticks presentes ya pertenecen a la vela actual.
+  const seen = ticks;
+  const open = Number(seen[0].quote);
+  const close = Number(seen[seen.length - 1].quote);
+  const quotes = seen.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+
+  let min = low;
+  let max = high;
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  if (min === max) {
+    const bump = Math.max(Math.abs(min || 1) * 0.00002, 0.000001);
+    min -= bump;
+    max += bump;
+  }
+  const pad = Math.max((max - min) * 0.16, Math.abs(close || 1) * 0.000005);
+  min -= pad;
+  max += pad;
+
+  const plotX = 12;
+  const plotY = 12;
+  const plotW = Math.max(80, w * 0.68 - 20);
+  const plotH = Math.max(100, h - 28);
+  const candleX = Math.max(plotX + plotW + 18, w * 0.82);
+  const candleTop = plotY + 10;
+  const yOf = (q) => plotY + (max - Number(q)) / Math.max(max - min, 1e-12) * plotH;
+
+  const minTickMs = Math.min(...seen.map((p) => p.ms));
+  const maxTickMs = Math.max(...seen.map((p) => p.ms));
+  const usefulMs = Number.isFinite(minTickMs) && Number.isFinite(maxTickMs) && (maxTickMs - minTickMs) >= 1200;
+  const displayEndMs = Math.max(1000, Math.min(60000, Math.max(Number(replayMs || 0), maxTickMs)));
+  const xOfMs = (m) => plotX + (Number(m) / 60000) * plotW;
+  const xOfPoint = (p, i) => {
+    if (usefulMs) return xOfMs(p.ms);
+    const frac = seen.length <= 1 ? 0 : i / (seen.length - 1);
+    return plotX + frac * Math.max(18, (displayEndMs / 60000) * plotW);
+  };
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(148,163,184,.16)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = plotY + (plotH * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(plotX, y);
+    ctx.lineTo(plotX + plotW, y);
+    ctx.stroke();
+  }
+  for (const mark of [0, 15000, 30000, 45000, 60000]) {
+    const x = xOfMs(mark);
+    ctx.setLineDash(mark === 60000 ? [] : [4, 6]);
+    ctx.beginPath();
+    ctx.moveTo(x, plotY);
+    ctx.lineTo(x, plotY + plotH);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Recorrido interno del precio.
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.88)";
+  ctx.lineWidth = 2.3;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  seen.forEach((p, i) => {
+    const x = xOfPoint(p, i);
+    const y = yOf(p.quote);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Puntos finos del recorrido. En vivo puede tener muchos ticks, por eso salteamos algunos.
+  ctx.fillStyle = "rgba(255,255,255,.75)";
+  const step = Math.max(1, Math.floor(seen.length / 90));
+  for (let i = 0; i < seen.length; i += step) {
+    const p = seen[i];
+    ctx.beginPath();
+    ctx.arc(xOfPoint(p, i), yOf(p.quote), 1.15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const last = seen[seen.length - 1];
+  const cx = xOfPoint(last, seen.length - 1);
+  const cy = yOf(last.quote);
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  ctx.strokeStyle = "rgba(15,23,42,.90)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 5.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  // Vela grande viva.
+  const yH = yOf(high);
+  const yL = yOf(low);
+  const yO = yOf(open);
+  const yC = yOf(close);
+  const up = close >= open;
+  const col = up ? "rgba(34,197,94,.96)" : "rgba(248,113,113,.96)";
+  const bodyTop = Math.min(yO, yC);
+  const bodyH = Math.max(3, Math.abs(yC - yO));
+  const bodyW = Math.min(34, Math.max(20, w * 0.085));
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath();
+  ctx.moveTo(candleX, yH);
+  ctx.lineTo(candleX, yL);
+  ctx.stroke();
+  ctx.fillStyle = col;
+  drawRoundedRect(ctx, candleX - bodyW / 2, bodyTop, bodyW, bodyH, 5);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.30)";
+  ctx.lineWidth = 1;
+  drawRoundedRect(ctx, candleX - bodyW / 2 - 3, bodyTop - 3, bodyW + 6, bodyH + 6, 6);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(226,232,240,.72)";
+  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("VELA", candleX, Math.max(10, candleTop - 2));
+  ctx.restore();
+
+  const sec = Math.max(0, Math.min(60, Math.floor(displayEndMs / 1000)));
+  ctx.save();
+  ctx.fillStyle = "rgba(226,232,240,.74)";
+  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("0s", xOfMs(0), h - 5);
+  ctx.textAlign = "center";
+  ctx.fillText(`${sec}s`, xOfMs(displayEndMs), h - 5);
+  ctx.textAlign = "right";
+  ctx.fillText("60s", xOfMs(60000), h - 5);
+  ctx.restore();
+
+  if (infoEl) {
+    infoEl.textContent = `${sec}.0s · ${seen.length} ticks · precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
+  }
+}
+
 function drawLiveReplayNow(force = false) {
   if (!liveView || liveView.classList.contains("hidden")) return;
   if (!liveReplayCanvas) return;
@@ -4037,8 +4216,10 @@ function drawLiveReplayNow(force = false) {
     return;
   }
 
-  // Usa el mismo motor visual que Replay de vela, pero con la vela viva y el tiempo actual.
-  drawModalReplayCanvas(liveReplayCanvas, item, ms, liveReplayInfoEl);
+  // En vivo usa un dibujador propio: no recorta por replayMs como el replay histórico,
+  // porque los ticks recibidos YA son la vela actual. Esto evita que se vea solo el punto/barra
+  // cuando el reloj y los ms de ticks quedan desfasados.
+  drawLiveReplayCanvas(liveReplayCanvas, item, ms, liveReplayInfoEl);
 }
 function setLiveTradeButtonsBusy(busy = false) {
   [liveBuyCallBtn, liveBuyPutBtn].forEach((btn) => {
