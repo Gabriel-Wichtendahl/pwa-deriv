@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-base-v50-live-tab-less-vertical-zoom";
+const CACHE = "deriv-assets-base-v51-fix-pausa-en-vivo-senales";
 
 const ASSETS = [
   "./",

@@ -33,6 +33,7 @@
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
 // ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
+// ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
@@ -705,8 +706,8 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V46_20260520";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V46_20260520";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V51_20260522";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V51_20260522";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -3469,10 +3470,18 @@ function saveBool(key, value) {
 }
 
 const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_v1";
+const LIVE_ANALYSIS_PAUSE_MIGRATION_KEY = "liveAnalysisPauseFix_v51";
 let liveAnalysisPaused = false;
 
 function loadLiveAnalysisPaused() {
   try {
+    // V51: en versiones anteriores, tocar el botón ▶️ mientras estabas en la pestaña En vivo
+    // podía dejar una pausa manual global guardada. Eso hacía que luego salieran muy pocas
+    // señales y el celular casi no trabajara. Al instalar esta versión se limpia UNA vez.
+    if (localStorage.getItem(LIVE_ANALYSIS_PAUSE_MIGRATION_KEY) !== "1") {
+      localStorage.setItem(LIVE_ANALYSIS_PAUSED_KEY, "0");
+      localStorage.setItem(LIVE_ANALYSIS_PAUSE_MIGRATION_KEY, "1");
+    }
     liveAnalysisPaused = localStorage.getItem(LIVE_ANALYSIS_PAUSED_KEY) === "1";
   } catch {
     liveAnalysisPaused = false;
@@ -3496,18 +3505,28 @@ function areSignalsPaused(viewName = null) {
   const view = viewName || getActiveViewName();
   return !!liveAnalysisPaused || view === "live";
 }
+function getSignalsPauseReason(viewName = null) {
+  const view = viewName || getActiveViewName();
+  if (view === "live") return "live_tab";
+  if (liveAnalysisPaused) return "manual";
+  return "";
+}
 function applyLiveAnalysisPauseUI() {
   const btn = document.getElementById("liveAnalysisPauseBtn");
   if (!btn) return;
+  const reason = getSignalsPauseReason();
   const paused = areSignalsPaused();
+  const autoLive = reason === "live_tab";
   // Botón compacto: solo icono para no ocupar espacio en la fila de pestañas.
-  btn.textContent = paused ? "▶️" : "⏸️";
-  btn.dataset.state = paused ? "paused" : "live";
-  btn.setAttribute("aria-label", paused ? "Reanudar análisis en vivo" : "Pausar análisis en vivo");
+  btn.textContent = autoLive ? "👁️" : (paused ? "▶️" : "⏸️");
+  btn.dataset.state = autoLive ? "live_auto_pause" : (paused ? "paused" : "live");
+  btn.setAttribute("aria-label", autoLive ? "En vivo pausa señales automáticamente" : (paused ? "Reanudar análisis en vivo" : "Pausar análisis en vivo"));
   btn.setAttribute("aria-pressed", paused ? "true" : "false");
-  btn.title = paused
-    ? "PAUSADO: tocar para reanudar análisis en vivo."
-    : "LIVE: tocar para pausar nuevas señales.";
+  btn.title = autoLive
+    ? "La pestaña En vivo pausa señales automáticamente. Volvé a Señales para reanudar análisis."
+    : paused
+      ? "PAUSADO manualmente: tocar para reanudar análisis en vivo."
+      : "LIVE: tocar para pausar nuevas señales.";
   btn.style.borderColor = paused ? "rgba(248,113,113,.72)" : "rgba(34,211,238,.46)";
   btn.style.background = paused
     ? "linear-gradient(180deg, rgba(127,29,29,.42), rgba(127,29,29,.20))"
@@ -3516,6 +3535,13 @@ function applyLiveAnalysisPauseUI() {
   btn.style.boxShadow = paused ? "0 0 14px rgba(248,113,113,.20)" : "0 0 12px rgba(34,211,238,.12)";
 }
 function toggleLiveAnalysisPaused() {
+  // V51: si estás en En vivo, esa pestaña ya pausa señales automáticamente.
+  // No permitimos que este botón deje guardada una pausa manual global por error.
+  if (getActiveViewName() === "live") {
+    applyLiveAnalysisPauseUI();
+    toast("👁️ En vivo pausa señales solo mientras estás en esa pestaña. Volvé a Señales para analizar.", 2200);
+    return;
+  }
   liveAnalysisPaused = !liveAnalysisPaused;
   saveLiveAnalysisPaused();
   applyLiveAnalysisPauseUI();
@@ -4300,7 +4326,7 @@ function initLiveTradeButtons() {
     liveBuyPutBtn.onclick = () => liveManualTrade("PUT");
     liveBuyPutBtn.dataset.ready = "1";
   }
-  setLiveTradeStatus("Modo en vivo: señales pausadas. Botones COMPRA/VENTA operan el par seleccionado.");
+  setLiveTradeStatus("Modo en vivo: señales pausadas solo mientras estás en esta pestaña. Botones COMPRA/VENTA operan el par seleccionado.");
 }
 
 function requestLiveReplayDraw(force = false) {
@@ -4382,7 +4408,7 @@ function setActiveView(name) {
   if (isPractice) ensurePracticeReady();
   if (isLive) {
     startLiveReplayLoop();
-    setLiveTradeStatus("Modo en vivo activo: señales pausadas. Podés mirar la vela y operar manualmente el par seleccionado.");
+    setLiveTradeStatus("Modo en vivo activo: señales pausadas solo en esta pestaña. Volvé a Señales para reanudar análisis.");
   } else {
     stopLiveReplayLoop();
   }
