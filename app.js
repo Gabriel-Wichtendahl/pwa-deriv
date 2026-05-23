@@ -35,6 +35,7 @@
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
 // ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
 // ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
+// ✅ V54: En vivo más compacto, gráfico más bajo, info visible y controles de puntos/operar más claros
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
@@ -4352,7 +4353,7 @@ function buildLiveManualTradeItem(side = "CALL") {
     symbol: sym,
     direction: safeSide,
     mode: "EN VIVO",
-    mode_version: "V53_LIVE_MODAL_POINTS",
+    mode_version: "V54_LIVE_COMPACT_MODAL_POINTS",
     ticks: ticks.slice(),
     minuteComplete: false,
     signalConfirmations: (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).map((ev) => ({ ...ev })),
@@ -4428,7 +4429,7 @@ function initLiveTradeButtons() {
     liveBuyPutBtn.dataset.ready = "1";
   }
   updateLiveConfirmationUI();
-  setLiveTradeStatus("Modo en vivo: señales pausadas solo en esta pestaña. Sumá 4 puntos netos y operá manualmente.");
+  setLiveTradeStatus("🟡 En vivo activo · señales pausadas. Sumá 4 puntos netos y operá manualmente.");
 }
 
 function requestLiveReplayDraw(force = false) {
