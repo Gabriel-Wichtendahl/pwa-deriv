@@ -50,21 +50,40 @@
     </section>
 
     <section id="liveView" class="liveView hidden" role="tabpanel">
-      <div class="liveReplayCard">
-        <div class="liveReplayHead">
-          <div>
-            <div class="liveReplayTitle">📡 Gráfico en vivo</div>
-            <div id="liveReplaySub" class="liveReplaySub">Vela actual · estilo replay</div>
+      <div class="modalCard chartModalCard liveModalCard">
+        <div class="modalHeader liveModalHeader">
+          <div class="modalHeaderText">
+            <div class="modalTitle">📡 Gráfico en vivo</div>
+            <div id="liveReplaySub" class="modalSub liveReplaySub">Vela actual · señales pausadas</div>
           </div>
-          <div id="liveSymbolBar" class="liveSymbolBar" aria-label="Elegir par en vivo"></div>
         </div>
-        <canvas id="liveReplayCanvas"></canvas>
-        <div class="liveTradeBar" aria-label="Operar desde gráfico en vivo">
-          <button id="liveBuyCallBtn" class="liveTradeBtn liveTradeCall" type="button">🟢 COMPRA</button>
-          <button id="liveBuyPutBtn" class="liveTradeBtn liveTradePut" type="button">🔴 VENTA</button>
+
+        <div id="liveSymbolBar" class="liveSymbolBar liveSymbolBarModal" aria-label="Elegir par en vivo"></div>
+
+        <div class="minuteCanvasWrap liveMinuteCanvasWrap">
+          <canvas id="liveReplayCanvas"></canvas>
         </div>
-        <div id="liveTradeStatus" class="liveTradeStatus">Modo en vivo: las señales quedan pausadas mientras estás en esta pestaña.</div>
-        <div id="liveReplayInfo" class="modalReplayInfo liveReplayInfo">Esperando ticks…</div>
+
+        <div class="modalFooter liveModalFooter">
+          <div id="liveConfirmPanel" class="liveConfirmPanel" aria-label="Puntos para operar en vivo">
+            <div class="liveConfirmTop">
+              <div id="liveConfirmCount" class="liveConfirmCount">COMPRA 0/4 · VENTA 0/4</div>
+              <div id="liveConfirmHint" class="liveConfirmHint">Modo en vivo · mínimo 4 puntos netos</div>
+            </div>
+            <div class="liveConfirmRow">
+              <button id="liveConfirmBuyBtn" class="btn liveConfirmBtn liveConfirmBuy" type="button">🟢 + COMPRA 0/4</button>
+              <button id="liveConfirmSellBtn" class="btn liveConfirmBtn liveConfirmSell" type="button">🔴 + VENTA 0/4</button>
+              <button id="liveConfirmUndoBtn" class="btn btnGhost liveConfirmUndo" type="button" title="Quitar último punto">↩️</button>
+            </div>
+          </div>
+
+          <div class="tradeRow liveTradeBar" aria-label="Operar desde gráfico en vivo">
+            <button id="liveBuyCallBtn" class="btn liveTradeBtn liveTradeCall" type="button">🟢 COMPRAR</button>
+            <button id="liveBuyPutBtn" class="btn liveTradeBtn liveTradePut" type="button">🔴 VENDER</button>
+          </div>
+          <div id="liveTradeStatus" class="liveTradeStatus">Modo en vivo: sumá 4 puntos netos y operá manualmente el par seleccionado.</div>
+          <div id="liveReplayInfo" class="modalReplayInfo liveReplayInfo">Esperando ticks…</div>
+        </div>
       </div>
     </section>
 

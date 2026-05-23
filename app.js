@@ -34,6 +34,7 @@
 // ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
 // ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
+// ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
@@ -1530,6 +1531,11 @@ const liveSymbolBarEl = $("liveSymbolBar");
 const liveBuyCallBtn = $("liveBuyCallBtn");
 const liveBuyPutBtn = $("liveBuyPutBtn");
 const liveTradeStatusEl = $("liveTradeStatus");
+const liveConfirmCountEl = $("liveConfirmCount");
+const liveConfirmHintEl = $("liveConfirmHint");
+const liveConfirmBuyBtn = $("liveConfirmBuyBtn");
+const liveConfirmSellBtn = $("liveConfirmSellBtn");
+const liveConfirmUndoBtn = $("liveConfirmUndoBtn");
 const feedbackView = $("feedbackView"); // compat
 
 // Config modal existente (engrane y modal)
@@ -1806,6 +1812,8 @@ const MODAL_DRAW_MIN_INTERVAL_MS = 120;
 let liveReplaySymbol = loadLiveReplaySymbol();
 let liveReplayRaf = null;
 let liveReplayLastDrawAt = 0;
+let liveSignalConfirmations = [];
+let liveSignalMinuteKey = "";
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 
 // V32: caché específica para la vista Velas 1m del modal.
@@ -3970,6 +3978,7 @@ function loadLiveReplaySymbol() {
 function saveLiveReplaySymbol(sym) {
   liveReplaySymbol = SYMBOLS.includes(String(sym || "")) ? String(sym) : (SYMBOLS[0] || "R_10");
   try { localStorage.setItem(LIVE_REPLAY_SYMBOL_KEY, liveReplaySymbol); } catch {}
+  resetLiveSignalConfirmations("symbol_change");
   paintLiveSymbolButtons();
   updateCounter("live");
   requestLiveReplayDraw(true);
@@ -4032,6 +4041,106 @@ function paintLiveSymbolButtons() {
   });
 }
 
+
+function getLiveSignalKey(sym = liveReplaySymbol) {
+  return `${sym || "—"}::${getLiveReplayMinute(sym) || 0}`;
+}
+function resetLiveSignalConfirmations(reason = "") {
+  liveSignalConfirmations = [];
+  liveSignalMinuteKey = getLiveSignalKey(liveReplaySymbol);
+  updateLiveConfirmationUI(reason);
+}
+function ensureLiveSignalConfirmationsForCurrentMinute() {
+  const key = getLiveSignalKey(liveReplaySymbol);
+  if (liveSignalMinuteKey !== key) {
+    liveSignalConfirmations = [];
+    liveSignalMinuteKey = key;
+  }
+}
+function getLiveConfirmationScore() {
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  return (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).reduce((acc, ev) => {
+    const side = normalizeSignalConfirmationSide(ev?.side);
+    if (side === "CALL") return acc + 1;
+    if (side === "PUT") return acc - 1;
+    return acc;
+  }, 0);
+}
+function getLiveNetBuyPoints() { return Math.max(0, getLiveConfirmationScore()); }
+function getLiveNetSellPoints() { return Math.max(0, -getLiveConfirmationScore()); }
+function getLiveEnabledTradeSide() {
+  const score = getLiveConfirmationScore();
+  if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
+  if (score <= -SIGNAL_CONFIRM_MIN) return "PUT";
+  return "";
+}
+function getLiveConfirmationStatusText() {
+  return `COMPRA ${getLiveNetBuyPoints()}/${SIGNAL_CONFIRM_MIN} · VENTA ${getLiveNetSellPoints()}/${SIGNAL_CONFIRM_MIN}`;
+}
+function getLiveMissingConfirmations(side) {
+  const wanted = normalizeSignalConfirmationSide(side);
+  if (wanted === "CALL") return Math.max(0, SIGNAL_CONFIRM_MIN - getLiveNetBuyPoints());
+  if (wanted === "PUT") return Math.max(0, SIGNAL_CONFIRM_MIN - getLiveNetSellPoints());
+  return SIGNAL_CONFIRM_MIN;
+}
+function updateLiveConfirmationUI(reason = "") {
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  const enabled = getLiveEnabledTradeSide();
+  const buyPts = getLiveNetBuyPoints();
+  const sellPts = getLiveNetSellPoints();
+  const totalEvents = Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations.length : 0;
+  if (liveConfirmCountEl) {
+    if (enabled === "CALL" || enabled === "PUT") {
+      const pts = enabled === "CALL" ? buyPts : sellPts;
+      liveConfirmCountEl.innerHTML = `${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada <span class="signalConfirmPts">${pts}/${SIGNAL_CONFIRM_MIN} pts</span>`;
+    } else {
+      liveConfirmCountEl.textContent = getLiveConfirmationStatusText();
+    }
+    liveConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
+    liveConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.46)" : enabled === "PUT" ? "rgba(239,68,68,.46)" : "rgba(251,191,36,.24)";
+    liveConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.16)" : enabled === "PUT" ? "rgba(127,29,29,.19)" : "rgba(0,0,0,.13)";
+  }
+  if (liveConfirmHintEl) {
+    liveConfirmHintEl.textContent = enabled
+      ? `Listo para ${enabled === "CALL" ? "COMPRAR" : "VENDER"} · modo manual`
+      : `Modo en vivo · mínimo ${SIGNAL_CONFIRM_MIN} puntos netos`;
+    liveConfirmHintEl.style.color = enabled === "CALL" ? "#bbf7d0" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.68)";
+  }
+  if (liveConfirmBuyBtn) liveConfirmBuyBtn.textContent = `🟢 + COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
+  if (liveConfirmSellBtn) liveConfirmSellBtn.textContent = `🔴 + VENTA ${sellPts}/${SIGNAL_CONFIRM_MIN}`;
+  if (liveConfirmUndoBtn) {
+    liveConfirmUndoBtn.disabled = totalEvents <= 0;
+    liveConfirmUndoBtn.style.opacity = liveConfirmUndoBtn.disabled ? ".42" : "1";
+  }
+  if (liveBuyCallBtn) {
+    const enabledCall = enabled === "CALL";
+    liveBuyCallBtn.disabled = !enabledCall;
+    liveBuyCallBtn.style.opacity = enabledCall ? "1" : ".45";
+    liveBuyCallBtn.title = enabledCall ? "COMPRAR habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("CALL")} puntos netos para COMPRA`;
+  }
+  if (liveBuyPutBtn) {
+    const enabledPut = enabled === "PUT";
+    liveBuyPutBtn.disabled = !enabledPut;
+    liveBuyPutBtn.style.opacity = enabledPut ? "1" : ".45";
+    liveBuyPutBtn.title = enabledPut ? "VENDER habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
+  }
+}
+function addLiveSignalConfirmation(side = "CALL") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return;
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  liveSignalConfirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(liveReplaySymbol), at: Date.now(), source: "live_tab_points" });
+  updateLiveConfirmationUI();
+  const enabled = getLiveEnabledTradeSide();
+  if (enabled === "CALL" || enabled === "PUT") toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
+  else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
+}
+function removeLiveSignalConfirmation() {
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  liveSignalConfirmations.pop();
+  updateLiveConfirmationUI();
+}
+
 function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   if (!canvas || !item) return;
 
@@ -4046,8 +4155,10 @@ function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   const w = cssW;
   const h = cssH;
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "rgba(2,6,23,0.96)";
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
   ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
 
   let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
   ticks = ticks
@@ -4065,148 +4176,110 @@ function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
     return;
   }
 
-  // En vivo no debe mostrar solo los ticks <= replayMs si por un desfase de reloj
-  // replayMs quedó atrás. Los ticks presentes ya pertenecen a la vela actual.
-  const seen = ticks;
-  const open = Number(seen[0].quote);
-  const close = Number(seen[seen.length - 1].quote);
-  const quotes = seen.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const pts = ticks;
+  const quotes = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const open = Number(pts[0].quote);
+  const close = Number(pts[pts.length - 1].quote);
   const high = Math.max(...quotes);
   const low = Math.min(...quotes);
 
   let min = low;
   let max = high;
   if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  let range = max - min;
+  if (range < 1e-9) range = Math.max(Math.abs(close || 1) * 0.000001, 1e-9);
+  const pad = Math.max(range * 0.18, Math.abs(close || 1) * 0.00010);
+  min -= pad;
+  max += pad;
 
-  // V50: en En vivo el auto-zoom anterior dejaba cualquier movimiento chico muy alto.
-  // Abrimos más la escala vertical para que el recorrido y la vela se vean más parecidos
-  // al Replay/Deriv y no ocupen todo el panel por pocos ticks.
-  const center = (min + max) / 2;
-  const rawRange = Math.max(max - min, Math.abs(close || 1) * 0.000001, 0.000001);
-  const minVisualRange = Math.max(Math.abs(close || 1) * 0.00055, rawRange * 2.7);
-  min = center - minVisualRange / 2;
-  max = center + minVisualRange / 2;
+  const xOf = (ms) => (Number(ms) / 60000) * (w - 20) + 10;
+  const yOf = (q) => (1 - (Number(q) - min) / Math.max(max - min, 1e-12)) * (h - 30) + 10;
+  const msNow = Math.max(0, Math.min(60000, Math.max(Number(replayMs || 0), pts[pts.length - 1].ms || 0)));
 
-  const plotX = 12;
-  const plotY = 12;
-  const plotW = Math.max(80, w * 0.68 - 20);
-  const plotH = Math.max(100, h - 28);
-  const candleX = Math.max(plotX + plotW + 18, w * 0.82);
-  const candleTop = plotY + 10;
-  const yOf = (q) => plotY + (max - Number(q)) / Math.max(max - min, 1e-12) * plotH;
+  const segments = [
+    { start: 0, end: 15000 },
+    { start: 15000, end: 30000 },
+    { start: 30000, end: 45000 },
+    { start: 45000, end: 60000 },
+  ];
 
-  const minTickMs = Math.min(...seen.map((p) => p.ms));
-  const maxTickMs = Math.max(...seen.map((p) => p.ms));
-  const usefulMs = Number.isFinite(minTickMs) && Number.isFinite(maxTickMs) && (maxTickMs - minTickMs) >= 1200;
-  const displayEndMs = Math.max(1000, Math.min(60000, Math.max(Number(replayMs || 0), maxTickMs)));
-  const xOfMs = (m) => plotX + (Number(m) / 60000) * plotW;
-  const xOfPoint = (p, i) => {
-    if (usefulMs) return xOfMs(p.ms);
-    const frac = seen.length <= 1 ? 0 : i / (seen.length - 1);
-    return plotX + frac * Math.max(18, (displayEndMs / 60000) * plotW);
-  };
+  for (const seg of segments) {
+    const x1 = xOf(seg.start);
+    const x2 = xOf(seg.end);
+    let fill = "rgba(255,255,255,0.025)";
+    if (msNow >= seg.end) fill = "rgba(34,211,238,0.10)";
+    else if (msNow >= seg.start && msNow < seg.end) fill = "rgba(251,191,36,0.10)";
+    ctx.fillStyle = fill;
+    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
+  }
 
-  ctx.save();
-  ctx.strokeStyle = "rgba(148,163,184,.16)";
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
   ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = plotY + (plotH * i) / 4;
+  for (let i = 1; i <= 4; i++) {
+    const y = (h / 5) * i;
     ctx.beginPath();
-    ctx.moveTo(plotX, y);
-    ctx.lineTo(plotX + plotW, y);
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
     ctx.stroke();
   }
-  for (const mark of [0, 15000, 30000, 45000, 60000]) {
-    const x = xOfMs(mark);
-    ctx.setLineDash(mark === 60000 ? [] : [4, 6]);
-    ctx.beginPath();
-    ctx.moveTo(x, plotY);
-    ctx.lineTo(x, plotY + plotH);
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
-  ctx.restore();
+  ctx.globalAlpha = 1;
 
-  // Recorrido interno del precio.
+  for (const mark of [0, 15000, 30000, 45000, 60000]) {
+    const x = xOf(mark);
+    ctx.save();
+    ctx.setLineDash(mark === 60000 ? [] : [5, 5]);
+    ctx.strokeStyle = mark === 30000 ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.26)";
+    ctx.lineWidth = mark === 30000 ? 1.8 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    const label = mark === 0 ? "0s" : mark === 15000 ? "15s" : mark === 30000 ? "30s" : mark === 45000 ? "45s" : "60s";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = mark === 60000 ? "right" : "left";
+    ctx.fillText(label, mark === 60000 ? w - 8 : Math.min(w - 28, x + 4), h - 6);
+  }
+
+  // Recorrido en vivo — sin vela lateral para que el gráfico tenga el mismo espacio que el modal.
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,.88)";
-  ctx.lineWidth = 2.3;
+  ctx.strokeStyle = "rgba(255,255,255,.86)";
+  ctx.lineWidth = 2.35;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   ctx.beginPath();
-  seen.forEach((p, i) => {
-    const x = xOfPoint(p, i);
-    const y = yOf(p.quote);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  pts.forEach((p, i) => {
+    const x = xOf(p.ms), y = yOf(p.quote);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   });
   ctx.stroke();
 
-  // Puntos finos del recorrido. En vivo puede tener muchos ticks, por eso salteamos algunos.
-  ctx.fillStyle = "rgba(255,255,255,.75)";
-  const step = Math.max(1, Math.floor(seen.length / 90));
-  for (let i = 0; i < seen.length; i += step) {
-    const p = seen[i];
+  const step = Math.max(1, Math.floor(pts.length / 100));
+  ctx.fillStyle = "rgba(255,255,255,.72)";
+  for (let i = 0; i < pts.length; i += step) {
+    const p = pts[i];
     ctx.beginPath();
-    ctx.arc(xOfPoint(p, i), yOf(p.quote), 1.15, 0, Math.PI * 2);
+    ctx.arc(xOf(p.ms), yOf(p.quote), 1.15, 0, Math.PI * 2);
     ctx.fill();
   }
-  const last = seen[seen.length - 1];
-  const cx = xOfPoint(last, seen.length - 1);
-  const cy = yOf(last.quote);
+  const last = pts[pts.length - 1];
   ctx.fillStyle = "rgba(255,255,255,1)";
   ctx.strokeStyle = "rgba(15,23,42,.90)";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.arc(cx, cy, 5.2, 0, Math.PI * 2);
+  ctx.arc(xOf(last.ms), yOf(last.quote), 5.2, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
-  ctx.restore();
-
-  // Vela grande viva.
-  const yH = yOf(high);
-  const yL = yOf(low);
-  const yO = yOf(open);
-  const yC = yOf(close);
-  const up = close >= open;
-  const col = up ? "rgba(34,197,94,.96)" : "rgba(248,113,113,.96)";
-  const bodyTop = Math.min(yO, yC);
-  const bodyH = Math.max(3, Math.abs(yC - yO));
-  const bodyW = Math.min(34, Math.max(20, w * 0.085));
-  ctx.save();
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 2.4;
-  ctx.beginPath();
-  ctx.moveTo(candleX, yH);
-  ctx.lineTo(candleX, yL);
-  ctx.stroke();
-  ctx.fillStyle = col;
-  drawRoundedRect(ctx, candleX - bodyW / 2, bodyTop, bodyW, bodyH, 5);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,.30)";
-  ctx.lineWidth = 1;
-  drawRoundedRect(ctx, candleX - bodyW / 2 - 3, bodyTop - 3, bodyW + 6, bodyH + 6, 6);
-  ctx.stroke();
-  ctx.fillStyle = "rgba(226,232,240,.72)";
-  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.textAlign = "center";
-  ctx.fillText("VELA", candleX, Math.max(10, candleTop - 2));
-  ctx.restore();
-
-  const sec = Math.max(0, Math.min(60, Math.floor(displayEndMs / 1000)));
-  ctx.save();
-  ctx.fillStyle = "rgba(226,232,240,.74)";
-  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.textAlign = "left";
-  ctx.fillText("0s", xOfMs(0), h - 5);
-  ctx.textAlign = "center";
-  ctx.fillText(`${sec}s`, xOfMs(displayEndMs), h - 5);
-  ctx.textAlign = "right";
-  ctx.fillText("60s", xOfMs(60000), h - 5);
   ctx.restore();
 
   if (infoEl) {
-    infoEl.textContent = `${sec}.0s · ${seen.length} ticks · precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
+    const sec = Math.max(0, Math.min(60, Math.floor(msNow / 1000)));
+    const lastMove = pts.length >= 2 ? close - Number(pts[pts.length - 2].quote) : 0;
+    const dir = lastMove > 0 ? "↑" : lastMove < 0 ? "↓" : "•";
+    infoEl.textContent = `${sec}s · ${pts.length} ticks · ${dir} precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
   }
 }
 
@@ -4221,6 +4294,8 @@ function drawLiveReplayNow(force = false) {
   const item = buildLiveReplayItem(liveReplaySymbol);
   const ticks = item.ticks || [];
   const ms = getLiveReplayMsInMinute(liveReplaySymbol);
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  updateLiveConfirmationUI();
 
   if (liveReplaySubEl) {
     const sec = Math.floor(ms / 1000);
@@ -4252,9 +4327,12 @@ function drawLiveReplayNow(force = false) {
 function setLiveTradeButtonsBusy(busy = false) {
   [liveBuyCallBtn, liveBuyPutBtn].forEach((btn) => {
     if (!btn) return;
-    btn.disabled = !!busy;
-    btn.style.opacity = busy ? ".55" : "1";
+    if (busy) {
+      btn.disabled = true;
+      btn.style.opacity = ".55";
+    }
   });
+  if (!busy) updateLiveConfirmationUI();
 }
 function setLiveTradeStatus(text, tone = "") {
   if (!liveTradeStatusEl) return;
@@ -4266,8 +4344,7 @@ function buildLiveManualTradeItem(side = "CALL") {
   const minute = getLiveReplayMinute(sym);
   const ticks = getLiveReplayTicks(sym);
   const safeSide = normalizeSignalConfirmationSide(side) || "CALL";
-  const confirmations = [];
-  for (let i = 0; i < SIGNAL_CONFIRM_MIN; i++) confirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(sym), at: Date.now(), source: "live_tab_manual" });
+  ensureLiveSignalConfirmationsForCurrentMinute();
   return {
     id: `LIVE_TRADE-${minute}-${sym}-${safeSide}-${Date.now()}`,
     minute,
@@ -4275,16 +4352,25 @@ function buildLiveManualTradeItem(side = "CALL") {
     symbol: sym,
     direction: safeSide,
     mode: "EN VIVO",
-    mode_version: "V48_LIVE_TAB_MANUAL",
+    mode_version: "V53_LIVE_MODAL_POINTS",
     ticks: ticks.slice(),
     minuteComplete: false,
-    signalConfirmations: confirmations,
+    signalConfirmations: (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).map((ev) => ({ ...ev })),
     liveManualTrade: true,
   };
 }
+
 async function liveManualTrade(side = "CALL") {
   const safeSide = normalizeSignalConfirmationSide(side);
   if (!safeSide) return;
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  const enabledSide = getLiveEnabledTradeSide();
+  if (enabledSide !== safeSide) {
+    const faltan = getLiveMissingConfirmations(safeSide);
+    setLiveTradeStatus(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}. ${getLiveConfirmationStatusText()}`, "pending");
+    toast(`Primero marcá 4 puntos netos para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1600);
+    return;
+  }
   const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
   const item = buildLiveManualTradeItem(safeSide);
   try {
@@ -4301,6 +4387,7 @@ async function liveManualTrade(side = "CALL") {
     const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
     setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviada${cid ? " · ID " + cid : ""}`, "ok");
     toast(`✅ Trade en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
+    resetLiveSignalConfirmations("trade_sent");
   } catch (e) {
     // Si no llegó a comprar, quitamos el item auxiliar para no ensuciar Señales.
     try {
@@ -4314,10 +4401,24 @@ async function liveManualTrade(side = "CALL") {
     toast(`⚠️ Trade en vivo falló: ${msg}`, 2600);
   } finally {
     setLiveTradeButtonsBusy(false);
+    updateLiveConfirmationUI();
     updateCounter(getActiveViewName());
   }
 }
+
 function initLiveTradeButtons() {
+  if (liveConfirmBuyBtn && !liveConfirmBuyBtn.dataset.ready) {
+    liveConfirmBuyBtn.onclick = () => addLiveSignalConfirmation("CALL");
+    liveConfirmBuyBtn.dataset.ready = "1";
+  }
+  if (liveConfirmSellBtn && !liveConfirmSellBtn.dataset.ready) {
+    liveConfirmSellBtn.onclick = () => addLiveSignalConfirmation("PUT");
+    liveConfirmSellBtn.dataset.ready = "1";
+  }
+  if (liveConfirmUndoBtn && !liveConfirmUndoBtn.dataset.ready) {
+    liveConfirmUndoBtn.onclick = () => removeLiveSignalConfirmation();
+    liveConfirmUndoBtn.dataset.ready = "1";
+  }
   if (liveBuyCallBtn && !liveBuyCallBtn.dataset.ready) {
     liveBuyCallBtn.onclick = () => liveManualTrade("CALL");
     liveBuyCallBtn.dataset.ready = "1";
@@ -4326,7 +4427,8 @@ function initLiveTradeButtons() {
     liveBuyPutBtn.onclick = () => liveManualTrade("PUT");
     liveBuyPutBtn.dataset.ready = "1";
   }
-  setLiveTradeStatus("Modo en vivo: señales pausadas solo mientras estás en esta pestaña. Botones COMPRA/VENTA operan el par seleccionado.");
+  updateLiveConfirmationUI();
+  setLiveTradeStatus("Modo en vivo: señales pausadas solo en esta pestaña. Sumá 4 puntos netos y operá manualmente.");
 }
 
 function requestLiveReplayDraw(force = false) {
