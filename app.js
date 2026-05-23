@@ -36,6 +36,7 @@
 // ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
 // ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
 // ✅ V55: vuelve al En vivo v53 y agrega espacio scroll para ver COMPRAR/VENDER sin que lo tape disciplina
+// ✅ V56: En vivo opera igual que Señales: puntos manuales y ejecución automática al segundo 59
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
@@ -1815,6 +1816,7 @@ let liveReplayRaf = null;
 let liveReplayLastDrawAt = 0;
 let liveSignalConfirmations = [];
 let liveSignalMinuteKey = "";
+let liveAutoEntryState = { minuteKey: "", attempted: false, status: "idle", side: "", contract_id: "", error: "" };
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 
 // V32: caché específica para la vista Velas 1m del modal.
@@ -4049,6 +4051,7 @@ function getLiveSignalKey(sym = liveReplaySymbol) {
 function resetLiveSignalConfirmations(reason = "") {
   liveSignalConfirmations = [];
   liveSignalMinuteKey = getLiveSignalKey(liveReplaySymbol);
+  liveAutoEntryState = { minuteKey: liveSignalMinuteKey, attempted: false, status: "idle", side: "", contract_id: "", error: "" };
   updateLiveConfirmationUI(reason);
 }
 function ensureLiveSignalConfirmationsForCurrentMinute() {
@@ -4056,6 +4059,9 @@ function ensureLiveSignalConfirmationsForCurrentMinute() {
   if (liveSignalMinuteKey !== key) {
     liveSignalConfirmations = [];
     liveSignalMinuteKey = key;
+    liveAutoEntryState = { minuteKey: key, attempted: false, status: "idle", side: "", contract_id: "", error: "" };
+  } else if (!liveAutoEntryState || liveAutoEntryState.minuteKey !== key) {
+    liveAutoEntryState = { minuteKey: key, attempted: false, status: "idle", side: "", contract_id: "", error: "" };
   }
 }
 function getLiveConfirmationScore() {
@@ -4102,9 +4108,12 @@ function updateLiveConfirmationUI(reason = "") {
     liveConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.16)" : enabled === "PUT" ? "rgba(127,29,29,.19)" : "rgba(0,0,0,.13)";
   }
   if (liveConfirmHintEl) {
+    const msNow = getLiveReplayMsInMinute(liveReplaySymbol);
+    const secNow = Math.max(0, Math.min(60, Math.floor(msNow / 1000)));
+    const faltan59 = Math.max(0, SIGNAL_AUTO_ENTRY_SEC - secNow);
     liveConfirmHintEl.textContent = enabled
-      ? `Listo para ${enabled === "CALL" ? "COMPRAR" : "VENDER"} · modo manual`
-      : `Modo en vivo · mínimo ${SIGNAL_CONFIRM_MIN} puntos netos`;
+      ? `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${enabled === "CALL" ? "COMPRA" : "VENTA"}${faltan59 ? ` · faltan ${faltan59}s` : ""}`
+      : `Modo en vivo · mínimo ${SIGNAL_CONFIRM_MIN} puntos netos · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     liveConfirmHintEl.style.color = enabled === "CALL" ? "#bbf7d0" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.68)";
   }
   if (liveConfirmBuyBtn) liveConfirmBuyBtn.textContent = `🟢 + COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
@@ -4115,15 +4124,21 @@ function updateLiveConfirmationUI(reason = "") {
   }
   if (liveBuyCallBtn) {
     const enabledCall = enabled === "CALL";
-    liveBuyCallBtn.disabled = !enabledCall;
+    liveBuyCallBtn.textContent = `🟢 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s COMPRA`;
+    liveBuyCallBtn.disabled = true;
     liveBuyCallBtn.style.opacity = enabledCall ? "1" : ".45";
-    liveBuyCallBtn.title = enabledCall ? "COMPRAR habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("CALL")} puntos netos para COMPRA`;
+    liveBuyCallBtn.title = enabledCall
+      ? `COMPRA lista: se ejecuta automáticamente en el segundo ${SIGNAL_AUTO_ENTRY_SEC}`
+      : `Faltan ${getLiveMissingConfirmations("CALL")} puntos netos para COMPRA`;
   }
   if (liveBuyPutBtn) {
     const enabledPut = enabled === "PUT";
-    liveBuyPutBtn.disabled = !enabledPut;
+    liveBuyPutBtn.textContent = `🔴 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s VENTA`;
+    liveBuyPutBtn.disabled = true;
     liveBuyPutBtn.style.opacity = enabledPut ? "1" : ".45";
-    liveBuyPutBtn.title = enabledPut ? "VENDER habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
+    liveBuyPutBtn.title = enabledPut
+      ? `VENTA lista: se ejecuta automáticamente en el segundo ${SIGNAL_AUTO_ENTRY_SEC}`
+      : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
   }
 }
 function addLiveSignalConfirmation(side = "CALL") {
@@ -4297,6 +4312,7 @@ function drawLiveReplayNow(force = false) {
   const ms = getLiveReplayMsInMinute(liveReplaySymbol);
   ensureLiveSignalConfirmationsForCurrentMinute();
   updateLiveConfirmationUI();
+  tryLiveAutoEntryAt59("LIVE_DRAW_59_SCAN");
 
   if (liveReplaySubEl) {
     const sec = Math.floor(ms / 1000);
@@ -4353,7 +4369,7 @@ function buildLiveManualTradeItem(side = "CALL") {
     symbol: sym,
     direction: safeSide,
     mode: "EN VIVO",
-    mode_version: "V53_LIVE_MODAL_POINTS",
+    mode_version: "V56_LIVE_AUTO59_POINTS",
     ticks: ticks.slice(),
     minuteComplete: false,
     signalConfirmations: (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).map((ev) => ({ ...ev })),
@@ -4361,7 +4377,102 @@ function buildLiveManualTradeItem(side = "CALL") {
   };
 }
 
-async function liveManualTrade(side = "CALL") {
+function isLiveAutoEntryWindowOpen(sym = liveReplaySymbol) {
+  const ms = getLiveReplayMsInMinute(sym);
+  return ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000;
+}
+function formatLiveAutoEntryWaitText(sym = liveReplaySymbol) {
+  const ms = getLiveReplayMsInMinute(sym);
+  const sec = Math.max(0, Math.min(60, Math.floor(ms / 1000)));
+  if (sec < SIGNAL_AUTO_ENTRY_SEC) return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+  if (sec >= 60) return "vela cerrada";
+  return `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`;
+}
+async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_59") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return false;
+  ensureLiveSignalConfirmationsForCurrentMinute();
+
+  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+  const key = getLiveSignalKey(sym);
+  if (liveAutoEntryState?.minuteKey === key && liveAutoEntryState?.attempted) return false;
+  if (!isLiveAutoEntryWindowOpen(sym)) return false;
+  if (tradeInFlight) return false;
+
+  const enabledSide = getLiveEnabledTradeSide();
+  if (enabledSide !== safeSide) return false;
+
+  const item = buildLiveManualTradeItem(safeSide);
+  item.liveManualTrade = false;
+  item.liveAuto59Trade = true;
+  item.signalAutoEntry = {
+    type: "LIVE_AUTO_59",
+    attempted: true,
+    status: "sending",
+    side: safeSide,
+    ms: Math.round(getLiveReplayMsInMinute(sym)),
+    sec: Math.round(getLiveReplayMsInMinute(sym) / 1000),
+    reason: String(reason || "LIVE_AUTO_59"),
+    at: Date.now(),
+    confirmation_status: getLiveConfirmationStatusText(),
+  };
+
+  liveAutoEntryState = { minuteKey: key, attempted: true, status: "sending", side: safeSide, contract_id: "", error: "" };
+
+  try {
+    setLiveTradeButtonsBusy(true);
+    setLiveTradeStatus(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+
+    history.push(item);
+    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    saveHistory(history);
+
+    const res = await Promise.race([
+      buyOneClick(safeSide, sym, item),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout auto trade en vivo")), 22000)),
+    ]);
+    const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
+    liveAutoEntryState.status = "sent";
+    liveAutoEntryState.contract_id = cid;
+    item.signalAutoEntry.status = "sent";
+    item.signalAutoEntry.contract_id = cid;
+    item.signalAutoEntry.sent_at = Date.now();
+    saveHistory(history);
+    setLiveTradeStatus(`✅ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviado${cid ? " · ID " + cid : ""}`, "ok");
+    toast(`✅ AUTO ${SIGNAL_AUTO_ENTRY_SEC}s en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
+    resetLiveSignalConfirmations("live_auto_sent");
+    return true;
+  } catch (e) {
+    liveAutoEntryState.status = "error";
+    liveAutoEntryState.error = e?.message || String(e);
+    try {
+      if (!item?.trade?.contract_id && !item?.signalAutoEntry?.contract_id) {
+        history = (history || []).filter((it) => it?.id !== item.id);
+        saveHistory(history);
+      }
+    } catch {}
+    const msg = e?.message || String(e);
+    setLiveTradeStatus(`⚠️ AUTO en vivo falló: ${msg}`, "error");
+    toast(`⚠️ AUTO en vivo falló: ${msg}`, 2600);
+    return false;
+  } finally {
+    setLiveTradeButtonsBusy(false);
+    updateLiveConfirmationUI();
+    updateCounter(getActiveViewName());
+  }
+}
+function tryLiveAutoEntryAt59(reason = "LIVE_TIMER_59") {
+  try {
+    if ((localStorage.getItem("activeView") || "signals") !== "live") return false;
+    ensureLiveSignalConfirmationsForCurrentMinute();
+    const side = getLiveEnabledTradeSide();
+    if (!side) return false;
+    return liveAutoTradeAt59(side, reason);
+  } catch {
+    return false;
+  }
+}
+function liveManualTrade(side = "CALL") {
   const safeSide = normalizeSignalConfirmationSide(side);
   if (!safeSide) return;
   ensureLiveSignalConfirmationsForCurrentMinute();
@@ -4370,41 +4481,13 @@ async function liveManualTrade(side = "CALL") {
     const faltan = getLiveMissingConfirmations(safeSide);
     setLiveTradeStatus(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}. ${getLiveConfirmationStatusText()}`, "pending");
     toast(`Primero marcá 4 puntos netos para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1600);
-    return;
+    return false;
   }
-  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
-  const item = buildLiveManualTradeItem(safeSide);
-  try {
-    setLiveTradeButtonsBusy(true);
-    setLiveTradeStatus(`Enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
-    // Guardar el item antes de comprar para que, si Deriv acepta el contrato, pueda quedar vinculado y pasar a Trades.
-    history.push(item);
-    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
-    saveHistory(history);
-    const res = await Promise.race([
-      buyOneClick(safeSide, sym, item),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade en vivo")), 22000)),
-    ]);
-    const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
-    setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviada${cid ? " · ID " + cid : ""}`, "ok");
-    toast(`✅ Trade en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
-    resetLiveSignalConfirmations("trade_sent");
-  } catch (e) {
-    // Si no llegó a comprar, quitamos el item auxiliar para no ensuciar Señales.
-    try {
-      if (!item?.trade?.contract_id && !item?.signalAutoEntry?.contract_id) {
-        history = (history || []).filter((it) => it?.id !== item.id);
-        saveHistory(history);
-      }
-    } catch {}
-    const msg = e?.message || String(e);
-    setLiveTradeStatus(`⚠️ No se pudo enviar: ${msg}`, "error");
-    toast(`⚠️ Trade en vivo falló: ${msg}`, 2600);
-  } finally {
-    setLiveTradeButtonsBusy(false);
-    updateLiveConfirmationUI();
-    updateCounter(getActiveViewName());
-  }
+  const wait = formatLiveAutoEntryWaitText(liveReplaySymbol);
+  setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} preparada · ${wait}. Se ejecuta automáticamente, igual que Señales.`, "pending");
+  toast(`AUTO ${SIGNAL_AUTO_ENTRY_SEC}s preparado: ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1500);
+  tryLiveAutoEntryAt59("LIVE_BUTTON_CHECK");
+  return false;
 }
 
 function initLiveTradeButtons() {
@@ -4429,7 +4512,7 @@ function initLiveTradeButtons() {
     liveBuyPutBtn.dataset.ready = "1";
   }
   updateLiveConfirmationUI();
-  setLiveTradeStatus("Modo en vivo: señales pausadas solo en esta pestaña. Sumá 4 puntos netos y operá manualmente.");
+  setLiveTradeStatus("Modo en vivo: señales pausadas. Sumá 4 puntos netos; se ejecuta automático en el segundo 59.");
 }
 
 function requestLiveReplayDraw(force = false) {
