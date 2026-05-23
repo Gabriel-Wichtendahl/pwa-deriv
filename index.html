@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-  <title>Deriv Signals — Giro Auto Backtest Demo V3</title>
+  <title>Deriv Signals</title>
 
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="style.css" />
@@ -17,7 +17,7 @@
   <div class="bgNeon" aria-hidden="true"></div>
 
   <header class="header">
-    <h2 id="status" class="status">Conectando… · Giro Auto Backtest Demo V3</h2>
+    <h2 id="status" class="status">Conectando…</h2>
 
     <div class="topStatus">
       <div class="pill combinedStatusPill" aria-label="Estado de ticks y cuenta regresiva">
@@ -32,7 +32,8 @@
 
     <div class="tabsBar">
       <div class="tabs" role="tablist" aria-label="Secciones">
-        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true" aria-controls="signalsView">Auto 60</button>
+        <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true" aria-controls="signalsView">Señales</button>
+        <button class="tab" type="button" data-view="live" role="tab" aria-selected="false" aria-controls="liveView">En vivo</button>
         <button class="tab" type="button" data-view="trades" role="tab" aria-selected="false" aria-controls="tradesView">Trades</button>
         <button class="tab" type="button" data-view="practice" role="tab" aria-selected="false" aria-controls="practiceView">Práctica</button>
       </div>
@@ -46,6 +47,44 @@
   <main class="main">
     <section id="signalsView" role="tabpanel">
       <div id="signals" class="signals"></div>
+    </section>
+
+    <section id="liveView" class="liveView hidden" role="tabpanel">
+      <div class="modalCard chartModalCard liveModalCard">
+        <div class="modalHeader liveModalHeader">
+          <div class="modalHeaderText">
+            <div class="modalTitle">📡 Gráfico en vivo</div>
+            <div id="liveReplaySub" class="modalSub liveReplaySub">Vela actual · señales pausadas</div>
+          </div>
+        </div>
+
+        <div id="liveSymbolBar" class="liveSymbolBar liveSymbolBarModal" aria-label="Elegir par en vivo"></div>
+
+        <div class="minuteCanvasWrap liveMinuteCanvasWrap">
+          <canvas id="liveReplayCanvas"></canvas>
+        </div>
+
+        <div class="modalFooter liveModalFooter">
+          <div id="liveConfirmPanel" class="liveConfirmPanel" aria-label="Puntos para operar en vivo">
+            <div class="liveConfirmTop">
+              <div id="liveConfirmCount" class="liveConfirmCount">COMPRA 0/4 · VENTA 0/4</div>
+              <div id="liveConfirmHint" class="liveConfirmHint">Modo en vivo · mínimo 4 puntos netos</div>
+            </div>
+            <div class="liveConfirmRow">
+              <button id="liveConfirmBuyBtn" class="btn liveConfirmBtn liveConfirmBuy" type="button">🟢 + COMPRA 0/4</button>
+              <button id="liveConfirmSellBtn" class="btn liveConfirmBtn liveConfirmSell" type="button">🔴 + VENTA 0/4</button>
+              <button id="liveConfirmUndoBtn" class="btn btnGhost liveConfirmUndo" type="button" title="Quitar último punto">↩️</button>
+            </div>
+          </div>
+
+          <div class="tradeRow liveTradeBar" aria-label="Operar desde gráfico en vivo">
+            <button id="liveBuyCallBtn" class="btn liveTradeBtn liveTradeCall" type="button">🟢 COMPRAR</button>
+            <button id="liveBuyPutBtn" class="btn liveTradeBtn liveTradePut" type="button">🔴 VENDER</button>
+          </div>
+          <div id="liveTradeStatus" class="liveTradeStatus">Modo en vivo: sumá 4 puntos netos y operá manualmente el par seleccionado.</div>
+          <div id="liveReplayInfo" class="modalReplayInfo liveReplayInfo">Esperando ticks…</div>
+        </div>
+      </div>
     </section>
 
     <section id="tradesView" class="hidden" role="tabpanel">
@@ -125,6 +164,8 @@
 
       <div class="minuteCanvasWrap">
         <canvas id="minuteCanvas"></canvas>
+        <button id="modalCandle1mBtn" class="modalChartViewBtn" type="button" aria-pressed="false" title="Ver mini gráfico de velas de 1 minuto">🕯️ Velas 1m</button>
+        <button id="modalReplayBtn" class="modalReplayBtn hidden" type="button" title="Reproducir tick por tick la vela de la señal">🔎 Replay</button>
         <div id="modalNavVoteBar" class="modalNavVoteBar" aria-label="Navegación y feedback del modal">
           <button id="modalPrevItemBtn" class="modalQuickBtn modalNavBtn" type="button" aria-label="Anterior">←</button>
           <div class="modalVoteGroup" aria-label="Feedback">
@@ -174,6 +215,7 @@
             <button class="btn evalBtn" type="button" data-sec="40">⏱️ 40s</button>
             <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
           </div>
+          <button id="modeBtn" class="btn btnGhost" type="button">🎯 SNR interacción</button>
           <button id="executionModeBtn" class="btn btnGhost" type="button">↕️ Rise/Fall 1m</button>
           <button id="autoOpenChartBtn" class="btn btnGhost" type="button">📈 Auto-abrir gráfico OFF</button>
           <button id="lowPowerBtn" class="btn btnGhost" type="button">🔋 Bajo consumo OFF</button>

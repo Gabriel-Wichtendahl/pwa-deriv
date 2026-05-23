@@ -21,24 +21,27 @@
 // ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO AUTO BACKTEST V3: no muestra señales si el cierre 60 real no está dentro del SNR
-// ✅ NUEVO AUTO BACKTEST V3: la señal nace solo con S-R-S/R-S-R + cierre confirmado por ticks_history
+// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 59 si ya hay 4 confirmaciones netas para COMPRA/VENTA
+// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 59
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
+// ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
+// ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
+// ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
+// ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
+// ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
+// ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
+// ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
+// ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
+// ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
+// ✅ V55: vuelve al En vivo v53 y agrega espacio scroll para ver COMPRAR/VENDER sin que lo tape disciplina
+// ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
+// ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT_20260511";
-const AUTO_BACKTEST_VERSION = "GIRO_AUTO_BACKTEST_DEMO_V3_CLOSE_STRICT";
-const AUTO_BACKTEST_DEMO_ONLY = true;
-const AUTO_BACKTEST_FORCE_DEMO_ACCOUNT = true;
-const AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE = false;
-const AUTO_BACKTEST_MAX_CONSECUTIVE_MOMENTUM = 3;
-const AUTO_BACKTEST_MOMENTUM_LOOKBACK = 8;
-const AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE = true;
-const AUTO_BACKTEST_REQUIRE_SNR_ROLE_SEQUENCE = true;
-const AUTO_BACKTEST_SNR_ROLE_LOOKBACK = 160;
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V10_MODAL_NAV_FEEDBACK_20260511";
 
 /*
   Mapa rápido de módulos:
@@ -61,7 +64,7 @@ const SYMBOLS = ["R_10", "R_25", "R_50", "R_75", "R_100"];
 const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
-const STORE_KEY = "derivSignalsHistory_giroAutoBacktest_v3";
+const STORE_KEY = "derivSignalsHistory_v2";
 const MAX_HISTORY = 200;
 
 const MIN_TICKS = 3;
@@ -70,23 +73,28 @@ const RETRY_DELAY_MS = 5000;
 
 const HISTORY_TIMEOUT_MS = 7000;
 
+const KEEP_CLOSED_AWAY_SIGNALS_KEY = "keepClosedAwaySignals_v1";
+let keepClosedAwaySignals = false;
+
+const LIVE_REPLAY_SYMBOL_KEY = "liveReplaySymbol_v1";
+
 /* =========================
    Trades Journal (estudio)
 ========================= */
-const TRADES_STORE_KEY = "derivTradesJournal_giroAutoBacktest_v3";
+const TRADES_STORE_KEY = "derivTradesJournal_v1";
 const TRADES_JOURNAL_MAX = 500;
 
 /* =========================
    Capturas de estudio
 ========================= */
-const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_giroAutoBacktest_v1";
+const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
 
 /* =========================
    Trade account config
 ========================= */
-const ACCOUNT_MODE_KEY = "derivTradingAccountMode_giroAutoBacktest_v1";
+const ACCOUNT_MODE_KEY = "derivTradingAccountMode_v1";
 const ACCOUNT_MODE_DEMO = "demo";
 const ACCOUNT_MODE_REAL = "real";
 const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
@@ -105,7 +113,7 @@ const DEFAULT_CURRENCY = "USD";
    - Nivel 2: stake + ganancia real del nivel 1
    - Después del nivel 2, gane o pierda, vuelve al nivel 1
 ========================= */
-const C100_STATE_KEY = "interesCompuesto2_state_giroAutoBacktest_v1";
+const C100_STATE_KEY = "interesCompuesto2_state_v1";
 const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no informa ganancia
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
@@ -116,17 +124,17 @@ const C100_LEVELS = [
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
-const EXECUTION_MODE_KEY = "executionMode_giroAutoBacktest_v1";
+const EXECUTION_MODE_KEY = "executionMode_v1";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_giroAutoBacktest_v1_fixed_by_symbol";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v4_fixed_by_symbol";
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
-const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_giroAutoBacktest_v1";
+const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_v1";
 const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
-const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_giroAutoBacktest_v1";
+const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_v1";
 const HIGHLOW_DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
 // Límite de pago total para High/Low: payout potencial / stake.
@@ -155,7 +163,7 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
 /* =========================
    Auto-open chart config
 ========================= */
-const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_giroAutoBacktest_v1";
+const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
@@ -164,11 +172,11 @@ let c100PanelEl = null;
 /* =========================
    Disciplina
 ========================= */
-const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_giroAutoBacktest_v1";
-const DISCIPLINE_WINS_KEY = "discipline_wins_giroAutoBacktest_v1";
-const DISCIPLINE_LOSSES_KEY = "discipline_losses_giroAutoBacktest_v1";
-const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_giroAutoBacktest_v1";
-const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_giroAutoBacktest_v1";
+const DISCIPLINE_WINDOW_START_KEY = "discipline_windowStartMs_v1";
+const DISCIPLINE_WINS_KEY = "discipline_wins_v1";
+const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
+const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
+const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
 
 const DISCIPLINE_MAX_WINS = 3;
 const DISCIPLINE_MAX_LOSSES = 2;
@@ -184,7 +192,7 @@ let disciplineBannerEl = null; // banner visible para bloqueo/contador DEMO
 /* =========================
    Link contract_id -> signalId
 ========================= */
-const TRADE_LINKS_KEY = "derivTradeLinks_giroAutoBacktest_v3"; // contract_id -> signalId
+const TRADE_LINKS_KEY = "trade_links_v1"; // contract_id -> signalId
 let tradeLinks = new Map(); // in-memory
 
 function loadTradeLinks() {
@@ -340,7 +348,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
   ctx.fillText("Captura de estudio PWA", 52, 48);
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.76)";
-  ctx.fillText(`${item?.symbol || "—"} · ${dir === "CALL" ? "COMPRA / CALL" : "VENTA / PUT"} · Entrada 60s · ${item?.time || ""}`, 52, 72);
+  ctx.fillText(`${item?.symbol || "—"} · ${dir === "CALL" ? "COMPRA / CALL" : "VENTA / PUT"} · Entrada ${SIGNAL_AUTO_ENTRY_SEC}s · ${item?.time || ""}`, 52, 72);
   studyDrawPill(ctx, W - 255, 32, 205, 38, `Resultado: ${result}`, tradeColor);
 
   const x0 = 54, y0 = 116, x1 = W - 54, y1 = H - 118;
@@ -424,7 +432,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     });
     ctx.stroke();
 
-    const entryMs = Number(item?.trade?.entry_ms || item?.signalAutoEntry?.ms || 60000);
+    const entryMs = Number(item?.trade?.entry_ms || item?.signalAutoEntry?.ms || SIGNAL_AUTO_ENTRY_MS);
     const safeEntryMs = Math.min(60000, Math.max(0, entryMs));
     const entryQuote = Number(getPriceAtMs(signalTicks.length ? signalTicks : item.ticks, safeEntryMs));
     const ex = xOf(safeEntryMs);
@@ -466,7 +474,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     ctx.beginPath(); ctx.arc(0, -2, 5.5, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
-    const entryTag = isItm ? "T 60s" : isOtm ? "TM 60s" : `${dir} 60s`;
+    const entryTag = isItm ? `T ${SIGNAL_AUTO_ENTRY_SEC}s` : isOtm ? `TM ${SIGNAL_AUTO_ENTRY_SEC}s` : `${dir} ${SIGNAL_AUTO_ENTRY_SEC}s`;
     studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(ex - 18, cx1 - 108)), Math.max(cy0 + 12, pinY - 4), 96, 32, entryTag, tradeColor, "#07120d");
 
     // Línea horizontal de operación menos gruesa
@@ -529,7 +537,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.84)";
   const actionLabel = isItm ? "T" : isOtm ? "TM" : dir;
-  const note = `${isCall ? "Soporte" : "Resistencia"} respetad${isCall ? "o" : "a"} · entrada ${actionLabel} 60s · pin, línea, cierre y bandera en ${isItm ? "verde" : isOtm ? "rojo" : "amarillo"}`;
+  const note = `${isCall ? "Soporte" : "Resistencia"} respetad${isCall ? "o" : "a"} · entrada ${actionLabel} ${SIGNAL_AUTO_ENTRY_SEC}s · pin, línea, cierre y bandera en ${isItm ? "verde" : isOtm ? "rojo" : "amarillo"}`;
   ctx.fillText(note, 170, H - 58);
 }
 
@@ -688,9 +696,11 @@ const MODE_FUERZA_DEBILIDAD_CLARA = "FUERZA/DEBILIDAD CLARA";
 const MODE_LIKE_MANTENIDO = "LIKE MANTENIDO";
 const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
-const MODE_SNR_SEGUNDO_TOQUE = "SNR SEGUNDO TOQUE";
+const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
+const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
+const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
-const ANALYSIS_MODE_KEY = "analysisMode_giroAutoBacktest_v1";
+const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
 const GIRO_FLEX_LOGIC_VERSION = "GIRO_FLEX_RAMA_REEMPLAZO_20260421";
@@ -698,47 +708,69 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V9_MODAL_LIMPIO_COMPACTO_20260511";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V51_20260522";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V51_20260522";
+const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_giroAutoBacktest_v1";
+const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
-const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_giroAutoBacktest_v1";
+const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
 const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 
 function normalizeSignalMode(mode) {
-  // BASE V4: único motor activo. Cualquier modo viejo guardado se fuerza a SNR.
+  const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
+  if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
+  if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
+function isDynamicLineMode(mode) {
+  return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
+}
+function isSNRPolaridadMode(mode) {
+  return normalizeSignalMode(mode) === MODE_SNR_POLARIDAD;
+}
 function isGiroFamilyMode(mode) {
-  return mode === MODE_SNR_SEGUNDO_TOQUE || mode === MODE_GIRO_NIVEL || mode === MODE_GIRO_POLARIDAD;
+  const m = normalizeSignalMode(mode);
+  return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
+  if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
+    const stored = localStorage.getItem(ANALYSIS_MODE_KEY);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
+    return normalizeSignalMode(stored || MODE_SNR_SEGUNDO_TOQUE);
   } catch {}
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 function saveAnalysisMode(mode) {
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_SNR_SEGUNDO_TOQUE);
+    localStorage.setItem(ANALYSIS_MODE_KEY, normalizeSignalMode(mode));
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
 }
 function getModeBtnLabel(mode) {
-  return "🎯 SNR 2º toque";
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
+  if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
+  return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
+  if (m === MODE_SNR_POLARIDAD) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
-const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_giroAutoBacktest_v1";
+const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
 function loadPracticeSavedSignals() {
   try {
     const raw = localStorage.getItem(PRACTICE_SAVED_STORE_KEY);
@@ -1082,7 +1114,7 @@ function getGiroPolarityCandidateLevels(symbol, minute, currentRange, rules = RU
 function getGiroPolarityRoleText(pol) {
   if (!pol) return "";
   if (pol.levelMode === "sin_nivel") return "ZONA INTRAVELA";
-  if (pol.levelMode === "snr_body") {
+  if (pol.levelMode === "snr_body" || pol.levelMode === "snr_polaridad") {
     const original = pol.originalType === "support" ? "SOP" : "RES";
     const role = pol.currentRole === "support" || pol.levelType === "support" ? "SOP" : "RES";
     return `SNR ${original}→${role}`;
@@ -1105,7 +1137,7 @@ function formatGiroPolarityLevel(item) {
   if (pol.levelMode === "sin_nivel") {
     return `⚡ Zona intravela · ${roleText}: ${Number(pol.level).toFixed(6)} → ${dir}${pts}`;
   }
-  if (pol.levelMode === "snr_body") {
+  if (pol.levelMode === "snr_body" || pol.levelMode === "snr_polaridad") {
     const low = Number(pol.zoneLow);
     const high = Number(pol.zoneHigh);
     const zoneTxt = Number.isFinite(low) && Number.isFinite(high)
@@ -1322,11 +1354,11 @@ function makeJournalIdFromSignal(it) {
   return `${String(it.id || "")}::${cid}`.slice(0, 220);
 }
 
-// guarda/actualiza snapshot (solo ITM/OTM)
+// guarda/actualiza snapshot de trade: PENDING entra inmediatamente; ITM/OTM actualizan resultado.
 function upsertTradeJournalFromSignal(it) {
   if (!it?.trade?.badge) return;
-  const b = String(it.trade.badge || "");
-  if (b !== "ITM" && b !== "OTM") return;
+  const b = String(it.trade.badge || "").toUpperCase();
+  if (b !== "PENDING" && b !== "ITM" && b !== "OTM") return;
 
   const entry = {
     journal_id: makeJournalIdFromSignal(it),
@@ -1385,13 +1417,13 @@ function upsertTradeJournalFromSignal(it) {
   saveTradesJournal(tradesJournal);
 }
 
-// siembra (una vez) desde history por si existían ITM/OTM ya guardados
+// siembra (una vez) desde history por si existían trades ya guardados
 function seedTradesJournalFromHistory() {
   try {
     let changed = false;
     for (const it of history || []) {
-      const b = it?.trade?.badge || "";
-      if (b === "ITM" || b === "OTM") {
+      const b = String(it?.trade?.badge || "").toUpperCase();
+      if (b === "PENDING" || b === "ITM" || b === "OTM") {
         const id = makeJournalIdFromSignal(it);
         if (!tradesJournal.some((x) => x && x.journal_id === id)) {
           upsertTradeJournalFromSignal(it);
@@ -1492,6 +1524,19 @@ const modeBtn = $("modeBtn");
 
 // Tabs existentes (del HTML)
 const signalsView = $("signalsView");
+const liveView = $("liveView");
+const liveReplayCanvas = $("liveReplayCanvas");
+const liveReplayInfoEl = $("liveReplayInfo");
+const liveReplaySubEl = $("liveReplaySub");
+const liveSymbolBarEl = $("liveSymbolBar");
+const liveBuyCallBtn = $("liveBuyCallBtn");
+const liveBuyPutBtn = $("liveBuyPutBtn");
+const liveTradeStatusEl = $("liveTradeStatus");
+const liveConfirmCountEl = $("liveConfirmCount");
+const liveConfirmHintEl = $("liveConfirmHint");
+const liveConfirmBuyBtn = $("liveConfirmBuyBtn");
+const liveConfirmSellBtn = $("liveConfirmSellBtn");
+const liveConfirmUndoBtn = $("liveConfirmUndoBtn");
 const feedbackView = $("feedbackView"); // compat
 
 // Config modal existente (engrane y modal)
@@ -1507,6 +1552,8 @@ const modalCloseBackdrop = $("modalCloseBackdrop");
 const modalTitle = $("modalTitle");
 const modalSub = $("modalSub");
 const minuteCanvas = $("minuteCanvas");
+const modalCandle1mBtn = $("modalCandle1mBtn");
+const modalReplayBtn = $("modalReplayBtn");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
 
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
@@ -1534,15 +1581,18 @@ let manualGiroSummaryEl = null;
 let manualGiroStateEl = null;
 let manualGiroButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
-const SIGNAL_AUTO_ENTRY_MS = 60000;
+const SIGNAL_AUTO_ENTRY_MS = 59000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
-// Rama paralela AUTO BACKTEST:
-// la entrada automática se evalúa solo al cierre real de la vela (60s),
-// exige cierre DENTRO de la zona SNR y no usa la zona amarilla/cerca.
+// V23: la señal vive en 3 etapas: prealerta temprana para analizar,
+// validación de autoentrada en 59s y confirmación final por cierre en SNR/amarilla.
+const SIGNAL_PREALERT_MIN_SEC = 35;
+const SIGNAL_PREALERT_MAX_SEC = 45;
+// V7: aunque haya 4 puntos manuales, la entrada real solo se permite
+// si al segundo 59 el precio está dentro de la zona SNR o muy cerca.
 const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
-const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0;
-const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0;
+const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
+const SIGNAL_AUTO_SNR_NEAR_ZONE_MULT = 0.35;
 
 function buildSNRNearAreaMetaFromLevel(meta) {
   if (!meta || typeof meta !== "object") return null;
@@ -1556,7 +1606,7 @@ function buildSNRNearAreaMetaFromLevel(meta) {
   const tolerance = Number(meta.tolerance);
   const zoneSize = Number(meta.zone);
 
-  // Misma reconstrucción usada por el filtro de entrada en 60s.
+  // Misma reconstrucción usada por el filtro de entrada en 59s.
   // Así lo que ves en el modal coincide con lo que la PWA acepta como "cerca".
   if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
     if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
@@ -1725,6 +1775,10 @@ let vibrateEnabled = true;
 let EVAL_SEC = 45;
 let PRACTICE_EVAL_SEC = 45;
 
+// V38: en modo SNR los botones 35/40/45 pasan a ser el FIN del radar.
+// El radar arranca siempre en 35s y busca prealerta hasta el segundo elegido.
+const SNR_RADAR_START_SEC = 35;
+
 // Estado principal: NORMAL vs GIRO vs GIRO FLEX
 let signalMode = MODE_NORMAL;
 
@@ -1732,9 +1786,6 @@ let history = loadHistory();
 migrateHistoryModesToGiro();
 
 let minuteData = {};
-// AUTO BACKTEST V3: marca qué minutos/símbolos fueron rehidratados con ticks_history.
-// Si no hay cierre real confirmado, no se crea señal.
-let fullMinuteHydrated = {};
 let lastEvaluatedMinute = null;
 let evalRetryTimer = null;
 
@@ -1755,7 +1806,23 @@ let modalOpenContext = { source: "signals", signalId: "", journalId: "" };
 let modalLive = false;
 let modalDrawRaf = null;
 let modalLastDrawAt = 0;
+let modalChartView = "line"; // "line" | "candles1m"
+let modalReplayState = { open: false, playing: false, speed: 1, currentMs: 0, lastFrameTs: 0, raf: null };
 const MODAL_DRAW_MIN_INTERVAL_MS = 120;
+
+let liveReplaySymbol = loadLiveReplaySymbol();
+let liveReplayRaf = null;
+let liveReplayLastDrawAt = 0;
+let liveSignalConfirmations = [];
+let liveSignalMinuteKey = "";
+const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
+
+// V32: caché específica para la vista Velas 1m del modal.
+// La vista debe usar OHLC reales de Deriv y no velas inventadas/rellenadas.
+const MODAL_CANDLES_1M_COUNT = 34;
+const modalOHLC1mCache = new Map();
+const modalOHLC1mPending = new Map();
+const modalOHLC1mFailed = new Set();
 
 // Mantener separados los modos históricos.
 // GIRO debe seguir siendo GIRO y los modos viejos no deben mezclarse con GIRO.
@@ -1904,15 +1971,6 @@ function ensureTradingAccountButton() {
   }
 
   btn.onclick = () => {
-    if (AUTO_BACKTEST_FORCE_DEMO_ACCOUNT) {
-      activeTradingAccount = ACCOUNT_MODE_DEMO;
-      saveTradingAccountMode();
-      syncAccountScopedSettingsUI();
-      applyTradingAccountUI();
-      applyTradingAccountBannerUI();
-      toast("🟢 Esta versión AUTO BACKTEST opera solo en DEMO", 1800);
-      return;
-    }
     activeTradingAccount = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_DEMO : ACCOUNT_MODE_REAL;
     saveTradingAccountMode();
     loadDiscipline();
@@ -1943,13 +2001,11 @@ function applyTradingAccountUI() {
   const btn = pickEl("tradingAccountBtn");
   if (!btn) return;
   const isReal = activeTradingAccount === ACCOUNT_MODE_REAL;
-  btn.textContent = AUTO_BACKTEST_FORCE_DEMO_ACCOUNT ? "🟢 Cuenta DEMO · AUTO BACKTEST" : (isReal ? "🔴 Cuenta REAL" : "🟢 Cuenta DEMO");
-  btn.classList.toggle("active", isReal && !AUTO_BACKTEST_FORCE_DEMO_ACCOUNT);
-  btn.title = AUTO_BACKTEST_FORCE_DEMO_ACCOUNT
-    ? "Esta versión paralela fuerza DEMO y no permite operar REAL."
-    : (isReal
-      ? "Estás configurando y operando con la cuenta REAL"
-      : "Estás configurando y operando con la cuenta DEMO");
+  btn.textContent = isReal ? "🔴 Cuenta REAL" : "🟢 Cuenta DEMO";
+  btn.classList.toggle("active", isReal);
+  btn.title = isReal
+    ? "Estás configurando y operando con la cuenta REAL"
+    : "Estás configurando y operando con la cuenta DEMO";
 }
 function ensureTradingAccountBanner() {
   let el = document.getElementById("tradingAccountBanner");
@@ -3246,7 +3302,7 @@ function shouldAutoOpenChartNow() {
    🪫 Low power mode
 ========================= */
 let lowPowerMode = false;
-const LOWPOWER_KEY = "lowPowerMode_giroAutoBacktest_v1";
+const LOWPOWER_KEY = "lowPowerMode_v1";
 
 const UI_INTERVAL_NORMAL_MS = 500;
 const UI_INTERVAL_LOW_MS = 1200;
@@ -3283,10 +3339,11 @@ function startUiTimers() {
     updateCountdownUI();
     updateDisciplineLockUI(false);
     updateC100PanelUI();
-    // ✅ FIX AUTO 60 DEMO/REAL:
-    // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 60.
+    // ✅ FIX AUTO 59 DEMO/REAL:
+    // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 59.
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
     updateModalCandleStatusUI();
+    refreshOpenSignalStageBadges();
     scanSignalAutoEntriesAt57();
   }, getUiIntervalMs());
 }
@@ -3421,11 +3478,19 @@ function saveBool(key, value) {
   localStorage.setItem(key, value ? "1" : "0");
 }
 
-const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_giroAutoBacktest_v1";
+const LIVE_ANALYSIS_PAUSED_KEY = "liveAnalysisPaused_v1";
+const LIVE_ANALYSIS_PAUSE_MIGRATION_KEY = "liveAnalysisPauseFix_v51";
 let liveAnalysisPaused = false;
 
 function loadLiveAnalysisPaused() {
   try {
+    // V51: en versiones anteriores, tocar el botón ▶️ mientras estabas en la pestaña En vivo
+    // podía dejar una pausa manual global guardada. Eso hacía que luego salieran muy pocas
+    // señales y el celular casi no trabajara. Al instalar esta versión se limpia UNA vez.
+    if (localStorage.getItem(LIVE_ANALYSIS_PAUSE_MIGRATION_KEY) !== "1") {
+      localStorage.setItem(LIVE_ANALYSIS_PAUSED_KEY, "0");
+      localStorage.setItem(LIVE_ANALYSIS_PAUSE_MIGRATION_KEY, "1");
+    }
     liveAnalysisPaused = localStorage.getItem(LIVE_ANALYSIS_PAUSED_KEY) === "1";
   } catch {
     liveAnalysisPaused = false;
@@ -3436,23 +3501,41 @@ function saveLiveAnalysisPaused() {
     localStorage.setItem(LIVE_ANALYSIS_PAUSED_KEY, liveAnalysisPaused ? "1" : "0");
   } catch {}
 }
+function getActiveViewName() {
+  try { return localStorage.getItem("activeView") || "signals"; } catch { return "signals"; }
+}
+function isLiveStandaloneViewActive() {
+  return getActiveViewName() === "live";
+}
 function areSignalsPaused(viewName = null) {
-  // Pausa manual global: visible en Señales, Trades y Práctica.
-  // Solo frena NUEVOS análisis/señales en vivo. No borra historial ni corta WebSocket.
-  return !!liveAnalysisPaused;
+  // Pausa manual global + pausa automática cuando se abre la pestaña En vivo.
+  // En vivo es un modo aparte: sigue recibiendo ticks para dibujar, pero no crea nuevas señales
+  // ni dispara autoentradas de señales mientras esa pestaña está activa.
+  const view = viewName || getActiveViewName();
+  return !!liveAnalysisPaused || view === "live";
+}
+function getSignalsPauseReason(viewName = null) {
+  const view = viewName || getActiveViewName();
+  if (view === "live") return "live_tab";
+  if (liveAnalysisPaused) return "manual";
+  return "";
 }
 function applyLiveAnalysisPauseUI() {
   const btn = document.getElementById("liveAnalysisPauseBtn");
   if (!btn) return;
+  const reason = getSignalsPauseReason();
   const paused = areSignalsPaused();
+  const autoLive = reason === "live_tab";
   // Botón compacto: solo icono para no ocupar espacio en la fila de pestañas.
-  btn.textContent = paused ? "▶️" : "⏸️";
-  btn.dataset.state = paused ? "paused" : "live";
-  btn.setAttribute("aria-label", paused ? "Reanudar análisis en vivo" : "Pausar análisis en vivo");
+  btn.textContent = autoLive ? "👁️" : (paused ? "▶️" : "⏸️");
+  btn.dataset.state = autoLive ? "live_auto_pause" : (paused ? "paused" : "live");
+  btn.setAttribute("aria-label", autoLive ? "En vivo pausa señales automáticamente" : (paused ? "Reanudar análisis en vivo" : "Pausar análisis en vivo"));
   btn.setAttribute("aria-pressed", paused ? "true" : "false");
-  btn.title = paused
-    ? "PAUSADO: tocar para reanudar análisis en vivo."
-    : "LIVE: tocar para pausar nuevas señales.";
+  btn.title = autoLive
+    ? "La pestaña En vivo pausa señales automáticamente. Volvé a Señales para reanudar análisis."
+    : paused
+      ? "PAUSADO manualmente: tocar para reanudar análisis en vivo."
+      : "LIVE: tocar para pausar nuevas señales.";
   btn.style.borderColor = paused ? "rgba(248,113,113,.72)" : "rgba(34,211,238,.46)";
   btn.style.background = paused
     ? "linear-gradient(180deg, rgba(127,29,29,.42), rgba(127,29,29,.20))"
@@ -3461,6 +3544,13 @@ function applyLiveAnalysisPauseUI() {
   btn.style.boxShadow = paused ? "0 0 14px rgba(248,113,113,.20)" : "0 0 12px rgba(34,211,238,.12)";
 }
 function toggleLiveAnalysisPaused() {
+  // V51: si estás en En vivo, esa pestaña ya pausa señales automáticamente.
+  // No permitimos que este botón deje guardada una pausa manual global por error.
+  if (getActiveViewName() === "live") {
+    applyLiveAnalysisPauseUI();
+    toast("👁️ En vivo pausa señales solo mientras estás en esa pestaña. Volvé a Señales para analizar.", 2200);
+    return;
+  }
   liveAnalysisPaused = !liveAnalysisPaused;
   saveLiveAnalysisPaused();
   applyLiveAnalysisPauseUI();
@@ -3527,6 +3617,10 @@ function updateCounter(viewName = null) {
     counterEl.textContent = `Práctica: ${practiceSessionStats.total}`;
     return;
   }
+  if (activeView === "live") {
+    counterEl.textContent = `En vivo: ${liveReplaySymbol || SYMBOLS[0] || "—"}`;
+    return;
+  }
   counterEl.textContent = `Señales: ${history.length}`;
 }
 
@@ -3552,11 +3646,6 @@ function getTradingAccountTokenKey() {
   return activeTradingAccount === ACCOUNT_MODE_REAL ? DERIV_TOKEN_REAL_KEY : DERIV_TOKEN_DEMO_KEY;
 }
 function loadTradingAccountMode() {
-  if (AUTO_BACKTEST_FORCE_DEMO_ACCOUNT) {
-    activeTradingAccount = ACCOUNT_MODE_DEMO;
-    try { localStorage.setItem(ACCOUNT_MODE_KEY, ACCOUNT_MODE_DEMO); } catch {}
-    return;
-  }
   try {
     const saved = String(localStorage.getItem(ACCOUNT_MODE_KEY) || "").toLowerCase();
     activeTradingAccount = saved === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
@@ -3566,11 +3655,6 @@ function loadTradingAccountMode() {
 }
 function saveTradingAccountMode() {
   try {
-    if (AUTO_BACKTEST_FORCE_DEMO_ACCOUNT) {
-      activeTradingAccount = ACCOUNT_MODE_DEMO;
-      localStorage.setItem(ACCOUNT_MODE_KEY, ACCOUNT_MODE_DEMO);
-      return;
-    }
     localStorage.setItem(ACCOUNT_MODE_KEY, activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO);
   } catch {}
 }
@@ -3582,6 +3666,59 @@ function getTradeScopeText() {
 }
 function getTradeExecutionTitle() {
   return `Operar ${getTradingAccountLabel()} 1m`;
+}
+
+
+function loadKeepClosedAwaySignals() {
+  try {
+    keepClosedAwaySignals = localStorage.getItem(KEEP_CLOSED_AWAY_SIGNALS_KEY) === "1";
+  } catch {
+    keepClosedAwaySignals = false;
+  }
+}
+function saveKeepClosedAwaySignals() {
+  try {
+    localStorage.setItem(KEEP_CLOSED_AWAY_SIGNALS_KEY, keepClosedAwaySignals ? "1" : "0");
+  } catch {}
+}
+function updateKeepClosedAwaySignalsButton() {
+  const btn = document.getElementById("keepClosedAwaySignalsBtn");
+  if (!btn) return;
+
+  btn.textContent = keepClosedAwaySignals ? "🧪 Guardar fuera SNR: SÍ" : "🧪 Guardar fuera SNR: NO";
+  btn.title = keepClosedAwaySignals
+    ? "Las señales que cierren fuera de zona azul/amarilla se conservan para testeo."
+    : "Las señales sin trade que cierren fuera de zona azul/amarilla se eliminan como antes.";
+  btn.setAttribute("aria-pressed", keepClosedAwaySignals ? "true" : "false");
+  btn.style.borderColor = keepClosedAwaySignals ? "rgba(34,211,238,.75)" : "rgba(255,255,255,.16)";
+  btn.style.background = keepClosedAwaySignals
+    ? "linear-gradient(180deg, rgba(34,211,238,.18), rgba(59,130,246,.10))"
+    : "";
+  btn.style.boxShadow = keepClosedAwaySignals
+    ? "0 0 0 1px rgba(34,211,238,.18) inset, 0 0 16px rgba(34,211,238,.18)"
+    : "";
+}
+function toggleKeepClosedAwaySignals() {
+  keepClosedAwaySignals = !keepClosedAwaySignals;
+  saveKeepClosedAwaySignals();
+  updateKeepClosedAwaySignalsButton();
+
+  if (keepClosedAwaySignals) {
+    toast("🧪 Test activo: se conservan señales fuera de zona", 1900);
+  } else {
+    const removed = purgeClosedSignalsOutsideSNRCloseZone("toggle_keep_outside_off");
+    toast(removed ? `🧹 Test apagado: ${removed} señal(es) fuera de zona eliminadas` : "🧹 Test apagado", 2000);
+  }
+}
+function ensureKeepClosedAwaySignalsToggle() {
+  const btn = ensureViewActionButton("signals", {
+    id: "keepClosedAwaySignalsBtn",
+    text: keepClosedAwaySignals ? "🧪 Guardar fuera SNR: SÍ" : "🧪 Guardar fuera SNR: NO",
+    title: "Conserva o elimina señales sin trade que cierran fuera de zona azul/amarilla",
+    onClick: toggleKeepClosedAwaySignals,
+  });
+  updateKeepClosedAwaySignalsButton();
+  return btn;
 }
 
 function getSignalEvalButtons() {
@@ -3827,11 +3964,505 @@ function ensureViewActionButton(viewName, opts) {
   return btn;
 }
 
+
+/* =========================
+   Pestaña En vivo — vela actual estilo Replay
+========================= */
+function loadLiveReplaySymbol() {
+  try {
+    const saved = String(localStorage.getItem(LIVE_REPLAY_SYMBOL_KEY) || "");
+    return SYMBOLS.includes(saved) ? saved : (SYMBOLS[0] || "R_10");
+  } catch {
+    return SYMBOLS[0] || "R_10";
+  }
+}
+function saveLiveReplaySymbol(sym) {
+  liveReplaySymbol = SYMBOLS.includes(String(sym || "")) ? String(sym) : (SYMBOLS[0] || "R_10");
+  try { localStorage.setItem(LIVE_REPLAY_SYMBOL_KEY, liveReplaySymbol); } catch {}
+  resetLiveSignalConfirmations("symbol_change");
+  paintLiveSymbolButtons();
+  updateCounter("live");
+  requestLiveReplayDraw(true);
+}
+function getLiveReplayMinute(sym = liveReplaySymbol) {
+  // Usar la última vela vista del símbolo elegido. Antes dependía del último tick global;
+  // si otro par actualizaba el reloj, el replay live podía quedar con ms desfasado y dibujar solo 1 tick.
+  const bySymbol = Number(lastMinuteSeenBySymbol?.[sym]);
+  if (Number.isFinite(bySymbol) && bySymbol > 0) return bySymbol;
+  return currentServerMinute();
+}
+function getLiveReplayTicks(sym = liveReplaySymbol) {
+  const minute = getLiveReplayMinute(sym);
+  const arr = minuteData?.[minute]?.[sym];
+  return (Array.isArray(arr) ? arr : [])
+    .map((p) => ({ ms: Math.max(0, Math.min(60000, Number(p.ms))), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+}
+function getLiveReplayMsInMinute(sym = liveReplaySymbol) {
+  try {
+    const minute = getLiveReplayMinute(sym);
+    const now = serverNowMs();
+    const byClock = Math.max(0, Math.min(60000, now - minute * 60000));
+    const ticks = getLiveReplayTicks(sym);
+    const lastTickMs = ticks.length ? Number(ticks[ticks.length - 1].ms) : 0;
+    // En vivo debe dibujar todos los ticks recibidos del símbolo, aunque el reloj global
+    // venga de otro par o esté algunos segundos corrido.
+    return Math.max(0, Math.min(60000, Math.max(byClock, lastTickMs)));
+  } catch {
+    const ticks = getLiveReplayTicks(sym);
+    return ticks.length ? Number(ticks[ticks.length - 1].ms) || 0 : 0;
+  }
+}
+function buildLiveReplayItem(sym = liveReplaySymbol) {
+  const minute = getLiveReplayMinute(sym);
+  return {
+    id: `LIVE::${sym}::${minute}`,
+    symbol: sym,
+    minute,
+    time: "Vela actual",
+    mode: "EN VIVO",
+    direction: "",
+    ticks: getLiveReplayTicks(sym),
+  };
+}
+function paintLiveSymbolButtons() {
+  if (!liveSymbolBarEl) return;
+  if (!liveSymbolBarEl.dataset.ready) {
+    liveSymbolBarEl.innerHTML = SYMBOLS.map((sym) => `<button class="liveSymbolBtn" type="button" data-symbol="${escapeHtml(sym)}">${escapeHtml(sym.replace("R_", "R"))}</button>`).join("");
+    liveSymbolBarEl.querySelectorAll(".liveSymbolBtn").forEach((btn) => {
+      btn.onclick = () => saveLiveReplaySymbol(btn.dataset.symbol || SYMBOLS[0]);
+    });
+    liveSymbolBarEl.dataset.ready = "1";
+  }
+  liveSymbolBarEl.querySelectorAll(".liveSymbolBtn").forEach((btn) => {
+    const active = btn.dataset.symbol === liveReplaySymbol;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+
+function getLiveSignalKey(sym = liveReplaySymbol) {
+  return `${sym || "—"}::${getLiveReplayMinute(sym) || 0}`;
+}
+function resetLiveSignalConfirmations(reason = "") {
+  liveSignalConfirmations = [];
+  liveSignalMinuteKey = getLiveSignalKey(liveReplaySymbol);
+  updateLiveConfirmationUI(reason);
+}
+function ensureLiveSignalConfirmationsForCurrentMinute() {
+  const key = getLiveSignalKey(liveReplaySymbol);
+  if (liveSignalMinuteKey !== key) {
+    liveSignalConfirmations = [];
+    liveSignalMinuteKey = key;
+  }
+}
+function getLiveConfirmationScore() {
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  return (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).reduce((acc, ev) => {
+    const side = normalizeSignalConfirmationSide(ev?.side);
+    if (side === "CALL") return acc + 1;
+    if (side === "PUT") return acc - 1;
+    return acc;
+  }, 0);
+}
+function getLiveNetBuyPoints() { return Math.max(0, getLiveConfirmationScore()); }
+function getLiveNetSellPoints() { return Math.max(0, -getLiveConfirmationScore()); }
+function getLiveEnabledTradeSide() {
+  const score = getLiveConfirmationScore();
+  if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
+  if (score <= -SIGNAL_CONFIRM_MIN) return "PUT";
+  return "";
+}
+function getLiveConfirmationStatusText() {
+  return `COMPRA ${getLiveNetBuyPoints()}/${SIGNAL_CONFIRM_MIN} · VENTA ${getLiveNetSellPoints()}/${SIGNAL_CONFIRM_MIN}`;
+}
+function getLiveMissingConfirmations(side) {
+  const wanted = normalizeSignalConfirmationSide(side);
+  if (wanted === "CALL") return Math.max(0, SIGNAL_CONFIRM_MIN - getLiveNetBuyPoints());
+  if (wanted === "PUT") return Math.max(0, SIGNAL_CONFIRM_MIN - getLiveNetSellPoints());
+  return SIGNAL_CONFIRM_MIN;
+}
+function updateLiveConfirmationUI(reason = "") {
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  const enabled = getLiveEnabledTradeSide();
+  const buyPts = getLiveNetBuyPoints();
+  const sellPts = getLiveNetSellPoints();
+  const totalEvents = Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations.length : 0;
+  if (liveConfirmCountEl) {
+    if (enabled === "CALL" || enabled === "PUT") {
+      const pts = enabled === "CALL" ? buyPts : sellPts;
+      liveConfirmCountEl.innerHTML = `${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada <span class="signalConfirmPts">${pts}/${SIGNAL_CONFIRM_MIN} pts</span>`;
+    } else {
+      liveConfirmCountEl.textContent = getLiveConfirmationStatusText();
+    }
+    liveConfirmCountEl.style.color = enabled === "CALL" ? "#dcfce7" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.92)";
+    liveConfirmCountEl.style.borderColor = enabled === "CALL" ? "rgba(34,197,94,.46)" : enabled === "PUT" ? "rgba(239,68,68,.46)" : "rgba(251,191,36,.24)";
+    liveConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.16)" : enabled === "PUT" ? "rgba(127,29,29,.19)" : "rgba(0,0,0,.13)";
+  }
+  if (liveConfirmHintEl) {
+    liveConfirmHintEl.textContent = enabled
+      ? `Listo para ${enabled === "CALL" ? "COMPRAR" : "VENDER"} · modo manual`
+      : `Modo en vivo · mínimo ${SIGNAL_CONFIRM_MIN} puntos netos`;
+    liveConfirmHintEl.style.color = enabled === "CALL" ? "#bbf7d0" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.68)";
+  }
+  if (liveConfirmBuyBtn) liveConfirmBuyBtn.textContent = `🟢 + COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
+  if (liveConfirmSellBtn) liveConfirmSellBtn.textContent = `🔴 + VENTA ${sellPts}/${SIGNAL_CONFIRM_MIN}`;
+  if (liveConfirmUndoBtn) {
+    liveConfirmUndoBtn.disabled = totalEvents <= 0;
+    liveConfirmUndoBtn.style.opacity = liveConfirmUndoBtn.disabled ? ".42" : "1";
+  }
+  if (liveBuyCallBtn) {
+    const enabledCall = enabled === "CALL";
+    liveBuyCallBtn.disabled = !enabledCall;
+    liveBuyCallBtn.style.opacity = enabledCall ? "1" : ".45";
+    liveBuyCallBtn.title = enabledCall ? "COMPRAR habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("CALL")} puntos netos para COMPRA`;
+  }
+  if (liveBuyPutBtn) {
+    const enabledPut = enabled === "PUT";
+    liveBuyPutBtn.disabled = !enabledPut;
+    liveBuyPutBtn.style.opacity = enabledPut ? "1" : ".45";
+    liveBuyPutBtn.title = enabledPut ? "VENDER habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
+  }
+}
+function addLiveSignalConfirmation(side = "CALL") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return;
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  liveSignalConfirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(liveReplaySymbol), at: Date.now(), source: "live_tab_points" });
+  updateLiveConfirmationUI();
+  const enabled = getLiveEnabledTradeSide();
+  if (enabled === "CALL" || enabled === "PUT") toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
+  else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
+}
+function removeLiveSignalConfirmation() {
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  liveSignalConfirmations.pop();
+  updateLiveConfirmationUI();
+}
+
+function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
+  if (!canvas || !item) return;
+
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
+
+  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
+  ticks = ticks
+    .map((p, idx) => ({
+      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
+      quote: Number(p?.quote),
+      idx,
+    }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
+
+  if (ticks.length < 2) {
+    drawMiniCandlesLoading(ctx, w, h, "Esperando ticks en vivo…");
+    if (infoEl) infoEl.textContent = `${item.symbol || "—"} · esperando ticks suficientes`;
+    return;
+  }
+
+  const pts = ticks;
+  const quotes = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const open = Number(pts[0].quote);
+  const close = Number(pts[pts.length - 1].quote);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+
+  let min = low;
+  let max = high;
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  let range = max - min;
+  if (range < 1e-9) range = Math.max(Math.abs(close || 1) * 0.000001, 1e-9);
+  const pad = Math.max(range * 0.18, Math.abs(close || 1) * 0.00010);
+  min -= pad;
+  max += pad;
+
+  const xOf = (ms) => (Number(ms) / 60000) * (w - 20) + 10;
+  const yOf = (q) => (1 - (Number(q) - min) / Math.max(max - min, 1e-12)) * (h - 30) + 10;
+  const msNow = Math.max(0, Math.min(60000, Math.max(Number(replayMs || 0), pts[pts.length - 1].ms || 0)));
+
+  const segments = [
+    { start: 0, end: 15000 },
+    { start: 15000, end: 30000 },
+    { start: 30000, end: 45000 },
+    { start: 45000, end: 60000 },
+  ];
+
+  for (const seg of segments) {
+    const x1 = xOf(seg.start);
+    const x2 = xOf(seg.end);
+    let fill = "rgba(255,255,255,0.025)";
+    if (msNow >= seg.end) fill = "rgba(34,211,238,0.10)";
+    else if (msNow >= seg.start && msNow < seg.end) fill = "rgba(251,191,36,0.10)";
+    ctx.fillStyle = fill;
+    ctx.fillRect(x1, 8, Math.max(0, x2 - x1), h - 32);
+  }
+
+  ctx.globalAlpha = 0.22;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= 4; i++) {
+    const y = (h / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  for (const mark of [0, 15000, 30000, 45000, 60000]) {
+    const x = xOf(mark);
+    ctx.save();
+    ctx.setLineDash(mark === 60000 ? [] : [5, 5]);
+    ctx.strokeStyle = mark === 30000 ? "rgba(255,255,255,0.42)" : "rgba(255,255,255,0.26)";
+    ctx.lineWidth = mark === 30000 ? 1.8 : 1.2;
+    ctx.beginPath();
+    ctx.moveTo(x, 10);
+    ctx.lineTo(x, h - 22);
+    ctx.stroke();
+    ctx.restore();
+
+    const label = mark === 0 ? "0s" : mark === 15000 ? "15s" : mark === 30000 ? "30s" : mark === 45000 ? "45s" : "60s";
+    ctx.fillStyle = "rgba(255,255,255,0.78)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.textAlign = mark === 60000 ? "right" : "left";
+    ctx.fillText(label, mark === 60000 ? w - 8 : Math.min(w - 28, x + 4), h - 6);
+  }
+
+  // Recorrido en vivo — sin vela lateral para que el gráfico tenga el mismo espacio que el modal.
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.86)";
+  ctx.lineWidth = 2.35;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = xOf(p.ms), y = yOf(p.quote);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  const step = Math.max(1, Math.floor(pts.length / 100));
+  ctx.fillStyle = "rgba(255,255,255,.72)";
+  for (let i = 0; i < pts.length; i += step) {
+    const p = pts[i];
+    ctx.beginPath();
+    ctx.arc(xOf(p.ms), yOf(p.quote), 1.15, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const last = pts[pts.length - 1];
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  ctx.strokeStyle = "rgba(15,23,42,.90)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(xOf(last.ms), yOf(last.quote), 5.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  if (infoEl) {
+    const sec = Math.max(0, Math.min(60, Math.floor(msNow / 1000)));
+    const lastMove = pts.length >= 2 ? close - Number(pts[pts.length - 2].quote) : 0;
+    const dir = lastMove > 0 ? "↑" : lastMove < 0 ? "↓" : "•";
+    infoEl.textContent = `${sec}s · ${pts.length} ticks · ${dir} precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
+  }
+}
+
+function drawLiveReplayNow(force = false) {
+  if (!liveView || liveView.classList.contains("hidden")) return;
+  if (!liveReplayCanvas) return;
+  const now = Date.now();
+  if (!force && now - liveReplayLastDrawAt < LIVE_REPLAY_DRAW_MIN_INTERVAL_MS) return;
+  liveReplayLastDrawAt = now;
+
+  paintLiveSymbolButtons();
+  const item = buildLiveReplayItem(liveReplaySymbol);
+  const ticks = item.ticks || [];
+  const ms = getLiveReplayMsInMinute(liveReplaySymbol);
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  updateLiveConfirmationUI();
+
+  if (liveReplaySubEl) {
+    const sec = Math.floor(ms / 1000);
+    const last = ticks.length ? Number(ticks[ticks.length - 1].quote) : Number(lastQuoteBySymbol?.[liveReplaySymbol]);
+    liveReplaySubEl.textContent = `${liveReplaySymbol} · vela actual · ${sec}s/60s${Number.isFinite(last) ? " · " + last.toFixed(6) : ""} · señales pausadas`;
+  }
+
+  if (ticks.length < 2) {
+    const ctx = liveReplayCanvas.getContext("2d");
+    const cssW = liveReplayCanvas.clientWidth || 1;
+    const cssH = liveReplayCanvas.clientHeight || 1;
+    const dpr = window.devicePixelRatio || 1;
+    liveReplayCanvas.width = Math.floor(cssW * dpr);
+    liveReplayCanvas.height = Math.floor(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.fillStyle = "rgba(2,6,23,0.96)";
+    ctx.fillRect(0, 0, cssW, cssH);
+    drawMiniCandlesLoading(ctx, cssW, cssH, "Esperando ticks en vivo…");
+    if (liveReplayInfoEl) liveReplayInfoEl.textContent = `${liveReplaySymbol} · esperando ticks de la vela actual`;
+    return;
+  }
+
+  // En vivo usa un dibujador propio: no recorta por replayMs como el replay histórico,
+  // porque los ticks recibidos YA son la vela actual. Esto evita que se vea solo el punto/barra
+  // cuando el reloj y los ms de ticks quedan desfasados.
+  drawLiveReplayCanvas(liveReplayCanvas, item, ms, liveReplayInfoEl);
+}
+function setLiveTradeButtonsBusy(busy = false) {
+  [liveBuyCallBtn, liveBuyPutBtn].forEach((btn) => {
+    if (!btn) return;
+    if (busy) {
+      btn.disabled = true;
+      btn.style.opacity = ".55";
+    }
+  });
+  if (!busy) updateLiveConfirmationUI();
+}
+function setLiveTradeStatus(text, tone = "") {
+  if (!liveTradeStatusEl) return;
+  liveTradeStatusEl.textContent = text || "";
+  liveTradeStatusEl.dataset.tone = tone || "";
+}
+function buildLiveManualTradeItem(side = "CALL") {
+  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+  const minute = getLiveReplayMinute(sym);
+  const ticks = getLiveReplayTicks(sym);
+  const safeSide = normalizeSignalConfirmationSide(side) || "CALL";
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  return {
+    id: `LIVE_TRADE-${minute}-${sym}-${safeSide}-${Date.now()}`,
+    minute,
+    time: `${new Date(minute * 60000).toISOString().slice(11, 19)} UTC`,
+    symbol: sym,
+    direction: safeSide,
+    mode: "EN VIVO",
+    mode_version: "V53_LIVE_MODAL_POINTS",
+    ticks: ticks.slice(),
+    minuteComplete: false,
+    signalConfirmations: (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).map((ev) => ({ ...ev })),
+    liveManualTrade: true,
+  };
+}
+
+async function liveManualTrade(side = "CALL") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return;
+  ensureLiveSignalConfirmationsForCurrentMinute();
+  const enabledSide = getLiveEnabledTradeSide();
+  if (enabledSide !== safeSide) {
+    const faltan = getLiveMissingConfirmations(safeSide);
+    setLiveTradeStatus(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}. ${getLiveConfirmationStatusText()}`, "pending");
+    toast(`Primero marcá 4 puntos netos para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1600);
+    return;
+  }
+  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+  const item = buildLiveManualTradeItem(safeSide);
+  try {
+    setLiveTradeButtonsBusy(true);
+    setLiveTradeStatus(`Enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+    // Guardar el item antes de comprar para que, si Deriv acepta el contrato, pueda quedar vinculado y pasar a Trades.
+    history.push(item);
+    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    saveHistory(history);
+    const res = await Promise.race([
+      buyOneClick(safeSide, sym, item),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade en vivo")), 22000)),
+    ]);
+    const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
+    setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviada${cid ? " · ID " + cid : ""}`, "ok");
+    toast(`✅ Trade en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
+    resetLiveSignalConfirmations("trade_sent");
+  } catch (e) {
+    // Si no llegó a comprar, quitamos el item auxiliar para no ensuciar Señales.
+    try {
+      if (!item?.trade?.contract_id && !item?.signalAutoEntry?.contract_id) {
+        history = (history || []).filter((it) => it?.id !== item.id);
+        saveHistory(history);
+      }
+    } catch {}
+    const msg = e?.message || String(e);
+    setLiveTradeStatus(`⚠️ No se pudo enviar: ${msg}`, "error");
+    toast(`⚠️ Trade en vivo falló: ${msg}`, 2600);
+  } finally {
+    setLiveTradeButtonsBusy(false);
+    updateLiveConfirmationUI();
+    updateCounter(getActiveViewName());
+  }
+}
+
+function initLiveTradeButtons() {
+  if (liveConfirmBuyBtn && !liveConfirmBuyBtn.dataset.ready) {
+    liveConfirmBuyBtn.onclick = () => addLiveSignalConfirmation("CALL");
+    liveConfirmBuyBtn.dataset.ready = "1";
+  }
+  if (liveConfirmSellBtn && !liveConfirmSellBtn.dataset.ready) {
+    liveConfirmSellBtn.onclick = () => addLiveSignalConfirmation("PUT");
+    liveConfirmSellBtn.dataset.ready = "1";
+  }
+  if (liveConfirmUndoBtn && !liveConfirmUndoBtn.dataset.ready) {
+    liveConfirmUndoBtn.onclick = () => removeLiveSignalConfirmation();
+    liveConfirmUndoBtn.dataset.ready = "1";
+  }
+  if (liveBuyCallBtn && !liveBuyCallBtn.dataset.ready) {
+    liveBuyCallBtn.onclick = () => liveManualTrade("CALL");
+    liveBuyCallBtn.dataset.ready = "1";
+  }
+  if (liveBuyPutBtn && !liveBuyPutBtn.dataset.ready) {
+    liveBuyPutBtn.onclick = () => liveManualTrade("PUT");
+    liveBuyPutBtn.dataset.ready = "1";
+  }
+  updateLiveConfirmationUI();
+  setLiveTradeStatus("Modo en vivo: señales pausadas solo en esta pestaña. Sumá 4 puntos netos y operá manualmente.");
+}
+
+function requestLiveReplayDraw(force = false) {
+  if ((localStorage.getItem("activeView") || "signals") !== "live") return;
+  drawLiveReplayNow(force);
+}
+function liveReplayLoop() {
+  if ((localStorage.getItem("activeView") || "signals") !== "live") {
+    stopLiveReplayLoop();
+    return;
+  }
+  drawLiveReplayNow(false);
+  liveReplayRaf = requestAnimationFrame(liveReplayLoop);
+}
+function startLiveReplayLoop() {
+  stopLiveReplayLoop();
+  initLiveTradeButtons();
+  paintLiveSymbolButtons();
+  drawLiveReplayNow(true);
+  liveReplayRaf = requestAnimationFrame(liveReplayLoop);
+}
+function stopLiveReplayLoop() {
+  if (liveReplayRaf) cancelAnimationFrame(liveReplayRaf);
+  liveReplayRaf = null;
+}
+
 function updatePerViewClearButtonsVisibility(activeView) {
   const wSignals = document.getElementById("clearSignalsInlineBtnWrap");
   const wTrades = document.getElementById("clearTradesInlineBtnWrap");
+  const wKeepOutside = document.getElementById("keepClosedAwaySignalsBtnWrap");
 
   if (wSignals) wSignals.style.display = activeView === "signals" ? "flex" : "none";
+  if (wKeepOutside) wKeepOutside.style.display = activeView === "signals" ? "flex" : "none";
   if (wTrades) wTrades.style.display = "none";
 }
 
@@ -3846,6 +4477,8 @@ function ensureInlineClearButtons() {
     },
   });
 
+  ensureKeepClosedAwaySignalsToggle();
+
   const oldTradesWrap = document.getElementById("clearTradesInlineBtnWrap");
   if (oldTradesWrap) oldTradesWrap.remove();
 
@@ -3855,12 +4488,14 @@ function ensureInlineClearButtons() {
 
 function setActiveView(name) {
   const isSignals = name === "signals";
+  const isLive = name === "live";
   const isTrades = name === "trades";
   const isPractice = name === "practice";
 
   const tv = ensureTradesView();
 
   if (signalsView) signalsView.classList.toggle("hidden", !isSignals);
+  if (liveView) liveView.classList.toggle("hidden", !isLive);
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (practiceView) practiceView.classList.toggle("hidden", !isPractice);
 
@@ -3874,6 +4509,12 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isPractice) ensurePracticeReady();
+  if (isLive) {
+    startLiveReplayLoop();
+    setLiveTradeStatus("Modo en vivo activo: señales pausadas solo en esta pestaña. Volvé a Señales para reanudar análisis.");
+  } else {
+    stopLiveReplayLoop();
+  }
   updateCounter(name);
   updatePerViewClearButtonsVisibility(name);
   ensureLiveAnalysisPauseButton();
@@ -3888,17 +4529,17 @@ function initTabs() {
   qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
 
   const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "trades", "practice"].includes(saved) ? saved : "signals";
+  const initial = ["signals", "live", "trades", "practice"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 }
 
 /* =========================
    Práctica
 ========================= */
-const PRACTICE_STATS_KEY = "practiceStats_giroAutoBacktest_v1";
-const PRACTICE_FILTER_KEY = "practiceFilterMode_giroAutoBacktest_v1";
-const PRACTICE_POOL_STATE_KEY = "practicePoolState_giroAutoBacktest_v1";
-const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_giroAutoBacktest_v1";
+const PRACTICE_STATS_KEY = "practiceStats_v1";
+const PRACTICE_FILTER_KEY = "practiceFilterMode_v1";
+const PRACTICE_POOL_STATE_KEY = "practicePoolState_v2";
+const PRACTICE_EXPORT_SAVED_KEY = "practiceExportSelected_v1";
 const PRACTICE_EXPORT_MAX = 150;
 const PRACTICE_FILTER_ALL = "ALL";
 const PRACTICE_FILTER_GIRO = "GIRO";
@@ -3924,12 +4565,12 @@ let practiceConfirmSellBtnEl = null;
 let practiceConfirmUndoBtnEl = null;
 let practiceConfirmHintEl = null;
 let practiceImageModeBtnEl = null;
-const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_giroAutoBacktest_v1";
+const PRACTICE_DISPLAY_MODE_KEY = "practiceDisplayMode_v1";
 const PRACTICE_DISPLAY_REPLAY = "REPLAY";
 const PRACTICE_DISPLAY_IMAGE = "IMAGE";
 let practiceDisplayMode = loadPracticeDisplayMode();
 const PRACTICE_CONFIRM_MIN = 4;
-const PRACTICE_AUTO_ENTRY_MS = 57000;
+const PRACTICE_AUTO_ENTRY_MS = 59000;
 const PRACTICE_AUTO_ENTRY_SEC = Math.round(PRACTICE_AUTO_ENTRY_MS / 1000);
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
@@ -4400,7 +5041,7 @@ function isPracticePastAutoEntryTime(round = practiceRound) {
   const ms = Number(round.replayMs ?? round.cutoffMs ?? 0);
   return Number.isFinite(ms) && ms >= PRACTICE_AUTO_ENTRY_MS;
 }
-function tryPracticeAutoEntryAt57(reason = "AUTO_57") {
+function tryPracticeAutoEntryAt57(reason = "AUTO_59") {
   if (!practiceRound || practiceRound.finished || practiceRound.answer) return false;
   if (!isPracticePastAutoEntryTime(practiceRound)) return false;
 
@@ -4409,11 +5050,11 @@ function tryPracticeAutoEntryAt57(reason = "AUTO_57") {
 
   practiceRound.answer = side;
   practiceRound.autoEntry = {
-    type: "AUTO_57",
+    type: "AUTO_59",
     side,
     ms: Math.round(Number(practiceRound.replayMs || PRACTICE_AUTO_ENTRY_MS)),
     sec: PRACTICE_AUTO_ENTRY_SEC,
-    reason: String(reason || "AUTO_57"),
+    reason: String(reason || "AUTO_59"),
     confirmationStatus: getPracticeConfirmationStatusText(),
     at: Date.now(),
   };
@@ -4583,7 +5224,7 @@ function addPracticeConfirmation(side = "CALL") {
   // En modo imagen completa no se reproduce la formación: al llegar a 4 puntos netos, muestra resultado al instante.
   if (tryPracticeImageModeAutoResult("CONFIRMACION_IMAGEN_COMPLETA")) return;
 
-  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 60s,
+  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 59s,
   // también entra automáticamente sin esperar otro frame.
   tryPracticeAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -5520,9 +6161,9 @@ function practiceLoop(ts) {
   const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
   drawPracticeChart(practiceCanvas, visibleTicks, replayMs, practiceRound.segmentMarks);
 
-  // Auto-entrada de práctica: al segundo 60, si ya hay 4 puntos netos
+  // Auto-entrada de práctica: al segundo 59, si ya hay 4 puntos netos
   // para COMPRA o VENTA y no hubo decisión manual, se elige esa dirección.
-  tryPracticeAutoEntryAt57("TIMER_57");
+  tryPracticeAutoEntryAt57("TIMER_59");
 
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
@@ -6137,7 +6778,7 @@ function applyTheme(theme) {
 (function initEvalMode() {
   ensureSignal35EvalButton();
 
-  const savedSec = parseInt(localStorage.getItem("evalSec") || "45", 10);
+  const savedSec = parseInt(localStorage.getItem("evalSec") || "40", 10);
   EVAL_SEC = [35, 40, 45].includes(savedSec) ? savedSec : 45;
 
   const savedPracticeSec = parseInt(localStorage.getItem("practiceEvalSec") || "45", 10);
@@ -6147,6 +6788,7 @@ function applyTheme(theme) {
     getSignalEvalButtons().forEach((b) => {
       const sec = parseInt(b.dataset.sec || "0", 10);
       b.classList.toggle("active", sec === EVAL_SEC);
+      b.title = sec === 35 ? "SNR: chequeo en 35s. Línea dinámica: evalúa en 35s." : `SNR: radar 35-${sec}s. Línea dinámica: evalúa en ${sec}s.`;
     });
   paintEval();
   try { paintPracticeSecButtons(); } catch {}
@@ -6161,24 +6803,28 @@ function applyTheme(theme) {
       })
   );
 
-  signalMode = MODE_NORMAL;
-  saveAnalysisMode(signalMode);
+  signalMode = loadAnalysisMode();
 
   const paintMode = () => {
     if (!modeBtn) return;
+    signalMode = normalizeSignalMode(signalMode);
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = "Base limpia: los motores de señal están desactivados.";
+    modeBtn.title = isDynamicLineMode(signalMode)
+      ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 59s con 4 puntos."
+      : isSNRPolaridadMode(signalMode)
+        ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
+        : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = MODE_NORMAL;
+      signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast("⚪ Base limpia: sin motor de señales", 1500);
+      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
     };
 })();
 
@@ -6387,6 +7033,7 @@ function drawDerivLikeChart(canvas, ticks) {
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
   const modalPolarityLevel = modalCurrentItem?.giroPolaridad?.level;
+  const modalDynamicLine = getSignalDynamicLineMeta(modalCurrentItem);
   const modalSNRNearArea = modalCurrentItem?.giroPolaridad
     ? buildSNRNearAreaMetaFromLevel(modalCurrentItem.giroPolaridad)
     : null;
@@ -6394,7 +7041,13 @@ function drawDerivLikeChart(canvas, ticks) {
     min = Math.min(min, Number(modalPolarityLevel));
     max = Math.max(max, Number(modalPolarityLevel));
   }
-  if (AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE && modalSNRNearArea) {
+  if (modalDynamicLine) {
+    const dl0 = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 0));
+    const dl1 = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 60000));
+    if (Number.isFinite(dl0)) { min = Math.min(min, dl0); max = Math.max(max, dl0); }
+    if (Number.isFinite(dl1)) { min = Math.min(min, dl1); max = Math.max(max, dl1); }
+  }
+  if (modalSNRNearArea) {
     min = Math.min(min, Number(modalSNRNearArea.nearLow), Number(modalSNRNearArea.zoneLow));
     max = Math.max(max, Number(modalSNRNearArea.nearHigh), Number(modalSNRNearArea.zoneHigh));
   }
@@ -6477,14 +7130,14 @@ function drawDerivLikeChart(canvas, ticks) {
     const strokeCol = isSupport ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
     const fillCol = isSupport ? "rgba(34,197,94,0.10)" : "rgba(248,113,113,0.10)";
     ctx.save();
-    if (AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE && pol.levelMode === "snr_body" && modalSNRNearArea) {
+    if (["snr_body", "snr_polaridad"].includes(String(pol.levelMode || "")) && modalSNRNearArea) {
       const nearLow = Number(modalSNRNearArea.nearLow);
       const nearHigh = Number(modalSNRNearArea.nearHigh);
       const zoneLow = Number(modalSNRNearArea.zoneLow);
       const zoneHigh = Number(modalSNRNearArea.zoneHigh);
 
-      // Área amarilla desactivada en esta rama AUTO BACKTEST.
-      // Solo queda visible la zona SNR real.
+      // V8: área amarilla = margen exacto que la PWA considera "cerca" del SNR
+      // para permitir AUTO 59s aunque el precio no esté dentro de la zona.
       if ([nearLow, nearHigh, zoneLow, zoneHigh].every(Number.isFinite)) {
         const yNearHigh = yOf(nearHigh);
         const yZoneHigh = yOf(zoneHigh);
@@ -6508,26 +7161,66 @@ function drawDerivLikeChart(canvas, ticks) {
         ctx.restore();
       }
     }
-    if (pol.levelMode === "snr_body" && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))) {
+    if (["snr_body", "snr_polaridad"].includes(String(pol.levelMode || "")) && Number.isFinite(Number(pol.zoneLow)) && Number.isFinite(Number(pol.zoneHigh))) {
       const yA = yOf(Number(pol.zoneHigh));
       const yB = yOf(Number(pol.zoneLow));
       const top = Math.min(yA, yB);
       const bandH = Math.max(4, Math.abs(yB - yA));
-      ctx.fillStyle = fillCol;
+      ctx.fillStyle = "rgba(96,165,250,0.09)";
       ctx.fillRect(8, top, w - 16, bandH);
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "rgba(96,165,250,0.90)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(8, yA);
+      ctx.lineTo(w - 8, yA);
+      ctx.moveTo(8, yB);
+      ctx.lineTo(w - 8, yB);
+      ctx.stroke();
+      ctx.restore();
+      ctx.setLineDash([7, 5]);
+      ctx.strokeStyle = "rgba(255,255,255,0.22)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(8, yLevel);
+      ctx.lineTo(w - 8, yLevel);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else {
+      ctx.setLineDash([8, 5]);
+      ctx.strokeStyle = strokeCol;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.moveTo(8, yLevel);
+      ctx.lineTo(w - 8, yLevel);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
-    ctx.setLineDash([8, 5]);
-    ctx.strokeStyle = strokeCol;
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    ctx.moveTo(8, yLevel);
-    ctx.lineTo(w - 8, yLevel);
-    ctx.stroke();
-    ctx.setLineDash([]);
     // Sin rótulos sobre la zona SNR ni sobre el área amarilla:
     // se mantienen las bandas y líneas visuales, pero se quitan los textos
     // para evitar contaminación visual dentro del modal.
     ctx.restore();
+  }
+
+  // Línea dinámica de tendencia (soporte/resistencia inclinada)
+  if (modalDynamicLine) {
+    const y0v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 0));
+    const y1v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 60000));
+    if (Number.isFinite(y0v) && Number.isFinite(y1v)) {
+      const isSupportLine = String(modalDynamicLine.levelType || modalDynamicLine.lineType || "") === "support";
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = isSupportLine ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
+      ctx.lineWidth = 2.3;
+      ctx.shadowColor = isSupportLine ? "rgba(34,197,94,0.20)" : "rgba(248,113,113,0.20)";
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.moveTo(xOf(0), yOf(y0v));
+      ctx.lineTo(xOf(60000), yOf(y1v));
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   // línea de “ahora” en live
@@ -6882,9 +7575,9 @@ function addSignalConfirmation(side = "CALL") {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 60s,
+  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 59s,
   // también se dispara la auto-entrada sin esperar otro tick/timer.
-  trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_60");
+  trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
 function removeSignalConfirmation() {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
@@ -6921,16 +7614,16 @@ function updateSignalConfirmationUI() {
     const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
     const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · SNR cerca/dentro${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
       signalConfirmHintEl.textContent = score === 0
-        ? `Mínimo ${SIGNAL_CONFIRM_MIN} netas`
-        : `Neto ${score > 0 ? "+" : ""}${score}`;
+        ? `PREALERTA · mínimo ${SIGNAL_CONFIRM_MIN} netas`
+        : `PREALERTA · neto ${score > 0 ? "+" : ""}${score}`;
       signalConfirmHintEl.style.color = "rgba(255,255,255,.68)";
     }
   }
@@ -6990,7 +7683,7 @@ function assertSignalMinimumConfirmations(side = null, item = modalCurrentItem) 
 function getSignalSNREntryMeta(item) {
   const meta = getSignalLevelMeta(item);
   if (!meta || typeof meta !== "object") return null;
-  if (String(meta.levelMode || "") !== "snr_body") return null;
+  if (!["snr_body", "snr_polaridad"].includes(String(meta.levelMode || ""))) return null;
   const level = Number(meta.level);
   if (!Number.isFinite(level)) return null;
   return meta;
@@ -7002,51 +7695,11 @@ function getSignalLiveTicksForEntryGate(item) {
     ? minuteData[minute][symbol]
     : [];
   const saved = Array.isArray(item?.ticks) ? item.ticks : [];
+  // Si la señal sigue viva, minuteData tiene los ticks hasta el segundo actual.
+  // Si no, usamos los ticks guardados/hidratados.
   return live.length >= saved.length ? live.slice() : saved.slice();
 }
-function getSignalClosePriceAt60(item) {
-  const minute = Number(item?.minute);
-  const symbol = String(item?.symbol || "");
-  const ocClose = Number(candleOC?.[minute]?.[symbol]?.close);
-  if (Number.isFinite(ocClose)) return ocClose;
-
-  const ticks = getSignalLiveTicksForEntryGate(item)
-    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-
-  if (ticks.length) {
-    const q = Number(getPriceAtMs(ticks, 60000));
-    if (Number.isFinite(q)) return q;
-    const last = Number(ticks[ticks.length - 1]?.quote);
-    if (Number.isFinite(last)) return last;
-  }
-
-  return NaN;
-}
-function getSignalOpenPriceAt0(item) {
-  const minute = Number(item?.minute);
-  const symbol = String(item?.symbol || "");
-  const ocOpen = Number(candleOC?.[minute]?.[symbol]?.open);
-  if (Number.isFinite(ocOpen)) return ocOpen;
-
-  const ticks = getSignalLiveTicksForEntryGate(item)
-    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-
-  if (ticks.length) {
-    const first = Number(ticks[0]?.quote);
-    if (Number.isFinite(first)) return first;
-  }
-  return NaN;
-}
 function getSignalPriceAtEntryCheckMs(item, checkMs = SIGNAL_AUTO_SNR_CHECK_MS) {
-  if (Number(checkMs) >= 60000) {
-    const close = getSignalClosePriceAt60(item);
-    if (Number.isFinite(close)) return close;
-  }
-
   const ticks = getSignalLiveTicksForEntryGate(item)
     .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
     .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
@@ -7072,6 +7725,8 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
   const tolerance = Number(meta.tolerance);
   const zoneSize = Number(meta.zone);
 
+  // Preferimos zoneLow/zoneHigh porque ya incluyen la zona chica + tolerancia.
+  // Si falta, reconstruimos una franja razonable desde bodyZone o level.
   if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
     if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
       zoneLow = Math.min(bodyLow, bodyHigh);
@@ -7087,41 +7742,66 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
       zoneHigh = level + fallback;
     }
   }
-  const zl = Math.min(zoneLow, zoneHigh);
-  const zh = Math.max(zoneLow, zoneHigh);
-  zoneLow = zl;
-  zoneHigh = zh;
+  {
+    const zA = zoneLow;
+    const zB = zoneHigh;
+    zoneLow = Math.min(zA, zB);
+    zoneHigh = Math.max(zA, zB);
+  }
   const zoneWidth = Math.max(0, zoneHigh - zoneLow);
 
-  const nearBuffer = AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE
-    ? Math.max(
-        Number.isFinite(tolerance) ? tolerance * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
-        zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
-        Number.isFinite(zoneSize) ? zoneSize * 0.25 : 0,
-        Math.abs(level) * 0.000001,
-        1e-9
-      )
-    : 0;
+  const nearBuffer = Math.max(
+    Number.isFinite(tolerance) ? tolerance * SIGNAL_AUTO_SNR_NEAR_TOL_MULT : 0,
+    zoneWidth * SIGNAL_AUTO_SNR_NEAR_ZONE_MULT,
+    Number.isFinite(zoneSize) ? zoneSize * 0.25 : 0,
+    Math.abs(level) * 0.000001,
+    1e-9
+  );
 
   const price = getSignalPriceAtEntryCheckMs(item, checkMs);
   if (!Number.isFinite(price)) {
-    return { ok: false, pending: true, reason: "sin_precio_60", message: "Todavía no hay cierre suficiente para validar el SNR en 60s." };
+    return { ok: false, pending: true, reason: "sin_precio_59", message: "Todavía no hay precio suficiente para validar el SNR en 59s." };
+  }
+
+  const roleHardBreakInfo = getSignalSNRRoleHardBreakInfo(meta, getSignalLiveTicksForEntryGate(item), checkMs);
+  if (roleHardBreakInfo?.broken) {
+    return {
+      ok: false,
+      pending: false,
+      reason: "snr_role_broken_intracandle",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: checkMs,
+      check_sec: Math.round(checkMs / 1000),
+      price,
+      level,
+      zoneLow,
+      zoneHigh,
+      bodyZoneLow: Number.isFinite(bodyLow) ? bodyLow : null,
+      bodyZoneHigh: Number.isFinite(bodyHigh) ? bodyHigh : null,
+      tolerance: Number.isFinite(tolerance) ? tolerance : null,
+      nearBuffer,
+      distance: roleHardBreakInfo.breakDistance,
+      relation: "broken_role",
+      levelType: String(meta.levelType || ""),
+      originalType: String(meta.originalType || ""),
+      currentRole: String(meta.currentRole || ""),
+      roleHardBreakInfo,
+      message: `SNR invalidado: la vela rompió el rol del nivel antes de ${Math.round(checkMs / 1000)}s (${roleHardBreakInfo.breakQuote.toFixed(6)} fuera de ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)})`,
+    };
   }
 
   const distance = price < zoneLow ? zoneLow - price : price > zoneHigh ? price - zoneHigh : 0;
   const inside = distance <= 0;
-  const near = !inside && AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE && distance <= nearBuffer;
+  const near = !inside && distance <= nearBuffer;
   const ok = inside || near;
   const relation = inside ? "inside" : price < zoneLow ? (near ? "near_below" : "far_below") : (near ? "near_above" : "far_above");
-  const checkSec = Math.round(checkMs / 1000);
-
   return {
     ok,
     pending: false,
-    reason: ok ? (inside ? "inside_snr_zone" : "near_snr_zone") : "close_outside_snr_zone",
+    reason: ok ? (inside ? "inside_snr_zone" : "near_snr_zone") : "far_from_snr_zone",
     side: normalizeSignalConfirmationSide(side) || "",
     check_ms: checkMs,
-    check_sec: checkSec,
+    check_sec: Math.round(checkMs / 1000),
     price,
     level,
     zoneLow,
@@ -7132,264 +7812,226 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
     nearBuffer,
     distance,
     relation,
+    roleHardBreakInfo: roleHardBreakInfo || null,
     levelType: String(meta.levelType || ""),
     originalType: String(meta.originalType || ""),
     currentRole: String(meta.currentRole || ""),
-    strict_inside_only: !AUTO_BACKTEST_USE_YELLOW_NEAR_ZONE,
     message: ok
-      ? `Precio ${checkSec}s ${price.toFixed(6)} dentro del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)}`
-      : `Precio ${checkSec}s ${price.toFixed(6)} fuera del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)} (dist ${distance.toFixed(6)})`,
+      ? `Precio ${SIGNAL_AUTO_ENTRY_SEC}s ${price.toFixed(6)} dentro/cerca del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)}`
+      : `Precio ${SIGNAL_AUTO_ENTRY_SEC}s ${price.toFixed(6)} lejos del SNR ${zoneLow.toFixed(6)}-${zoneHigh.toFixed(6)} (dist ${distance.toFixed(6)})`,
   };
 }
 function formatSignalSNREntryGate(gate) {
   if (!gate || typeof gate !== "object") return "SNR no validado";
   if (gate.pending) return gate.message || "SNR pendiente";
   if (!Number.isFinite(Number(gate.price))) return gate.message || "SNR sin precio";
-  const status = gate.ok ? "dentro" : "fuera";
-  return `60s ${status}: ${Number(gate.price).toFixed(6)} | zona ${Number(gate.zoneLow).toFixed(6)}-${Number(gate.zoneHigh).toFixed(6)}`;
+  const status = gate.ok ? (gate.reason === "inside_snr_zone" ? "dentro" : "cerca") : "lejos";
+  return `${SIGNAL_AUTO_ENTRY_SEC}s ${status}: ${Number(gate.price).toFixed(6)} | zona ${Number(gate.zoneLow).toFixed(6)}-${Number(gate.zoneHigh).toFixed(6)}`;
 }
-function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
-  if (!SIGNAL_AUTO_SNR_GATE_ENABLED || !item) return null;
+
+const SIGNAL_CLOSE_SNR_FILTER_MS = 60000;
+function getSignalCloseSNREntryGate(item) {
+  if (!item || !item.minuteComplete) return null;
   const meta = getSignalSNREntryMeta(item);
   if (!meta) return null;
-  const ms = getSignalConfirmationMs(item);
-  if (ms < SIGNAL_AUTO_ENTRY_MS) {
-    throw new Error(`La entrada SNR se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
-  }
-  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
-  if (gate.pending) throw new Error(gate.message || "SNR pendiente de precio");
-  if (!gate.ok) throw new Error(`Precio lejos del SNR: ${formatSignalSNREntryGate(gate)}`);
+  const ticks = Array.isArray(item.ticks) ? item.ticks : [];
+  // No borrar hasta tener la vela completa hidratada: evita falsos descartes por falta de ticks.
+  if (ticks.length < 2) return null;
+  const gate = buildSignalSNREntryGate(item, item.direction || "", SIGNAL_CLOSE_SNR_FILTER_MS);
+  if (!gate || gate.pending || !Number.isFinite(Number(gate.price))) return null;
   return gate;
 }
-
-function getAutoBacktestCandleDirection(item) {
-  const open = Number(getSignalOpenPriceAt0(item));
-  const close = Number(getSignalClosePriceAt60(item));
-  if (!Number.isFinite(open) || !Number.isFinite(close)) return { side: "", formation: "", open, close, bodyDir: 0 };
-  if (close > open) return { side: "PUT", formation: "ALCISTA", open, close, bodyDir: 1 };
-  if (close < open) return { side: "CALL", formation: "BAJISTA", open, close, bodyDir: -1 };
-  return { side: "", formation: "NEUTRA", open, close, bodyDir: 0 };
-}
-function getCandleDirectionFromOHLC(candle) {
-  const open = Number(candle?.open);
-  const close = Number(candle?.close);
-  if (!Number.isFinite(open) || !Number.isFinite(close)) return 0;
-  if (close > open) return 1;
-  if (close < open) return -1;
-  return 0;
-}
-function getClosedCandleForMomentum(symbol, minute) {
-  const m = Number(minute);
-  const sym = String(symbol || "");
-  if (!Number.isFinite(m) || !sym) return null;
-
-  const live = candleOC?.[m]?.[sym];
-  if (live && [live.open, live.close].map(Number).every(Number.isFinite)) return live;
-
-  const stored = (Array.isArray(giroPolarityCandles?.[sym]) ? giroPolarityCandles[sym] : [])
-    .find((c) => Number(c?.minute) === m);
-  if (stored && [stored.open, stored.close].map(Number).every(Number.isFinite)) return stored;
-  return null;
-}
-function getMomentumRunBeforeSignal(item, lookback = AUTO_BACKTEST_MOMENTUM_LOOKBACK) {
-  const symbol = String(item?.symbol || "");
-  const minute = Number(item?.minute);
-  const candles = [];
-  if (!symbol || !Number.isFinite(minute)) return { blocked: false, maxRun: 0, runDir: 0, candles: [] };
-
-  for (let i = Number(lookback || 8); i >= 1; i--) {
-    const m = minute - i;
-    const candle = getClosedCandleForMomentum(symbol, m);
-    if (!candle) continue;
-    candles.push({ minute: m, open: Number(candle.open), close: Number(candle.close), dir: getCandleDirectionFromOHLC(candle) });
-  }
-
-  let maxRun = 0;
-  let runDir = 0;
-  let curRun = 0;
-  let curDir = 0;
-
-  for (const c of candles) {
-    const d = Number(c.dir || 0);
-    if (!d) {
-      curRun = 0;
-      curDir = 0;
-      continue;
-    }
-    if (d === curDir) curRun += 1;
-    else {
-      curDir = d;
-      curRun = 1;
-    }
-    if (curRun > maxRun) {
-      maxRun = curRun;
-      runDir = curDir;
-    }
-  }
-
-  return {
-    blocked: maxRun > AUTO_BACKTEST_MAX_CONSECUTIVE_MOMENTUM,
-    maxRun,
-    runDir,
-    candles,
-  };
-}
-function isAutoBacktestGiroMode(item) {
-  return isGiroFamilyMode(normalizeSignalMode(item?.mode || ""));
-}
-function hasAutoBacktestSNRRoleSequenceMeta(item) {
-  const meta = getSignalSNREntryMeta(item);
-  if (!meta) return false;
-  const pattern = String(meta.rolePattern || "").toUpperCase().trim();
-  if (pattern === "S-R-S" || pattern === "R-S-R") return true;
-  const seq = String(meta.roleSequence || "").toUpperCase().trim();
-  return seq.includes("S-R-S") || seq.includes("R-S-R");
-}
-function isAutoBacktestEntryWindowOpen(item) {
+function signalHasProtectedTrade(item) {
   if (!item) return false;
-  const nowMinute = currentServerMinute();
-  const itemMinute = Number(item.minute);
-  if (!Number.isFinite(itemMinute)) return false;
-  // Opera justo después del cierre: al primer momento del minuto siguiente.
-  return itemMinute === nowMinute - 1;
+  const b = String(item?.trade?.badge || "").toUpperCase();
+  if (b === "PENDING" || b === "ITM" || b === "OTM") return true;
+  if (item?.trade?.contract_id) return true;
+  if (item?.signalAutoEntry?.contract_id) return true;
+  const autoStatus = String(item?.signalAutoEntry?.status || "").toLowerCase();
+  if (item?.signalAutoEntry?.attempted && ["sending", "sent"].includes(autoStatus)) return true;
+  return false;
 }
-function markAutoBacktestDecision(item, status, extra = {}) {
-  if (!item) return;
-  item.signalAutoEntry = {
-    type: "AUTO_BACKTEST_DEMO_60",
-    version: AUTO_BACKTEST_VERSION,
-    auto_backtest_demo: true,
-    attempted: true,
-    status,
-    ms: SIGNAL_AUTO_ENTRY_MS,
-    sec: SIGNAL_AUTO_ENTRY_SEC,
-    at: Date.now(),
-    strict_snr_close: true,
-    yellow_zone_used: false,
-    ...extra,
+function hasSignalTradeAssociated(item) {
+  return signalHasProtectedTrade(item);
+}
+function shouldRemoveSignalBecauseClosedAwayFromSNR(item) {
+  // No purgar señales que ya ejecutaron o están ejecutando un trade.
+  // Si se borra una señal con contrato, se pierde el vínculo para actualizar Trades.
+  if (signalHasProtectedTrade(item)) return false;
+  const gate = getSignalCloseSNREntryGate(item);
+  if (!gate) return false;
+  item.closeSnrGate = {
+    ok: !!gate.ok,
+    reason: gate.reason,
+    price: gate.price,
+    zoneLow: gate.zoneLow,
+    zoneHigh: gate.zoneHigh,
+    nearBuffer: gate.nearBuffer,
+    distance: gate.distance,
+    checked_ms: SIGNAL_CLOSE_SNR_FILTER_MS,
+    keptByTestMode: keepClosedAwaySignals && !gate.ok,
   };
-  saveHistory(history);
+
+  // V45: modo test. Si está activo, las señales que cierran fuera de zona se conservan
+  // en Señales para que el usuario pueda revisarlas, marcarlas y exportarlas.
+  if (keepClosedAwaySignals && !gate.ok) {
+    item.keepClosedAwayByUser = true;
+    item.keepClosedAwaySavedAt = Date.now();
+    return false;
+  }
+
+  return !gate.ok;
 }
-function buildAutoBacktestDecision(item, reason = "AUTO_60") {
-  if (!item) return { ok: false, status: "sin_senal", message: "Sin señal" };
-  if (!AUTO_BACKTEST_DEMO_ONLY || activeTradingAccount !== ACCOUNT_MODE_DEMO) {
-    return { ok: false, status: "blocked_not_demo", message: "Esta versión solo opera en DEMO" };
+function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
+  if (!Array.isArray(history) || !history.length) return 0;
+  const removedIds = new Set();
+  const before = history.length;
+  let keptOutsideChanged = false;
+  history = history.filter((it) => {
+    const prevKept = !!it?.keepClosedAwayByUser;
+    if (shouldRemoveSignalBecauseClosedAwayFromSNR(it)) {
+      if (it && it.id) removedIds.add(String(it.id));
+      return false;
+    }
+    if (!prevKept && !!it?.keepClosedAwayByUser) keptOutsideChanged = true;
+    return true;
+  });
+  const removed = before - history.length;
+  if (!removed) {
+    if (keptOutsideChanged) {
+      try { saveHistory(history); } catch {}
+      try { renderHistory(); } catch {}
+    }
+    return 0;
   }
-  if (!isAutoBacktestGiroMode(item)) {
-    return { ok: false, status: "blocked_not_giro", message: "No es señal GIRO/SNR" };
+
+  try { saveHistory(history); } catch {}
+  try {
+    for (const id of removedIds) {
+      const row = document.querySelector(`.row[data-id="${cssEscape(id)}"]`);
+      if (row && row.parentElement) row.parentElement.removeChild(row);
+    }
+  } catch {}
+
+  if (
+    modalCurrentItem &&
+    modalOpenContext?.source !== "trades" &&
+    removedIds.has(String(modalCurrentItem.id || ""))
+  ) {
+    try { closeChartModal(); } catch {}
   }
-  if (AUTO_BACKTEST_REQUIRE_SNR_ROLE_SEQUENCE && !hasAutoBacktestSNRRoleSequenceMeta(item)) {
+
+  updateCounter(localStorage.getItem("activeView") || "signals");
+  if ((localStorage.getItem("activeView") || "signals") === "signals") {
+    try { renderHistory(); } catch {}
+  }
+  return removed;
+}
+function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
+  if (!item) return null;
+
+  // V48: operaciones manuales desde la pestaña En vivo son independientes de señales/SNR/AUTO 59.
+  // Se registran como estudio, pero no se bloquean por zona ni por segundo 59.
+  if (item?.liveManualTrade) {
+    const sym = item.symbol || liveReplaySymbol || "";
+    const ticks = Array.isArray(item.ticks) ? item.ticks : getLiveReplayTicks(sym);
+    const last = ticks.length ? Number(ticks[ticks.length - 1].quote) : Number(lastQuoteBySymbol?.[sym]);
     return {
-      ok: false,
-      status: "blocked_snr_without_role_sequence",
-      message: "SNR inválido: falta secuencia mínima S-R-S o R-S-R",
-      snr_meta: getSignalSNREntryMeta(item) || null,
+      ok: true,
+      pending: false,
+      reason: "live_manual_trade",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: Math.round(getLiveReplayMsInMinute(sym)),
+      check_sec: Math.round(getLiveReplayMsInMinute(sym) / 1000),
+      price: Number.isFinite(last) ? last : null,
+      message: "Trade manual desde pestaña En vivo; señales/SNR pausadas y no bloquean esta entrada.",
     };
   }
-  if (!isAutoBacktestEntryWindowOpen(item)) {
-    return { ok: false, status: "blocked_not_close_window", message: "La entrada se evalúa al cierre 60s del minuto anterior" };
+
+  const ms = getSignalConfirmationMs(item);
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
   }
 
-  const candle = getAutoBacktestCandleDirection(item);
-  if (!candle.side) {
-    return { ok: false, status: "blocked_unclear_formation", message: "Formación sin dirección clara al cierre", candle };
+  // Modo Línea dinámica: acá la línea sí valida la entrada.
+  // Soporte dinámico => CALL solo si el precio respeta arriba.
+  // Resistencia dinámica => PUT solo si el precio respeta abajo.
+  if (isDynamicLineMode(item.mode)) {
+    const gate = buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS);
+    if (gate?.pending) throw new Error(gate.message || "Línea dinámica pendiente");
+    if (!gate?.ok) throw new Error(gate?.message || "La vela no respeta la línea dinámica");
+    return gate;
   }
 
-  const momentum = getMomentumRunBeforeSignal(item);
-  if (momentum.blocked) {
+  // V46: en modos SNR/SNR polaridad NO se exige que la vela cierre dentro del SNR
+  // ni se bloquea la autoentrada por estar lejos de la zona al check de 59s.
+  // La operación se decide por: vela viva + 4 puntos netos + disciplina OK.
+  // Igual calculamos el gate SNR para registrar si el precio estaba dentro/cerca/lejos,
+  // pero no lo usamos como bloqueo operativo.
+  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+  if (gate?.pending) {
     return {
-      ok: false,
-      status: "blocked_momentum_gt_3",
-      message: `Momentum bloqueado: ${momentum.maxRun} velas consecutivas antes de la señal`,
-      side: candle.side,
-      formation_side: candle.formation,
-      candle,
-      momentum,
+      ok: true,
+      pending: false,
+      reason: "auto59_4pts_snr_sin_cierre_zona",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: SIGNAL_AUTO_SNR_CHECK_MS,
+      check_sec: SIGNAL_AUTO_ENTRY_SEC,
+      message: "AUTO 59 habilitado por 4 puntos; cierre/zona SNR no bloquean la entrada.",
+      original_gate: gate,
     };
   }
-
-  const gate = buildSignalSNREntryGate(item, candle.side, SIGNAL_AUTO_SNR_CHECK_MS);
-  if (gate.pending) {
-    return { ok: false, pending: true, status: "pending_close_price", message: gate.message || "Cierre 60s pendiente", side: candle.side, formation_side: candle.formation, candle, momentum, snr_entry_gate: gate };
-  }
-  if (!gate.ok || gate.reason !== "inside_snr_zone") {
-    return {
-      ok: false,
-      status: "blocked_close_outside_snr",
-      message: "El cierre 60s quedó fuera de la zona SNR",
-      side: candle.side,
-      formation_side: candle.formation,
-      candle,
-      momentum,
-      snr_entry_gate: gate,
-    };
-  }
-
-  return {
+  return Object.assign({}, gate || {}, {
     ok: true,
-    status: "ready",
-    message: `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`,
-    side: candle.side,
-    formation_side: candle.formation,
-    candle,
-    momentum,
-    snr_entry_gate: gate,
-    reason: String(reason || "AUTO_60"),
-  };
-}
-function isAutoBacktestAutoContext(item) {
-  return item?.signalAutoEntry?.type === "AUTO_BACKTEST_DEMO_60" && item?.signalAutoEntry?.auto_backtest_demo === true;
+    pending: false,
+    reason: gate?.reason ? `auto59_4pts_sin_bloqueo_${gate.reason}` : "auto59_4pts_sin_cierre_zona",
+    original_ok: !!gate?.ok,
+    original_reason: gate?.reason || "sin_snr_gate",
+    message: gate?.ok
+      ? (gate.message || "AUTO 59 por 4 puntos; precio dentro/cerca del SNR.")
+      : `AUTO 59 por 4 puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
+  });
 }
 
-function trySignalAutoEntryAt57(reason = "AUTO_60", itemOverride = null) {
-  // Nombre legado para no tener que cambiar todos los llamados internos.
-  // En esta rama trabaja en 60s/cierre, no en 57s.
+function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
   const item = itemOverride || modalCurrentItem;
-  if (!item) return false;
+  if (!item || !isTradeEntryOpen(item)) return false;
   if (item?.trade?.badge) return false;
   if (tradeInFlight) return false;
   if (item?.signalAutoEntry?.attempted) return false;
 
-  const decision = buildAutoBacktestDecision(item, reason);
-  if (decision.pending) return false;
+  const ms = getSignalConfirmationMs(item);
+  if (ms < SIGNAL_AUTO_ENTRY_MS) return false;
 
-  if (!decision.ok) {
-    markAutoBacktestDecision(item, decision.status || "blocked", {
-      reason: String(reason || "AUTO_60"),
-      message: decision.message || "Autoentrada bloqueada",
-      side: decision.side || "",
-      formation_side: decision.formation_side || decision?.candle?.formation || "",
-      candle: decision.candle || null,
-      momentum: decision.momentum || null,
-      snr_entry_gate: decision.snr_entry_gate || null,
-    });
-    if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-    const msg = decision.status === "blocked_close_outside_snr"
-      ? "⛔ AUTO 60 cancelado: cierre fuera del SNR"
-      : decision.status === "blocked_momentum_gt_3"
-        ? "⛔ AUTO 60 cancelado: momentum > 3 velas"
-        : decision.status === "blocked_snr_without_role_sequence"
-          ? "⛔ AUTO 60 cancelado: SNR sin S-R-S/R-S-R"
-          : `⛔ AUTO 60 cancelado: ${decision.message || decision.status || "regla no cumplida"}`;
-    toast(msg, 2400);
-    return true;
+  const side = getSignalEnabledTradeSide(item);
+  if (!side) return false;
+
+  let gate = null;
+  try {
+    gate = assertSignalSNREntryGateAt57(side, item);
+  } catch (err) {
+    const msg = err?.message || (isDynamicLineMode(item.mode) ? "La línea dinámica no habilita la entrada" : "La entrada SNR no está habilitada");
+    if (!itemOverride || (modalCurrentItem && modalCurrentItem.id === item.id)) toast(`⛔ ${msg}`, 1500);
+    return false;
   }
-
-  const side = decision.side;
   const label = side === "CALL" ? "COMPRA" : "VENTA";
 
-  markAutoBacktestDecision(item, "sending", {
-    reason: String(reason || "AUTO_60"),
+  item.signalAutoEntry = {
+    type: "AUTO_59_REAL",
+    attempted: true,
+    status: "sending",
     side,
-    formation_side: decision.formation_side,
-    candle: decision.candle,
-    momentum: decision.momentum,
-    snr_entry_gate: decision.snr_entry_gate,
-    confirmation_status: "AUTO_BACKTEST_SIN_CONFIRMACIONES_MANUALES",
-  });
+    ms,
+    sec: Math.round(ms / 1000),
+    reason: String(reason || "AUTO_59"),
+    at: Date.now(),
+    confirmation_status: getSignalConfirmationStatusText(item),
+    snr_entry_gate: gate,
+  };
+  saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO 60: enviando ${label} DEMO…`, 1500);
+  toast(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -7401,7 +8043,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_60", itemOverride = null) {
       item.signalAutoEntry.contract_id = cid ? String(cid) : "";
       item.signalAutoEntry.sent_at = Date.now();
       saveHistory(history);
-      toast(`✅ AUTO ${label} DEMO enviado ${cid ? "ID: " + cid : ""}`, 1800);
+      toast(`✅ AUTO ${label} enviado ${cid ? "ID: " + cid : ""}`, 1800);
     })
     .catch((e) => {
       item.signalAutoEntry.status = "error";
@@ -7421,18 +8063,17 @@ function trySignalAutoEntryAt57(reason = "AUTO_60", itemOverride = null) {
   return true;
 }
 
-function scanSignalAutoEntriesAt57(reasonOrMinute = null) {
-  // Nombre legado: escanea AUTO 60/cierre.
+function scanSignalAutoEntriesAt57() {
   try {
+    if (areSignalsPaused()) return false;
     if (tradeInFlight) return false;
     const nowMinute = currentServerMinute();
-    const closedMinute = Number.isFinite(Number(reasonOrMinute)) ? Number(reasonOrMinute) : nowMinute - 1;
     const candidates = (history || [])
-      .filter((it) => it && Number(it.minute) === closedMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
-      .filter((it) => isAutoBacktestGiroMode(it));
+      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => getSignalEnabledTradeSide(it));
 
     for (const it of candidates) {
-      if (trySignalAutoEntryAt57("TIMER_60_CLOSE_SCAN", it)) return true;
+      if (trySignalAutoEntryAt57("TIMER_59_SCAN", it)) return true;
     }
   } catch {}
   return false;
@@ -7543,8 +8184,777 @@ function updateModalCandleStatusUI() {
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
 
-  // Auto-entrada real: igual que práctica, al segundo 60 si ya hay 4 puntos netos.
-  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_60_MODAL");
+  // Auto-entrada real: igual que práctica, al segundo 59 si ya hay 4 puntos netos.
+  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_59");
+}
+
+
+/* =========================
+   Modal: vista mini velas 1m
+========================= */
+function updateModalChartViewBtnUI() {
+  const isCandles = modalChartView === "candles1m";
+  if (modalCandle1mBtn) {
+    modalCandle1mBtn.setAttribute("aria-pressed", isCandles ? "true" : "false");
+    modalCandle1mBtn.textContent = isCandles ? "📈 Línea" : "🕯️ Velas 1m";
+    modalCandle1mBtn.title = isCandles
+      ? "Volver al gráfico de línea intraminuto"
+      : "Ver mini gráfico de velas de 1 minuto con el nivel marcado";
+  }
+  if (modalReplayBtn) {
+    modalReplayBtn.classList.toggle("hidden", !isCandles);
+    modalReplayBtn.title = "Abrir zoom y reproducir tick por tick la vela de la señal";
+  }
+}
+function setModalChartView(view) {
+  modalChartView = view === "candles1m" ? "candles1m" : "line";
+  if (modalChartView !== "candles1m") closeModalReplay();
+  updateModalChartViewBtnUI();
+  requestModalDraw(true);
+}
+if (modalCandle1mBtn) {
+  modalCandle1mBtn.onclick = (e) => {
+    e.stopPropagation();
+    setModalChartView(modalChartView === "candles1m" ? "line" : "candles1m");
+  };
+}
+if (modalReplayBtn) {
+  modalReplayBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (modalChartView !== "candles1m") setModalChartView("candles1m");
+    openModalReplay();
+  };
+}
+function candleFromTicks(symbol, minute, ticks = []) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (!pts.length) return null;
+  const prices = pts.map((p) => p.quote);
+  const open = prices[0];
+  const close = prices[prices.length - 1];
+  const high = Math.max(...prices);
+  const low = Math.min(...prices);
+  if (![open, high, low, close].every(Number.isFinite)) return null;
+  return { symbol, minute: Number(minute), open, high, low, close, fromTicks: true };
+}
+function getStoredCandleByMinute(symbol, minute) {
+  const arr = Array.isArray(giroPolarityCandles?.[symbol]) ? giroPolarityCandles[symbol] : [];
+  return arr.find((c) => Number(c?.minute) === Number(minute)) || null;
+}
+function sanitizeMiniCandle(symbol, candle, opts = {}) {
+  const m = Number(candle?.minute);
+  const open = Number(candle?.open);
+  const high = Number(candle?.high);
+  const low = Number(candle?.low);
+  const close = Number(candle?.close);
+  if (![m, open, high, low, close].every(Number.isFinite)) return null;
+  return {
+    ...candle,
+    ...opts,
+    symbol,
+    minute: m,
+    open,
+    high: Math.max(open, high, low, close),
+    low: Math.min(open, high, low, close),
+    close,
+  };
+}
+function modalOHLC1mCacheKey(symbol, endMinute, count = MODAL_CANDLES_1M_COUNT) {
+  return `${symbol || ""}::${Number(endMinute)}::${Number(count) || MODAL_CANDLES_1M_COUNT}`;
+}
+function normalizeDerivOHLC1mCandles(symbol, candles, endMinute, maxCount = MODAL_CANDLES_1M_COUNT) {
+  const endM = Number(endMinute);
+  const minM = Number.isFinite(endM) ? endM - maxCount + 1 : -Infinity;
+  const byMinute = new Map();
+
+  for (const c of Array.isArray(candles) ? candles : []) {
+    const epoch = Number(c?.epoch ?? c?.time ?? c?.timestamp);
+    const minute = Number.isFinite(epoch) ? Math.floor(epoch / 60) : Number(c?.minute);
+    if (!Number.isFinite(minute)) continue;
+    if (Number.isFinite(endM) && (minute < minM || minute > endM)) continue;
+
+    const clean = sanitizeMiniCandle(symbol, { ...c, minute }, { source: "deriv_ohlc" });
+    if (!clean) continue;
+    byMinute.set(Number(clean.minute), clean);
+  }
+
+  return [...byMinute.values()]
+    .sort((a, b) => Number(a.minute) - Number(b.minute))
+    .slice(-maxCount);
+}
+async function fetchDerivOHLC1mCandles(symbol, endMinute, maxCount = MODAL_CANDLES_1M_COUNT) {
+  const endM = Number(endMinute);
+  if (!symbol || !Number.isFinite(endM)) return [];
+
+  const start = minuteToEpochSec(endM - maxCount + 1);
+  const end = minuteToEpochSec(endM + 1);
+
+  const res = await wsRequest({
+    ticks_history: symbol,
+    start,
+    end,
+    style: "candles",
+    granularity: 60,
+    adjust_start_time: 1,
+  });
+
+  return normalizeDerivOHLC1mCandles(symbol, res?.candles, endM, maxCount);
+}
+function requestModalOHLC1mCandles(item, maxCount = MODAL_CANDLES_1M_COUNT) {
+  if (!item) return false;
+  const symbol = item.symbol;
+  const endMinute = getModalOneMinuteCandlesEndMinute(item);
+  if (!symbol || !Number.isFinite(endMinute)) return false;
+
+  const key = modalOHLC1mCacheKey(symbol, endMinute, maxCount);
+  if (modalOHLC1mCache.has(key) || modalOHLC1mPending.has(key)) return true;
+  if (!ws || ws.readyState !== 1) {
+    modalOHLC1mFailed.add(key);
+    return false;
+  }
+
+  const promise = fetchDerivOHLC1mCandles(symbol, endMinute, maxCount)
+    .then((candles) => {
+      if (Array.isArray(candles) && candles.length) {
+        modalOHLC1mCache.set(key, candles);
+        modalOHLC1mFailed.delete(key);
+      } else {
+        modalOHLC1mFailed.add(key);
+      }
+    })
+    .catch(() => {
+      modalOHLC1mFailed.add(key);
+    })
+    .finally(() => {
+      modalOHLC1mPending.delete(key);
+      if (
+        modalCurrentItem &&
+        modalChartView === "candles1m" &&
+        modalCurrentItem.symbol === symbol &&
+        Number(getModalOneMinuteCandlesEndMinute(modalCurrentItem)) === endMinute
+      ) {
+        requestModalDraw(true);
+      }
+    });
+
+  modalOHLC1mPending.set(key, promise);
+  return true;
+}
+function getCachedModalOHLC1mCandles(symbol, endMinute, maxCount = MODAL_CANDLES_1M_COUNT) {
+  const key = modalOHLC1mCacheKey(symbol, endMinute, maxCount);
+  const cached = modalOHLC1mCache.get(key);
+  return Array.isArray(cached) ? cached.slice() : [];
+}
+function hasResolvedNextResultCandle(item) {
+  const out = getItemNextOutcomeValue(item);
+  return out === "up" || out === "down" || out === "flat" || out === "equal" || out === "neutral";
+}
+function getModalOneMinuteCandlesEndMinute(item) {
+  const m = Number(item?.minute);
+  if (!Number.isFinite(m)) return m;
+  // V42: si la señal ya tiene resultado de próxima vela, el modal de Velas 1m
+  // debe mostrar también esa vela siguiente, después de la vela señal remarcada.
+  return hasResolvedNextResultCandle(item) ? m + 1 : m;
+}
+function isModalSignalCandle(item, candle) {
+  return Number(candle?.minute) === Number(item?.minute);
+}
+function isModalNextResultCandle(item, candle) {
+  return hasResolvedNextResultCandle(item) && Number(candle?.minute) === Number(item?.minute) + 1;
+}
+function buildLocalOneMinuteCandlesFallback(item, liveTicks = [], maxCount = MODAL_CANDLES_1M_COUNT, endMinuteOverride = null) {
+  if (!item) return [];
+  const symbol = item.symbol;
+  const minute = Number(item.minute);
+  const endMinute = Number.isFinite(Number(endMinuteOverride)) ? Number(endMinuteOverride) : getModalOneMinuteCandlesEndMinute(item);
+  const byMinute = new Map();
+
+  // Fallback solo con velas disponibles localmente. No rellena huecos y no fuerza
+  // aperturas/cierres, para evitar las velas falsas que se veían en v31.
+  for (const c of getGiroPolarityCandles(symbol, endMinute, maxCount) || []) {
+    const clean = sanitizeMiniCandle(symbol, c, { source: "local_ohlc" });
+    if (clean) byMinute.set(Number(clean.minute), clean);
+  }
+
+  let current = null;
+  if (modalLive && isItemLiveMinute(item)) {
+    const lt = minuteData?.[minute]?.[symbol];
+    current = candleFromTicks(symbol, minute, Array.isArray(lt) && lt.length ? lt : liveTicks);
+  }
+  if (!current && !modalLive) current = getStoredCandleByMinute(symbol, minute);
+  if (!current && candleOC?.[minute]?.[symbol]) current = { symbol, minute, ...candleOC[minute][symbol], current: modalLive && isItemLiveMinute(item) };
+  if (!current && Array.isArray(item?.ticks) && item.ticks.length) current = candleFromTicks(symbol, minute, item.ticks);
+
+  const cleanCurrent = current ? sanitizeMiniCandle(symbol, current, { current: modalLive && isItemLiveMinute(item), source: current.fromTicks ? "ticks" : "local_current" }) : null;
+  if (cleanCurrent) byMinute.set(Number(cleanCurrent.minute), cleanCurrent);
+
+  if (hasResolvedNextResultCandle(item)) {
+    const nextMinute = Number(minute) + 1;
+    const nextStored = getStoredCandleByMinute(symbol, nextMinute);
+    const nextOC = candleOC?.[nextMinute]?.[symbol] ? { symbol, minute: nextMinute, ...candleOC[nextMinute][symbol] } : null;
+    const cleanNext = sanitizeMiniCandle(symbol, nextStored || nextOC || {}, { source: nextStored ? "local_next_result" : "candle_oc_next_result" });
+    if (cleanNext) byMinute.set(Number(cleanNext.minute), cleanNext);
+  }
+
+  return [...byMinute.values()]
+    .sort((a, b) => Number(a.minute) - Number(b.minute))
+    .slice(-maxCount);
+}
+function buildModalOneMinuteCandles(item, liveTicks = []) {
+  if (!item) return [];
+  const symbol = item.symbol;
+  const minute = Number(item.minute);
+  const count = MODAL_CANDLES_1M_COUNT;
+  const endMinute = getModalOneMinuteCandlesEndMinute(item);
+  const key = modalOHLC1mCacheKey(symbol, endMinute, count);
+
+  let candles = getCachedModalOHLC1mCandles(symbol, endMinute, count);
+
+  if (!candles.length) {
+    requestModalOHLC1mCandles(item, count);
+    // Mientras llegan las velas reales, solo usamos fallback local si ya falló el pedido.
+    // Así no se vuelve a mostrar el gráfico deformado por datos incompletos.
+    if (modalOHLC1mFailed.has(key)) candles = buildLocalOneMinuteCandlesFallback(item, liveTicks, count, endMinute);
+  }
+
+  if (candles.length && modalLive && isItemLiveMinute(item)) {
+    const lt = minuteData?.[minute]?.[symbol];
+    const current = candleFromTicks(symbol, minute, Array.isArray(lt) && lt.length ? lt : liveTicks);
+    const cleanCurrent = current ? sanitizeMiniCandle(symbol, current, { current: true, source: "ticks_live" }) : null;
+    if (cleanCurrent) {
+      const byMinute = new Map(candles.map((c) => [Number(c.minute), c]));
+      byMinute.set(Number(cleanCurrent.minute), cleanCurrent);
+      candles = [...byMinute.values()].sort((a, b) => Number(a.minute) - Number(b.minute)).slice(-count);
+    }
+  }
+
+  return candles;
+}
+function drawMiniCandlesLoading(ctx, w, h, text = "Cargando velas 1m reales…") {
+  ctx.save();
+  ctx.fillStyle = "rgba(148,163,184,0.92)";
+  ctx.font = "800 15px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, w / 2, h / 2);
+  ctx.restore();
+}
+function drawRoundedRect(ctx, x, y, w, h, r) {
+  const rr = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const w = cssW;
+  const h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(2,6,23,0.94)";
+  ctx.fillRect(0, 0, w, h);
+
+  const candles = buildModalOneMinuteCandles(item, ticks);
+  if (!candles.length) {
+    const pendingKey = item ? modalOHLC1mCacheKey(item.symbol, getModalOneMinuteCandlesEndMinute(item), MODAL_CANDLES_1M_COUNT) : "";
+    const isPending = pendingKey && modalOHLC1mPending.has(pendingKey);
+    drawMiniCandlesLoading(ctx, w, h, isPending ? "Cargando velas 1m reales…" : "Sin velas 1m reales disponibles");
+    return;
+  }
+
+  const padL = 34;
+  const padR = 12;
+  const padT = 12;
+  const padB = 24;
+  const plotW = Math.max(1, w - padL - padR);
+  const plotH = Math.max(1, h - padT - padB);
+  const meta = getSignalDynamicLineMeta(item);
+  const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
+  const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
+
+  // V33: la vista Velas 1m debe usar EXACTAMENTE la misma proyección
+  // que el gráfico de línea intraminuto. Antes se reconstruía la pendiente
+  // con touchDetails y eso podía desplazar el nivel: la línea de velas no
+  // coincidía con la línea del gráfico normal. Ahora cada vela pregunta el
+  // valor real de la línea para su minuto con getDynamicLineValue(meta,...).
+  const buildDynamicLineVisual = () => {
+    if (!meta || !candles.length) return null;
+    const projected = candles.map((c) => Number(getDynamicLineValue(meta, Number(c.minute), 0)));
+    if (projected.filter(Number.isFinite).length < 2) return null;
+
+    // Si algún minuto aislado no proyecta, interpolamos entre vecinos válidos
+    // solo para dibujar continuo, sin cambiar la lógica de entrada.
+    const filled = projected.slice();
+    for (let i = 0; i < filled.length; i++) {
+      if (Number.isFinite(filled[i])) continue;
+      let l = i - 1;
+      while (l >= 0 && !Number.isFinite(filled[l])) l--;
+      let r = i + 1;
+      while (r < filled.length && !Number.isFinite(filled[r])) r++;
+      if (l >= 0 && r < filled.length && Number.isFinite(filled[l]) && Number.isFinite(filled[r])) {
+        const t = (i - l) / Math.max(1, r - l);
+        filled[i] = filled[l] + (filled[r] - filled[l]) * t;
+      } else if (l >= 0 && Number.isFinite(filled[l])) {
+        filled[i] = filled[l];
+      } else if (r < filled.length && Number.isFinite(filled[r])) {
+        filled[i] = filled[r];
+      }
+    }
+    return (i) => Number(filled[i]);
+  };
+  const dynamicLineVisualAt = buildDynamicLineVisual();
+
+  const values = [];
+  for (const c of candles) values.push(Number(c.high), Number(c.low), Number(c.open), Number(c.close));
+  if (meta && dynamicLineVisualAt) {
+    for (let i = 0; i < candles.length; i++) values.push(Number(dynamicLineVisualAt(i)));
+  }
+  if (snrArea) values.push(Number(snrArea.nearLow), Number(snrArea.nearHigh), Number(snrArea.zoneLow), Number(snrArea.zoneHigh));
+  else if (pol && Number.isFinite(Number(pol.level))) values.push(Number(pol.level));
+  let min = Math.min(...values.filter(Number.isFinite));
+  let max = Math.max(...values.filter(Number.isFinite));
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  if (min === max) { min -= Math.abs(min || 1) * 0.00001; max += Math.abs(max || 1) * 0.00001; }
+  const padding = (max - min) * 0.12;
+  min -= padding;
+  max += padding;
+
+  const yOf = (v) => padT + (max - Number(v)) / Math.max(max - min, 1e-12) * plotH;
+  const step = plotW / Math.max(candles.length, 1);
+  const xOf = (i) => padL + step * i + step / 2;
+  const candleW = Math.max(4, Math.min(16, step * 0.56));
+
+  // Grilla tipo Deriv, suave.
+  ctx.save();
+  ctx.strokeStyle = "rgba(148,163,184,0.14)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (plotH * i) / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  const vStep = Math.max(4, Math.floor(candles.length / 6));
+  for (let i = 0; i < candles.length; i += vStep) {
+    const x = xOf(i);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Zona SNR horizontal si la señal la trae.
+  if (snrArea) {
+    const yNearA = yOf(Number(snrArea.nearLow));
+    const yNearB = yOf(Number(snrArea.nearHigh));
+    const yZoneA = yOf(Number(snrArea.zoneLow));
+    const yZoneB = yOf(Number(snrArea.zoneHigh));
+    const yTopNear = Math.min(yNearA, yNearB), hNear = Math.abs(yNearB - yNearA);
+    const yTopZone = Math.min(yZoneA, yZoneB), hZone = Math.abs(yZoneB - yZoneA);
+    ctx.save();
+    ctx.fillStyle = "rgba(250,204,21,0.12)";
+    ctx.fillRect(padL, yTopNear, plotW, Math.max(1, hNear));
+    ctx.fillStyle = "rgba(59,130,246,0.18)";
+    ctx.fillRect(padL, yTopZone, plotW, Math.max(1, hZone));
+    ctx.strokeStyle = "rgba(96,165,250,0.80)";
+    ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(padL, yZoneA); ctx.lineTo(w - padR, yZoneA); ctx.moveTo(padL, yZoneB); ctx.lineTo(w - padR, yZoneB); ctx.stroke();
+    ctx.restore();
+  } else if (pol && Number.isFinite(Number(pol.level))) {
+    const y = yOf(Number(pol.level));
+    ctx.save();
+    ctx.setLineDash([7, 5]);
+    ctx.strokeStyle = "rgba(96,165,250,0.86)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Velas 1 minuto reales de Deriv.
+  candles.forEach((c, i) => {
+    const x = xOf(i);
+    const open = Number(c.open), high = Number(c.high), low = Number(c.low), close = Number(c.close);
+    const up = close >= open;
+    const col = up ? "rgba(34,197,94,0.95)" : "rgba(248,113,113,0.95)";
+    const yH = yOf(high), yL = yOf(low), yO = yOf(open), yC = yOf(close);
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(x, yH); ctx.lineTo(x, yL); ctx.stroke();
+    const bodyTop = Math.min(yO, yC);
+    const bodyH = Math.max(2, Math.abs(yC - yO));
+    ctx.fillStyle = col;
+    drawRoundedRect(ctx, x - candleW / 2, bodyTop, candleW, bodyH, Math.min(3, candleW / 3));
+    ctx.fill();
+    if (isModalSignalCandle(item, c)) {
+      ctx.strokeStyle = "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 1.25;
+      drawRoundedRect(ctx, x - candleW / 2 - 2, bodyTop - 2, candleW + 4, bodyH + 4, 4);
+      ctx.stroke();
+    }
+    if (isModalNextResultCandle(item, c)) {
+      const out = getItemNextOutcomeValue(item);
+      const outCol = out === "up" ? "rgba(34,197,94,0.98)" : out === "down" ? "rgba(248,113,113,0.98)" : "rgba(229,231,235,0.92)";
+      ctx.strokeStyle = outCol;
+      ctx.lineWidth = 2.15;
+      ctx.shadowColor = outCol;
+      ctx.shadowBlur = 8;
+      drawRoundedRect(ctx, x - candleW / 2 - 3, bodyTop - 3, candleW + 6, bodyH + 6, 5);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = outCol;
+      ctx.font = "900 13px system-ui, -apple-system, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(out === "up" ? "▲" : out === "down" ? "▼" : "=" , x, Math.max(8, Math.min(bodyTop - 9, padT + 9)));
+    }
+    ctx.restore();
+  });
+
+  // Línea dinámica marcada sobre las velas de 1 minuto.
+  if (meta && dynamicLineVisualAt) {
+    const isSupportLine = String(meta.levelType || meta.lineType || "") === "support";
+    ctx.save();
+    ctx.strokeStyle = isSupportLine ? "rgba(34,197,94,0.96)" : "rgba(248,113,113,0.96)";
+    ctx.lineWidth = 2.2;
+    ctx.shadowColor = isSupportLine ? "rgba(34,197,94,0.22)" : "rgba(248,113,113,0.22)";
+    ctx.shadowBlur = 9;
+    ctx.beginPath();
+    const x0 = xOf(0);
+    const y0 = yOf(dynamicLineVisualAt(0));
+    const x1 = xOf(candles.length - 1);
+    const y1 = yOf(dynamicLineVisualAt(candles.length - 1));
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+
+    const touchSet = new Set((Array.isArray(meta.touchMinutes) ? meta.touchMinutes : []).map((m) => Number(m)));
+    if (touchSet.size) {
+      ctx.fillStyle = isSupportLine ? "rgba(187,247,208,0.95)" : "rgba(254,202,202,0.95)";
+      ctx.strokeStyle = "rgba(2,6,23,0.70)";
+      ctx.lineWidth = 1.2;
+      candles.forEach((c, i) => {
+        if (!touchSet.has(Number(c.minute))) return;
+        const x = xOf(i);
+        const y = yOf(dynamicLineVisualAt(i));
+        ctx.beginPath(); ctx.arc(x, y, 4.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      });
+    }
+    ctx.restore();
+  }
+
+  // Línea del último cierre.
+  const last = candles[candles.length - 1];
+  if (last) {
+    const y = yOf(Number(last.close));
+    ctx.save();
+    ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,0.26)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+
+/* =========================
+   Replay vela señal — zoom tick por tick
+========================= */
+function getModalReplayTicks(item = modalCurrentItem) {
+  if (!item) return [];
+  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
+  if (modalLive && isItemLiveMinute(item)) {
+    const liveTicks = minuteData?.[item.minute]?.[item.symbol];
+    if (Array.isArray(liveTicks) && liveTicks.length >= ticks.length) ticks = liveTicks.slice();
+  }
+  return ticks
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .map((p) => ({ ms: Math.max(0, Math.min(60000, p.ms)), quote: p.quote }))
+    .sort((a, b) => a.ms - b.ms);
+}
+function ensureModalReplayBox() {
+  let box = document.getElementById("modalReplayBox");
+  if (box) return box;
+  const host = document.querySelector("#chartModal .minuteCanvasWrap") || (chartModal ? chartModal.querySelector(".minuteCanvasWrap") : null);
+  if (!host) return null;
+  box = document.createElement("div");
+  box.id = "modalReplayBox";
+  box.className = "modalReplayBox hidden";
+  box.innerHTML = `
+    <div class="modalReplayHead">
+      <div class="modalReplayTitle">🔎 Replay vela de señal</div>
+      <button id="modalReplayCloseBtn" class="modalReplayClose" type="button" aria-label="Cerrar replay">✖</button>
+    </div>
+    <canvas id="modalReplayCanvas"></canvas>
+    <div id="modalReplayInfo" class="modalReplayInfo">—</div>
+    <div class="modalReplayControls">
+      <button id="modalReplayPlayBtn" class="modalReplayControlBtn" type="button">▶️</button>
+      <button id="modalReplayResetBtn" class="modalReplayControlBtn" type="button">↺</button>
+      <button id="modalReplaySpeedBtn" class="modalReplayControlBtn" type="button">1x</button>
+      <input id="modalReplaySeek" type="range" min="0" max="60000" step="250" value="0" aria-label="Tiempo del replay" />
+    </div>`;
+  host.appendChild(box);
+
+  const closeBtn = box.querySelector("#modalReplayCloseBtn");
+  const playBtn = box.querySelector("#modalReplayPlayBtn");
+  const resetBtn = box.querySelector("#modalReplayResetBtn");
+  const speedBtn = box.querySelector("#modalReplaySpeedBtn");
+  const seek = box.querySelector("#modalReplaySeek");
+  if (closeBtn) closeBtn.onclick = (e) => { e.stopPropagation(); closeModalReplay(); };
+  if (playBtn) playBtn.onclick = (e) => {
+    e.stopPropagation();
+    modalReplayState.playing = !modalReplayState.playing;
+    modalReplayState.lastFrameTs = 0;
+    if (modalReplayState.playing && modalReplayState.currentMs >= 60000) modalReplayState.currentMs = 0;
+    startModalReplayLoop();
+    updateModalReplayControlsUI();
+  };
+  if (resetBtn) resetBtn.onclick = (e) => {
+    e.stopPropagation();
+    modalReplayState.currentMs = 0;
+    modalReplayState.lastFrameTs = 0;
+    modalReplayState.playing = true;
+    startModalReplayLoop();
+    drawModalReplayFrame();
+  };
+  if (speedBtn) speedBtn.onclick = (e) => {
+    e.stopPropagation();
+    const speeds = [1, 2, 4];
+    const idx = speeds.indexOf(Number(modalReplayState.speed || 1));
+    modalReplayState.speed = speeds[(idx + 1) % speeds.length];
+    updateModalReplayControlsUI();
+  };
+  if (seek) seek.oninput = (e) => {
+    e.stopPropagation();
+    modalReplayState.currentMs = Math.max(0, Math.min(60000, Number(seek.value) || 0));
+    modalReplayState.lastFrameTs = 0;
+    drawModalReplayFrame();
+  };
+  box.addEventListener("click", (e) => e.stopPropagation());
+  return box;
+}
+function updateModalReplayControlsUI() {
+  const box = document.getElementById("modalReplayBox");
+  if (!box) return;
+  const playBtn = box.querySelector("#modalReplayPlayBtn");
+  const speedBtn = box.querySelector("#modalReplaySpeedBtn");
+  const seek = box.querySelector("#modalReplaySeek");
+  if (playBtn) {
+    playBtn.textContent = modalReplayState.playing ? "⏸️" : "▶️";
+    playBtn.classList.toggle("active", !!modalReplayState.playing);
+  }
+  if (speedBtn) speedBtn.textContent = `${Number(modalReplayState.speed || 1)}x`;
+  if (seek) seek.value = String(Math.max(0, Math.min(60000, Number(modalReplayState.currentMs || 0))));
+}
+function openModalReplay() {
+  if (!modalCurrentItem) return;
+  const ticks = getModalReplayTicks(modalCurrentItem);
+  if (ticks.length < 2) {
+    toast("⚠️ Sin ticks suficientes para replay", 1600);
+    return;
+  }
+  const box = ensureModalReplayBox();
+  if (!box) return;
+  box.classList.remove("hidden");
+  modalReplayState.open = true;
+  modalReplayState.playing = true;
+  modalReplayState.speed = 1;
+  modalReplayState.currentMs = 0;
+  modalReplayState.lastFrameTs = 0;
+  updateModalReplayControlsUI();
+  startModalReplayLoop();
+}
+function closeModalReplay() {
+  modalReplayState.open = false;
+  modalReplayState.playing = false;
+  modalReplayState.lastFrameTs = 0;
+  if (modalReplayState.raf) cancelAnimationFrame(modalReplayState.raf);
+  modalReplayState.raf = null;
+  const box = document.getElementById("modalReplayBox");
+  if (box) box.classList.add("hidden");
+}
+function startModalReplayLoop() {
+  if (!modalReplayState.open) return;
+  if (modalReplayState.raf) cancelAnimationFrame(modalReplayState.raf);
+  modalReplayState.raf = requestAnimationFrame(modalReplayLoop);
+}
+function modalReplayLoop(ts) {
+  if (!modalReplayState.open) return;
+  if (modalReplayState.playing) {
+    if (!modalReplayState.lastFrameTs) modalReplayState.lastFrameTs = ts;
+    const dt = Math.max(0, ts - modalReplayState.lastFrameTs);
+    modalReplayState.lastFrameTs = ts;
+    modalReplayState.currentMs = Math.min(60000, Number(modalReplayState.currentMs || 0) + dt * Number(modalReplayState.speed || 1));
+    if (modalReplayState.currentMs >= 60000) {
+      modalReplayState.currentMs = 60000;
+      modalReplayState.playing = false;
+    }
+  } else {
+    modalReplayState.lastFrameTs = 0;
+  }
+  drawModalReplayFrame();
+  modalReplayState.raf = requestAnimationFrame(modalReplayLoop);
+}
+function drawModalReplayFrame() {
+  const box = document.getElementById("modalReplayBox");
+  if (!box || box.classList.contains("hidden") || !modalCurrentItem) return;
+  const canvas = box.querySelector("#modalReplayCanvas");
+  const info = box.querySelector("#modalReplayInfo");
+  drawModalReplayCanvas(canvas, modalCurrentItem, Number(modalReplayState.currentMs || 0), info);
+  updateModalReplayControlsUI();
+}
+function drawModalReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
+  if (!canvas || !item) return;
+  const ctx = canvas.getContext("2d");
+  const cssW = canvas.clientWidth || 1;
+  const cssH = canvas.clientHeight || 1;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const w = cssW, h = cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "rgba(2,6,23,0.96)";
+  ctx.fillRect(0, 0, w, h);
+
+  const ticks = getModalReplayTicks(item);
+  if (ticks.length < 2) {
+    drawMiniCandlesLoading(ctx, w, h, "Sin ticks suficientes para replay");
+    if (infoEl) infoEl.textContent = "Sin ticks suficientes para reproducir la vela.";
+    return;
+  }
+
+  const ms = Math.max(0, Math.min(60000, Number(replayMs || 0)));
+  let lastIdx = ticks.findIndex((p) => Number(p.ms) > ms) - 1;
+  if (lastIdx < 0) lastIdx = 0;
+  if (lastIdx >= ticks.length) lastIdx = ticks.length - 1;
+  const seen = ticks.slice(0, lastIdx + 1);
+  const open = Number(ticks[0].quote);
+  const cur = Number(seen[seen.length - 1]?.quote ?? open);
+  const highs = seen.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const high = Math.max(open, cur, ...highs);
+  const low = Math.min(open, cur, ...highs);
+  const close = cur;
+
+  const meta = getSignalDynamicLineMeta(item);
+  const line0 = meta ? Number(getDynamicLineValue(meta, item.minute, 0)) : NaN;
+  const line1 = meta ? Number(getDynamicLineValue(meta, item.minute, 60000)) : NaN;
+  const values = ticks.map((p) => p.quote).filter(Number.isFinite);
+  if (Number.isFinite(line0)) values.push(line0);
+  if (Number.isFinite(line1)) values.push(line1);
+  let min = Math.min(...values), max = Math.max(...values);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
+  if (min === max) { min -= Math.abs(min || 1) * 0.00001; max += Math.abs(max || 1) * 0.00001; }
+  const pad = (max - min) * 0.12;
+  min -= pad; max += pad;
+
+  const plotX = 12;
+  const plotY = 12;
+  const plotW = Math.max(80, w * 0.68 - 20);
+  const plotH = Math.max(100, h - 28);
+  const candleX = Math.max(plotX + plotW + 18, w * 0.82);
+  const candleTop = plotY + 10;
+  const candleBot = plotY + plotH - 10;
+  const yOf = (q) => plotY + (max - Number(q)) / Math.max(max - min, 1e-12) * plotH;
+  const xOf = (m) => plotX + (Number(m) / 60000) * plotW;
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(148,163,184,.16)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = plotY + (plotH * i) / 4;
+    ctx.beginPath(); ctx.moveTo(plotX, y); ctx.lineTo(plotX + plotW, y); ctx.stroke();
+  }
+  for (const mark of [0, 15000, 30000, 45000, 60000]) {
+    const x = xOf(mark);
+    ctx.setLineDash(mark === 60000 ? [] : [4, 6]);
+    ctx.beginPath(); ctx.moveTo(x, plotY); ctx.lineTo(x, plotY + plotH); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  if (meta && Number.isFinite(line0) && Number.isFinite(line1)) {
+    const isSupport = String(meta.levelType || meta.lineType || "") === "support";
+    ctx.save();
+    ctx.strokeStyle = isSupport ? "rgba(34,197,94,.90)" : "rgba(248,113,113,.90)";
+    ctx.lineWidth = 1.8;
+    ctx.shadowColor = isSupport ? "rgba(34,197,94,.20)" : "rgba(248,113,113,.20)";
+    ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.moveTo(xOf(0), yOf(line0)); ctx.lineTo(xOf(60000), yOf(line1)); ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,.82)";
+  ctx.lineWidth = 2.2;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  seen.forEach((p, i) => {
+    const x = xOf(p.ms), y = yOf(p.quote);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "rgba(255,255,255,.90)";
+  for (const p of seen) {
+    ctx.beginPath(); ctx.arc(xOf(p.ms), yOf(p.quote), 1.5, 0, Math.PI * 2); ctx.fill();
+  }
+  const cx = xOf(seen[seen.length - 1].ms), cy = yOf(cur);
+  ctx.fillStyle = "rgba(255,255,255,1)";
+  ctx.strokeStyle = "rgba(15,23,42,.85)";
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+
+  // Vela grande formándose con el mismo recorrido ya visto.
+  const yH = yOf(high), yL = yOf(low), yO = yOf(open), yC = yOf(close);
+  const up = close >= open;
+  const col = up ? "rgba(34,197,94,.96)" : "rgba(248,113,113,.96)";
+  const bodyTop = Math.min(yO, yC);
+  const bodyH = Math.max(3, Math.abs(yC - yO));
+  const bodyW = Math.min(34, Math.max(20, w * 0.085));
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(candleX, yH); ctx.lineTo(candleX, yL); ctx.stroke();
+  ctx.fillStyle = col;
+  drawRoundedRect(ctx, candleX - bodyW / 2, bodyTop, bodyW, bodyH, 5);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.30)";
+  ctx.lineWidth = 1;
+  drawRoundedRect(ctx, candleX - bodyW / 2 - 3, bodyTop - 3, bodyW + 6, bodyH + 6, 6);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(226,232,240,.72)";
+  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "center";
+  ctx.fillText("VELA", candleX, Math.max(10, candleTop - 2));
+  ctx.restore();
+
+  ctx.save();
+  ctx.fillStyle = "rgba(226,232,240,.74)";
+  ctx.font = "800 10px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("0s", xOf(0), h - 5);
+  ctx.textAlign = "center";
+  ctx.fillText(`${Math.round(ms / 1000)}s`, xOf(ms), h - 5);
+  ctx.textAlign = "right";
+  ctx.fillText("60s", xOf(60000), h - 5);
+  ctx.restore();
+
+  if (infoEl) {
+    const tickTxt = `${lastIdx + 1}/${ticks.length} ticks`;
+    infoEl.textContent = `${(ms / 1000).toFixed(1)}s · ${tickTxt} · precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
+  }
 }
 
 /* =========================
@@ -7574,7 +8984,8 @@ function requestModalDraw(force = false) {
       if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
     }
 
-    drawDerivLikeChart(minuteCanvas, ticks);
+    if (modalChartView === "candles1m") drawDerivLikeOneMinuteCandles(minuteCanvas, it, ticks);
+    else drawDerivLikeChart(minuteCanvas, ticks);
 
     const n = Array.isArray(ticks) ? ticks.length : 0;
     setCompactModalHeader(it, n);
@@ -8448,6 +9859,7 @@ function navigateModalItem(step = 1) {
    Chart modal
 ========================= */
 function openChartModal(item, opts = {}) {
+  closeModalReplay();
   modalCurrentItem = item;
   modalOpenContext = normalizeModalContext(opts, item);
   if (!chartModal || !modalTitle || !modalSub) return;
@@ -8481,10 +9893,12 @@ function openChartModal(item, opts = {}) {
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
   updateModalNavVoteUI();
+  updateModalChartViewBtnUI();
 
   requestModalDraw(true);
 }
 function closeChartModal() {
+  closeModalReplay();
   if (!chartModal) return;
   chartModal.classList.add("hidden");
   chartModal.setAttribute("aria-hidden", "true");
@@ -8517,6 +9931,7 @@ window.addEventListener("resize", () => {
   applyModalTradeButtonsLayout();
   updateModalCandleStatusUI();
   requestModalDraw(true);
+  if (modalReplayState.open) drawModalReplayFrame();
 });
 if (modalLiveBtn) {
   modalLiveBtn.onclick = () => {
@@ -8564,6 +9979,7 @@ function updateRowChartBtnOnRow(row, item) {
   if (!row) return;
   const btn = row.querySelector(".chartBtn");
   if (!btn) return;
+  const candleBtn = row.querySelector(".rowCandleBtn");
 
   const liveEligible = isItemLiveMinute(item);
   const ready = !!item.minuteComplete || liveEligible;
@@ -8577,6 +9993,11 @@ function updateRowChartBtnOnRow(row, item) {
   } else {
     btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
     btn.title = "Esperando cierre del minuto…";
+  }
+
+  if (candleBtn) {
+    candleBtn.disabled = !ready;
+    candleBtn.title = ready ? "Ver mini gráfico de velas de 1 minuto" : "Esperando cierre del minuto…";
   }
 }
 function updateRowTradeBadgeOnRow(row, item) {
@@ -8883,6 +10304,146 @@ function applyVoteButtonsVisual(row, vote = "", { lock = false } = {}) {
   row.classList.toggle("voted", !!safeVote);
 }
 
+
+function getSignalLifecycleStageInfo(item) {
+  if (!item) return { key: "", label: "", title: "" };
+  const autoSec = Number(item.signalAutoEntrySec || SIGNAL_AUTO_ENTRY_SEC || 59);
+  const preSec = Number(item.signalPrealertAtSec || item?.giroPolaridad?.evalSec || EVAL_SEC || 45);
+  const pointsTxt = getSignalConfirmationStatusText(item);
+  const hasTrade = hasSignalTradeAssociated(item);
+  const attempted = !!item?.signalAutoEntry?.attempted;
+  const status = String(item?.signalAutoEntry?.status || "");
+
+  const dynamicMode = isDynamicLineMode(item.mode);
+
+  if (item.minuteComplete) {
+    if (hasTrade || attempted) {
+      const badge = item?.trade?.badge ? String(item.trade.badge) : status === "sent" ? "TRADE" : "AUTO";
+      return {
+        key: "trade",
+        label: `📌 ${badge}`,
+        title: `Operación asociada. No se elimina por filtro de cierre. ${pointsTxt}`,
+      };
+    }
+    if (dynamicMode) {
+      const gate = buildSignalDynamicLineEntryGate(item, item.direction || "", 60000);
+      return gate?.ok
+        ? { key: "closed_line_ok", label: "✅ RESPETA LÍNEA", title: `La vela cerró respetando la línea dinámica. ${pointsTxt}` }
+        : { key: "closed_line_break", label: "❌ ROMPE LÍNEA", title: `La vela cerró del lado inválido de la línea dinámica. ${pointsTxt}` };
+    }
+    const gate = getSignalCloseSNREntryGate(item);
+    if (gate?.ok) {
+      return {
+        key: "closed_ok",
+        label: "✅ CERRÓ SNR",
+        title: `La vela cerró dentro/cerca del SNR. ${pointsTxt}`,
+      };
+    }
+    return {
+      key: "closed_far",
+      label: keepClosedAwaySignals || item.keepClosedAwayByUser ? "🧪 FUERA SNR" : "❌ FUERA SNR",
+      title: `${keepClosedAwaySignals || item.keepClosedAwayByUser ? "Cierre fuera del SNR/amarilla conservado para testeo." : "Cierre fuera del SNR/amarilla. Si no hay trade, se descarta."} ${pointsTxt}`,
+    };
+  }
+
+  const ms = getSignalConfirmationMs(item);
+  if (ms >= SIGNAL_AUTO_ENTRY_MS) {
+    const side = getSignalEnabledTradeSide(item) || item.direction || "";
+    const gate = dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    if (dynamicMode) {
+      if (gate?.ok && getSignalEnabledTradeSide(item)) {
+        return { key: "auto_ready_line", label: `🟢 AUTO ${autoSec}s`, title: `Listo: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos + línea dinámica respetada. ${pointsTxt}` };
+      }
+      return { key: "auto_wait_line", label: gate?.ok ? `🟢 LÍNEA ${autoSec}s` : `⛔ LÍNEA ${autoSec}s`, title: `${gate?.message || "Línea dinámica pendiente"}. ${pointsTxt}` };
+    }
+    if (gate?.ok && getSignalEnabledTradeSide(item)) {
+      return {
+        key: "auto_ready",
+        label: `🟢 AUTO ${autoSec}s`,
+        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos completos + precio dentro de zona azul/amarilla. ${pointsTxt}`,
+      };
+    }
+    if (gate?.ok) {
+      return {
+        key: "auto_zone",
+        label: `🟢 ZONA ${autoSec}s`,
+        title: `Precio dentro/cerca del SNR como referencia. Para operar faltan 4 puntos. ${pointsTxt}`,
+      };
+    }
+    return {
+      key: "auto_wait",
+      label: `🟠 ${autoSec}s`,
+      title: `En ${autoSec}s el SNR queda solo como referencia. Para operar importan los 4 puntos. ${pointsTxt}`,
+    };
+  }
+
+  return {
+    key: "prealert",
+    label: dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
+    title: dynamicMode
+      ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
+      : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro de zona azul/amarilla. ${pointsTxt}`,
+  };
+}
+
+function updateRowSignalStageOnRow(row, item) {
+  if (!row || !item) return;
+  let el = row.querySelector(".signalStageBadge");
+  if (!el) return;
+  const st = getSignalLifecycleStageInfo(item);
+  el.textContent = st.label || "";
+  el.title = st.title || "";
+  el.dataset.stage = st.key || "";
+  el.style.display = st.label ? "inline-flex" : "none";
+  el.style.alignItems = "center";
+  el.style.justifyContent = "center";
+  el.style.marginLeft = "6px";
+  el.style.padding = "3px 7px";
+  el.style.borderRadius = "999px";
+  el.style.fontSize = "10.5px";
+  el.style.fontWeight = "950";
+  el.style.letterSpacing = ".15px";
+  el.style.whiteSpace = "nowrap";
+  el.style.border = "1px solid rgba(255,255,255,.14)";
+  el.style.background = "rgba(255,255,255,.055)";
+  el.style.color = "rgba(255,255,255,.84)";
+  if (st.key === "prealert") {
+    el.style.borderColor = "rgba(251,191,36,.42)";
+    el.style.background = "rgba(251,191,36,.10)";
+    el.style.color = "#fef3c7";
+  } else if (st.key === "auto_ready" || st.key === "auto_zone" || st.key === "closed_ok") {
+    el.style.borderColor = "rgba(34,197,94,.42)";
+    el.style.background = "rgba(34,197,94,.10)";
+    el.style.color = "#dcfce7";
+  } else if (st.key === "auto_wait") {
+    el.style.borderColor = "rgba(251,146,60,.40)";
+    el.style.background = "rgba(251,146,60,.10)";
+    el.style.color = "#ffedd5";
+  } else if (st.key === "closed_far") {
+    el.style.borderColor = "rgba(239,68,68,.40)";
+    el.style.background = "rgba(239,68,68,.10)";
+    el.style.color = "#fee2e2";
+  } else if (st.key === "trade") {
+    el.style.borderColor = "rgba(56,189,248,.42)";
+    el.style.background = "rgba(56,189,248,.10)";
+    el.style.color = "#e0f2fe";
+  }
+}
+
+function refreshOpenSignalStageBadges() {
+  if (!signalsEl) return;
+  const liveMinute = currentServerMinute();
+  const rows = signalsEl.querySelectorAll(".row[data-id]");
+  rows.forEach((row) => {
+    const id = String(row.dataset.id || "");
+    const item = findHistoryItemById(id);
+    if (!item) return;
+    if (item.minute === liveMinute || !item.minuteComplete || item.signalAutoEntry || item.trade) {
+      updateRowSignalStageOnRow(row, item);
+    }
+  });
+}
+
 /* =========================
    Build row
 ========================= */
@@ -8916,7 +10477,9 @@ function buildRow(item, opts = {}) {
   row.innerHTML = `
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
+      <span class="signalStageBadge" title=""></span>
       <button class="chartBtn" type="button"></button>
+      <button class="rowCandleBtn" type="button" title="Ver mini gráfico de velas 1m">🕯️</button>
       <span class="tradeBadge hidden" title=""></span>
       <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
     </div>
@@ -8938,12 +10501,35 @@ function buildRow(item, opts = {}) {
     }
 
     const canOpen = target.minuteComplete || isItemLiveMinute(target);
-    if (canOpen) openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
+    if (canOpen) {
+      modalChartView = "line";
+      openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
+    }
   };
+
+  const rowCandleBtn = row.querySelector(".rowCandleBtn");
+  if (rowCandleBtn) {
+    rowCandleBtn.onclick = (e) => {
+      e.stopPropagation();
+
+      let target = item;
+      if (opts.source === "trades" && opts.signalId) {
+        const real = findHistoryItemById(String(opts.signalId));
+        if (real) target = real;
+      }
+
+      const canOpen = target.minuteComplete || isItemLiveMinute(target);
+      if (canOpen) {
+        modalChartView = "candles1m";
+        openChartModal(target, { source: opts.source === "trades" ? "trades" : "signals", signalId: opts.signalId || item.id || target.id || "", journalId: opts.journalId || item.journal_id || target.journal_id || "" });
+      }
+    };
+  }
 
   updateRowChartBtnOnRow(row, item);
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
+  updateRowSignalStageOnRow(row, item);
 
   // acciones: señales + Trades de estudio
   if (!opts.hideActions) {
@@ -9055,28 +10641,15 @@ function renderHistory() {
   if (!signalsEl) return;
   signalsEl.innerHTML = "";
 
-  let changed = false;
-  const clean = [];
   for (const it of history || []) {
-    if (!it) { changed = true; continue; }
     if (!it.mode) it.mode = "NORMAL";
     else {
       const rawMode = String(it.mode || "");
       const normalizedFamily = normalizeSignalMode(rawMode);
       it.mode = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(rawMode) ? normalizedFamily : rawMode.toUpperCase();
     }
-
-    // AUTO BACKTEST V3: esta rama no muestra señales heredadas/tempranas.
-    // Solo se listan señales nacidas al cierre 60 confirmado.
-    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !it.auto_backtest_signal_created_at_close) {
-      changed = true;
-      continue;
-    }
-    clean.push(it);
   }
-  if (clean.length !== history.length) changed = true;
-  history = clean;
-  if (changed) saveHistory(history);
+  saveHistory(history);
 
   updateCounter();
 
@@ -9302,15 +10875,27 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
 
     try {
       const signalId = tradeLinks.get(cid) || "";
+      const outcomeExtra = {
+        profit: Number(poc.profit),
+        status: String(poc.status || ""),
+        sold_time: Number(poc.sell_time || 0),
+        contract_id: cid,
+        outcome_source: sourceLabel,
+      };
       const it = signalId ? findHistoryItemById(signalId) : null;
       if (it) {
-        setTradeBadge(it, isWin ? "ITM" : "OTM", {
-          profit: Number(poc.profit),
-          status: String(poc.status || ""),
-          sold_time: Number(poc.sell_time || 0),
-          contract_id: cid,
-          outcome_source: sourceLabel,
-        });
+        setTradeBadge(it, isWin ? "ITM" : "OTM", outcomeExtra);
+      } else {
+        // Salvavidas: si la señal fue purgada o no está en Signals, actualizamos el trade en Journal por contract_id.
+        const idx = tradesJournal.findIndex((x) => String(x?.trade?.contract_id || "") === cid);
+        if (idx >= 0) {
+          tradesJournal[idx].trade ||= {};
+          tradesJournal[idx].trade.badge = isWin ? "ITM" : "OTM";
+          Object.assign(tradesJournal[idx].trade, outcomeExtra);
+          tradesJournal[idx].saved_at = Date.now();
+          saveTradesJournal(tradesJournal);
+          try { if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView(); } catch {}
+        }
       }
     } catch {}
 
@@ -9446,17 +11031,13 @@ function assertEntryWindowOpen(item = modalCurrentItem) {
 
 async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, itemOverride = null) {
   const itemCtx = itemOverride || modalCurrentItem;
-  const autoBacktestCtx = isAutoBacktestAutoContext(itemCtx);
   assertCanTrade();
-  if (!autoBacktestCtx) {
-    assertEntryWindowOpen(itemCtx);
-    assertSignalMinimumConfirmations(side, itemCtx);
-  }
-  // Rama AUTO BACKTEST: en auto se compra después del cierre 60s validado.
-  // Manualmente, se mantiene la validación estricta de SNR al segundo 60.
-  const snrEntryGate = autoBacktestCtx
-    ? (itemCtx?.signalAutoEntry?.snr_entry_gate || buildSignalSNREntryGate(itemCtx, side, SIGNAL_AUTO_SNR_CHECK_MS))
-    : assertSignalSNREntryGateAt57(side, itemCtx);
+  assertEntryWindowOpen(itemCtx);
+  assertSignalMinimumConfirmations(side, itemCtx);
+  // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 59.
+  // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
+  // En Línea dinámica se mantiene su validación específica.
+  const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
   assertC100CanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
@@ -9472,20 +11053,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     let res = null;
     let contractLabel = side;
     let tradeExtra = { side, symbol, stake };
-    if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
-    if (autoBacktestCtx) {
-      tradeExtra = {
-        ...tradeExtra,
-        auto_backtest_demo: true,
-        version: AUTO_BACKTEST_VERSION,
-        entry_sec: SIGNAL_AUTO_ENTRY_SEC,
-        entry_rule: "close_60_inside_snr_only",
-        yellow_zone_used: false,
-        formation_side: itemCtx?.signalAutoEntry?.formation_side || "",
-        momentum: itemCtx?.signalAutoEntry?.momentum || null,
-        candle: itemCtx?.signalAutoEntry?.candle || null,
-      };
-    }
+    if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
+    if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
+    else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
 
     if (shouldUseAutoHighLowExecution() && itemCtx?.id) {
       ensureSignalAutoPrecalc(itemCtx);
@@ -9769,60 +11339,6 @@ async function fetchFullMinuteTicks(symbol, minute) {
   if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
   return normalizeTicksForMinute(minute, h.times, h.prices);
 }
-
-function markFullMinuteHydrated(minute, symbol, value = true) {
-  const m = Number(minute);
-  const sym = String(symbol || "");
-  if (!Number.isFinite(m) || !sym) return;
-  fullMinuteHydrated[m] ||= {};
-  fullMinuteHydrated[m][sym] = !!value;
-}
-function isFullMinuteHydrated(minute, symbol) {
-  const m = Number(minute);
-  const sym = String(symbol || "");
-  return !!(Number.isFinite(m) && sym && fullMinuteHydrated?.[m]?.[sym]);
-}
-function updateCandleOCFromFullTicks(symbol, minute, ticks) {
-  const pts = (Array.isArray(ticks) ? ticks : [])
-    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  if (!pts.length || !symbol || !Number.isFinite(Number(minute))) return false;
-
-  const prices = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (!prices.length) return false;
-
-  candleOC[minute] ||= {};
-  candleOC[minute][symbol] = {
-    open: Number(getPriceAtMs(pts, 0)),
-    high: Math.max(...prices),
-    low: Math.min(...prices),
-    close: Number(getPriceAtMs(pts, 60000)),
-  };
-  syncCurrentCandleToPolarity(symbol, minute);
-  return true;
-}
-async function hydrateClosedMinuteDataFromDerivHistory(minute) {
-  if (!ws || ws.readyState !== 1) return false;
-  const m = Number(minute);
-  if (!Number.isFinite(m)) return false;
-
-  minuteData[m] ||= {};
-  fullMinuteHydrated[m] ||= {};
-  let any = false;
-
-  const results = await Promise.allSettled(SYMBOLS.map(async (symbol) => {
-    const full = await fetchFullMinuteTicks(symbol, m);
-    if (!full || full.length < 2) return false;
-    minuteData[m][symbol] = full.slice();
-    updateCandleOCFromFullTicks(symbol, m, full);
-    markFullMinuteHydrated(m, symbol, true);
-    return true;
-  }));
-
-  for (const r of results) if (r.status === "fulfilled" && r.value) any = true;
-  return any;
-}
 async function hydrateSignalsFromDerivHistory(minute) {
   const items = history.filter((it) => it.minute === minute);
   if (!items.length) return false;
@@ -9950,6 +11466,7 @@ async function rehydrateHistoryOnBoot() {
         }
       }
       if (changed || anyMark) saveHistory(history);
+      purgeClosedSignalsOutsideSNRCloseZone("rehydrate_minute_complete");
     } catch {}
 
     await sleep(REHYDRATE_SLEEP_MS);
@@ -10055,22 +11572,11 @@ function finalizeMinute(minute) {
     } catch {}
   })();
 
-  // --- AUTO BACKTEST V3: señal + trade nacen recién con cierre 60 REAL confirmado ---
+  // --- resto: igual que antes ---
   (async () => {
-    // Primero traemos ticks_history del minuto cerrado.
-    // Esto evita mostrar señales cuando el último tick vivo parecía estar en SNR,
-    // pero el cierre real de 60s terminó afuera.
-    const closedMinuteHydrated = await hydrateClosedMinuteDataFromDerivHistory(minute);
     const ticksChanged = await hydrateSignalsFromDerivHistory(minute);
 
-    // No hay señal temprana. En el cierre se analiza solo con símbolos hidratados:
-    // 1) cierre 60s dentro de zona SNR,
-    // 2) SNR con secuencia soporte-resistencia-soporte o viceversa.
-    try {
-      if (!areSignalsPaused() && closedMinuteHydrated) evaluateMinute(minute);
-    } catch {}
-
-    let changed = !!ticksChanged || !!closedMinuteHydrated;
+    let changed = ticksChanged;
     for (const it of history) {
       if (it.minute === minute && !it.minuteComplete) {
         it.minuteComplete = true;
@@ -10079,9 +11585,7 @@ function finalizeMinute(minute) {
       }
     }
     if (changed) saveHistory(history);
-
-    // AUTO BACKTEST: después de crear la señal al cierre, intenta operar DEMO automáticamente.
-    scanSignalAutoEntriesAt57(minute);
+    purgeClosedSignalsOutsideSNRCloseZone("finalize_minute_complete");
 
     if (modalCurrentItem && modalCurrentItem.minute === minute) {
       modalLive = false;
@@ -10167,33 +11671,68 @@ function onTick(tick) {
     requestModalDraw(false);
   }
 
+  if ((localStorage.getItem("activeView") || "signals") === "live" && symbol === liveReplaySymbol) {
+    requestLiveReplayDraw(false);
+  }
+
   if (history && history.length) {
     const tail = history.slice(-12);
     for (const it of tail) updateRowChartBtn(it);
   }
 
-  // ✅ FIX AUTO 60: también revisar en cada tick, aunque el modal no haya redibujado.
-  scanSignalAutoEntriesAt57();
+  // ✅ FIX AUTO 59: también revisar en cada tick, salvo cuando el análisis está pausado
+  // o la pestaña En vivo está activa (modo aparte).
+  if (!areSignalsPaused()) scanSignalAutoEntriesAt57();
 
-  // AUTO BACKTEST V3:
-  // No se generan señales a 35/40/45s.
-  // La señal se evalúa recién cuando la vela cerró y finalizeMinute(minute) confirma el cierre 60s.
-  if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !areSignalsPaused() && sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
-    lastEvaluatedMinute = minute;
-    const ok = evaluateMinute(minute);
-    if (!ok && signalMode === MODE_NORMAL) scheduleRetry(minute);
+  if (!areSignalsPaused()) {
+    const activeModeForTick = normalizeSignalMode(signalMode);
+
+    if (isDynamicLineMode(activeModeForTick)) {
+      // Línea dinámica queda igual: evalúa una sola vez en el segundo elegido.
+      if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(1000, Number(EVAL_SEC || 45) * 1000),
+          evalSec: Number(EVAL_SEC || 45),
+          radar: false,
+        });
+
+        if (!ok && signalMode === MODE_NORMAL) scheduleRetry(minute);
+      }
+    } else {
+      // V38 SNR RADAR:
+      // En SNR ya no evalúa solo en un segundo exacto.
+      // Desde 35s hasta el segundo elegido escanea en cada tick.
+      // Si encuentra interacción válida con el SNR, crea la prealerta y deja de escanear esa vela.
+      const radarStartSec = SNR_RADAR_START_SEC;
+      const radarEndSec = Math.max(radarStartSec, Math.min(45, Number(EVAL_SEC || 40)));
+
+      if (sec >= radarStartSec && sec <= radarEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(radarStartSec * 1000, Math.min(msInMinute, radarEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec,
+          radarEndSec,
+        });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > radarEndSec && lastEvaluatedMinute !== minute) {
+        // Se terminó la ventana de radar sin señal. No volver a evaluar esta vela.
+        lastEvaluatedMinute = minute;
+      }
+    }
   }
 }
 function scheduleRetry(minute) {
   if (evalRetryTimer) clearTimeout(evalRetryTimer);
   evalRetryTimer = setTimeout(() => {
     if (areSignalsPaused()) return;
-    if (Math.floor(Date.now() / 60000) === minute) evaluateMinute(minute);
+    if (Math.floor(Date.now() / 60000) === minute) evaluateMinute(minute, { evalMs: Math.max(1000, Number(EVAL_SEC || 45) * 1000), evalSec: Number(EVAL_SEC || 45), radar: false });
   }, RETRY_DELAY_MS);
 }
 
 /* =========================
-   Technical rules + Evaluation (NORMAL + GIRO v3)
+   Technical rules + Evaluation (NORMAL + GIRO v2)
 ========================= */
 function getPriceAtMs(ticks, ms) {
   if (!ticks || !ticks.length) return null;
@@ -11337,30 +12876,119 @@ function getGiroNivelSimpleCandidateLevels(symbol, minute, currentRange, rules =
   }));
 }
 function getGiroSNRBodyTolerance(symbol, currentRange = 0) {
-  const candles = getGiroPolarityCandles(symbol, null, 50);
+  const candles = getGiroPolarityCandles(symbol, null, 70);
   const bodies = candles
     .map((c) => Math.abs(Number(c.close) - Number(c.open)))
     .filter((x) => Number.isFinite(x) && x > 0);
+  const closes = candles
+    .map((c) => Number(c.close))
+    .filter(Number.isFinite);
+  const steps = [];
+  for (let i = 1; i < closes.length; i++) {
+    const d = Math.abs(closes[i] - closes[i - 1]);
+    if (Number.isFinite(d) && d > 0) steps.push(d);
+  }
   const avgBody = bodies.length
     ? bodies.reduce((a, b) => a + b, 0) / bodies.length
     : Math.max(Math.abs(Number(currentRange || 0)) * 0.18, 1e-9);
-  return Math.max(avgBody * 0.65, Math.abs(Number(currentRange || 0)) * 0.040, 1e-9);
+  const avgStep = steps.length
+    ? steps.reduce((a, b) => a + b, 0) / steps.length
+    : avgBody;
+
+  // V21: tolerancia un poco más fina. El nivel se arma por CIERRES con reacción,
+  // no por todo el cuerpo de la vela. Por eso no necesitamos una banda tan grande.
+  return Math.max(avgBody * 0.38, avgStep * 0.92, Math.abs(Number(currentRange || 0)) * 0.024, 1e-9);
+}
+function getArrayPercentileValue(src, pct = 0.5) {
+  const arr = (src || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!arr.length) return null;
+  const p = Math.max(0, Math.min(1, Number(pct || 0)));
+  const idx = (arr.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return arr[lo];
+  const t = idx - lo;
+  return arr[lo] * (1 - t) + arr[hi] * t;
+}
+function getGiroSNRCloseReactionRawLevels(candles, currentRange, tolerance) {
+  const out = [];
+  const src = (candles || []).filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite));
+  if (src.length < 4) return out;
+
+  const reactionMin = Math.max(Number(tolerance || 0) * 0.78, Math.abs(Number(currentRange || 0)) * 0.040, 1e-9);
+  const lookAhead = 4;
+
+  for (let i = 0; i < src.length - 1; i++) {
+    const c = src[i];
+    const close = Number(c.close);
+    const open = Number(c.open);
+    if (![open, close].every(Number.isFinite)) continue;
+
+    const future = src.slice(i + 1, Math.min(src.length, i + 1 + lookAhead));
+    if (!future.length) continue;
+
+    const futureHigh = Math.max(...future.map((x) => Number(x.high)).filter(Number.isFinite));
+    const futureLow = Math.min(...future.map((x) => Number(x.low)).filter(Number.isFinite));
+    const futureCloseHigh = Math.max(...future.map((x) => Number(x.close)).filter(Number.isFinite));
+    const futureCloseLow = Math.min(...future.map((x) => Number(x.close)).filter(Number.isFinite));
+    if (![futureHigh, futureLow, futureCloseHigh, futureCloseLow].every(Number.isFinite)) continue;
+
+    const pureDownMove = Math.max(0, close - futureLow, close - futureCloseLow);
+    const pureUpMove = Math.max(0, futureHigh - close, futureCloseHigh - close);
+
+    const body = Math.abs(close - open);
+    const bodyPenalty = body > reactionMin * 1.9 ? 0.90 : 1;
+
+    // Si desde ese cierre el precio reacciona hacia abajo, ese cierre cuenta como resistencia.
+    if (pureDownMove >= reactionMin && pureDownMove >= pureUpMove * 0.58) {
+      out.push({
+        price: close,
+        type: "resistance",
+        minute: Number(c.minute),
+        reactionMove: pureDownMove,
+        reactionScore: Math.max(0.01, (pureDownMove / reactionMin) * bodyPenalty),
+        source: "close_reaction_down",
+      });
+    }
+
+    // Si desde ese cierre el precio reacciona hacia arriba, ese cierre cuenta como soporte.
+    if (pureUpMove >= reactionMin && pureUpMove >= pureDownMove * 0.58) {
+      out.push({
+        price: close,
+        type: "support",
+        minute: Number(c.minute),
+        reactionMove: pureUpMove,
+        reactionScore: Math.max(0.01, (pureUpMove / reactionMin) * bodyPenalty),
+        source: "close_reaction_up",
+      });
+    }
+  }
+  return out;
 }
 function clusterGiroSNRBodyLevels(rawLevels, tolerance) {
   const clusters = [];
   for (const type of ["resistance", "support"]) {
     const sorted = (rawLevels || [])
       .filter((x) => x && x.type === type && Number.isFinite(Number(x.price)))
-      .map((x) => ({ ...x, price: Number(x.price), minute: Number(x.minute || 0) }))
+      .map((x) => ({
+        ...x,
+        price: Number(x.price),
+        minute: Number(x.minute || 0),
+        reactionScore: Number.isFinite(Number(x.reactionScore)) ? Number(x.reactionScore) : 1,
+        reactionMove: Number.isFinite(Number(x.reactionMove)) ? Number(x.reactionMove) : 0,
+      }))
       .sort((a, b) => Number(a.price) - Number(b.price));
 
     for (const lvl of sorted) {
       const price = Number(lvl.price);
+      const weight = Math.max(0.25, Math.min(3.5, Number(lvl.reactionScore || 1)));
       const sameType = clusters.filter((x) => x.originalType === type);
       const last = sameType[sameType.length - 1];
       if (!last || Math.abs(price - last.price) > tolerance) {
         clusters.push({
           price,
+          weightedPriceSum: price * weight,
+          weightSum: weight,
           originalType: type,
           type,
           touches: 1,
@@ -11370,307 +12998,849 @@ function clusterGiroSNRBodyLevels(rawLevels, tolerance) {
           zoneLow: price,
           zoneHigh: price,
           rawPrices: [price],
+          reactionSum: Number(lvl.reactionScore || 1),
+          reactionMax: Number(lvl.reactionScore || 1),
+          reactionMoveMax: Number(lvl.reactionMove || 0),
         });
       } else {
-        const total = last.touches + 1;
-        last.price = (last.price * last.touches + price) / total;
-        last.touches = total;
+        last.weightedPriceSum += price * weight;
+        last.weightSum += weight;
+        last.price = last.weightedPriceSum / Math.max(last.weightSum, 1e-9);
+        last.touches += 1;
         last.minutes.push(Number(lvl.minute || 0));
         last.firstMinute = Math.min(last.firstMinute, Number(lvl.minute || 0));
         last.lastTouchMinute = Math.max(last.lastTouchMinute, Number(lvl.minute || 0));
         last.zoneLow = Math.min(Number(last.zoneLow), price);
         last.zoneHigh = Math.max(Number(last.zoneHigh), price);
         last.rawPrices.push(price);
+        last.reactionSum += Number(lvl.reactionScore || 1);
+        last.reactionMax = Math.max(Number(last.reactionMax || 0), Number(lvl.reactionScore || 1));
+        last.reactionMoveMax = Math.max(Number(last.reactionMoveMax || 0), Number(lvl.reactionMove || 0));
       }
     }
   }
+
+  for (const cluster of clusters) {
+    const prices = (cluster.rawPrices || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+    const median = getArrayPercentileValue(prices, 0.50);
+    let coreLow = prices.length >= 3 ? getArrayPercentileValue(prices, 0.25) : getArrayPercentileValue(prices, 0.00);
+    let coreHigh = prices.length >= 3 ? getArrayPercentileValue(prices, 0.75) : getArrayPercentileValue(prices, 1.00);
+    if (!Number.isFinite(coreLow)) coreLow = Number(cluster.zoneLow);
+    if (!Number.isFinite(coreHigh)) coreHigh = Number(cluster.zoneHigh);
+    if (Number.isFinite(median)) cluster.price = median;
+    cluster.coreLow = Math.min(coreLow, coreHigh);
+    cluster.coreHigh = Math.max(coreLow, coreHigh);
+    cluster.zoneLow = cluster.coreLow;
+    cluster.zoneHigh = cluster.coreHigh;
+    cluster.zoneSpan = Math.max(0, Number(cluster.zoneHigh) - Number(cluster.zoneLow));
+    cluster.uniqueMinutes = new Set((cluster.minutes || []).map(Number).filter(Number.isFinite)).size;
+    cluster.reactionScore = Number(cluster.reactionSum || 0) / Math.max(1, Number(cluster.touches || 0));
+    cluster.compactness = Math.max(0, 1 - cluster.zoneSpan / Math.max(tolerance * 1.75, 1e-9));
+  }
   return clusters.sort((a, b) => Number(a.price) - Number(b.price));
 }
-function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
-  const candles = getGiroPolarityCandles(symbol, minute, 120);
-  if (!candles.length) return [];
-  const tol = getGiroSNRBodyTolerance(symbol, currentRange);
-  const raw = [];
-  for (const c of candles) {
-    const open = Number(c.open);
-    const close = Number(c.close);
-    if (![open, close].every(Number.isFinite)) continue;
-    raw.push({ price: Math.max(open, close), type: "resistance", minute: Number(c.minute) });
-    raw.push({ price: Math.min(open, close), type: "support", minute: Number(c.minute) });
+const SNR_EFFECTIVENESS_MIN_RATIO = 0.70;
+const SNR_EFFECTIVENESS_MIN_TESTS = 3;
+const SNR_RECENT_EFFECTIVENESS_MIN_RATIO = 0.70;
+const SNR_RECENT_EFFECTIVENESS_MIN_TESTS = 3;
+const SNR_RECENT_EFFECTIVENESS_MAX_TESTS = 5;
+const SNR_REVIEW_CONSECUTIVE_RECENT_FAILS = 2;
+const SNR_MAX_CONSECUTIVE_RECENT_FAILS = 3;
+
+function buildSNRRecentEffectivenessAudit(tests) {
+  const src = (tests || [])
+    .filter((x) => x && Number.isFinite(Number(x.minute)))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  const recent = src.slice(-SNR_RECENT_EFFECTIVENESS_MAX_TESTS);
+  const recentTotal = recent.length;
+  const recentWins = recent.filter((x) => !!x.success).length;
+  const recentFails = Math.max(0, recentTotal - recentWins);
+  const recentRatio = recentTotal > 0 ? recentWins / recentTotal : 0;
+
+  let consecutiveRecentFails = 0;
+  for (let i = src.length - 1; i >= 0; i--) {
+    if (src[i]?.success) break;
+    consecutiveRecentFails += 1;
   }
-  const clusters = clusterGiroSNRBodyLevels(raw, tol * 1.10);
+
+  const recentOk = recentTotal < SNR_RECENT_EFFECTIVENESS_MIN_TESTS || recentRatio >= SNR_RECENT_EFFECTIVENESS_MIN_RATIO;
+  const consecutiveFailsOk = consecutiveRecentFails < SNR_MAX_CONSECUTIVE_RECENT_FAILS;
+
+  return {
+    recentTests: recent,
+    recentTotal,
+    recentWins,
+    recentFails,
+    recentRatio,
+    recentPct: Math.round(recentRatio * 100),
+    consecutiveRecentFails,
+    reviewNeeded: consecutiveRecentFails >= SNR_REVIEW_CONSECUTIVE_RECENT_FAILS,
+    recentOk,
+    consecutiveFailsOk,
+    ok: recentOk && consecutiveFailsOk,
+  };
+}
+
+function getSignalSNRRoleHardBreakInfo(meta, ticks, checkMs = 60000) {
+  const m = meta || {};
+  const currentRole = String(m.currentRole || m.levelType || "").toLowerCase();
+  if (!["support", "resistance"].includes(currentRole)) return null;
+
+  let zoneLow = Number(m.zoneLow);
+  let zoneHigh = Number(m.zoneHigh);
+  const level = Number(m.level);
+  const tol = Math.max(Number(m.tolerance || 0), 1e-9);
+  const zoneSize = Number(m.zone);
+
+  if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
+    const bodyLow = Number(m.bodyZoneLow);
+    const bodyHigh = Number(m.bodyZoneHigh);
+    if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
+      zoneLow = Math.min(bodyLow, bodyHigh);
+      zoneHigh = Math.max(bodyLow, bodyHigh);
+    } else if (Number.isFinite(level)) {
+      const fallback = Math.max(tol * 0.50, Number.isFinite(zoneSize) ? zoneSize * 0.50 : 0, Math.abs(level) * 0.000001, 1e-9);
+      zoneLow = level - fallback;
+      zoneHigh = level + fallback;
+    }
+  }
+  if (![zoneLow, zoneHigh].every(Number.isFinite)) return null;
+  {
+    const a = zoneLow;
+    const b = zoneHigh;
+    zoneLow = Math.min(a, b);
+    zoneHigh = Math.max(a, b);
+  }
+
+  const pts = (ticks || [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms <= checkMs)
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 2) return null;
+
+  const values = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (!values.length) return null;
+  const high = Math.max(...values);
+  const low = Math.min(...values);
+  const range = Math.max(high - low, Math.abs(Number(level || values[0] || 0)) * 0.000001, 1e-9);
+  const zoneWidth = Math.max(zoneHigh - zoneLow, tol * 0.45, 1e-9);
+  const hardBreak = Math.max(tol * 0.80, zoneWidth * 0.80, range * 0.13, 1e-9);
+
+  const breakDistance = currentRole === "resistance" ? Math.max(0, high - zoneHigh) : Math.max(0, zoneLow - low);
+  const broken = breakDistance > hardBreak;
+  const breakQuote = currentRole === "resistance" ? high : low;
+
+  return {
+    broken,
+    currentRole,
+    checkMs,
+    zoneLow,
+    zoneHigh,
+    tolerance: tol,
+    hardBreak,
+    breakDistance,
+    breakQuote,
+    high,
+    low,
+    reason: broken ? "snr_role_broken_intracandle" : "snr_role_respected_intracandle",
+  };
+}
+
+function getGiroSNREffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange) {
   const out = [];
-  for (const cluster of clusters) {
-    if (Number(cluster.touches || 0) < 2) continue;
-    const breakInfo = getGiroPolarityBreakInfo(candles, cluster, tol * 0.85, { breakCloseTolMult: 0.42 });
-    if (!breakInfo) continue;
+  const src = (candles || [])
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  if (src.length < 5) return out;
+
+  const zLow = Math.min(Number(zoneLow), Number(zoneHigh));
+  const zHigh = Math.max(Number(zoneLow), Number(zoneHigh));
+  if (![zLow, zHigh].every(Number.isFinite)) return out;
+
+  const isSupport = role === "support";
+  const reactionNeed = Math.max(Number(tolerance || 0) * 0.55, Math.abs(Number(currentRange || 0)) * 0.030, 1e-9);
+  const lookAhead = 3;
+
+  for (let i = 0; i < src.length - 1; i++) {
+    const c = src[i];
+    const close = Number(c.close);
+    if (!Number.isFinite(close) || close < zLow || close > zHigh) continue;
+
+    const future = src.slice(i + 1, Math.min(src.length, i + 1 + lookAhead));
+    if (!future.length) continue;
+    const futureHigh = Math.max(...future.map((x) => Number(x.high)).filter(Number.isFinite));
+    const futureLow = Math.min(...future.map((x) => Number(x.low)).filter(Number.isFinite));
+    const futureClose = Number(future[future.length - 1]?.close);
+    if (![futureHigh, futureLow, futureClose].every(Number.isFinite)) continue;
+
+    const goodMove = isSupport
+      ? Math.max(0, futureHigh - close, futureClose - close)
+      : Math.max(0, close - futureLow, close - futureClose);
+    const badMove = isSupport
+      ? Math.max(0, close - futureLow, close - futureClose)
+      : Math.max(0, futureHigh - close, futureClose - close);
+
+    // Si cierra en el nivel y no gira, cuenta como fallo. No se permite “decorar”
+    // un SNR con cierres que lo atraviesan o no reaccionan.
+    const success = goodMove >= reactionNeed && goodMove >= badMove * 0.75;
     out.push({
-      ...cluster,
-      ...breakInfo,
-      levelMode: "snr_body",
-      levelType: breakInfo.currentRole,
-      level: Number(cluster.price),
-      tolerance: tol,
-      zoneLow: Number(cluster.zoneLow) - tol * 0.20,
-      zoneHigh: Number(cluster.zoneHigh) + tol * 0.20,
-      bodyZoneLow: Number(cluster.zoneLow),
-      bodyZoneHigh: Number(cluster.zoneHigh),
+      minute: Number(c.minute || 0),
+      close,
+      success,
+      goodMove,
+      badMove,
+      reactionNeed,
     });
   }
   return out;
 }
 
+function scoreGiroSNREffectiveness(candles, role, zoneLow, zoneHigh, tolerance, currentRange) {
+  const tests = getGiroSNREffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange);
+  const total = tests.length;
+  const wins = tests.filter((x) => x.success).length;
+  const ratio = total > 0 ? wins / total : 0;
+  const lastTestMinute = tests.reduce((m, x) => Math.max(m, Number(x.minute || 0)), 0);
+  const audit = buildSNRRecentEffectivenessAudit(tests);
+  return {
+    tests,
+    total,
+    wins,
+    fails: Math.max(0, total - wins),
+    ratio,
+    pct: Math.round(ratio * 100),
+    lastTestMinute,
+    recentTests: audit.recentTests,
+    recentTotal: audit.recentTotal,
+    recentWins: audit.recentWins,
+    recentFails: audit.recentFails,
+    recentRatio: audit.recentRatio,
+    recentPct: audit.recentPct,
+    consecutiveRecentFails: audit.consecutiveRecentFails,
+    reviewNeeded: audit.reviewNeeded,
+    recentOk: audit.recentOk,
+    consecutiveFailsOk: audit.consecutiveFailsOk,
+    ok: total >= SNR_EFFECTIVENESS_MIN_TESTS && ratio >= SNR_EFFECTIVENESS_MIN_RATIO && audit.ok,
+  };
+}
 
-/* =========================
-   AUTO BACKTEST V3 — SNR alternado sin doble rechazo
-   Regla del usuario:
-   - No se busca segundo rechazo ni formación temprana.
-   - La señal nace al cierre 60s si el cierre queda dentro de la zona SNR.
-   - El SNR debe haber actuado mínimo como S-R-S o R-S-R.
-========================= */
-function clusterAutoBacktestSNRZones(rawLevels, tolerance) {
-  const sorted = (rawLevels || [])
-    .filter((x) => x && Number.isFinite(Number(x.price)))
-    .map((x) => ({ ...x, price: Number(x.price), minute: Number(x.minute || 0) }))
-    .sort((a, b) => Number(a.price) - Number(b.price));
+function adjustGiroSNRZoneToEffectiveCloses(candles, role, center, coreLow, coreHigh, tolerance, currentRange) {
+  const tol = Math.max(Number(tolerance || 0), 1e-9);
+  let zLow = Math.min(Number(coreLow), Number(coreHigh));
+  let zHigh = Math.max(Number(coreLow), Number(coreHigh));
+  const baseCenter = Number(center);
+  if (![zLow, zHigh, baseCenter].every(Number.isFinite)) {
+    zLow = baseCenter - tol * 0.35;
+    zHigh = baseCenter + tol * 0.35;
+  }
 
-  const clusters = [];
-  for (const lvl of sorted) {
-    const price = Number(lvl.price);
-    const last = clusters[clusters.length - 1];
-    if (!last || Math.abs(price - last.price) > tolerance) {
-      clusters.push({
-        price,
-        touches: 1,
-        minutes: [Number(lvl.minute || 0)],
-        firstMinute: Number(lvl.minute || 0),
-        lastTouchMinute: Number(lvl.minute || 0),
-        zoneLow: price,
-        zoneHigh: price,
-        rawPrices: [price],
-      });
-    } else {
-      const total = Number(last.touches || 0) + 1;
-      last.price = (Number(last.price) * Number(last.touches || 1) + price) / total;
-      last.touches = total;
-      last.minutes.push(Number(lvl.minute || 0));
-      last.firstMinute = Math.min(Number(last.firstMinute || 0), Number(lvl.minute || 0));
-      last.lastTouchMinute = Math.max(Number(last.lastTouchMinute || 0), Number(lvl.minute || 0));
-      last.zoneLow = Math.min(Number(last.zoneLow), price);
-      last.zoneHigh = Math.max(Number(last.zoneHigh), price);
-      last.rawPrices.push(price);
+  let best = {
+    zoneLow: zLow,
+    zoneHigh: zHigh,
+    adjusted: false,
+    effectiveness: scoreGiroSNREffectiveness(candles, role, zLow, zHigh, tol, currentRange),
+  };
+
+  // Si la zona actual no llega a 70%, se recalibra alrededor de los cierres que sí
+  // respetaron el nivel. Esto evita mantener un SNR viejo cuando los cierres actuales
+  // dejaron de girar desde ahí.
+  if (best.effectiveness.ok && !best.effectiveness.reviewNeeded) return best;
+
+  const expandedLow = baseCenter - tol * 1.25;
+  const expandedHigh = baseCenter + tol * 1.25;
+  const broadTests = getGiroSNREffectivenessTests(candles, role, expandedLow, expandedHigh, tol, currentRange);
+  const successfulCloses = broadTests
+    .filter((x) => x.success && Number.isFinite(Number(x.close)))
+    .map((x) => Number(x.close))
+    .sort((a, b) => a - b);
+
+  if (successfulCloses.length >= 2) {
+    const median = getArrayPercentileValue(successfulCloses, 0.50);
+    const q1 = getArrayPercentileValue(successfulCloses, 0.25);
+    const q3 = getArrayPercentileValue(successfulCloses, 0.75);
+    const successfulSpan = Math.max(0, Number(q3) - Number(q1));
+    const width = Math.max(successfulSpan + tol * 0.18, tol * 0.42, Math.abs(Number(currentRange || 0)) * 0.016, 1e-9);
+    const newLow = Number(median) - width / 2;
+    const newHigh = Number(median) + width / 2;
+    const eff = scoreGiroSNREffectiveness(candles, role, newLow, newHigh, tol, currentRange);
+    const candidate = { zoneLow: newLow, zoneHigh: newHigh, adjusted: true, effectiveness: eff };
+    if (
+      (candidate.effectiveness.ok && !best.effectiveness.ok) ||
+      Number(candidate.effectiveness.ratio || 0) > Number(best.effectiveness.ratio || 0) ||
+      (Number(candidate.effectiveness.ratio || 0) === Number(best.effectiveness.ratio || 0) && Number(candidate.effectiveness.total || 0) > Number(best.effectiveness.total || 0))
+    ) {
+      best = candidate;
     }
   }
-  return clusters.sort((a, b) => Number(a.price) - Number(b.price));
-}
-function getAutoBacktestSNRRoleForCandle(candle, zoneLow, zoneHigh, tolerance) {
-  const open = Number(candle?.open);
-  const close = Number(candle?.close);
-  const bodyLow = Math.min(open, close);
-  const bodyHigh = Math.max(open, close);
-  if (![open, close, bodyLow, bodyHigh].every(Number.isFinite)) return "";
 
-  const tol = Math.max(Number(tolerance || 0), 1e-12);
-  const touchedByBody = bodyHigh >= zoneLow - tol * 0.20 && bodyLow <= zoneHigh + tol * 0.20;
-  if (!touchedByBody) return "";
-
-  const center = (Number(zoneLow) + Number(zoneHigh)) / 2;
-
-  // Soporte: el precio termina arriba de la zona que testeó.
-  if (close >= zoneHigh + tol * 0.05) return "support";
-  // Resistencia: el precio termina abajo de la zona que testeó.
-  if (close <= zoneLow - tol * 0.05) return "resistance";
-
-  // Si el cierre quedó dentro de la zona, se usa desde qué lado llegó o el centro.
-  if (open >= zoneHigh + tol * 0.05) return "support";
-  if (open <= zoneLow - tol * 0.05) return "resistance";
-  return close >= center ? "support" : "resistance";
+  return best;
 }
-function buildAutoBacktestSNRRoleEvents(candles, zoneLow, zoneHigh, tolerance) {
-  const events = [];
-  const sorted = (candles || [])
-    .filter((c) => c && Number.isFinite(Number(c.minute)))
-    .slice()
-    .sort((a, b) => Number(a.minute) - Number(b.minute));
 
-  for (const candle of sorted) {
-    const role = getAutoBacktestSNRRoleForCandle(candle, zoneLow, zoneHigh, tolerance);
-    if (!role) continue;
-    const minute = Number(candle.minute || 0);
-    const prev = events[events.length - 1];
-
-    // Comprime repeticiones consecutivas del mismo rol. No cuenta 3 soportes seguidos como S-R-S.
-    if (prev && prev.role === role) {
-      prev.count = Number(prev.count || 1) + 1;
-      prev.lastMinute = minute;
-      prev.minutes ||= [];
-      prev.minutes.push(minute);
-    } else {
-      events.push({
-        role,
-        minute,
-        firstMinute: minute,
-        lastMinute: minute,
-        count: 1,
-        minutes: [minute],
-      });
-    }
-  }
-  return events;
-}
-function findAutoBacktestSNRAlternatingPattern(roleEvents) {
-  const events = Array.isArray(roleEvents) ? roleEvents : [];
-  for (let i = 0; i <= events.length - 3; i++) {
-    const a = events[i]?.role;
-    const b = events[i + 1]?.role;
-    const c = events[i + 2]?.role;
-    if (a === "support" && b === "resistance" && c === "support") {
-      return { ok: true, pattern: "S-R-S", startIndex: i, events: events.slice(i, i + 3) };
-    }
-    if (a === "resistance" && b === "support" && c === "resistance") {
-      return { ok: true, pattern: "R-S-R", startIndex: i, events: events.slice(i, i + 3) };
-    }
-  }
-  return { ok: false, pattern: "", startIndex: -1, events: [] };
-}
-function formatAutoBacktestSNRRole(role) {
-  return role === "support" ? "S" : role === "resistance" ? "R" : "?";
-}
-function getAutoBacktestSNRRoleSequenceText(roleEvents) {
-  return (Array.isArray(roleEvents) ? roleEvents : []).map((ev) => formatAutoBacktestSNRRole(ev?.role)).join("-");
-}
-function getAutoBacktestSNRAlternatingLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
-  const candles = getGiroPolarityCandles(symbol, minute, AUTO_BACKTEST_SNR_ROLE_LOOKBACK);
+function buildGiroSNRBodyCandidateLevelsForCandles(symbol, candles, currentRange, lookbackLabel = "") {
   if (!candles.length) return [];
-
   const tol = getGiroSNRBodyTolerance(symbol, currentRange);
-  const raw = [];
-  for (const c of candles) {
-    const open = Number(c.open);
-    const close = Number(c.close);
-    if (![open, close].every(Number.isFinite)) continue;
-    const bodyHigh = Math.max(open, close);
-    const bodyLow = Math.min(open, close);
-    raw.push({ price: bodyHigh, minute: Number(c.minute) });
-    raw.push({ price: bodyLow, minute: Number(c.minute) });
-  }
 
-  const clusters = clusterAutoBacktestSNRZones(raw, tol * 1.10);
+  // Niveles SNR por cierres + reacción posterior, pero ahora con auditoría:
+  // solo sobreviven si al menos el 70% de los cierres que caen en la zona giran.
+  const raw = getGiroSNRCloseReactionRawLevels(candles, currentRange, tol);
+  const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.82);
+
   const out = [];
   for (const cluster of clusters) {
-    if (Number(cluster.touches || 0) < 3) continue;
+    const touches = Number(cluster.touches || 0);
+    const uniqueMinutes = Number(cluster.uniqueMinutes || 0);
+    const reactionScore = Number(cluster.reactionScore || 0);
+    let coreLow = Number(cluster.zoneLow);
+    let coreHigh = Number(cluster.zoneHigh);
+    let center = Number(cluster.price);
+    if (![coreLow, coreHigh, center].every(Number.isFinite)) continue;
+    {
+      const cLow = coreLow;
+      const cHigh = coreHigh;
+      coreLow = Math.min(cLow, cHigh);
+      coreHigh = Math.max(cLow, cHigh);
+    }
+    let closeBand = Math.max(0, coreHigh - coreLow);
 
-    const zoneLow = Number(cluster.zoneLow) - tol * 0.20;
-    const zoneHigh = Number(cluster.zoneHigh) + tol * 0.20;
-    if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh) || zoneHigh <= zoneLow) continue;
+    if (uniqueMinutes < 2 || touches < 2) continue;
+    if (touches < 3 && reactionScore < 1.75) continue;
 
-    const roleEvents = buildAutoBacktestSNRRoleEvents(candles, zoneLow, zoneHigh, tol);
-    const pattern = findAutoBacktestSNRAlternatingPattern(roleEvents);
-    if (!pattern.ok) continue;
+    const maxCloseBand = Math.max(tol * 1.55, Math.abs(Number(currentRange || 0)) * 0.090, 1e-9);
+    if (closeBand > maxCloseBand) {
+      coreLow = center - maxCloseBand / 2;
+      coreHigh = center + maxCloseBand / 2;
+      closeBand = maxCloseBand;
+    }
 
-    const lastRole = roleEvents[roleEvents.length - 1]?.role || "";
-    const firstRole = roleEvents[0]?.role || "";
+    const minCloseBand = Math.max(tol * 0.34, Math.abs(Number(currentRange || 0)) * 0.014, 1e-9);
+    if (closeBand < minCloseBand) {
+      coreLow = center - minCloseBand / 2;
+      coreHigh = center + minCloseBand / 2;
+      closeBand = minCloseBand;
+    }
+
+    const role = cluster.originalType === "support" ? "support" : "resistance";
+    const adjusted = adjustGiroSNRZoneToEffectiveCloses(candles, role, center, coreLow, coreHigh, tol, currentRange);
+    const eff = adjusted.effectiveness || scoreGiroSNREffectiveness(candles, role, coreLow, coreHigh, tol, currentRange);
+
+    // Regla nueva: mínimo 70% efectivo. Si los cierres en esa zona no giran,
+    // se descarta el nivel y se busca el próximo candidato.
+    if (!eff.ok) continue;
+    // V44: 2 fallos recientes seguidos no descartan el nivel de una, pero obligan a reajustar.
+    // Si luego del reajuste el nivel sigue debilitado, no genera señal nueva.
+    if (eff.reviewNeeded) continue;
+
+    coreLow = Math.min(Number(adjusted.zoneLow), Number(adjusted.zoneHigh));
+    coreHigh = Math.max(Number(adjusted.zoneLow), Number(adjusted.zoneHigh));
+    center = (coreLow + coreHigh) / 2;
+    closeBand = Math.max(0, coreHigh - coreLow);
+
+    const zonePad = Math.min(
+      Math.max(tol * 0.055, Math.abs(Number(currentRange || 0)) * 0.0045, 1e-9),
+      Math.max(tol * 0.16, 1e-9)
+    );
+
     out.push({
       ...cluster,
       levelMode: "snr_body",
-      level: Number(cluster.price),
-      price: Number(cluster.price),
+      originalType: role,
+      currentRole: role,
+      levelType: role,
+      direction: role === "support" ? "CALL" : "PUT",
+      breakDirection: "",
+      brokenAt: NaN,
+      level: center,
+      price: center,
+      tolerance: tol,
+      compactness: Number(cluster.compactness || 0),
+      reactionScore,
+      reactionMax: Number(cluster.reactionMax || 0),
+      reactionMoveMax: Number(cluster.reactionMoveMax || 0),
+      zoneLow: coreLow - zonePad,
+      zoneHigh: coreHigh + zonePad,
+      bodyZoneLow: coreLow,
+      bodyZoneHigh: coreHigh,
+      closeReactionZoneLow: coreLow,
+      closeReactionZoneHigh: coreHigh,
+      closeBand,
+      zonePad,
+      snrEffectivenessRatio: Number(eff.ratio || 0),
+      snrEffectivenessPct: Number(eff.pct || 0),
+      snrEffectivenessWins: Number(eff.wins || 0),
+      snrEffectivenessTests: Number(eff.total || 0),
+      snrEffectivenessFails: Number(eff.fails || 0),
+      snrRecentEffectivenessRatio: Number(eff.recentRatio || 0),
+      snrRecentEffectivenessPct: Number(eff.recentPct || 0),
+      snrRecentEffectivenessWins: Number(eff.recentWins || 0),
+      snrRecentEffectivenessTests: Number(eff.recentTotal || 0),
+      snrRecentEffectivenessFails: Number(eff.recentFails || 0),
+      snrRecentConsecutiveFails: Number(eff.consecutiveRecentFails || 0),
+      snrRecentReviewNeeded: !!eff.reviewNeeded,
+      snrEffectivenessMinPct: 70,
+      snrAdjustedToEffectiveCloses: !!adjusted.adjusted,
+      snrLookbackLabel: lookbackLabel,
+      lastTouchMinute: Math.max(Number(cluster.lastTouchMinute || 0), Number(eff.lastTestMinute || 0)),
+    });
+  }
+
+  return out;
+}
+
+function getGiroSNRBodyCandidateLevels(symbol, minute, currentRange, rules = RULES_GIRO_DOBLE_RECHAZO) {
+  const allCandles = getGiroPolarityCandles(symbol, minute, 160);
+  if (!allCandles.length) return [];
+
+  // V37: si un SNR viejo dejó de funcionar, la PWA prueba ventanas más actuales
+  // antes de descartarlo. Prioridad: 60/90/140 velas, todas auditadas al 70%.
+  const windows = [60, 90, 140];
+  const gathered = [];
+  for (const w of windows) {
+    const slice = allCandles.slice(Math.max(0, allCandles.length - w));
+    gathered.push(...buildGiroSNRBodyCandidateLevelsForCandles(symbol, slice, currentRange, `${w}m`));
+  }
+
+  const deduped = [];
+  for (const lvl of gathered.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
+    Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
+    Number(b.lastTouchMinute || 0) - Number(a.lastTouchMinute || 0)
+  )) {
+    const role = String(lvl.levelType || lvl.currentRole || lvl.originalType || "");
+    const level = Number(lvl.level || lvl.price);
+    const tol = Math.max(Number(lvl.tolerance || 0), 1e-9);
+    if (!Number.isFinite(level)) continue;
+    const duplicate = deduped.find((x) =>
+      String(x.levelType || x.currentRole || x.originalType || "") === role &&
+      Math.abs(Number(x.level || x.price) - level) <= tol * 0.72
+    );
+    if (!duplicate) deduped.push(lvl);
+  }
+
+  return deduped.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
+    Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
+    Number(b.touches || 0) - Number(a.touches || 0) ||
+    Number(a.zoneSpan || 0) - Number(b.zoneSpan || 0)
+  );
+}
+
+// =========================
+// Modo SNR POLARIDAD v39
+// Nivel horizontal de polaridad: resistencia rota -> soporte, soporte roto -> resistencia.
+// La señal no sale por ruptura: sale por retesteo de la zona después de cambiar de lado.
+// =========================
+const SNR_POLARIDAD_EFFECTIVENESS_MIN_RATIO = 0.70;
+const SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS = 2;
+
+function getSNRPolarityEffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange, afterMinute = null) {
+  const src = (candles || [])
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .filter((c) => !Number.isFinite(Number(afterMinute)) || Number(c.minute || 0) > Number(afterMinute))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  return getGiroSNREffectivenessTests(src, role, zoneLow, zoneHigh, tolerance, currentRange);
+}
+
+function scoreSNRPolarityEffectiveness(candles, role, zoneLow, zoneHigh, tolerance, currentRange, afterMinute = null) {
+  const tests = getSNRPolarityEffectivenessTests(candles, role, zoneLow, zoneHigh, tolerance, currentRange, afterMinute);
+  const total = tests.length;
+  const wins = tests.filter((x) => x.success).length;
+  const ratio = total > 0 ? wins / total : 0;
+  const audit = buildSNRRecentEffectivenessAudit(tests);
+  return {
+    tests,
+    total,
+    wins,
+    fails: Math.max(0, total - wins),
+    ratio,
+    pct: Math.round(ratio * 100),
+    recentTests: audit.recentTests,
+    recentTotal: audit.recentTotal,
+    recentWins: audit.recentWins,
+    recentFails: audit.recentFails,
+    recentRatio: audit.recentRatio,
+    recentPct: audit.recentPct,
+    consecutiveRecentFails: audit.consecutiveRecentFails,
+    reviewNeeded: audit.reviewNeeded,
+    recentOk: audit.recentOk,
+    consecutiveFailsOk: audit.consecutiveFailsOk,
+    ok: total >= SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS && ratio >= SNR_POLARIDAD_EFFECTIVENESS_MIN_RATIO && audit.ok,
+  };
+}
+
+function buildSNRPolarityCandidateLevelsForCandles(symbol, candles, currentRange, lookbackLabel = "") {
+  const src = (candles || [])
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .sort((a, b) => Number(a.minute || 0) - Number(b.minute || 0));
+  if (src.length < 12) return [];
+
+  const tol = getGiroSNRBodyTolerance(symbol, currentRange);
+  const raw = getGiroSNRCloseReactionRawLevels(src, currentRange, tol);
+  const clusters = clusterGiroSNRBodyLevels(raw, tol * 0.82);
+  const out = [];
+
+  for (const cluster of clusters) {
+    const originalType = cluster.originalType === "support" ? "support" : "resistance";
+    const touches = Number(cluster.touches || 0);
+    const uniqueMinutes = Number(cluster.uniqueMinutes || 0);
+    const reactionScore = Number(cluster.reactionScore || 0);
+    if (touches < 2 || uniqueMinutes < 2) continue;
+    if (touches < 3 && reactionScore < 1.45) continue;
+
+    let coreLow = Math.min(Number(cluster.zoneLow), Number(cluster.zoneHigh));
+    let coreHigh = Math.max(Number(cluster.zoneLow), Number(cluster.zoneHigh));
+    let center = Number(cluster.price);
+    if (![coreLow, coreHigh, center].every(Number.isFinite)) continue;
+
+    const maxCloseBand = Math.max(tol * 1.75, Math.abs(Number(currentRange || 0)) * 0.095, 1e-9);
+    if (coreHigh - coreLow > maxCloseBand) {
+      coreLow = center - maxCloseBand / 2;
+      coreHigh = center + maxCloseBand / 2;
+    }
+    const minCloseBand = Math.max(tol * 0.34, Math.abs(Number(currentRange || 0)) * 0.014, 1e-9);
+    if (coreHigh - coreLow < minCloseBand) {
+      coreLow = center - minCloseBand / 2;
+      coreHigh = center + minCloseBand / 2;
+    }
+
+    const zonePad = Math.min(
+      Math.max(tol * 0.12, Math.abs(Number(currentRange || 0)) * 0.006, 1e-9),
+      Math.max(tol * 0.26, 1e-9)
+    );
+    const zoneLow = coreLow - zonePad;
+    const zoneHigh = coreHigh + zonePad;
+    const breakMargin = Math.max(tol * 0.42, (zoneHigh - zoneLow) * 0.32, 1e-9);
+    const lastOriginalTouch = Math.max(...(cluster.minutes || []).map(Number).filter(Number.isFinite), 0);
+
+    let breakCandle = null;
+    for (const c of src) {
+      const m = Number(c.minute || 0);
+      if (!Number.isFinite(m) || m <= lastOriginalTouch) continue;
+      const close = Number(c.close);
+      const high = Number(c.high);
+      const low = Number(c.low);
+      if (![close, high, low].every(Number.isFinite)) continue;
+
+      if (originalType === "resistance") {
+        // Resistencia rota hacia arriba: puede convertirse en soporte.
+        if (close >= zoneHigh + breakMargin && high >= zoneHigh + breakMargin * 0.55) {
+          breakCandle = c;
+          break;
+        }
+      } else {
+        // Soporte roto hacia abajo: puede convertirse en resistencia.
+        if (close <= zoneLow - breakMargin && low <= zoneLow - breakMargin * 0.55) {
+          breakCandle = c;
+          break;
+        }
+      }
+    }
+    if (!breakCandle) continue;
+
+    const brokenAt = Number(breakCandle.minute || 0);
+
+    // V43: antes de aceptar una polaridad, el nivel original también debe
+    // estar sano recientemente. Si un soporte/resistencia funcionó hace mucho
+    // pero en lo último cerró varias veces en zona y no giró, se descarta.
+    const beforeBreak = src.filter((c) => Number(c.minute || 0) < brokenAt);
+    const originalEff = scoreGiroSNREffectiveness(beforeBreak, originalType, zoneLow, zoneHigh, tol, currentRange);
+    if (!originalEff.ok) continue;
+
+    const afterBreak = src.filter((c) => Number(c.minute || 0) > brokenAt);
+    if (!afterBreak.length) continue;
+
+    const currentRole = originalType === "resistance" ? "support" : "resistance";
+    const direction = currentRole === "support" ? "CALL" : "PUT";
+    const breakDirection = originalType === "resistance" ? "up" : "down";
+
+    // Confirmación de cambio de lado: no alcanza con una mecha o una ruptura aislada.
+    // Debe existir al menos un cierre del lado nuevo antes del retesteo actual.
+    const sideClose = afterBreak.find((c) => {
+      const close = Number(c.close);
+      if (!Number.isFinite(close)) return false;
+      return currentRole === "support" ? close >= zoneHigh + tol * 0.18 : close <= zoneLow - tol * 0.18;
+    });
+    if (!sideClose) continue;
+
+    const eff = scoreSNRPolarityEffectiveness(src, currentRole, zoneLow, zoneHigh, tol, currentRange, brokenAt);
+    // V43: si ya existen retesteos después de la ruptura, no alcanza con que
+    // el nivel haya funcionado en el pasado. Debe sostener 70% y no puede traer
+    // fallos consecutivos recientes. Si todavía no hay retesteos cerrados, se
+    // permite que el primer retesteo vivo sea evaluado por la vela actual.
+    const enoughTests = Number(eff.total || 0) >= SNR_POLARIDAD_EFFECTIVENESS_MIN_TESTS;
+    if (enoughTests && !eff.ok) continue;
+    // V44: si ya hay retesteos y aparecen 2 fallos seguidos, el nivel queda en revisión.
+    // En polaridad no se reajusta automáticamente el rol nuevo, así que por seguridad no genera señal.
+    if (enoughTests && eff.reviewNeeded) continue;
+    if (Number(eff.consecutiveRecentFails || 0) >= SNR_MAX_CONSECUTIVE_RECENT_FAILS) continue;
+
+    out.push({
+      ...cluster,
+      levelMode: "snr_polaridad",
+      originalType,
+      currentRole,
+      levelType: currentRole,
+      direction,
+      breakDirection,
+      brokenAt,
+      breakClose: Number(breakCandle.close),
+      breakHigh: Number(breakCandle.high),
+      breakLow: Number(breakCandle.low),
+      sideConfirmedAt: Number(sideClose.minute || 0),
+      level: (zoneLow + zoneHigh) / 2,
+      price: (zoneLow + zoneHigh) / 2,
       tolerance: tol,
       zoneLow,
       zoneHigh,
-      bodyZoneLow: Number(cluster.zoneLow),
-      bodyZoneHigh: Number(cluster.zoneHigh),
-      roleEvents,
-      rolePattern: pattern.pattern,
-      roleSequence: getAutoBacktestSNRRoleSequenceText(roleEvents),
-      rolePatternEvents: pattern.events,
-      originalType: firstRole || "mixed",
-      currentRole: lastRole || "mixed",
-      levelType: lastRole || "mixed",
-      touches: roleEvents.reduce((acc, ev) => acc + Number(ev.count || 1), 0),
-      roleTurns: roleEvents.length,
+      bodyZoneLow: coreLow,
+      bodyZoneHigh: coreHigh,
+      closeReactionZoneLow: coreLow,
+      closeReactionZoneHigh: coreHigh,
+      closeBand: Math.max(0, coreHigh - coreLow),
+      zonePad,
+      reactionScore,
+      reactionMax: Number(cluster.reactionMax || 0),
+      reactionMoveMax: Number(cluster.reactionMoveMax || 0),
+      snrEffectivenessRatio: Number(eff.ratio || 0),
+      snrEffectivenessPct: Number(eff.pct || 0),
+      snrEffectivenessWins: Number(eff.wins || 0),
+      snrEffectivenessTests: Number(eff.total || 0),
+      snrEffectivenessFails: Number(eff.fails || 0),
+      snrRecentEffectivenessRatio: Number(eff.recentRatio || 0),
+      snrRecentEffectivenessPct: Number(eff.recentPct || 0),
+      snrRecentEffectivenessWins: Number(eff.recentWins || 0),
+      snrRecentEffectivenessTests: Number(eff.recentTotal || 0),
+      snrRecentEffectivenessFails: Number(eff.recentFails || 0),
+      snrRecentConsecutiveFails: Number(eff.consecutiveRecentFails || 0),
+      snrRecentReviewNeeded: !!eff.reviewNeeded,
+      snrOriginalEffectivenessRatio: Number(originalEff.ratio || 0),
+      snrOriginalEffectivenessPct: Number(originalEff.pct || 0),
+      snrOriginalEffectivenessWins: Number(originalEff.wins || 0),
+      snrOriginalEffectivenessTests: Number(originalEff.total || 0),
+      snrOriginalEffectivenessFails: Number(originalEff.fails || 0),
+      snrOriginalRecentEffectivenessRatio: Number(originalEff.recentRatio || 0),
+      snrOriginalRecentEffectivenessPct: Number(originalEff.recentPct || 0),
+      snrOriginalRecentConsecutiveFails: Number(originalEff.consecutiveRecentFails || 0),
+      snrOriginalRecentReviewNeeded: !!originalEff.reviewNeeded,
+      snrEffectivenessMinPct: 70,
+      snrLookbackLabel: lookbackLabel,
+      touches,
+      polarityReady: true,
+      lastTouchMinute: Math.max(Number(cluster.lastTouchMinute || 0), brokenAt, Number(sideClose.minute || 0)),
     });
   }
-  return out.sort((a, b) =>
-    Number(b.roleTurns || 0) - Number(a.roleTurns || 0) ||
+
+  return out;
+}
+
+function getSNRPolarityCandidateLevels(symbol, minute, currentRange) {
+  const allCandles = getGiroPolarityCandles(symbol, minute, 170);
+  if (!allCandles.length) return [];
+  const windows = [70, 100, 150];
+  const gathered = [];
+  for (const w of windows) {
+    const slice = allCandles.slice(Math.max(0, allCandles.length - w));
+    gathered.push(...buildSNRPolarityCandidateLevelsForCandles(symbol, slice, currentRange, `${w}m`));
+  }
+  const deduped = [];
+  for (const lvl of gathered.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
     Number(b.touches || 0) - Number(a.touches || 0) ||
-    Math.abs(Number(a.level || 0)) - Math.abs(Number(b.level || 0))
+    Number(b.lastTouchMinute || 0) - Number(a.lastTouchMinute || 0)
+  )) {
+    const role = String(lvl.currentRole || lvl.levelType || "");
+    const level = Number(lvl.level || lvl.price);
+    const tol = Math.max(Number(lvl.tolerance || 0), 1e-9);
+    if (!Number.isFinite(level)) continue;
+    const duplicate = deduped.find((x) =>
+      String(x.currentRole || x.levelType || "") === role &&
+      Math.abs(Number(x.level || x.price) - level) <= tol * 0.72
+    );
+    if (!duplicate) deduped.push(lvl);
+  }
+  return deduped.sort((a, b) =>
+    Number(b.snrEffectivenessRatio || 0) - Number(a.snrEffectivenessRatio || 0) ||
+    Number(b.snrEffectivenessTests || 0) - Number(a.snrEffectivenessTests || 0) ||
+    Number(b.reactionScore || 0) - Number(a.reactionScore || 0) ||
+    Number(b.touches || 0) - Number(a.touches || 0)
   );
 }
-function analyzeAutoBacktestSNRCloseCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
+
+function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
-  if (ticks.length < 2) return null;
+  if (ticks.length < 4) return null;
 
-  const pts = ensureTicksWithBoundary(ticks, 60000);
-  const p0 = Number(getPriceAtMs(pts, 0));
-  const p60 = Number(getPriceAtMs(pts, 60000));
-  if (!Number.isFinite(p0) || !Number.isFinite(p60)) return null;
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(1000, Math.min(59000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
+  const evalSecUsed = Number.isFinite(Number(opts?.evalSec)) ? Number(opts.evalSec) : Math.round(evalMs / 1000);
+  const radarStartSec = Number.isFinite(Number(opts?.radarStartSec)) ? Number(opts.radarStartSec) : SNR_RADAR_START_SEC;
+  const radarEndSec = Number.isFinite(Number(opts?.radarEndSec)) ? Number(opts.radarEndSec) : Number(EVAL_SEC || 45);
+  const usingRadar = !!opts?.radar;
 
+  const tickOpen = Number(getPriceAtMs(ticks, 0));
+  const realOpen = Number(getCandidateRealOpenPrice(candidate, minute));
+  const p0 = Number.isFinite(realOpen) ? realOpen : tickOpen;
+  const pE = Number(getPriceAtMs(ticks, evalMs));
+  if (!Number.isFinite(p0) || !Number.isFinite(pE)) return null;
+
+  const pts = ensureTicksWithBoundary(ticks, evalMs);
   const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (qs.length < 2) return null;
+  if (qs.length < 3) return null;
+
   const high = Math.max(...qs);
   const low = Math.min(...qs);
-  const range = Math.max(high - low, Math.abs(p60) * 0.000001, 1e-9);
-
-  const direction = p60 > p0 ? "PUT" : p60 < p0 ? "CALL" : "";
-  if (!direction) return null;
-  const formationSide = p60 > p0 ? "ALCISTA" : "BAJISTA";
-
-  const levels = getAutoBacktestSNRAlternatingLevels(candidate.symbol, minute, range, rules);
+  const range = Math.max(high - low, Math.abs(pE) * 0.000001, 1e-9);
+  const levels = getSNRPolarityCandidateLevels(candidate.symbol, minute, range);
   if (!levels.length) return null;
 
   const matches = [];
   for (const lvl of levels) {
-    const zoneLow = Number(lvl.zoneLow);
-    const zoneHigh = Number(lvl.zoneHigh);
-    if (![zoneLow, zoneHigh].every(Number.isFinite)) continue;
-    if (p60 < zoneLow || p60 > zoneHigh) continue;
+    const level = Number(lvl.level || lvl.price);
+    const tol = Math.max(Number(lvl.tolerance || getGiroSNRBodyTolerance(candidate.symbol, range)), 1e-9);
+    let zoneLow = Math.min(Number(lvl.zoneLow), Number(lvl.zoneHigh));
+    let zoneHigh = Math.max(Number(lvl.zoneLow), Number(lvl.zoneHigh));
+    if (![level, tol, zoneLow, zoneHigh].every(Number.isFinite)) continue;
 
-    const zoneWidth = Math.max(zoneHigh - zoneLow, 1e-9);
-    const center = (zoneLow + zoneHigh) / 2;
-    const closeInsideScore = Math.max(0, 1 - Math.abs(p60 - center) / Math.max(zoneWidth / 2, 1e-9));
-    const roleTurns = Number(lvl.roleTurns || 0);
+    const currentRole = lvl.currentRole === "support" ? "support" : "resistance";
+    const direction = currentRole === "support" ? "CALL" : "PUT";
+    const zoneWidth = Math.max(zoneHigh - zoneLow, tol * 0.45, 1e-9);
+    const interactionMargin = Math.max(tol * 0.82, zoneWidth * 0.55, range * 0.045, 1e-9);
+
+    const candleBreakInfo = getSignalSNRRoleHardBreakInfo(
+      { ...lvl, currentRole, levelType: currentRole, zoneLow, zoneHigh, tolerance: tol, level },
+      pts,
+      evalMs
+    );
+    if (candleBreakInfo?.broken) continue;
+
+    const distance = pE < zoneLow ? zoneLow - pE : pE > zoneHigh ? pE - zoneHigh : 0;
+    const inside = distance <= 1e-12;
+    const interacting = distance <= interactionMargin;
+    if (!interacting) continue;
+
+    const roleSideOk = currentRole === "support" ? pE >= zoneLow - interactionMargin * 0.32 : pE <= zoneHigh + interactionMargin * 0.32;
+    if (!roleSideOk) continue;
+
+    // Retesteo desde el lado correcto:
+    // resistencia rota -> soporte: el precio tuvo que estar arriba y volver hacia la zona.
+    // soporte roto -> resistencia: el precio tuvo que estar abajo y volver hacia la zona.
+    const traveledFromRoleSide = currentRole === "support"
+      ? (p0 > zoneHigh + tol * 0.10 || high > zoneHigh + interactionMargin * 0.45)
+      : (p0 < zoneLow - tol * 0.10 || low < zoneLow - interactionMargin * 0.45);
+    if (!traveledFromRoleSide) continue;
+
+    const wrongSide = currentRole === "support" ? Math.max(0, zoneLow - pE) : Math.max(0, pE - zoneHigh);
+    if (wrongSide > interactionMargin * 0.40) continue;
+
+    const rejection = currentRole === "support" ? Math.max(0, pE - low) : Math.max(0, high - pE);
+    const rejectRatio = rejection / Math.max(range, 1e-9);
+    const proximityScore = Math.max(0, 1 - distance / Math.max(interactionMargin, 1e-9));
+    const sideScore = Math.max(0, 1 - wrongSide / Math.max(interactionMargin * 0.40, 1e-9));
+    const effRatio = Number(lvl.snrEffectivenessRatio || 0);
+    const effTests = Number(lvl.snrEffectivenessTests || 0);
     const touches = Number(lvl.touches || 0);
-    const quality = 70 + Math.min(6, roleTurns) * 8 + Math.min(8, touches) * 3 + closeInsideScore * 18;
+
+    let points = 0;
+    if (interacting) points += 2;
+    if (inside) points += 1;
+    if (Number.isFinite(Number(lvl.brokenAt))) points += 2;
+    if (traveledFromRoleSide) points += 1;
+    if (touches >= 2) points += 1;
+    if (touches >= 3) points += 1;
+    if (effTests >= 2 && effRatio >= 0.70) points += 2;
+    else if (effTests >= 1) points += 1;
+    if (rejectRatio >= 0.07) points += 1;
+    if (sideScore >= 0.70) points += 1;
+
+    const minutesAfterBreak = Number(minute || 0) - Number(lvl.brokenAt || 0);
+    const quality =
+      proximityScore * 48 +
+      (inside ? 18 : 0) +
+      Math.min(5, touches) * 6 +
+      Math.min(28, effRatio * 28) +
+      Math.min(12, effTests * 3) +
+      sideScore * 14 +
+      rejectRatio * 20 +
+      Math.min(12, Math.max(0, minutesAfterBreak) * 0.8) -
+      Math.max(0, wrongSide / tol) * 10;
 
     matches.push({
       direction,
       quality,
-      points: Math.round(quality / 12),
+      points,
       meta: {
-        level: Number(lvl.level),
-        levelMode: "snr_body",
+        level,
+        levelMode: "snr_polaridad",
         originalType: lvl.originalType,
-        currentRole: lvl.currentRole,
-        levelType: lvl.levelType,
+        currentRole,
+        levelType: currentRole,
         direction,
-        tolerance: Number(lvl.tolerance),
-        zone: zoneWidth,
+        tolerance: tol,
+        zone: Math.max(zoneWidth, interactionMargin),
         zoneLow,
         zoneHigh,
         bodyZoneLow: Number(lvl.bodyZoneLow),
         bodyZoneHigh: Number(lvl.bodyZoneHigh),
         touches,
-        roleTurns,
-        rolePattern: lvl.rolePattern,
-        roleSequence: lvl.roleSequence,
-        roleEvents: lvl.roleEvents,
-        close60: p60,
-        open0: p0,
-        formationSide,
+        reactionScore: Number(lvl.reactionScore || 0),
+        reactionMax: Number(lvl.reactionMax || 0),
+        reactionMoveMax: Number(lvl.reactionMoveMax || 0),
+        brokenAt: Number(lvl.brokenAt || 0),
+        breakDirection: lvl.breakDirection || "",
+        breakClose: Number(lvl.breakClose),
+        sideConfirmedAt: Number(lvl.sideConfirmedAt || 0),
+        snrEffectivenessRatio: effRatio,
+        snrEffectivenessPct: Number(lvl.snrEffectivenessPct || Math.round(effRatio * 100)),
+        snrEffectivenessWins: Number(lvl.snrEffectivenessWins || 0),
+        snrEffectivenessTests: effTests,
+        snrEffectivenessFails: Number(lvl.snrEffectivenessFails || 0),
+        snrRecentEffectivenessRatio: Number(lvl.snrRecentEffectivenessRatio || 0),
+        snrRecentEffectivenessPct: Number(lvl.snrRecentEffectivenessPct || 0),
+        snrRecentEffectivenessWins: Number(lvl.snrRecentEffectivenessWins || 0),
+        snrRecentEffectivenessTests: Number(lvl.snrRecentEffectivenessTests || 0),
+        snrRecentEffectivenessFails: Number(lvl.snrRecentEffectivenessFails || 0),
+        snrRecentConsecutiveFails: Number(lvl.snrRecentConsecutiveFails || 0),
+        snrRecentReviewNeeded: !!lvl.snrRecentReviewNeeded,
+        snrRoleHardBreakInfo: candleBreakInfo || null,
+        snrEffectivenessMinPct: 70,
+        snrLookbackLabel: lvl.snrLookbackLabel || "",
+        points,
         high,
         low,
-        points: Math.round(quality / 12),
-        stage: "auto_60_snr_roles_close_inside",
-        movementFilter: "snr_roles_srs_or_rsr_close_inside",
-        status: `AUTO 60: cierre dentro del SNR + secuencia ${lvl.rolePattern}`,
-        logic: "SNR alternado mínimo S-R-S/R-S-R; sin doble rechazo; sin señal temprana 35/40/45.",
+        p0,
+        tickOpen,
+        realOpen,
+        pE,
+        evalSec: evalSecUsed,
+        radar: usingRadar,
+        radarStartSec,
+        radarEndSec,
+        interactionMargin,
+        interactionDistance: distance,
+        interactionInside: inside,
+        wrongSide,
+        roleSideOk,
+        traveledFromRoleSide,
+        rejection,
+        rejectRatio,
+        proximityScore,
+        sideScore,
+        stage: "snr_polaridad_retest",
+        movementFilter: "snr_polaridad_ruptura_retest_cierre_zona",
+        status: usingRadar
+          ? `PREALERTA SNR POLARIDAD RADAR ${radarStartSec}-${radarEndSec}s: ruptura previa + cambio de lado + retesteo de zona. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`
+          : `PREALERTA SNR POLARIDAD: ruptura previa + cambio de lado + retesteo de zona. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`,
+        logic: currentRole === "support"
+          ? "resistencia rota hacia arriba -> retesteo desde arriba como soporte de polaridad => CALL"
+          : "soporte roto hacia abajo -> retesteo desde abajo como resistencia de polaridad => PUT",
       },
     });
   }
 
   if (!matches.length) return null;
-  matches.sort((a, b) => b.quality - a.quality || Number(b.meta?.roleTurns || 0) - Number(a.meta?.roleTurns || 0));
+  matches.sort((a, b) => b.quality - a.quality || b.points - a.points || Number(b.meta?.snrEffectivenessTests || 0) - Number(a.meta?.snrEffectivenessTests || 0));
   return matches[0];
 }
 
@@ -12387,25 +14557,47 @@ function analyzeGiroPatronVisualCandidate(candidate, minute, rules = RULES_GIRO_
   };
 }
 
-function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO) {
-  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
-  if (ticks.length < 7) return null;
+function getCandidateRealOpenPrice(candidate, minute) {
+  const symbol = String(candidate?.symbol || "");
+  const cm = Number(minute);
+  const ocOpen = Number(candleOC?.[cm]?.[symbol]?.open);
+  if (Number.isFinite(ocOpen)) return ocOpen;
+  const liveOpen = Number(minuteData?.[cm]?.[symbol]?.[0]?.quote);
+  if (Number.isFinite(liveOpen)) return liveOpen;
+  const firstTick = (candidate?.ticks || [])
+    .map((t) => ({ ms: Number(t?.ms), quote: Number(t?.quote) }))
+    .filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
+    .sort((a, b) => a.ms - b.ms)[0];
+  return firstTick && Number.isFinite(firstTick.quote) ? Number(firstTick.quote) : NaN;
+}
 
-  const evalMs = Math.max(35000, EVAL_SEC * 1000);
-  const p0 = Number(getPriceAtMs(ticks, 0));
+function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIRO_DOBLE_RECHAZO, opts = {}) {
+  // V14: regla simplificada solicitada.
+  // La señal sale cuando, al segundo seleccionado (EVAL_SEC), el precio está
+  // interactuando con una zona SNR válida por cuerpos/cierres.
+  // Se quita la exigencia de secuencia: rechazo, respuesta débil y segundo rechazo.
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 4) return null;
+
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(1000, Math.min(59000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
+  const evalSecUsed = Number.isFinite(Number(opts?.evalSec)) ? Number(opts.evalSec) : Math.round(evalMs / 1000);
+  const radarStartSec = Number.isFinite(Number(opts?.radarStartSec)) ? Number(opts.radarStartSec) : SNR_RADAR_START_SEC;
+  const radarEndSec = Number.isFinite(Number(opts?.radarEndSec)) ? Number(opts.radarEndSec) : Number(EVAL_SEC || 45);
+  const usingRadar = !!opts?.radar;
+  const tickOpen = Number(getPriceAtMs(ticks, 0));
+  const realOpen = Number(getCandidateRealOpenPrice(candidate, minute));
+  const p0 = Number.isFinite(realOpen) ? realOpen : tickOpen;
   const pE = Number(getPriceAtMs(ticks, evalMs));
   if (!Number.isFinite(p0) || !Number.isFinite(pE)) return null;
 
   const pts = ensureTicksWithBoundary(ticks, evalMs);
   const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (qs.length < 5) return null;
+  if (qs.length < 3) return null;
 
   const high = Math.max(...qs);
   const low = Math.min(...qs);
-  const range = Math.max(high - low, 1e-9);
-  const evalAbs = Math.abs(pE);
-  const minRangeForSymbol = Math.max(evalAbs * 0.000010, 1e-9);
-  if (range < minRangeForSymbol) return null;
+  const range = Math.max(high - low, Math.abs(pE) * 0.000001, 1e-9);
 
   const levels = getGiroSNRBodyCandidateLevels(candidate.symbol, minute, range, rules);
   if (!levels.length) return null;
@@ -12418,101 +14610,86 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
 
     const isResistance = (lvl.currentRole || lvl.levelType) === "resistance";
     const direction = isResistance ? "PUT" : "CALL";
-    const sign = isResistance ? 1 : -1;
-    const levelZ = sign * level;
-    const arr = pts
-      .map((p, idx) => ({ idx, ms: Number(p.ms || 0), q: Number(p.quote), z: sign * Number(p.quote) }))
-      .filter((p) => Number.isFinite(p.q) && Number.isFinite(p.z));
-    if (arr.length < 7) continue;
 
-    const bodyBand = Math.abs(Number(lvl.zoneHigh || level) - Number(lvl.zoneLow || level));
-    const zone = Math.max(bodyBand * 0.70 + tol * 0.75, range * 0.055, tol * 0.90);
-    const openToLevel = levelZ - Number(arr[0].z);
-    const minOpenToLevel = Math.max(range * 0.30, tol * 1.35);
-    if (openToLevel < minOpenToLevel) continue;
-
-    const nearIndexes = [];
-    for (let i = 0; i < arr.length; i++) {
-      if (arr[i].z >= levelZ - zone) nearIndexes.push(i);
+    let zoneLow = Number(lvl.zoneLow);
+    let zoneHigh = Number(lvl.zoneHigh);
+    if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
+      zoneLow = level - tol * 0.35;
+      zoneHigh = level + tol * 0.35;
     }
-    const clusters = clusterSequentialIndexes(nearIndexes).filter((cl) => cl.length >= 1);
-    if (clusters.length < 2) continue;
-
-    let bestSeq = null;
-    for (let a = 0; a < clusters.length - 1; a++) {
-      for (let b = a + 1; b < clusters.length; b++) {
-        const c1 = clusters[a];
-        const c2 = clusters[b];
-        if ((c2[0] - c1[c1.length - 1]) < 2) continue;
-
-        const firstTouchIdx = findMaxZIndex(arr, c1[0], c1[c1.length - 1]);
-        const secondTouchIdx = findMaxZIndex(arr, c2[0], c2[c2.length - 1]);
-        if (firstTouchIdx < 0 || secondTouchIdx < 0 || secondTouchIdx <= firstTouchIdx) continue;
-        if (arr[firstTouchIdx].ms < 9000) continue;
-
-        const minBetweenIdx = findMinZIndex(arr, c1[c1.length - 1], c2[0]);
-        if (minBetweenIdx < 0 || minBetweenIdx <= firstTouchIdx) continue;
-        const rejection1 = arr[firstTouchIdx].z - arr[minBetweenIdx].z;
-        const minReject = Math.max(range * 0.135, tol * 0.80);
-        if (rejection1 < minReject) continue;
-
-        const retestMove = arr[secondTouchIdx].z - arr[minBetweenIdx].z;
-        const minRetest = Math.max(range * 0.060, tol * 0.55);
-        if (retestMove < minRetest) continue;
-
-        // En el segundo toque no queremos que atraviese y sostenga la zona.
-        const secondBreakBeyond = arr[secondTouchIdx].z - levelZ;
-        if (secondBreakBeyond > Math.max(tol * 0.75, range * 0.060)) continue;
-
-        const attackMove = arr[firstTouchIdx].z - arr[0].z;
-        const attackPath = sumAbsDeltaZ(arr, 0, firstTouchIdx);
-        const attackEfficiency = attackMove / Math.max(attackPath, 1e-9);
-        if (attackMove < Math.max(range * 0.30, tol * 1.25)) continue;
-        if (attackEfficiency < 0.30) continue;
-
-        const rejectMs = Math.max(1, arr[minBetweenIdx].ms - arr[firstTouchIdx].ms);
-        const retestMs = Math.max(1, arr[secondTouchIdx].ms - arr[minBetweenIdx].ms);
-        const rejectionSlope = rejection1 / rejectMs;
-        const retestSlope = retestMove / retestMs;
-        const weakRetest = retestMove <= rejection1 * 0.82 || retestSlope <= rejectionSlope * 0.72;
-        if (!weakRetest) continue;
-
-        // Debe estar cerca del segundo toque al momento de evaluar, no muy alejado.
-        const lastZ = Number(arr[arr.length - 1].z);
-        const closeNearSecondTouch = Math.abs(lastZ - arr[secondTouchIdx].z) <= Math.max(zone * 1.40, range * 0.18);
-        const closeNearLevel = Math.abs(lastZ - levelZ) <= Math.max(zone * 1.75, range * 0.22);
-        if (!closeNearSecondTouch && !closeNearLevel) continue;
-
-        let points = 0;
-        if (Number(lvl.touches || 0) >= 2) points += 1;
-        if (Number(lvl.touches || 0) >= 3) points += 1;
-        if (attackMove >= range * 0.34) points += 1;
-        if (attackEfficiency >= 0.38) points += 1;
-        if (rejection1 >= range * 0.15 || rejectionSlope >= retestSlope * 1.25) points += 1;
-        if (weakRetest) points += 2;
-        if (secondBreakBeyond <= tol * 0.35) points += 1;
-        if (closeNearSecondTouch || closeNearLevel) points += 1;
-        if (points < 6) continue;
-
-        const nearScore = Math.max(0, 1 - Math.abs(lastZ - levelZ) / Math.max(zone * 1.80, 1e-9));
-        const score =
-          points * 14 +
-          Math.min(1.6, attackMove / Math.max(range * 0.34, 1e-9)) * 16 +
-          Math.min(1.8, rejection1 / Math.max(range * 0.14, 1e-9)) * 18 +
-          Math.max(0, 1 - retestMove / Math.max(rejection1, 1e-9)) * 18 +
-          nearScore * 14 +
-          Math.min(4, Number(lvl.touches || 0)) * 5;
-
-        const seq = { firstTouchIdx, minBetweenIdx, secondTouchIdx, attackMove, attackEfficiency, rejection1, retestMove, rejectionSlope, retestSlope, weakRetest, secondBreakBeyond, points, score, nearScore };
-        if (!bestSeq || seq.score > bestSeq.score) bestSeq = seq;
-      }
+    {
+      const zA = zoneLow;
+      const zB = zoneHigh;
+      zoneLow = Math.min(zA, zB);
+      zoneHigh = Math.max(zA, zB);
     }
 
-    if (!bestSeq) continue;
+    const bodyBand = Math.max(0, zoneHigh - zoneLow);
+    const compactBand = Math.max(0, 1 - bodyBand / Math.max(tol * 2.2, 1e-9));
+    const interactionMargin = Math.max(tol * 0.72, bodyBand * 0.55, range * 0.040, 1e-9);
+
+    const distance = pE < zoneLow ? zoneLow - pE : pE > zoneHigh ? pE - zoneHigh : 0;
+    const inside = distance <= 1e-12;
+    const interacting = distance <= interactionMargin;
+    if (!interacting) continue;
+
+    // V20: la vela de señal NO puede nacer dentro ni pegada al SNR.
+    // Usa apertura real de la vela (candleOC/minuteData), no solo el primer tick disponible.
+    const bodyLowRaw = Math.min(Number(lvl.bodyZoneLow), Number(lvl.bodyZoneHigh));
+    const bodyHighRaw = Math.max(Number(lvl.bodyZoneLow), Number(lvl.bodyZoneHigh));
+    const hasBodyZone = Number.isFinite(bodyLowRaw) && Number.isFinite(bodyHighRaw);
+    const openInsideSNRZone = p0 >= zoneLow && p0 <= zoneHigh;
+    const openInsideBodyZone = hasBodyZone && p0 >= bodyLowRaw && p0 <= bodyHighRaw;
+    const openDistanceToZone = p0 < zoneLow ? zoneLow - p0 : p0 > zoneHigh ? p0 - zoneHigh : 0;
+    const minOpenDistanceToZone = Math.max(interactionMargin * 1.20, tol * 1.15, bodyBand * 0.85, range * 0.070, 1e-9);
+    const openTooNearSNR = openInsideSNRZone || openInsideBodyZone || openDistanceToZone < minOpenDistanceToZone;
+    if (openTooNearSNR) continue;
+
+    // También debe abrir del lado lógico del viaje hacia el nivel:
+    // resistencia => abre claramente por debajo y viaja hacia arriba; soporte => abre claramente por arriba y viaja hacia abajo.
+    const openOnTravelSide = isResistance ? p0 < zoneLow - Math.max(tol * 0.15, 1e-9) : p0 > zoneHigh + Math.max(tol * 0.15, 1e-9);
+    if (!openOnTravelSide) continue;
+
+    const approachFromOpen = isResistance ? pE - p0 : p0 - pE;
+    if (approachFromOpen < Math.max(minOpenDistanceToZone * 0.42, tol * 0.50, 1e-9)) continue;
+
+    // Para evitar tomar una ruptura sostenida como interacción:
+    // - en resistencia, toleramos apenas arriba de la zona;
+    // - en soporte, toleramos apenas abajo de la zona.
+    const wrongSide = isResistance ? Math.max(0, pE - zoneHigh) : Math.max(0, zoneLow - pE);
+    if (wrongSide > interactionMargin * 0.65) continue;
+
+    const touches = Number(lvl.touches || 0);
+    const reactionStrength = Math.min(2.4, Math.max(0, Number(lvl.reactionScore || 0)));
+    const proximityScore = Math.max(0, 1 - distance / Math.max(interactionMargin, 1e-9));
+    const sideScore = wrongSide <= 1e-12 ? 1 : Math.max(0, 1 - wrongSide / Math.max(interactionMargin * 0.65, 1e-9));
+
+    let points = 0;
+    if (interacting) points += 2;
+    if (inside) points += 1;
+    if (touches >= 2) points += 1;
+    if (touches >= 3) points += 1;
+    if (touches >= 4) points += 1;
+    if (compactBand >= 0.45) points += 1;
+    if (reactionStrength >= 1.20) points += 1;
+    if (sideScore >= 0.70) points += 1;
+    if (openDistanceToZone >= minOpenDistanceToZone * 1.35) points += 1;
+
+    const openDistanceScore = Math.min(1, openDistanceToZone / Math.max(minOpenDistanceToZone * 1.65, 1e-9));
+    const quality =
+      proximityScore * 55 +
+      (inside ? 18 : 0) +
+      Math.min(5, touches) * 8 +
+      compactBand * 18 +
+      reactionStrength * 10 +
+      sideScore * 10 +
+      openDistanceScore * 12 -
+      Math.max(0, wrongSide / Math.max(tol, 1e-9)) * 4;
+
     matches.push({
       direction,
-      quality: bestSeq.score,
-      points: bestSeq.points,
+      quality,
+      points,
       meta: {
         level,
         levelMode: "snr_body",
@@ -12521,37 +14698,52 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
         levelType: isResistance ? "resistance" : "support",
         direction,
         tolerance: tol,
-        zone,
-        zoneLow: Number(lvl.zoneLow),
-        zoneHigh: Number(lvl.zoneHigh),
+        zone: Math.max(bodyBand, interactionMargin),
+        zoneLow,
+        zoneHigh,
         bodyZoneLow: Number(lvl.bodyZoneLow),
         bodyZoneHigh: Number(lvl.bodyZoneHigh),
-        touches: Number(lvl.touches || 0),
+        touches,
+        reactionScore: Number(lvl.reactionScore || 0),
+        reactionMax: Number(lvl.reactionMax || 0),
+        reactionMoveMax: Number(lvl.reactionMoveMax || 0),
+        bodyBand,
+        compactBodyBand: compactBand,
         brokenAt: Number(lvl.brokenAt || 0),
         breakDirection: lvl.breakDirection || "",
-        points: bestSeq.points,
+        points,
         high,
         low,
         p0,
+        tickOpen,
+        realOpen,
         pE,
-        openToLevel,
-        attackMove: bestSeq.attackMove,
-        attackEfficiency: bestSeq.attackEfficiency,
-        firstRejection: bestSeq.rejection1,
-        rejectionHasForce: true,
-        retestMove: bestSeq.retestMove,
-        responseRatio: bestSeq.retestMove / Math.max(bestSeq.rejection1, 1e-9),
-        responseSlope: bestSeq.retestSlope,
-        weakResponse: true,
-        secondTouch: true,
-        secondTouchMs: Number(arr[bestSeq.secondTouchIdx]?.ms || 0),
-        closeNearLevel: bestSeq.nearScore,
-        stage: "snr_segundo_toque",
-        movementFilter: "snr_cuerpos_segundo_toque",
-        status: "SNR segundo toque: llega al nivel -> rechazo -> segundo toque habilita señal",
+        evalSec: evalSecUsed,
+        radar: usingRadar,
+        radarStartSec,
+        radarEndSec,
+        interactionMargin,
+        interactionDistance: distance,
+        interactionInside: inside,
+        openDistanceToZone,
+        minOpenDistanceToZone,
+        openInsideSNRZone,
+        openInsideBodyZone,
+        openTooNearSNR,
+        openOnTravelSide,
+        approachFromOpen,
+        openDistanceScore,
+        wrongSide,
+        proximityScore,
+        sideScore,
+        stage: "snr_prealerta_cierre_snr",
+        movementFilter: "snr_cierres_reaccion_prealerta_eval_sec",
+        status: usingRadar
+          ? `PREALERTA SNR RADAR ${radarStartSec}-${radarEndSec}s: apertura fuera/lejos del SNR y precio ${evalSecUsed}s dentro/cerca del nivel. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`
+          : `PREALERTA SNR: apertura fuera/lejos del SNR y precio ${evalSecUsed}s dentro/cerca del nivel. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con puntos suficientes.`,
         logic: isResistance
-          ? "viejo soporte roto que pasa a resistencia; rechazo y segundo toque de resistencia => PUT"
-          : "vieja resistencia rota que pasa a soporte; rechazo y segundo toque de soporte => CALL",
+          ? `abre fuera/lejos por debajo y precio en ${evalSecUsed}s interactúa con resistencia SNR => PUT`
+          : `abre fuera/lejos por arriba y precio en ${evalSecUsed}s interactúa con soporte SNR => CALL`,
       },
     });
   }
@@ -12591,8 +14783,9 @@ function analyzeGiroSNRBodyCandidate(candidate, minute, rules = RULES_GIRO_DOBLE
     if (!Number.isFinite(level) || !Number.isFinite(tol) || tol <= 0) continue;
 
     const isResistance = (lvl.currentRole || lvl.levelType) === "resistance";
-    const band = Math.max(Math.abs(Number(lvl.zoneHigh) - Number(lvl.zoneLow)), tol * 0.55);
-    const zone = Math.max(band + tol * 0.35, range * 0.08);
+    const band = Math.max(Math.abs(Number(lvl.zoneHigh) - Number(lvl.zoneLow)), tol * 0.40);
+    const compactBand = Math.max(0, 1 - band / Math.max(tol * 2.2, 1e-9));
+    const zone = Math.max(band + tol * 0.20, range * 0.055);
     const seq = analyzeGiroMandatorySequence(pts, level, isResistance, zone, tol, range, {
       ...rules,
       zoneMult: Math.min(Number(rules.zoneMult || 2.35), 1.30),
@@ -12609,6 +14802,8 @@ function analyzeGiroSNRBodyCandidate(candidate, minute, rules = RULES_GIRO_DOBLE
     let points = 0;
     if (Number(lvl.touches || 0) >= 2) points += 1;
     if (Number(lvl.touches || 0) >= 3) points += 1;
+    if (Number(lvl.touches || 0) >= 4) points += 1;
+    if (compactBand >= 0.45) points += 1;
     if (seq.openToLevel >= Math.max(range * 0.24, tol * 1.15)) points += 1;
     if (seq.approachMove >= range * 0.24) points += 1;
     if (seq.routeBodyRatio >= 0.42) points += 1;
@@ -12625,7 +14820,7 @@ function analyzeGiroSNRBodyCandidate(candidate, minute, rules = RULES_GIRO_DOBLE
     const zoneCenter = (Number(lvl.zoneLow) + Number(lvl.zoneHigh)) / 2;
     const distClose = Math.abs(pE - zoneCenter);
     const nearScore = Math.max(0, 1 - distClose / Math.max(zone * 1.15, 1e-9));
-    const quality = seq.score + points * 14 + nearScore * 14 + Math.min(4, Number(lvl.touches || 0)) * 6 - Math.max(0, distClose / Math.max(tol, 1e-9)) * 5;
+    const quality = seq.score + points * 14 + nearScore * 14 + compactBand * 16 + Math.min(5, Number(lvl.touches || 0)) * 7 - Math.max(0, distClose / Math.max(tol, 1e-9)) * 5;
     const direction = isResistance ? "PUT" : "CALL";
 
     matches.push({
@@ -12646,6 +14841,8 @@ function analyzeGiroSNRBodyCandidate(candidate, minute, rules = RULES_GIRO_DOBLE
         bodyZoneLow: Number(lvl.bodyZoneLow),
         bodyZoneHigh: Number(lvl.bodyZoneHigh),
         touches: Number(lvl.touches || 0),
+        bodyBand,
+        compactBodyBand: compactBand,
         brokenAt: Number(lvl.brokenAt || 0),
         breakDirection: lvl.breakDirection || "",
         points,
@@ -13319,20 +15516,534 @@ function detectDebilidadPattern(candidate) {
   return call || put || null;
 }
 
-function evaluateMinute(minute) {
-  if (areSignalsPaused()) return true;
 
+
+/* =========================
+   Línea dinámica — soporte/resistencia de tendencia
+========================= */
+function getDynamicLineAvgRange(candles, fallback = 0) {
+  const ranges = (candles || [])
+    .map((c) => Math.abs(Number(c.high) - Number(c.low)))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  if (ranges.length) return ranges.reduce((a, b) => a + b, 0) / ranges.length;
+  return Math.max(Math.abs(Number(fallback || 0)), 1e-9);
+}
+function getDynamicLineValue(meta, minute, ms = 0) {
+  if (!meta) return NaN;
+  if (Number.isFinite(Number(meta.anchorMinute)) && Number.isFinite(Number(meta.anchorValue)) && Number.isFinite(Number(meta.slopePerCandle))) {
+    return Number(meta.anchorValue) + Number(meta.slopePerCandle) * ((Number(minute) - Number(meta.anchorMinute)) + Number(ms || 0) / 60000);
+  }
+  if (Number.isFinite(Number(meta.lineAtMinuteStart)) && Number.isFinite(Number(meta.lineAtMinuteEnd))) {
+    return Number(meta.lineAtMinuteStart) + (Number(meta.lineAtMinuteEnd) - Number(meta.lineAtMinuteStart)) * (Number(ms || 0) / 60000);
+  }
+  return Number(meta.level);
+}
+function candlePivotPoints(candles, field, type) {
+  // V34: pivotes extremos, no internos. Para línea dinámica ya no usamos
+  // solamente high/low crudo: armamos candidatos externos combinando mecha,
+  // cuerpo y cierre. Esta función queda como fallback para código viejo.
+  const arr = (candles || []).map((c, idx) => ({ ...c, idx, v: Number(c?.[field]) })).filter((p) => Number.isFinite(p.v));
+  if (arr.length < 4) return arr;
+  const out = [];
+  for (let i = 1; i < arr.length - 1; i++) {
+    const v = arr[i].v;
+    const prev = arr[i - 1].v;
+    const next = arr[i + 1].v;
+    if (type === "low") {
+      if (v <= prev && v <= next) out.push(arr[i]);
+    } else {
+      if (v >= prev && v >= next) out.push(arr[i]);
+    }
+  }
+  return out.length >= 2 ? out : arr;
+}
+function getDynamicLineBodyTop(c) {
+  return Math.max(Number(c?.open), Number(c?.close));
+}
+function getDynamicLineBodyBottom(c) {
+  return Math.min(Number(c?.open), Number(c?.close));
+}
+function getDynamicLineExtremeValue(c, isSupport, source = "wick") {
+  const open = Number(c?.open), high = Number(c?.high), low = Number(c?.low), close = Number(c?.close);
+  const bodyTop = Math.max(open, close);
+  const bodyBottom = Math.min(open, close);
+  if (source === "close") return close;
+  if (source === "body") return isSupport ? bodyBottom : bodyTop;
+  if (source === "open") return open;
+  return isSupport ? low : high;
+}
+function getDynamicLineBestTouch(c, line, isSupport) {
+  const open = Number(c?.open), high = Number(c?.high), low = Number(c?.low), close = Number(c?.close);
+  if (![open, high, low, close, line].every(Number.isFinite)) return null;
+  const bodyTop = Math.max(open, close);
+  const bodyBottom = Math.min(open, close);
+  const items = isSupport
+    ? [
+        { source: "wick", value: low, weight: 0.98 },
+        { source: "body", value: bodyBottom, weight: 1.10 },
+        { source: "close", value: close, weight: 1.18 },
+        { source: "open", value: open, weight: 0.92 },
+      ]
+    : [
+        { source: "wick", value: high, weight: 0.98 },
+        { source: "body", value: bodyTop, weight: 1.10 },
+        { source: "close", value: close, weight: 1.18 },
+        { source: "open", value: open, weight: 0.92 },
+      ];
+  let best = null;
+  for (const it of items) {
+    if (!Number.isFinite(it.value)) continue;
+    const dist = Math.abs(Number(it.value) - Number(line));
+    if (!best || dist < best.dist || (dist === best.dist && it.weight > best.weight)) {
+      best = { ...it, dist };
+    }
+  }
+  if (!best) return null;
+  const wickDist = Math.abs((isSupport ? low : high) - line);
+  const closeDist = Math.abs(close - line);
+  const bodyDist = Math.abs((isSupport ? bodyBottom : bodyTop) - line);
+  return {
+    ...best,
+    wickDist,
+    closeDist,
+    bodyDist,
+    closeValue: close,
+    wickValue: isSupport ? low : high,
+    bodyValue: isSupport ? bodyBottom : bodyTop,
+  };
+}
+function buildDynamicLineExtremeCandidates(candles, isSupport, maxCount = 34) {
+  const src = Array.isArray(candles) ? candles : [];
+  const n = src.length;
+  if (n < 5) return [];
+  const avgRange = getDynamicLineAvgRange(src.slice(-40), 0);
+  const local = [];
+  for (let i = 1; i < n - 1; i++) {
+    const c = src[i];
+    const prev = src[i - 1];
+    const next = src[i + 1];
+    const high = Number(c.high), low = Number(c.low), close = Number(c.close), open = Number(c.open);
+    if (![high, low, close, open].every(Number.isFinite)) continue;
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+    const side = isSupport ? low : high;
+    const prevSide = isSupport ? Number(prev.low) : Number(prev.high);
+    const nextSide = isSupport ? Number(next.low) : Number(next.high);
+    const bodySide = isSupport ? bodyBottom : bodyTop;
+    const closeSide = close;
+    const pivotByWick = isSupport ? (side <= prevSide && side <= nextSide) : (side >= prevSide && side >= nextSide);
+    const pivotByBody = isSupport
+      ? (bodySide <= getDynamicLineBodyBottom(prev) && bodySide <= getDynamicLineBodyBottom(next))
+      : (bodySide >= getDynamicLineBodyTop(prev) && bodySide >= getDynamicLineBodyTop(next));
+    // Se permiten cierres fuertes como parte del nivel si están en el borde.
+    const pivotByClose = isSupport
+      ? (closeSide <= Number(prev.close) && closeSide <= Number(next.close))
+      : (closeSide >= Number(prev.close) && closeSide >= Number(next.close));
+    if (!pivotByWick && !pivotByBody && !pivotByClose) continue;
+    const left = src.slice(Math.max(0, i - 4), i);
+    const right = src.slice(i + 1, Math.min(n, i + 5));
+    const neigh = left.concat(right);
+    const neighVals = neigh
+      .map((x) => isSupport ? Number(x.low) : Number(x.high))
+      .filter(Number.isFinite);
+    const extremeGap = neighVals.length
+      ? (isSupport ? Math.min(...neighVals) - side : side - Math.max(...neighVals))
+      : 0;
+    const bodyGap = neigh.length
+      ? (isSupport
+          ? Math.min(...neigh.map(getDynamicLineBodyBottom).filter(Number.isFinite)) - bodySide
+          : bodySide - Math.max(...neigh.map(getDynamicLineBodyTop).filter(Number.isFinite)))
+      : 0;
+    const prominence = Math.max(0, extremeGap, bodyGap, avgRange * 0.02);
+    // Cuanto más exterior, más prioridad. El cierre/cuerpo también suma para que
+    // puedan coincidir cierre+mecha, cierre+cierre o mezcla cierre/mecha.
+    const baseRank = prominence / Math.max(avgRange, 1e-9);
+    local.push({ idx: i, candle: c, side, bodySide, closeSide, bodyTop, bodyBottom, baseRank, pivotByWick, pivotByBody, pivotByClose });
+  }
+  if (local.length < 2) {
+    for (let i = 0; i < n; i++) {
+      const c = src[i];
+      const side = isSupport ? Number(c.low) : Number(c.high);
+      if (Number.isFinite(side)) local.push({ idx: i, candle: c, side, bodySide: getDynamicLineExtremeValue(c, isSupport, "body"), closeSide: Number(c.close), baseRank: 0.05, pivotByWick: true });
+    }
+  }
+  const candidates = [];
+  for (const p of local) {
+    const c = p.candle;
+    const minute = Number(c.minute);
+    const wick = isSupport ? Number(c.low) : Number(c.high);
+    const body = isSupport ? Number(p.bodyBottom) : Number(p.bodyTop);
+    const close = Number(c.close);
+    const open = Number(c.open);
+    const vals = [
+      { source: "wick", v: wick, sourceWeight: 1.00 + (p.pivotByWick ? 0.18 : 0) },
+      { source: "body", v: body, sourceWeight: 1.12 + (p.pivotByBody ? 0.18 : 0) },
+      { source: "close", v: close, sourceWeight: 1.18 + (p.pivotByClose ? 0.20 : 0) },
+    ];
+    // El open se usa con menos peso solo si también coincide con borde del cuerpo.
+    if (Number.isFinite(open)) vals.push({ source: "open", v: open, sourceWeight: 0.88 });
+    for (const it of vals) {
+      if (!Number.isFinite(it.v)) continue;
+      // Para soporte, no queremos candidatos de cierre muy arriba de la vela; para
+      // resistencia, no queremos cierres muy abajo: serían puntos internos.
+      const edgeDistance = Math.abs(it.v - wick);
+      const bodyRange = Math.max(Math.abs(Number(c.high) - Number(c.low)), avgRange * 0.25, 1e-9);
+      if ((it.source === "close" || it.source === "open") && edgeDistance > bodyRange * 0.86) continue;
+      candidates.push({
+        idx: p.idx,
+        minute,
+        v: Number(it.v),
+        source: it.source,
+        sourceWeight: it.sourceWeight,
+        exteriorRank: p.baseRank + (it.source === "close" ? 0.10 : it.source === "body" ? 0.07 : 0.03),
+        candle: c,
+      });
+    }
+  }
+  candidates.sort((a, b) =>
+    Number(a.idx) - Number(b.idx) ||
+    (Number(b.exteriorRank || 0) + Number(b.sourceWeight || 0)) - (Number(a.exteriorRank || 0) + Number(a.sourceWeight || 0))
+  );
+  // Reducir duplicados: máximo 2 candidatos por vela para no favorecer líneas internas.
+  const perIdx = new Map();
+  const compact = [];
+  for (const c of candidates) {
+    const arr = perIdx.get(c.idx) || [];
+    if (arr.length >= 2) continue;
+    arr.push(c);
+    perIdx.set(c.idx, arr);
+    compact.push(c);
+  }
+  return compact.slice(-maxCount);
+}
+function scoreDynamicTrendLine(candles, pA, pB, isSupport, currentMinute, currentPrice, currentRange = 0) {
+  if (!pA || !pB || pB.idx <= pA.idx) return null;
+  const avgRange = getDynamicLineAvgRange(candles.slice(-40), currentRange);
+  const minGap = 5;
+  const gap = pB.idx - pA.idx;
+  if (gap < minGap) return null;
+  const slope = (Number(pB.v) - Number(pA.v)) / gap;
+  const slopeAbs = Math.abs(slope);
+  const minSlope = Math.max(avgRange * 0.0045, Math.abs(Number(currentPrice || pB.v)) * 0.000000045, 1e-12);
+  const maxSlope = Math.max(avgRange * 1.18, minSlope * 4);
+  // V35: soporte/resistencia se define por BORDE externo, no por la pendiente.
+  // Un soporte puede ir subiendo o bajando si sostiene por debajo; una resistencia
+  // puede ir subiendo o bajando si techa por arriba. No convertir soportes rotos
+  // en resistencia ni resistencias rotas en soporte.
+  if (slopeAbs < minSlope) return null;
+  if (slopeAbs > maxSlope) return null;
+
+  // Tolerancia de toque: permite que el nivel se forme por cierres, cuerpos o mechas,
+  // pero sigue siendo exigente para evitar líneas internas.
+  const tol = Math.max(avgRange * 0.26, Math.abs(Number(currentPrice || pB.v)) * 0.0000038, 1e-9);
+  const reboundNeed = Math.max(avgRange * 0.52, Math.abs(Number(currentRange || 0)) * 0.17, tol * 1.55, 1e-9);
+  const anchorIdx = Number(pA.idx);
+  const anchorMinute = Number(pA.minute);
+  const anchorValue = Number(pA.v);
+  const valueAtIdx = (idx) => anchorValue + slope * (Number(idx) - anchorIdx);
+  const valueAtMinute = (m) => anchorValue + slope * (Number(m) - anchorMinute);
+
+  const touches = [];
+  let wrongCloses = 0;
+  let hardBreaks = 0;
+  let bodyCuts = 0;
+  let middleCuts = 0;
+  let oppositeSide = 0;
+  let envelopeFails = 0;
+  let recentWrongRun = 0;
+  let maxRecentWrongRun = 0;
+  let lastHardBreakIdx = -1;
+  let lastReentryIdx = -1;
+  let reboundScore = 0;
+  let sourceScore = 0;
+  let lastTouchIdx = -999;
+  let evaluated = 0;
+  for (let i = Math.max(0, pA.idx); i < candles.length; i++) {
+    const c = candles[i];
+    const line = valueAtIdx(i);
+    const low = Number(c.low), high = Number(c.high), open = Number(c.open), close = Number(c.close);
+    if (![low, high, open, close, line].every(Number.isFinite)) continue;
+    evaluated++;
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+    const range = Math.max(Math.abs(high - low), avgRange * 0.25, 1e-9);
+
+    // Línea externa: resistencia debe techar; soporte debe sostener.
+    const closeWrong = isSupport ? close < line - tol * 0.48 : close > line + tol * 0.48;
+    const hardBreak = isSupport ? low < line - tol * 1.28 : high > line + tol * 1.28;
+    const cutsBody = bodyBottom < line - tol * 0.12 && bodyTop > line + tol * 0.12;
+    const cutsMiddle = line > low + range * 0.30 && line < high - range * 0.30;
+    const wrongSideBody = isSupport ? bodyTop < line - tol * 0.25 : bodyBottom > line + tol * 0.25;
+    // V35: filtro de borde externo.
+    // Soporte: la línea debe sostener por debajo; si varios cuerpos quedan claramente
+    // debajo, el soporte fue roto y no se permite usarlo como venta/polaridad.
+    // Resistencia: la línea debe techar por arriba; si varios cuerpos quedan claramente
+    // encima, la resistencia fue rota y no se permite usarla como compra/polaridad.
+    const envelopeFail = isSupport ? bodyBottom < line - tol * 0.42 : bodyTop > line + tol * 0.42;
+    const correctClose = isSupport ? close >= line - tol * 0.16 : close <= line + tol * 0.16;
+    if (envelopeFail) envelopeFails++;
+    if (closeWrong || envelopeFail) {
+      recentWrongRun++;
+      if (recentWrongRun > maxRecentWrongRun) maxRecentWrongRun = recentWrongRun;
+    } else if (correctClose) {
+      recentWrongRun = 0;
+      lastReentryIdx = i;
+    }
+    if (hardBreak) lastHardBreakIdx = i;
+    if (closeWrong) wrongCloses++;
+    if (hardBreak) hardBreaks++;
+    if (cutsBody) bodyCuts++;
+    if (cutsMiddle) middleCuts++;
+    if (wrongSideBody) oppositeSide++;
+
+    const best = getDynamicLineBestTouch(c, line, isSupport);
+    if (!best) continue;
+    const multiConfirm =
+      (best.wickDist <= tol * 1.05 ? 1 : 0) +
+      (best.closeDist <= tol * 1.05 ? 1 : 0) +
+      (best.bodyDist <= tol * 1.05 ? 1 : 0);
+    const touchOk = best.dist <= tol || (best.closeDist <= tol * 1.18 && best.bodyDist <= tol * 1.22);
+    if (touchOk && i - lastTouchIdx >= 3) {
+      const next = candles.slice(i + 1, Math.min(candles.length, i + 6));
+      const excursion = next.length
+        ? (isSupport
+            ? Math.max(...next.map((x) => Number(x.high)).filter(Number.isFinite)) - line
+            : line - Math.min(...next.map((x) => Number(x.low)).filter(Number.isFinite)))
+        : 0;
+      const reacted = Number.isFinite(excursion) && excursion >= reboundNeed;
+      if (reacted) reboundScore += Math.min(2.4, excursion / Math.max(reboundNeed, 1e-9));
+      // Un toque sin reacción vale menos, pero sirve si otros cierres/mechas refuerzan el nivel.
+      const srcW = best.source === "close" ? 1.28 : best.source === "body" ? 1.14 : best.source === "wick" ? 1.02 : 0.86;
+      const comboW = multiConfirm >= 2 ? 0.36 : 0;
+      sourceScore += srcW + comboW + (reacted ? 0.58 : 0);
+      touches.push({
+        idx: i,
+        minute: Number(c.minute),
+        price: best.value,
+        line,
+        source: best.source,
+        multiConfirm,
+        wickDist: Number(best.wickDist || 0),
+        closeDist: Number(best.closeDist || 0),
+        bodyDist: Number(best.bodyDist || 0),
+        excursion: Number(excursion || 0),
+        reacted,
+      });
+      lastTouchIdx = i;
+    }
+  }
+  if (touches.length < 2) return null;
+  const separatedTouches = touches[touches.length - 1].idx - touches[0].idx;
+  if (separatedTouches < 7) return null;
+  const span = Math.max(1, candles.length - Math.max(0, pA.idx));
+  const closeBreakLimit = Math.max(1, Math.floor(span * 0.08));
+  const hardBreakLimit = Math.max(1, Math.floor(span * 0.075));
+  const bodyCutLimit = Math.max(1, Math.floor(span * 0.07));
+  const middleCutLimit = Math.max(1, Math.floor(span * 0.10));
+  const envelopeFailLimit = Math.max(1, Math.floor(span * 0.075));
+  if (wrongCloses > closeBreakLimit) return null;
+  if (hardBreaks > hardBreakLimit) return null;
+  if (bodyCuts > bodyCutLimit) return null;
+  if (middleCuts > middleCutLimit) return null;
+  if (envelopeFails > envelopeFailLimit) return null;
+  if (maxRecentWrongRun >= 2) {
+    // Si rompe y queda 2 velas del lado incorrecto, el nivel queda inválido.
+    // Para volver a usarlo debe reingresar al lado correcto y retestear desde ese lado.
+    if (lastReentryIdx <= lastHardBreakIdx || touches[touches.length - 1].idx <= lastReentryIdx) return null;
+  }
+  if (oppositeSide > Math.max(1, Math.floor(span * 0.08))) return null;
+
+  const projectedStart = valueAtMinute(currentMinute);
+  const projectedEnd = valueAtMinute(Number(currentMinute) + 1);
+  const price = Number(currentPrice);
+  const distance = Math.abs(price - projectedStart);
+  if ((candles.length - 1) - touches[touches.length - 1].idx > 26) return null;
+  const nearLimit = Math.max(avgRange * 0.82, Math.abs(Number(currentRange || 0)) * 0.36, tol * 2.35);
+  const respects = isSupport ? price >= projectedStart - tol * 0.10 : price <= projectedStart + tol * 0.10;
+  const near = distance <= nearLimit;
+  // V35: sin polaridad. Soporte solo existe si el precio está arriba y lo testea
+  // desde arriba; resistencia solo si el precio está abajo y la testea desde abajo.
+  if (!near || !respects) return null;
+
+  const closeTouches = touches.filter((t) => t.source === "close" || t.closeDist <= tol * 1.05).length;
+  const wickTouches = touches.filter((t) => t.source === "wick" || t.wickDist <= tol * 1.05).length;
+  const bodyTouches = touches.filter((t) => t.source === "body" || t.bodyDist <= tol * 1.05).length;
+  const reactedTouches = touches.filter((t) => t.reacted).length;
+  const endpointExterior = Number(pA.exteriorRank || 0) + Number(pB.exteriorRank || 0) + Number(pA.sourceWeight || 0) * 0.18 + Number(pB.sourceWeight || 0) * 0.18;
+  const externalPenalty = wrongCloses * 17 + hardBreaks * 16 + bodyCuts * 13 + middleCuts * 8 + oppositeSide * 12;
+  const quality =
+    touches.length * 25 +
+    Math.min(3.4, reboundScore) * 18 +
+    Math.min(30, separatedTouches) +
+    Math.max(0, 1 - distance / Math.max(nearLimit, 1e-9)) * 30 +
+    Math.min(18, slopeAbs / Math.max(avgRange * 0.04, 1e-9)) +
+    Math.min(18, sourceScore * 2.2) +
+    Math.min(16, endpointExterior * 8) +
+    Math.min(12, closeTouches * 3 + bodyTouches * 2 + wickTouches * 1.6) +
+    Math.min(10, reactedTouches * 3.5) -
+    externalPenalty;
+  return {
+    direction: isSupport ? "CALL" : "PUT",
+    quality,
+    points: Math.min(6, 2 + touches.length + Math.floor(reboundScore) + (closeTouches >= 2 ? 1 : 0)),
+    meta: {
+      levelMode: "dynamic_line",
+      levelType: isSupport ? "support" : "resistance",
+      lineType: isSupport ? "support" : "resistance",
+      direction: isSupport ? "CALL" : "PUT",
+      anchorMinute,
+      anchorValue,
+      anchorIdx,
+      slopePerCandle: slope,
+      tolerance: tol,
+      avgRange,
+      touches: touches.length,
+      closeTouches,
+      wickTouches,
+      bodyTouches,
+      touchSources: touches.map((t) => t.source),
+      touchMinutes: touches.map((t) => t.minute),
+      touchDetails: touches.map((t) => ({ idx: t.idx, minute: t.minute, line: t.line, price: t.price, source: t.source, multiConfirm: t.multiConfirm, excursion: t.excursion, reacted: t.reacted })),
+      firstTouchMinute: touches[0]?.minute,
+      lastTouchMinute: touches[touches.length - 1]?.minute,
+      reboundScore,
+      wrongCloses,
+      hardBreaks,
+      bodyCuts,
+      middleCuts,
+      envelopeFails,
+      maxRecentWrongRun,
+      lastHardBreakIdx,
+      lastReentryIdx,
+      noPolarity: true,
+      crosses: hardBreaks,
+      level: projectedStart,
+      lineAtEval: projectedStart,
+      lineAtMinuteStart: projectedStart,
+      lineAtMinuteEnd: projectedEnd,
+      currentPrice: price,
+      distanceToLine: distance,
+      nearLimit,
+      respectsLine: respects,
+      stage: "linea_dinamica_extrema_no_polaridad_v35",
+      movementFilter: "extremos_cierres_mechas_cuerpo_recorrido_sin_polaridad",
+      status: isSupport
+        ? "Soporte dinámico extremo: piso por mínimos/cierres/mechas. Solo COMPRA si el precio está arriba y retestea desde arriba; si rompe abajo se invalida hasta reingreso."
+        : "Resistencia dinámica extrema: techo por máximos/cierres/mechas. Solo VENTA si el precio está abajo y retestea desde abajo; si rompe arriba se invalida hasta reingreso.",
+      logic: isSupport
+        ? "soporte dinámico extremo comprador sin polaridad: mínimos externos + cierres/mechas/cuerpo + recorrido + precio arriba => CALL"
+        : "resistencia dinámica extrema vendedora sin polaridad: máximos externos + cierres/mechas/cuerpo + recorrido + precio abajo => PUT",
+    },
+  };
+}
+function findBestDynamicLine(symbol, minute, currentPrice, currentRange = 0) {
+  const candles = getGiroPolarityCandles(symbol, minute, 80);
+  if (!candles || candles.length < 14) return null;
+  const lows = buildDynamicLineExtremeCandidates(candles, true, 36);
+  const highs = buildDynamicLineExtremeCandidates(candles, false, 36);
+  const matches = [];
+  for (let a = 0; a < lows.length - 1; a++) {
+    for (let b = a + 1; b < lows.length; b++) {
+      if (lows[a].idx === lows[b].idx) continue;
+      const m = scoreDynamicTrendLine(candles, lows[a], lows[b], true, minute, currentPrice, currentRange);
+      if (m) matches.push(m);
+    }
+  }
+  for (let a = 0; a < highs.length - 1; a++) {
+    for (let b = a + 1; b < highs.length; b++) {
+      if (highs[a].idx === highs[b].idx) continue;
+      const m = scoreDynamicTrendLine(candles, highs[a], highs[b], false, minute, currentPrice, currentRange);
+      if (m) matches.push(m);
+    }
+  }
+  if (!matches.length) return null;
+  matches.sort((a, b) =>
+    b.quality - a.quality ||
+    Number(b.meta?.touches || 0) - Number(a.meta?.touches || 0) ||
+    Number(b.meta?.closeTouches || 0) - Number(a.meta?.closeTouches || 0) ||
+    Number(b.meta?.wickTouches || 0) - Number(a.meta?.wickTouches || 0)
+  );
+  return matches[0];
+}
+function analyzeDynamicLineCandidate(candidate, minute) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 3) return null;
+  const evalMs = Math.max(1000, Number(EVAL_SEC || 45) * 1000);
+  const pE = Number(getPriceAtMs(ticks, evalMs));
+  if (!Number.isFinite(pE)) return null;
+  const qs = ensureTicksWithBoundary(ticks, evalMs).map((p) => Number(p.quote)).filter(Number.isFinite);
+  const range = qs.length ? Math.max(Math.max(...qs) - Math.min(...qs), Math.abs(pE) * 0.000001, 1e-9) : Math.abs(pE) * 0.000001;
+  const match = findBestDynamicLine(candidate.symbol, minute, pE, range);
+  if (!match) return null;
+  match.meta.pE = pE;
+  match.meta.evalSec = Number(EVAL_SEC || 45);
+  return match;
+}
+function getSignalDynamicLineMeta(item) {
+  const meta = item?.dynamicLine || item?.giroPolaridad || item?.lineaDinamica || null;
+  if (!meta || typeof meta !== "object") return null;
+  if (String(meta.levelMode || "") !== "dynamic_line") return null;
+  if (!Number.isFinite(Number(meta.lineAtMinuteStart)) && !Number.isFinite(Number(meta.anchorValue))) return null;
+  return meta;
+}
+function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_ENTRY_MS) {
+  const meta = getSignalDynamicLineMeta(item);
+  if (!meta) return { ok: false, pending: false, reason: "sin_linea_dinamica", message: "La señal no trae línea dinámica válida." };
+  const price = getSignalPriceAtEntryCheckMs(item, checkMs);
+  if (!Number.isFinite(price)) return { ok: false, pending: true, reason: "sin_precio_59", message: "Todavía no hay precio suficiente para validar la línea en 59s." };
+  const line = getDynamicLineValue(meta, item?.minute, checkMs);
+  if (!Number.isFinite(line)) return { ok: false, pending: false, reason: "linea_invalida", message: "No se pudo proyectar la línea dinámica." };
+  const wanted = normalizeSignalConfirmationSide(side) || String(meta.direction || item?.direction || "").toUpperCase();
+  const expected = normalizeSignalConfirmationSide(meta.direction || item?.direction || "");
+  if (wanted && expected && wanted !== expected) {
+    return {
+      ok: false,
+      pending: false,
+      reason: "direccion_invalida_linea_dinamica",
+      side: wanted,
+      expectedSide: expected,
+      check_ms: checkMs,
+      check_sec: Math.round(checkMs / 1000),
+      price,
+      line,
+      distance: Math.abs(price - line),
+      levelType: String(meta.levelType || meta.lineType || ""),
+      message: expected === "CALL"
+        ? "Esta línea es soporte dinámico: solo habilita COMPRA."
+        : "Esta línea es resistencia dinámica: solo habilita VENTA.",
+    };
+  }
+  const isSupport = String(meta.levelType || meta.lineType || "") === "support" || expected === "CALL";
+  const eps = Math.max(Math.abs(line) * 0.00000002, 1e-9);
+  const ok = isSupport ? price >= line - eps : price <= line + eps;
+  return {
+    ok,
+    pending: false,
+    reason: ok ? "respeta_linea_dinamica" : "rompe_linea_dinamica",
+    side: wanted || expected,
+    check_ms: checkMs,
+    check_sec: Math.round(checkMs / 1000),
+    price,
+    line,
+    distance: Math.abs(price - line),
+    levelType: isSupport ? "support" : "resistance",
+    message: ok
+      ? `Precio ${Math.round(checkMs / 1000)}s respeta línea dinámica (${price.toFixed(6)} vs ${line.toFixed(6)})`
+      : `${isSupport ? "Soporte dinámico roto: precio debajo de la línea, no se convierte en venta" : "Resistencia dinámica rota: precio encima de la línea, no se convierte en compra"} (${price.toFixed(6)} vs ${line.toFixed(6)})`,
+  };
+}
+
+function evaluateMinute(minute, opts = {}) {
+  if (areSignalsPaused()) return false;
+
+  const evalOptions = opts && typeof opts === "object" ? opts : {};
   const data = minuteData[minute];
-  if (!data) return true;
+  if (!data) return false;
 
   const candidates = [];
   let readySymbols = 0;
 
   for (const sym of SYMBOLS) {
-    // AUTO BACKTEST V3: no se permite crear señal con ticks vivos/incompletos.
-    // El símbolo tiene que estar confirmado por ticks_history del minuto cerrado.
-    if (AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE && !isFullMinuteHydrated(minute, sym)) continue;
-
     const ticks = data[sym] || [];
     if (ticks.length >= MIN_TICKS) readySymbols++;
     if (ticks.length < MIN_TICKS) continue;
@@ -13351,20 +16062,26 @@ function evaluateMinute(minute) {
       score: Math.abs(move) / (vol || 1e-9),
       ticks,
       vol,
-      close_confirmed_by_ticks_history: true,
     });
   }
 
-  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return true;
+  if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
 
+  const activeMode = normalizeSignalMode(signalMode);
   const matches = [];
   for (const c of candidates) {
-    const match = analyzeAutoBacktestSNRCloseCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO);
+    let match = null;
+    let matchSource = "SNR_INTERACCION_NIVEL";
+    if (isDynamicLineMode(activeMode)) {
+      match = analyzeDynamicLineCandidate(c, minute);
+      matchSource = "LINEA_DINAMICA";
+    } else if (isSNRPolaridadMode(activeMode)) {
+      match = analyzeSNRPolaridadCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
+      matchSource = "SNR_POLARIDAD";
+    } else {
+      match = analyzeGiroSNRSecondTouchCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
+    }
     if (!match) continue;
-
-    const pseudoItemForMomentum = { minute, symbol: c.symbol, ticks: c.ticks, direction: match.direction, giroPolaridad: match.meta, mode: MODE_SNR_SEGUNDO_TOQUE };
-    const momentum = getMomentumRunBeforeSignal(pseudoItemForMomentum);
-    if (momentum.blocked) continue;
 
     matches.push({
       ...c,
@@ -13375,38 +16092,42 @@ function evaluateMinute(minute) {
       giroPolaridadScore: Math.round(match.quality),
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
-      matchSource: "AUTO_60_SNR_ROLES_CLOSE_INSIDE",
-      autoBacktestMomentum: momentum,
+      dynamicLineMeta: String(match.meta?.levelMode || "") === "dynamic_line" ? match.meta : null,
+      matchSource,
     });
   }
 
-  if (!matches.length) return true;
+  if (!matches.length) return false;
   matches.sort((a, b) =>
     b.quality - a.quality ||
     b.giroNivelPoints - a.giroNivelPoints ||
     b.giroNivelScore - a.giroNivelScore
   );
 
-  // Si dos símbolos quedan casi empatados, no fuerza una operación dudosa.
-  if (matches.length > 1 && matches[0].quality - matches[1].quality < RULES_GIRO_DOBLE_RECHAZO.minQualityGap) return true;
+  // V14: si hay interacción con nivel, se elige la mejor; no se cancela por empate de calidad.
 
   const bestMatch = matches[0];
-  addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
-    mode: MODE_SNR_SEGUNDO_TOQUE,
-    mode_version: GIRO_NIVEL_LOGIC_VERSION,
+  const prealertSec = Number(bestMatch?.giroPolaridadMeta?.evalSec || evalOptions.evalSec || EVAL_SEC || 45);
+  const added = addSignal(minute, bestMatch.symbol, bestMatch.direction, bestMatch.ticks, {
+    mode: activeMode,
+    mode_version: getModeVersion(activeMode),
     giroNivelScore: bestMatch.giroNivelScore,
     giroNivelPoints: bestMatch.giroNivelPoints,
     giroPolaridadScore: bestMatch.giroPolaridadScore,
     giroPolaridadPoints: bestMatch.giroPolaridadPoints,
     giroPolaridad: bestMatch.giroPolaridadMeta,
+    dynamicLine: bestMatch.dynamicLineMeta,
     aiLocalMatchSource: bestMatch.matchSource,
+    signalLifecycleStage: "prealert",
+    signalPrealertAtSec: prealertSec,
+    signalRadar: !isDynamicLineMode(activeMode) && !!evalOptions.radar,
+    signalRadarStartSec: !isDynamicLineMode(activeMode) ? Number(evalOptions.radarStartSec || SNR_RADAR_START_SEC) : null,
+    signalRadarEndSec: !isDynamicLineMode(activeMode) ? Number(evalOptions.radarEndSec || EVAL_SEC || 45) : null,
+    signalAutoEntrySec: SIGNAL_AUTO_ENTRY_SEC,
+    signalRequiresManualPoints: SIGNAL_CONFIRM_MIN,
     signalConfirmations: [],
-    signalAutoEntry: null,
-    auto_backtest_signal_created_at_close: true,
-    close_confirmed_by_ticks_history: true,
-    autoBacktestMomentum: bestMatch.autoBacktestMomentum || null,
   });
-  return true;
+  return !!added;
 }
 
 /* =========================
@@ -13415,40 +16136,8 @@ function evaluateMinute(minute) {
 function fmtTimeUTC(minute) {
   return new Date(minute * 60000).toISOString().substr(11, 8) + " UTC";
 }
-function validateAutoBacktestSignalCreatedAtClose(item) {
-  if (!AUTO_BACKTEST_SIGNAL_ONLY_ON_CLOSE) return true;
-  if (!item?.auto_backtest_signal_created_at_close) return false;
-  if (!item?.close_confirmed_by_ticks_history) return false;
-  if (!isFullMinuteHydrated(item.minute, item.symbol)) return false;
-
-  const meta = getSignalSNREntryMeta(item);
-  if (!meta) return false;
-
-  const pattern = String(meta.rolePattern || "").toUpperCase().trim();
-  const sequence = String(meta.roleSequence || "").toUpperCase().trim();
-  if (!(pattern === "S-R-S" || pattern === "R-S-R" || sequence.includes("S-R-S") || sequence.includes("R-S-R"))) return false;
-
-  const zoneLow = Number(meta.zoneLow);
-  const zoneHigh = Number(meta.zoneHigh);
-  if (![zoneLow, zoneHigh].every(Number.isFinite)) return false;
-  const zl = Math.min(zoneLow, zoneHigh);
-  const zh = Math.max(zoneLow, zoneHigh);
-
-  let close60 = Number(meta.close60);
-  if (!Number.isFinite(close60)) close60 = Number(getSignalClosePriceAt60(item));
-  if (!Number.isFinite(close60)) return false;
-  if (close60 < zl || close60 > zh) return false;
-
-  const candle = getAutoBacktestCandleDirection(item);
-  if (!candle.side || candle.side !== String(item.direction || "").toUpperCase()) return false;
-
-  const momentum = getMomentumRunBeforeSignal(item);
-  if (momentum.blocked) return false;
-
-  return true;
-}
 function addSignal(minute, symbol, direction, ticks, extra = {}) {
-  if (areSignalsPaused()) return;
+  if (areSignalsPaused()) return null;
   const modeLabel = normalizeSignalMode(signalMode);
   const modeId = modeLabel.replace(/\s+/g, "_").replace(/[^A-Z0-9_]/gi, "");
   const item = {
@@ -13473,11 +16162,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 
   item.manualGiro = normalizeManualGiroState(item.manualGiro);
 
-  // AUTO BACKTEST V3: si no pasa el cierre 60 real dentro del SNR,
-  // directamente no se guarda ni se muestra la señal.
-  if (!validateAutoBacktestSignalCreatedAtClose(item)) return;
-
-  if (history.some((x) => x.id === item.id)) return;
+  if (history.some((x) => x.id === item.id)) return null;
 
   history.push(item);
   if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -13511,6 +16196,8 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
       } catch {}
     });
   }
+
+  return item;
 }
 
 /* =========================
@@ -13739,6 +16426,7 @@ loadDiscipline();
 startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
 loadExecutionMode();
+loadKeepClosedAwaySignals();
 
 renderHistory();
 initNotificationOpenRouting();
@@ -13772,6 +16460,7 @@ updateDisciplineLockUI(false);
 seedTradesJournalFromHistory();
 
 initTabs();
+paintLiveSymbolButtons();
 ensureInlineClearButtons();
 ensureLiveAnalysisPauseButton();
 applyLiveAnalysisPauseUI();
