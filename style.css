@@ -1713,73 +1713,37 @@ body.light .settingsModalHeader{
 
 
 /* =========================
-   V54 — En vivo compacto como modal de Señales/Trades
+   V53 — En vivo como modal de Señales/Trades + puntos
 ========================= */
-.liveView{
-  padding-bottom:calc(76px + env(safe-area-inset-bottom));
-}
 .liveModalCard{
   width:min(100%, 430px);
   margin:0 auto;
   max-height:none;
-  padding:12px;
-  border-radius:24px;
 }
-.liveModalHeader{
-  margin-bottom:4px;
-}
-.liveModalHeader .modalTitle{
-  font-size:18px;
-  line-height:1.1;
-}
-.liveReplaySub{
-  font-size:12.5px;
-  line-height:1.18;
-}
+.liveModalHeader{ margin-bottom:4px; }
 .liveSymbolBarModal{
   justify-content:flex-start;
-  margin:6px 0 8px;
-  gap:8px;
+  margin:4px 0 8px;
 }
-.liveSymbolBtn{
-  padding:8px 10px;
-  font-size:12px;
-  min-width:46px;
-  border-radius:999px;
-}
-.liveMinuteCanvasWrap{
-  margin:6px 0 6px;
-}
+.liveMinuteCanvasWrap{ margin:8px 0 8px; }
 #liveReplayCanvas{
   display:block;
   width:100%;
-  height:min(32dvh,285px);
-  min-height:220px;
-  max-height:285px;
+  height:min(43dvh,360px);
+  min-height:280px;
+  max-height:360px;
   margin:0;
   touch-action:manipulation;
-  border-radius:18px;
+  border-radius:14px;
   border:1px solid var(--border);
   background:rgba(255,255,255,.03);
 }
-.liveReplayInfo{
-  margin:4px 2px 7px;
-  padding:0;
-  border:0;
-  background:transparent;
-  box-shadow:none;
-  font-size:11.6px;
-  line-height:1.22;
-  color:rgba(255,255,255,.72);
-}
-.liveModalFooter{
-  gap:7px;
-}
+.liveModalFooter{ gap:7px; }
 .liveConfirmPanel{
   width:100%;
   box-sizing:border-box;
-  margin:0;
-  padding:8px;
+  margin:0 0 2px 0;
+  padding:10px;
   border-radius:16px;
   border:1px solid rgba(255,255,255,.14);
   background:linear-gradient(180deg, rgba(251,191,36,.075), rgba(255,255,255,.025));
@@ -1790,41 +1754,40 @@ body.light .settingsModalHeader{
   align-items:center;
   justify-content:space-between;
   gap:8px;
-  margin-bottom:7px;
+  margin-bottom:8px;
 }
 .liveConfirmCount{
   font-weight:950;
-  letter-spacing:.2px;
-  font-size:13px;
-  padding:7px 10px;
+  letter-spacing:.25px;
+  font-size:14px;
+  padding:8px 11px;
   border-radius:999px;
   border:1px solid rgba(251,191,36,.24);
   background:rgba(0,0,0,.13);
   color:rgba(255,255,255,.92);
-  line-height:1.12;
-  white-space:normal;
+  line-height:1.15;
 }
 .liveConfirmHint{
   flex:1;
   text-align:right;
-  font-size:10.8px;
+  font-size:11.5px;
   font-weight:850;
   opacity:.90;
-  line-height:1.15;
+  line-height:1.18;
   color:rgba(255,255,255,.68);
 }
 .liveConfirmRow{
   display:grid;
   grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;
-  gap:7px;
+  gap:8px;
   align-items:stretch;
 }
 .liveConfirmBtn{
-  min-height:42px;
+  min-height:48px;
   border-radius:14px;
   font-weight:950;
-  font-size:12.8px;
-  letter-spacing:.2px;
+  font-size:14px;
+  letter-spacing:.25px;
   touch-action:manipulation;
 }
 .liveConfirmBuy{
@@ -1838,53 +1801,47 @@ body.light .settingsModalHeader{
   box-shadow:0 0 18px rgba(239,68,68,.13), inset 0 0 14px rgba(239,68,68,.07);
 }
 .liveConfirmUndo{
-  min-height:42px;
-  min-width:48px;
+  min-height:48px;
+  min-width:52px;
   border-radius:14px;
   font-weight:950;
-  font-size:17px;
+  font-size:18px;
 }
-.liveTradeBar{
-  margin-top:0;
-  gap:8px;
+.liveTradeBar{ margin-top:0; }
+.liveTradeBtn{ min-height:54px; }
+@media (max-width:480px){
+  .liveModalCard{width:min(100%,400px); padding:10px;}
+  #liveReplayCanvas{height:min(44dvh,340px); min-height:260px;}
+  .liveConfirmTop{align-items:flex-start;}
+  .liveConfirmCount{font-size:12.5px; padding:7px 9px;}
+  .liveConfirmHint{font-size:10.8px;}
+  .liveConfirmBtn{font-size:12.5px; padding-left:6px; padding-right:6px;}
+  .liveSymbolBtn{padding:7px 9px;font-size:11px;min-width:40px;}
 }
-.liveTradeBtn{
-  min-height:46px;
-  border-radius:16px;
-  font-size:15px;
-  font-weight:950;
+
+
+/* =========================
+   V55 — En vivo: permitir bajar hasta botones
+   Base v53/v51. No cambia diseño ni estrategia; solo agrega
+   espacio final para que la barra de disciplina no tape COMPRAR/VENDER.
+========================= */
+#liveView.liveView{
+  padding-bottom:calc(170px + env(safe-area-inset-bottom));
 }
-.liveTradeStatus{
-  margin-top:0;
-  padding:9px 11px;
-  border-radius:15px;
-  font-size:12px;
-  line-height:1.2;
-  font-weight:850;
-  background:rgba(15,23,42,.54);
-  border:1px solid rgba(255,255,255,.10);
+#liveView .liveModalCard{
+  margin-bottom:calc(150px + env(safe-area-inset-bottom));
+}
+#liveView .liveTradeBar,
+#liveView .liveConfirmPanel,
+#liveView .liveTradeStatus{
+  position:relative;
+  z-index:2;
 }
 @media (max-width:480px){
-  .liveModalCard{width:min(100%,400px); padding:10px; border-radius:22px;}
-  .liveModalHeader .modalTitle{font-size:17px;}
-  .liveReplaySub{font-size:12px;}
-  .liveSymbolBarModal{gap:7px; margin:5px 0 7px;}
-  .liveSymbolBtn{padding:7px 9px;font-size:11px;min-width:40px;}
-  #liveReplayCanvas{height:min(29dvh,250px); min-height:205px; max-height:250px;}
-  .liveConfirmTop{align-items:flex-start; gap:7px;}
-  .liveConfirmCount{font-size:12px; padding:7px 9px;}
-  .liveConfirmHint{font-size:10.4px;}
-  .liveConfirmBtn{font-size:12px; min-height:40px; padding-left:6px; padding-right:6px;}
-  .liveConfirmUndo{min-height:40px; min-width:44px;}
-  .liveTradeBtn{min-height:44px; font-size:14px;}
-  .liveTradeStatus{font-size:11.4px; padding:8px 10px;}
-}
-@media (max-height:760px){
-  #liveReplayCanvas{height:min(27dvh,228px); min-height:190px;}
-  .liveModalCard{padding-top:9px; padding-bottom:9px;}
-  .liveSymbolBarModal{margin-top:4px; margin-bottom:6px;}
-  .liveReplayInfo{font-size:11px; margin-bottom:6px;}
-  .liveConfirmPanel{padding:7px;}
-  .liveConfirmBtn,.liveConfirmUndo{min-height:38px;}
-  .liveTradeBtn{min-height:42px;}
+  #liveView.liveView{
+    padding-bottom:calc(190px + env(safe-area-inset-bottom));
+  }
+  #liveView .liveModalCard{
+    margin-bottom:calc(165px + env(safe-area-inset-bottom));
+  }
 }
