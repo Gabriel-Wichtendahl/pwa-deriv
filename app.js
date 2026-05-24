@@ -37,12 +37,13 @@
 // ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
 // ✅ V55: vuelve al En vivo v53 y agrega espacio scroll para ver COMPRAR/VENDER sin que lo tape disciplina
 // ✅ V57: En vivo opera igual que Señales: puntos manuales y ejecución automática al segundo 58
+// ✅ V58: agrega modo 🟢 Alcista Sana: señal CALL en 35/40/45 y revalidación/entrada AUTO 58
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V10_MODAL_NAV_FEEDBACK_20260511";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V58_ALCISTA_SANA_AUTO58_20260524";
 
 /*
   Mapa rápido de módulos:
@@ -699,6 +700,7 @@ const MODE_GIRO_APRENDIZAJE = "GIRO + APRENDIZAJE";
 const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
 const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
+const MODE_ALCISTA_SANA = "ALCISTA SANA";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
@@ -711,6 +713,7 @@ const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCA
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
+const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_MACRO_MICRO_AUTO58_V58_20260524";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -721,6 +724,7 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (raw.includes("ALCISTA") || raw.includes("BULLISH") || raw === "ALCISTA_SANA") return MODE_ALCISTA_SANA;
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
@@ -732,12 +736,16 @@ function isDynamicLineMode(mode) {
 function isSNRPolaridadMode(mode) {
   return normalizeSignalMode(mode) === MODE_SNR_POLARIDAD;
 }
+function isAlcistaSanaMode(mode) {
+  return normalizeSignalMode(mode) === MODE_ALCISTA_SANA;
+}
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
   return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
+  if (m === MODE_ALCISTA_SANA) return ALCISTA_SANA_LOGIC_VERSION;
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
@@ -760,6 +768,7 @@ function saveAnalysisMode(mode) {
 }
 function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
+  if (m === MODE_ALCISTA_SANA) return "🟢 Alcista Sana";
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
@@ -767,8 +776,23 @@ function getModeBtnLabel(mode) {
 function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
-  if (m === MODE_SNR_POLARIDAD) return MODE_LINEA_DINAMICA;
+  if (m === MODE_SNR_POLARIDAD) return MODE_ALCISTA_SANA;
+  if (m === MODE_ALCISTA_SANA) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
+}
+function getModeTitle(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Señal en 35/40/45s y revalidación/entrada CALL en 58s.";
+  if (m === MODE_LINEA_DINAMICA) return "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos.";
+  if (m === MODE_SNR_POLARIDAD) return "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido.";
+  return "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
+}
+function getModeToastText(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_ALCISTA_SANA) return "🟢 Modo Alcista Sana";
+  if (m === MODE_LINEA_DINAMICA) return "📐 Modo Línea dinámica";
+  if (m === MODE_SNR_POLARIDAD) return "🧲 Modo SNR polaridad";
+  return "🎯 Modo SNR interacción";
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -6894,11 +6918,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = isDynamicLineMode(signalMode)
-      ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos."
-      : isSNRPolaridadMode(signalMode)
-        ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
-        : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
+    modeBtn.title = getModeTitle(signalMode);
   };
   paintMode();
 
@@ -6907,7 +6927,7 @@ function applyTheme(theme) {
       signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
+      toast(getModeToastText(signalMode), 1500);
     };
 })();
 
@@ -7469,6 +7489,7 @@ function getSignalNetSellPoints(item = modalCurrentItem) {
   return Math.max(0, -getSignalConfirmationScore(item));
 }
 function getSignalEnabledTradeSide(item = modalCurrentItem) {
+  if (isAlcistaSanaMode(item?.mode) && normalizeSignalConfirmationSide(item?.direction) === "CALL" && item?.alcistaSana?.validSignal) return "CALL";
   const score = getSignalConfirmationScore(item);
   if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
   if (score <= -SIGNAL_CONFIRM_MIN) return "PUT";
@@ -7486,6 +7507,13 @@ function hasSignalMinimumConfirmations(item = modalCurrentItem, side = null) {
   return wanted ? enabled === wanted : !!enabled;
 }
 function getSignalConfirmationStatusText(item = modalCurrentItem) {
+  if (isAlcistaSanaMode(item?.mode)) {
+    const radar = item?.alcistaSana || {};
+    const score = Number.isFinite(Number(radar.score)) ? Number(radar.score) : 0;
+    const maxScore = Number.isFinite(Number(radar.maxScore)) ? Number(radar.maxScore) : 8;
+    const state = String(radar.state || (radar.validSignal ? "CALL válido" : "observando"));
+    return `ALCISTA ${score}/${maxScore} · ${state}`;
+  }
   return `COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} · VENTA ${getSignalNetSellPoints(item)}/${SIGNAL_CONFIRM_MIN}`;
 }
 function getSignalMissingConfirmations(side, item = modalCurrentItem) {
@@ -8036,6 +8064,14 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
     throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
   }
 
+  // Modo Alcista Sana: solo permite CALL si la estructura macro/micro sigue sana en 58s.
+  if (isAlcistaSanaMode(item.mode)) {
+    const gate = buildAlcistaSanaEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS);
+    if (gate?.pending) throw new Error(gate.message || "Alcista Sana pendiente");
+    if (!gate?.ok) throw new Error(gate?.message || "Alcista Sana cancelada antes del 58");
+    return gate;
+  }
+
   // Modo Línea dinámica: acá la línea sí valida la entrada.
   // Soporte dinámico => CALL solo si el precio respeta arriba.
   // Resistencia dinámica => PUT solo si el precio respeta abajo.
@@ -8240,7 +8276,13 @@ function updateModalCandleStatusUI() {
     }
     const enabled = getSignalEnabledTradeSide(modalCurrentItem);
     const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
-    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    if (isAlcistaSanaMode(modalCurrentItem?.mode)) {
+      const checkMs = Math.min(SIGNAL_AUTO_ENTRY_MS, Math.max(0, getSignalConfirmationMs(modalCurrentItem)));
+      const gate = buildAlcistaSanaEntryGate(modalCurrentItem, "CALL", checkMs);
+      bar.textContent = `🟢 Alcista Sana · ${gate?.ok ? "CALL válida" : "revisando"} · ${formatAlcistaSanaRadarSummary(gate?.radar || modalCurrentItem.alcistaSana)} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    } else {
+      bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    }
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.14)";
     bar.style.borderColor = "rgba(34,197,94,.28)";
@@ -10398,6 +10440,7 @@ function getSignalLifecycleStageInfo(item) {
   const status = String(item?.signalAutoEntry?.status || "");
 
   const dynamicMode = isDynamicLineMode(item.mode);
+  const alcistaMode = isAlcistaSanaMode(item.mode);
 
   if (item.minuteComplete) {
     if (hasTrade || attempted) {
@@ -10407,6 +10450,12 @@ function getSignalLifecycleStageInfo(item) {
         label: `📌 ${badge}`,
         title: `Operación asociada. No se elimina por filtro de cierre. ${pointsTxt}`,
       };
+    }
+    if (alcistaMode) {
+      const gate = buildAlcistaSanaEntryGate(item, "CALL", 60000);
+      return gate?.ok
+        ? { key: "closed_alcista_ok", label: "✅ ALCISTA SANA", title: `La vela cerró con estructura alcista sana. ${formatAlcistaSanaRadarSummary(gate.radar || item.alcistaSana)}` }
+        : { key: "closed_alcista_break", label: "❌ ALCISTA ROTA", title: gate?.message || "La estructura alcista se rompió." };
     }
     if (dynamicMode) {
       const gate = buildSignalDynamicLineEntryGate(item, item.direction || "", 60000);
@@ -10432,7 +10481,11 @@ function getSignalLifecycleStageInfo(item) {
   const ms = getSignalConfirmationMs(item);
   if (ms >= SIGNAL_AUTO_ENTRY_MS) {
     const side = getSignalEnabledTradeSide(item) || item.direction || "";
-    const gate = dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    const gate = alcistaMode ? buildAlcistaSanaEntryGate(item, "CALL", SIGNAL_AUTO_ENTRY_MS) : dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    if (alcistaMode) {
+      if (gate?.ok) return { key: "auto_ready_alcista", label: `🟢 AUTO ${autoSec}s`, title: `Alcista Sana revalidada: ${formatAlcistaSanaRadarSummary(gate.radar || item.alcistaSana)}` };
+      return { key: "auto_wait_alcista", label: `⛔ AUTO ${autoSec}s`, title: gate?.message || "Alcista Sana todavía no habilita entrada." };
+    }
     if (dynamicMode) {
       if (gate?.ok && getSignalEnabledTradeSide(item)) {
         return { key: "auto_ready_line", label: `🟢 AUTO ${autoSec}s`, title: `Listo: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos + línea dinámica respetada. ${pointsTxt}` };
@@ -10462,10 +10515,12 @@ function getSignalLifecycleStageInfo(item) {
 
   return {
     key: "prealert",
-    label: dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
-    title: dynamicMode
-      ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
-      : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro de zona azul/amarilla. ${pointsTxt}`,
+    label: alcistaMode ? "🟢 ALCISTA SANA" : dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
+    title: alcistaMode
+      ? `Señal Alcista Sana en ${Math.round(preSec)}s. Revalida macro/micro y entra CALL en ${autoSec}s si sigue sana. ${formatAlcistaSanaRadarSummary(item.alcistaSana)}`
+      : dynamicMode
+        ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
+        : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro de zona azul/amarilla. ${pointsTxt}`,
   };
 }
 
@@ -10494,6 +10549,14 @@ function updateRowSignalStageOnRow(row, item) {
     el.style.borderColor = "rgba(251,191,36,.42)";
     el.style.background = "rgba(251,191,36,.10)";
     el.style.color = "#fef3c7";
+  } else if (st.key === "auto_ready_alcista" || st.key === "closed_alcista_ok") {
+    el.style.borderColor = "rgba(34,197,94,.50)";
+    el.style.background = "rgba(34,197,94,.12)";
+    el.style.color = "#dcfce7";
+  } else if (st.key === "closed_alcista_break" || st.key === "auto_wait_alcista") {
+    el.style.borderColor = "rgba(239,68,68,.44)";
+    el.style.background = "rgba(239,68,68,.12)";
+    el.style.color = "#fee2e2";
   } else if (st.key === "auto_ready" || st.key === "auto_zone" || st.key === "closed_ok") {
     el.style.borderColor = "rgba(34,197,94,.42)";
     el.style.background = "rgba(34,197,94,.10)";
@@ -11770,7 +11833,18 @@ function onTick(tick) {
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isDynamicLineMode(activeModeForTick)) {
+    if (isAlcistaSanaMode(activeModeForTick)) {
+      // Alcista Sana: NO usa radar por ventana. La señal sale solo en el segundo elegido
+      // (35/40/45) y la operación se revalida recién en AUTO 58s.
+      if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+        evaluateMinute(minute, {
+          evalMs: Math.max(1000, Number(EVAL_SEC || 45) * 1000),
+          evalSec: Number(EVAL_SEC || 45),
+          radar: false,
+        });
+      }
+    } else if (isDynamicLineMode(activeModeForTick)) {
       // Línea dinámica queda igual: evalúa una sola vez en el segundo elegido.
       if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
         lastEvaluatedMinute = minute;
@@ -16116,6 +16190,229 @@ function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_
   };
 }
 
+
+/* =========================
+   Alcista Sana — continuación CALL macro + micro sana
+   - Señal en el segundo seleccionado (35/40/45)
+   - Revalidación y entrada solo CALL en AUTO 58s
+========================= */
+function getAlcistaSanaCandleFromTicks(ticks, evalMs = 60000) {
+  const pts = ensureTicksWithBoundary(ticks, evalMs)
+    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < MIN_TICKS) return null;
+  const qs = pts.map((p) => Number(p.quote));
+  const open = Number(qs[0]);
+  const close = Number(qs[qs.length - 1]);
+  const high = Math.max(...qs);
+  const low = Math.min(...qs);
+  const range = Math.max(high - low, Math.abs(close) * 0.000001, 1e-9);
+  const body = close - open;
+  return { pts, open, close, high, low, range, body };
+}
+function getAlcistaSanaMacroState(symbol, minute, currentCandle = null) {
+  const prev = getGiroPolarityCandles(symbol, minute, 8)
+    .filter((c) => c && [c.open, c.high, c.low, c.close].map(Number).every(Number.isFinite))
+    .slice(-5);
+
+  const reasons = [];
+  const blockers = [];
+  if (prev.length < 2) {
+    return { ok: false, state: "dudosa", reasons, blockers: ["Macro sin historial suficiente"] };
+  }
+
+  const closesUp = prev.slice(1).reduce((acc, c, i) => acc + (Number(c.close) >= Number(prev[i].close) ? 1 : 0), 0);
+  const higherLows = prev.slice(1).reduce((acc, c, i) => acc + (Number(c.low) >= Number(prev[i].low) ? 1 : 0), 0);
+  const ranges = prev.map((c) => Math.max(Math.abs(Number(c.high) - Number(c.low)), 1e-9));
+  const avgRange = ranges.reduce((a, b) => a + b, 0) / Math.max(1, ranges.length);
+  const last = prev[prev.length - 1];
+  const lastBody = Number(last.close) - Number(last.open);
+  const lastBearStrong = lastBody < 0 && Math.abs(lastBody) >= avgRange * 0.56;
+  const currentOpen = Number(currentCandle?.open);
+  const currentClose = Number(currentCandle?.close);
+  const currentBull = Number.isFinite(currentOpen) && Number.isFinite(currentClose) ? currentClose > currentOpen : true;
+
+  if (closesUp >= Math.max(1, prev.length - 2)) reasons.push("Cierres ascendentes");
+  if (higherLows >= Math.max(1, prev.length - 2)) reasons.push("Mínimos más altos");
+  if (!lastBearStrong) reasons.push("Sin vela bajista fuerte previa");
+  if (currentBull) reasons.push("Vela actual alcista");
+
+  if (lastBearStrong) blockers.push("Vela bajista fuerte previa");
+  if (!currentBull) blockers.push("Vela actual no alcista");
+
+  const ok = closesUp >= Math.max(1, prev.length - 2) && higherLows >= Math.max(1, prev.length - 2) && !lastBearStrong && currentBull;
+  return { ok, state: ok ? "sana" : blockers.length ? "rota" : "dudosa", reasons, blockers, closesUp, higherLows };
+}
+function getAlcistaSanaResistanceState(symbol, minute, price, range) {
+  const candles = getGiroPolarityCandles(symbol, minute, 36)
+    .filter((c) => c && [c.high, c.low, c.close].map(Number).every(Number.isFinite));
+  const p = Number(price);
+  const r = Math.max(Math.abs(Number(range || 0)), Math.abs(p) * 0.000001, 1e-9);
+  if (!Number.isFinite(p) || !candles.length) return { blocked: false, state: "libre" };
+
+  const highsAbove = candles
+    .map((c) => Number(c.high))
+    .filter((h) => Number.isFinite(h) && h > p)
+    .sort((a, b) => a - b);
+  if (!highsAbove.length) return { blocked: false, state: "libre" };
+
+  const nearest = highsAbove[0];
+  const distance = nearest - p;
+  const touchTol = r * 0.28;
+  const touches = candles.filter((c) => Math.abs(Number(c.high) - nearest) <= touchTol).length;
+  const blocked = distance <= Math.max(r * 0.18, touchTol * 0.75) && touches >= 2;
+  return { blocked, state: blocked ? "fuerte" : distance <= r * 0.35 ? "cerca" : "libre", level: nearest, distance, touches };
+}
+function analyzeAlcistaSanaCandidate(candidate, minute, opts = {}) {
+  const evalMs = Math.max(1000, Math.min(58000, Number.isFinite(Number(opts?.evalMs)) ? Number(opts.evalMs) : Number(EVAL_SEC || 45) * 1000));
+  const candle = getAlcistaSanaCandleFromTicks(candidate?.ticks, evalMs);
+  if (!candle) return null;
+
+  const { pts, open, close, high, low, range, body } = candle;
+  const scoreParts = [];
+  const blockers = [];
+  const reasons = [];
+
+  const macro = getAlcistaSanaMacroState(candidate.symbol, minute, candle);
+  if (macro.ok) { scoreParts.push({ key: "macro", points: 2, label: "Macro alcista sana" }); reasons.push("Macro alcista sana"); }
+  else blockers.push(...(macro.blockers?.length ? macro.blockers : ["Macro no sana"]));
+
+  const net = close - open;
+  const dirRatio = directionalRatio(pts, 1);
+  const retrace = maxRetraceAgainst(pts, 1);
+  const upperWick = Math.max(0, high - close);
+  const closePos = (close - low) / range;
+  const bodyStrength = Math.abs(body) / range;
+  const firstThirdEnd = evalMs * 0.34;
+  const lastThirdStart = evalMs * 0.66;
+  const firstThird = sliceTicks(pts, 0, firstThirdEnd);
+  const lastThird = sliceTicks(pts, lastThirdStart, evalMs);
+  const lastThirdDir = directionalRatio(lastThird, 1);
+  const minFirst = firstThird.length ? Math.min(...firstThird.map((p) => Number(p.quote))) : low;
+  const minLast = lastThird.length ? Math.min(...lastThird.map((p) => Number(p.quote))) : low;
+
+  const microHealthy = net > range * 0.18 && dirRatio >= 0.50 && closePos >= 0.58 && retrace <= range * 0.58 && minLast >= minFirst - range * 0.08;
+  if (microHealthy) { scoreParts.push({ key: "micro", points: 2, label: "Micro alcista sana" }); reasons.push("Micro alcista sana"); }
+  else blockers.push("Microestructura rota");
+
+  const healthyPullback = retrace <= range * 0.45 && close >= open + range * 0.18;
+  if (healthyPullback) { scoreParts.push({ key: "pullback", points: 1, label: "Retroceso sano" }); reasons.push("Retroceso sano"); }
+
+  const buyerRecoversFast = close >= high - range * 0.25 && lastThirdDir >= 0.45;
+  if (buyerRecoversFast) { scoreParts.push({ key: "buyer", points: 1, label: "Comprador recupera rápido" }); reasons.push("Comprador recupera rápido"); }
+
+  const partialCloseHigh = closePos >= 0.64;
+  if (partialCloseHigh) { scoreParts.push({ key: "close_high", points: 1, label: "Cierre parcial alto" }); reasons.push("Cierre parcial alto"); }
+
+  const strongBearishRejection = upperWick >= range * 0.34 && upperWick >= Math.max(Math.abs(body) * 0.85, range * 0.22);
+  if (!strongBearishRejection) { scoreParts.push({ key: "no_reject", points: 1, label: "Sin rechazo vendedor fuerte" }); reasons.push("Sin rechazo vendedor fuerte"); }
+  else blockers.push("Rechazo vendedor fuerte");
+
+  if (upperWick >= range * 0.42) blockers.push("Mecha superior grande");
+  if (retrace >= range * 0.66) blockers.push("Retroceso profundo");
+  if (closePos < 0.50) blockers.push("Vela en mitad baja");
+  if (minLast < minFirst - range * 0.16) blockers.push("Rompió mínimo interno");
+  if (bodyStrength < 0.18) blockers.push("Vela actual indecisa");
+
+  const resistance = getAlcistaSanaResistanceState(candidate.symbol, minute, close, range);
+  if (resistance.blocked) blockers.push("Resistencia fuerte arriba");
+
+  const score = scoreParts.reduce((acc, x) => acc + Number(x.points || 0), 0);
+  const uniqueBlockers = Array.from(new Set(blockers.filter(Boolean)));
+  const valid = score >= 5 && uniqueBlockers.length === 0;
+  if (!valid) return null;
+
+  const state = score >= 6 ? "CALL FUERTE" : "CALL VÁLIDO";
+  const meta = {
+    levelMode: "alcista_sana",
+    mode: MODE_ALCISTA_SANA,
+    direction: "CALL",
+    evalMs,
+    evalSec: Math.round(evalMs / 1000),
+    score,
+    maxScore: 8,
+    state,
+    validSignal: true,
+    validTrade: true,
+    macro: macro.state,
+    micro: "sana",
+    pullback: healthyPullback ? "sano" : "dudoso",
+    buyer: buyerRecoversFast ? "mantiene" : "débil",
+    rejection: strongBearishRejection ? "sí" : "no",
+    resistance: resistance.state,
+    reasons,
+    blockers: uniqueBlockers,
+    scoreParts,
+    metrics: {
+      open, close, high, low, range, net, dirRatio, retrace, upperWick, closePos, bodyStrength,
+      resistanceLevel: Number.isFinite(Number(resistance.level)) ? Number(resistance.level) : null,
+      resistanceDistance: Number.isFinite(Number(resistance.distance)) ? Number(resistance.distance) : null,
+    },
+  };
+
+  return {
+    direction: "CALL",
+    quality: score * 10 + Math.max(0, closePos * 4) + Math.max(0, dirRatio * 3),
+    points: score,
+    meta,
+    alcistaSana: meta,
+  };
+}
+function buildAlcistaSanaEntryGate(item, side = "CALL", checkMs = SIGNAL_AUTO_ENTRY_MS) {
+  if (!item) return { ok: false, pending: false, reason: "sin_senal", message: "No hay señal Alcista Sana." };
+  const wanted = normalizeSignalConfirmationSide(side) || "CALL";
+  if (wanted !== "CALL") return { ok: false, pending: false, reason: "solo_call", message: "Alcista Sana solo permite COMPRA/CALL." };
+  const ticks = getSignalLiveTicksForEntryGate(item)
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (ticks.length < MIN_TICKS || Number(ticks[ticks.length - 1]?.ms) < Math.min(checkMs, SIGNAL_AUTO_ENTRY_MS) - 1300) {
+    return { ok: false, pending: true, reason: "ticks_insuficientes", message: "Todavía no hay ticks suficientes para revalidar Alcista Sana." };
+  }
+  const radar = analyzeAlcistaSanaCandidate({ symbol: item.symbol, ticks }, Number(item.minute), { evalMs: checkMs, evalSec: Math.round(checkMs / 1000), radar: false });
+  if (!radar?.alcistaSana?.validTrade) {
+    const lastRadar = getAlcistaSanaCandleFromTicks(ticks, checkMs);
+    const q = lastRadar ? Number(lastRadar.close) : Number(getSignalPriceAtEntryCheckMs(item, checkMs));
+    return {
+      ok: false,
+      pending: false,
+      reason: "alcista_sana_rota",
+      side: "CALL",
+      check_ms: checkMs,
+      check_sec: Math.round(checkMs / 1000),
+      price: Number.isFinite(q) ? q : null,
+      radar: item.alcistaSana || null,
+      message: `Cancelada: micro/macro Alcista Sana rota antes del ${Math.round(checkMs / 1000)}s`,
+    };
+  }
+  const meta = radar.alcistaSana;
+  const q = Number(meta?.metrics?.close);
+  return {
+    ok: true,
+    pending: false,
+    reason: "alcista_sana_validada",
+    side: "CALL",
+    check_ms: checkMs,
+    check_sec: Math.round(checkMs / 1000),
+    price: Number.isFinite(q) ? q : null,
+    radar: meta,
+    message: `Alcista Sana validada ${Math.round(checkMs / 1000)}s: CALL ${meta.score}/${meta.maxScore}`,
+  };
+}
+function formatAlcistaSanaRadarSummary(radar) {
+  if (!radar || typeof radar !== "object") return "radar pendiente";
+  const score = Number.isFinite(Number(radar.score)) ? Number(radar.score) : 0;
+  const max = Number.isFinite(Number(radar.maxScore)) ? Number(radar.maxScore) : 8;
+  const macro = radar.macro || "—";
+  const micro = radar.micro || "—";
+  const pullback = radar.pullback || "—";
+  const buyer = radar.buyer || "—";
+  const rejection = radar.rejection || "—";
+  const resistance = radar.resistance || "—";
+  return `CALL ${score}/${max} · Macro ${macro} · Micro ${micro} · Retroceso ${pullback} · Comprador ${buyer} · Rechazo ${rejection} · Resistencia ${resistance}`;
+}
+
 function evaluateMinute(minute, opts = {}) {
   if (areSignalsPaused()) return false;
 
@@ -16155,7 +16452,10 @@ function evaluateMinute(minute, opts = {}) {
   for (const c of candidates) {
     let match = null;
     let matchSource = "SNR_INTERACCION_NIVEL";
-    if (isDynamicLineMode(activeMode)) {
+    if (isAlcistaSanaMode(activeMode)) {
+      match = analyzeAlcistaSanaCandidate(c, minute, evalOptions);
+      matchSource = "ALCISTA_SANA";
+    } else if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
     } else if (isSNRPolaridadMode(activeMode)) {
@@ -16175,6 +16475,7 @@ function evaluateMinute(minute, opts = {}) {
       giroPolaridadScore: Math.round(match.quality),
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
+      alcistaSanaMeta: match.alcistaSana || (match.meta?.levelMode === "alcista_sana" ? match.meta : null),
       dynamicLineMeta: String(match.meta?.levelMode || "") === "dynamic_line" ? match.meta : null,
       matchSource,
     });
@@ -16200,6 +16501,7 @@ function evaluateMinute(minute, opts = {}) {
     giroPolaridadPoints: bestMatch.giroPolaridadPoints,
     giroPolaridad: bestMatch.giroPolaridadMeta,
     dynamicLine: bestMatch.dynamicLineMeta,
+    alcistaSana: bestMatch.alcistaSanaMeta,
     aiLocalMatchSource: bestMatch.matchSource,
     signalLifecycleStage: "prealert",
     signalPrealertAtSec: prealertSec,
