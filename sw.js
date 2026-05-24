@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v58-alcista-sana-auto58";
+const CACHE = "deriv-assets-v59-alcista-sana-radar-flex";
 
 const ASSETS = [
   "./",

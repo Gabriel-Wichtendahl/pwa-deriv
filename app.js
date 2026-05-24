@@ -43,7 +43,7 @@
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V58_ALCISTA_SANA_AUTO58_20260524";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V59_ALCISTA_SANA_RADAR_FLEX_20260524";
 
 /*
   Mapa rápido de módulos:
@@ -713,7 +713,7 @@ const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCA
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
-const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_MACRO_MICRO_AUTO58_V58_20260524";
+const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_MACRO_MICRO_RADAR_FLEX_AUTO58_V59_20260524";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -782,7 +782,7 @@ function nextSignalMode(mode) {
 }
 function getModeTitle(mode) {
   const m = normalizeSignalMode(mode);
-  if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Señal en 35/40/45s y revalidación/entrada CALL en 58s.";
+  if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Escanea desde el segundo elegido hasta 57s y revalida/entra CALL en 58s.";
   if (m === MODE_LINEA_DINAMICA) return "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos.";
   if (m === MODE_SNR_POLARIDAD) return "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido.";
   return "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
@@ -6895,7 +6895,7 @@ function applyTheme(theme) {
     getSignalEvalButtons().forEach((b) => {
       const sec = parseInt(b.dataset.sec || "0", 10);
       b.classList.toggle("active", sec === EVAL_SEC);
-      b.title = sec === 35 ? "SNR: chequeo en 35s. Línea dinámica: evalúa en 35s." : `SNR: radar 35-${sec}s. Línea dinámica: evalúa en ${sec}s.`;
+      b.title = sec === 35 ? "SNR: chequeo en 35s. Alcista Sana/Línea dinámica evalúan en 35s." : `SNR: radar 35-${sec}s. Alcista Sana/Línea dinámica evalúan en ${sec}s.`;
     });
   paintEval();
   try { paintPracticeSecButtons(); } catch {}
@@ -11834,15 +11834,24 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isAlcistaSanaMode(activeModeForTick)) {
-      // Alcista Sana: NO usa radar por ventana. La señal sale solo en el segundo elegido
-      // (35/40/45) y la operación se revalida recién en AUTO 58s.
-      if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
-        lastEvaluatedMinute = minute;
-        evaluateMinute(minute, {
-          evalMs: Math.max(1000, Number(EVAL_SEC || 45) * 1000),
-          evalSec: Number(EVAL_SEC || 45),
-          radar: false,
+      // V59 Alcista Sana:
+      // El botón 35/40/45 marca el INICIO del radar. Si evaluábamos una sola vez
+      // justo en ese segundo, muchas velas sanas quedaban afuera por 1 tick o por una
+      // pausa mínima. Ahora escanea desde el segundo elegido hasta 57s.
+      // Si encuentra estructura, crea la señal CALL; si no, no vuelve a molestar esa vela.
+      const alcistaStartSec = Math.max(35, Math.min(45, Number(EVAL_SEC || 45)));
+      const alcistaEndSec = SIGNAL_AUTO_ENTRY_SEC - 1;
+      if (sec >= alcistaStartSec && sec <= alcistaEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(1000, Math.min(msInMinute, alcistaEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec: alcistaStartSec,
+          radarEndSec: alcistaEndSec,
         });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > alcistaEndSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
       }
     } else if (isDynamicLineMode(activeModeForTick)) {
       // Línea dinámica queda igual: evalúa una sola vez en el segundo elegido.
@@ -16275,8 +16284,19 @@ function analyzeAlcistaSanaCandidate(candidate, minute, opts = {}) {
   const reasons = [];
 
   const macro = getAlcistaSanaMacroState(candidate.symbol, minute, candle);
-  if (macro.ok) { scoreParts.push({ key: "macro", points: 2, label: "Macro alcista sana" }); reasons.push("Macro alcista sana"); }
-  else blockers.push(...(macro.blockers?.length ? macro.blockers : ["Macro no sana"]));
+  if (macro.ok) {
+    scoreParts.push({ key: "macro", points: 2, label: "Macro alcista sana" });
+    reasons.push("Macro alcista sana");
+  } else {
+    // V59: la macro no debe matar todas las señales cuando recién arrancó la app
+    // o todavía no hay suficientes velas guardadas. Solo bloqueamos si hay algo grave.
+    const hardMacroBlockers = (macro.blockers || []).filter((x) =>
+      String(x || "").includes("Vela actual no alcista") ||
+      String(x || "").includes("Vela bajista fuerte previa")
+    );
+    if (hardMacroBlockers.length) blockers.push(...hardMacroBlockers);
+    else reasons.push("Macro dudosa, no bloqueante");
+  }
 
   const net = close - open;
   const dirRatio = directionalRatio(pts, 1);
@@ -16292,31 +16312,36 @@ function analyzeAlcistaSanaCandidate(candidate, minute, opts = {}) {
   const minFirst = firstThird.length ? Math.min(...firstThird.map((p) => Number(p.quote))) : low;
   const minLast = lastThird.length ? Math.min(...lastThird.map((p) => Number(p.quote))) : low;
 
-  const microHealthy = net > range * 0.18 && dirRatio >= 0.50 && closePos >= 0.58 && retrace <= range * 0.58 && minLast >= minFirst - range * 0.08;
+  // V59: más realista para ticks de Deriv. Antes era demasiado estricto y
+  // prácticamente no disparaba señal. Sigue exigiendo vela alcista, cierre alto
+  // y que el retroceso no destruya la microestructura.
+  const microHealthy = net > range * 0.10 && dirRatio >= 0.44 && closePos >= 0.52 && retrace <= range * 0.72 && minLast >= minFirst - range * 0.18;
   if (microHealthy) { scoreParts.push({ key: "micro", points: 2, label: "Micro alcista sana" }); reasons.push("Micro alcista sana"); }
   else blockers.push("Microestructura rota");
 
-  const healthyPullback = retrace <= range * 0.45 && close >= open + range * 0.18;
+  const healthyPullback = retrace <= range * 0.58 && close >= open + range * 0.10;
   if (healthyPullback) { scoreParts.push({ key: "pullback", points: 1, label: "Retroceso sano" }); reasons.push("Retroceso sano"); }
 
-  const buyerRecoversFast = close >= high - range * 0.25 && lastThirdDir >= 0.45;
+  const buyerRecoversFast = close >= high - range * 0.32 && (lastThird.length < 2 || lastThirdDir >= 0.38);
   if (buyerRecoversFast) { scoreParts.push({ key: "buyer", points: 1, label: "Comprador recupera rápido" }); reasons.push("Comprador recupera rápido"); }
 
-  const partialCloseHigh = closePos >= 0.64;
+  const partialCloseHigh = closePos >= 0.58;
   if (partialCloseHigh) { scoreParts.push({ key: "close_high", points: 1, label: "Cierre parcial alto" }); reasons.push("Cierre parcial alto"); }
 
   const strongBearishRejection = upperWick >= range * 0.34 && upperWick >= Math.max(Math.abs(body) * 0.85, range * 0.22);
   if (!strongBearishRejection) { scoreParts.push({ key: "no_reject", points: 1, label: "Sin rechazo vendedor fuerte" }); reasons.push("Sin rechazo vendedor fuerte"); }
   else blockers.push("Rechazo vendedor fuerte");
 
-  if (upperWick >= range * 0.42) blockers.push("Mecha superior grande");
-  if (retrace >= range * 0.66) blockers.push("Retroceso profundo");
-  if (closePos < 0.50) blockers.push("Vela en mitad baja");
-  if (minLast < minFirst - range * 0.16) blockers.push("Rompió mínimo interno");
-  if (bodyStrength < 0.18) blockers.push("Vela actual indecisa");
+  if (upperWick >= range * 0.46) blockers.push("Mecha superior grande");
+  if (retrace >= range * 0.78) blockers.push("Retroceso profundo");
+  if (closePos < 0.46) blockers.push("Vela en mitad baja");
+  if (minLast < minFirst - range * 0.24) blockers.push("Rompió mínimo interno");
+  if (bodyStrength < 0.12) blockers.push("Vela actual indecisa");
 
   const resistance = getAlcistaSanaResistanceState(candidate.symbol, minute, close, range);
-  if (resistance.blocked) blockers.push("Resistencia fuerte arriba");
+  // V59: la resistencia arriba queda como advertencia salvo que esté extremadamente pegada.
+  // Si la dejamos como bloqueo normal, anulaba casi todas las continuaciones.
+  if (resistance.blocked && Number(resistance.distance || Infinity) <= range * 0.10 && Number(resistance.touches || 0) >= 3) blockers.push("Resistencia fuerte arriba");
 
   const score = scoreParts.reduce((acc, x) => acc + Number(x.points || 0), 0);
   const uniqueBlockers = Array.from(new Set(blockers.filter(Boolean)));
