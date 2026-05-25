@@ -39,12 +39,13 @@
 // ✅ V57: En vivo opera igual que Señales: puntos manuales y ejecución automática al segundo 58
 // ✅ V58: agrega modo 🟢 Alcista Sana: señal CALL en 35/40/45 y revalidación/entrada AUTO 58
 // ✅ V60: Alcista Sana NO opera sola: solo señal; auto 58 requiere 4 puntos manuales COMPRA
+// ✅ V61: FIX Alcista Sana: los 4 puntos manuales pueden ejecutar COMPRA o VENTA al 58; el radar no bloquea VENTA
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V60_ALCISTA_SANA_NO_AUTO_SOLO_20260524";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V61_ALCISTA_SANA_4PTS_COMPRA_VENTA_AUTO58_20260524";
 
 /*
   Mapa rápido de módulos:
@@ -714,7 +715,7 @@ const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCA
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
-const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_MACRO_MICRO_RADAR_SENAL_4PTS_AUTO58_V60_20260524";
+const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_RADAR_SENAL_4PTS_COMPRA_VENTA_AUTO58_V61_20260524";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -783,7 +784,7 @@ function nextSignalMode(mode) {
 }
 function getModeTitle(mode) {
   const m = normalizeSignalMode(mode);
-  if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Solo avisa; NO opera sola. AUTO 58 únicamente si marcás 4 puntos manuales de COMPRA.";
+  if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Solo avisa; NO opera sola. AUTO 58 únicamente si marcás 4 puntos manuales de COMPRA o VENTA.";
   if (m === MODE_LINEA_DINAMICA) return "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos.";
   if (m === MODE_SNR_POLARIDAD) return "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido.";
   return "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
@@ -7492,14 +7493,9 @@ function getSignalNetSellPoints(item = modalCurrentItem) {
 function getSignalEnabledTradeSide(item = modalCurrentItem) {
   const score = getSignalConfirmationScore(item);
 
-  // V60: Alcista Sana ya NO habilita operación solo por radar/validSignal.
-  // La señal puede aparecer sola, pero la autoentrada a 58s requiere que el usuario
-  // haya marcado 4 puntos manuales de COMPRA. Además este modo nunca habilita PUT.
-  if (isAlcistaSanaMode(item?.mode)) {
-    if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
-    return "";
-  }
-
+  // V61: Alcista Sana NO opera sola por radar, pero si el usuario marca
+  // 4 puntos manuales netos, respeta el lado elegido: COMPRA o VENTA.
+  // La señal/radar del modo sigue siendo alcista; los puntos manuales mandan la ejecución.
   if (score >= SIGNAL_CONFIRM_MIN) return "CALL";
   if (score <= -SIGNAL_CONFIRM_MIN) return "PUT";
   return "";
@@ -7521,7 +7517,7 @@ function getSignalConfirmationStatusText(item = modalCurrentItem) {
     const score = Number.isFinite(Number(radar.score)) ? Number(radar.score) : 0;
     const maxScore = Number.isFinite(Number(radar.maxScore)) ? Number(radar.maxScore) : 8;
     const state = String(radar.state || (radar.validSignal ? "CALL válido" : "observando"));
-    return `ALCISTA ${score}/${maxScore} · COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} pts · ${state}`;
+    return `ALCISTA ${score}/${maxScore} · COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} · VENTA ${getSignalNetSellPoints(item)}/${SIGNAL_CONFIRM_MIN} · ${state}`;
   }
   return `COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} · VENTA ${getSignalNetSellPoints(item)}/${SIGNAL_CONFIRM_MIN}`;
 }
@@ -7735,14 +7731,18 @@ function updateSignalConfirmationUI() {
     const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
       const gateTxt = isAlcistaSanaMode(modalCurrentItem?.mode)
-        ? "4 pts manuales + radar sano"
+        ? "4 pts manuales"
         : isDynamicLineMode(modalCurrentItem?.mode)
           ? "línea respetada"
           : "zona azul/amarilla";
       signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${gateTxt}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      const gateTxt = isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla";
+      const gateTxt = isAlcistaSanaMode(modalCurrentItem?.mode)
+        ? "4 pts manuales"
+        : isDynamicLineMode(modalCurrentItem?.mode)
+          ? "línea respetada"
+          : "zona azul/amarilla";
       signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${gateTxt}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
@@ -8079,12 +8079,25 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
     throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
   }
 
-  // Modo Alcista Sana: solo permite CALL si la estructura macro/micro sigue sana en 58s.
+  // V61: Alcista Sana solo genera radar/señal; NO debe operar sola.
+  // Pero si el usuario marcó 4 puntos manuales, la ejecución al 58 respeta
+  // el lado marcado (COMPRA o VENTA). El radar alcista se guarda como contexto,
+  // pero no bloquea la decisión manual ni impide VENTA.
   if (isAlcistaSanaMode(item.mode)) {
-    const gate = buildAlcistaSanaEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS);
-    if (gate?.pending) throw new Error(gate.message || "Alcista Sana pendiente");
-    if (!gate?.ok) throw new Error(gate?.message || "Alcista Sana cancelada antes del 58");
-    return gate;
+    let alcistaGate = null;
+    try { alcistaGate = buildAlcistaSanaEntryGate(item, "CALL", SIGNAL_AUTO_ENTRY_MS); } catch {}
+    return {
+      ok: true,
+      pending: false,
+      reason: "auto58_4pts_manual_alcista_sana_sin_bloqueo",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: SIGNAL_AUTO_ENTRY_MS,
+      check_sec: SIGNAL_AUTO_ENTRY_SEC,
+      message: `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s habilitado por 4 puntos manuales en Alcista Sana; el radar no bloquea ${normalizeSignalConfirmationSide(side) === "PUT" ? "VENTA" : "COMPRA"}.`,
+      alcista_sana_gate: alcistaGate,
+      original_ok: !!alcistaGate?.ok,
+      original_reason: alcistaGate?.reason || "radar_contexto",
+    };
   }
 
   // Modo Línea dinámica: acá la línea sí valida la entrada.
@@ -8294,11 +8307,11 @@ function updateModalCandleStatusUI() {
     if (isAlcistaSanaMode(modalCurrentItem?.mode)) {
       const checkMs = Math.min(SIGNAL_AUTO_ENTRY_MS, Math.max(0, getSignalConfirmationMs(modalCurrentItem)));
       const gate = buildAlcistaSanaEntryGate(modalCurrentItem, "CALL", checkMs);
-      const buyPts = getSignalNetBuyPoints(modalCurrentItem);
-      const autoMsg = buyPts >= SIGNAL_CONFIRM_MIN
-        ? `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s habilitado`
-        : `NO opera sola · falta COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
-      bar.textContent = `🟢 Alcista Sana · ${gate?.ok ? "CALL válida" : "revisando"} · ${formatAlcistaSanaRadarSummary(gate?.radar || modalCurrentItem.alcistaSana)} · ${autoMsg}`;
+      const enabledSide = getSignalEnabledTradeSide(modalCurrentItem);
+      const autoMsg = enabledSide
+        ? `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s ${enabledSide === "CALL" ? "COMPRA" : "VENTA"} habilitado`
+        : `NO opera sola · ${getSignalConfirmationStatusText(modalCurrentItem)}`;
+      bar.textContent = `🟢 Alcista Sana · ${gate?.ok ? "radar válido" : "radar revisando"} · ${formatAlcistaSanaRadarSummary(gate?.radar || modalCurrentItem.alcistaSana)} · ${autoMsg}`;
     } else {
       bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     }
@@ -10502,10 +10515,10 @@ function getSignalLifecycleStageInfo(item) {
     const side = getSignalEnabledTradeSide(item) || item.direction || "";
     const gate = alcistaMode ? buildAlcistaSanaEntryGate(item, "CALL", SIGNAL_AUTO_ENTRY_MS) : dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
     if (alcistaMode) {
-      const manualReady = getSignalEnabledTradeSide(item) === "CALL";
-      if (gate?.ok && manualReady) return { key: "auto_ready_alcista", label: `🟢 AUTO ${autoSec}s`, title: `Alcista Sana revalidada + 4 puntos manuales: ${formatAlcistaSanaRadarSummary(gate.radar || item.alcistaSana)}` };
-      if (gate?.ok) return { key: "radar_ok_alcista", label: "🟢 RADAR OK", title: `Alcista Sana válida, pero NO opera sola. Para AUTO ${autoSec}s necesitás 4 puntos manuales de COMPRA. ${pointsTxt}` };
-      return { key: "auto_wait_alcista", label: `⛔ ALCISTA`, title: gate?.message || "Alcista Sana todavía no habilita entrada." };
+      const manualSide = getSignalEnabledTradeSide(item);
+      if (manualSide) return { key: "auto_ready_alcista", label: `🟢 AUTO ${autoSec}s`, title: `Alcista Sana no opera sola; AUTO habilitado por 4 puntos manuales de ${manualSide === "CALL" ? "COMPRA" : "VENTA"}. ${pointsTxt}` };
+      if (gate?.ok) return { key: "radar_ok_alcista", label: "🟢 RADAR OK", title: `Alcista Sana válida, pero NO opera sola. Para AUTO ${autoSec}s necesitás 4 puntos manuales de COMPRA o VENTA. ${pointsTxt}` };
+      return { key: "auto_wait_alcista", label: `⛔ ALCISTA`, title: `${gate?.message || "Alcista Sana todavía no habilita entrada."} ${pointsTxt}` };
     }
     if (dynamicMode) {
       if (gate?.ok && getSignalEnabledTradeSide(item)) {
