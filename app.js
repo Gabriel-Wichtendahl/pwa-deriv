@@ -41,12 +41,13 @@
 // ✅ V60: Alcista Sana NO opera sola: solo señal; auto 58 requiere 4 puntos manuales COMPRA
 // ✅ V61: FIX Alcista Sana: los 4 puntos manuales pueden ejecutar COMPRA o VENTA al 58; el radar no bloquea VENTA
 // ✅ V62: agrega modo 🔁 Respuesta Sana: primer movimiento irregular/débil + segundo movimiento contrario sano/natural
+// ✅ V63: Respuesta Sana ignora el selector 35/40/45 y dispara señal apenas se detecta (10s-57s)
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V62_RESPUESTA_SANA_4PTS_AUTO58_20260526";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V63_RESPUESTA_SANA_DETECTA_AL_INSTANTE_20260526";
 
 /*
   Mapa rápido de módulos:
@@ -718,7 +719,7 @@ const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_202605
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_RADAR_SENAL_4PTS_COMPRA_VENTA_AUTO58_V61_20260524";
-const RESPUESTA_SANA_LOGIC_VERSION = "RESPUESTA_SANA_DEBIL_A_RESPUESTA_FUERTE_4PTS_AUTO58_V62_20260526";
+const RESPUESTA_SANA_LOGIC_VERSION = "RESPUESTA_SANA_DEBIL_A_RESPUESTA_FUERTE_DETECTA_AL_INSTANTE_4PTS_AUTO58_V63_20260526";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -794,7 +795,7 @@ function nextSignalMode(mode) {
 }
 function getModeTitle(mode) {
   const m = normalizeSignalMode(mode);
-  if (m === MODE_RESPUESTA_SANA) return "Modo Respuesta Sana: primer movimiento irregular o débil + segundo movimiento contrario sano/fuerte. Solo avisa; AUTO 58 solo con 4 puntos manuales.";
+  if (m === MODE_RESPUESTA_SANA) return "Modo Respuesta Sana: primer movimiento irregular o débil + segundo movimiento contrario sano/fuerte. La señal sale apenas se detecta; AUTO 58 solo con 4 puntos manuales.";
   if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Solo avisa; NO opera sola. AUTO 58 únicamente si marcás 4 puntos manuales de COMPRA o VENTA.";
   if (m === MODE_LINEA_DINAMICA) return "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos.";
   if (m === MODE_SNR_POLARIDAD) return "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido.";
@@ -1817,6 +1818,9 @@ let PRACTICE_EVAL_SEC = 45;
 // V38: en modo SNR los botones 35/40/45 pasan a ser el FIN del radar.
 // El radar arranca siempre en 35s y busca prealerta hasta el segundo elegido.
 const SNR_RADAR_START_SEC = 35;
+// V63: Respuesta Sana no depende del selector 35/40/45.
+// Empieza a buscar apenas hay suficiente vela para separar primer movimiento y respuesta.
+const RESPUESTA_SANA_DETECT_START_SEC = 10;
 
 // Estado principal: NORMAL vs GIRO vs GIRO FLEX
 let signalMode = MODE_NORMAL;
@@ -6910,7 +6914,7 @@ function applyTheme(theme) {
     getSignalEvalButtons().forEach((b) => {
       const sec = parseInt(b.dataset.sec || "0", 10);
       b.classList.toggle("active", sec === EVAL_SEC);
-      b.title = sec === 35 ? "SNR: chequeo en 35s. Alcista Sana/Respuesta Sana/Línea dinámica evalúan en 35s." : `SNR: radar 35-${sec}s. Alcista Sana/Respuesta Sana/Línea dinámica evalúan en ${sec}s.`;
+      b.title = sec === 35 ? "SNR: chequeo en 35s. Alcista Sana/Línea dinámica evalúan en 35s. Respuesta Sana ignora este selector y avisa apenas detecta." : `SNR: radar 35-${sec}s. Alcista Sana/Línea dinámica evalúan en ${sec}s. Respuesta Sana ignora este selector y avisa apenas detecta.`;
     });
   paintEval();
   try { paintPracticeSecButtons(); } catch {}
@@ -10610,7 +10614,7 @@ function getSignalLifecycleStageInfo(item) {
     key: "prealert",
     label: respuestaMode ? "🔁 RESPUESTA SANA" : alcistaMode ? "🟢 ALCISTA SANA" : dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
     title: respuestaMode
-      ? `Señal Respuesta Sana en ${Math.round(preSec)}s. Primer movimiento débil/irregular y respuesta contraria sana. Solo avisa; AUTO ${autoSec}s solo con 4 puntos manuales. ${formatRespuestaSanaRadarSummary(item.respuestaSana)}`
+      ? `Señal Respuesta Sana detectada en ${Math.round(preSec)}s. Primer movimiento débil/irregular y respuesta contraria sana. Solo avisa; AUTO ${autoSec}s solo con 4 puntos manuales. ${formatRespuestaSanaRadarSummary(item.respuestaSana)}`
       : alcistaMode
         ? `Señal Alcista Sana en ${Math.round(preSec)}s. Solo avisa; NO opera sola. AUTO ${autoSec}s solo con 4 puntos manuales COMPRA + radar sano. ${formatAlcistaSanaRadarSummary(item.alcistaSana)}`
         : dynamicMode
@@ -11928,12 +11932,33 @@ function onTick(tick) {
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isAlcistaSanaMode(activeModeForTick) || isRespuestaSanaMode(activeModeForTick)) {
-      // V59/V62 Alcista Sana y Respuesta Sana:
+    if (isRespuestaSanaMode(activeModeForTick)) {
+      // V63 Respuesta Sana:
+      // Este modo NO depende del selector 35/40/45.
+      // La señal sale apenas se detecta la secuencia:
+      // 1) primer movimiento irregular/débil
+      // 2) respuesta contraria sana/fuerte/natural.
+      // La operación sigue segura: AUTO 58 solo con 4 puntos manuales.
+      const respuestaStartSec = RESPUESTA_SANA_DETECT_START_SEC;
+      const respuestaEndSec = SIGNAL_AUTO_ENTRY_SEC - 1;
+      if (sec >= respuestaStartSec && sec <= respuestaEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(1000, Math.min(msInMinute, respuestaEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec: respuestaStartSec,
+          radarEndSec: respuestaEndSec,
+          instantDetection: true,
+        });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > respuestaEndSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+      }
+    } else if (isAlcistaSanaMode(activeModeForTick)) {
+      // V59/V62 Alcista Sana:
       // El botón 35/40/45 marca el INICIO del radar. Si evaluábamos una sola vez
       // justo en ese segundo, muchas velas sanas quedaban afuera por 1 tick o por una
       // pausa mínima. Ahora escanea desde el segundo elegido hasta 57s.
-      // Si encuentra estructura, crea la señal CALL; si no, no vuelve a molestar esa vela.
       const alcistaStartSec = Math.max(35, Math.min(45, Number(EVAL_SEC || 45)));
       const alcistaEndSec = SIGNAL_AUTO_ENTRY_SEC - 1;
       if (sec >= alcistaStartSec && sec <= alcistaEndSec && lastEvaluatedMinute !== minute) {
