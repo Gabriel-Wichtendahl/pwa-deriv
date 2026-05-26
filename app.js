@@ -40,12 +40,13 @@
 // ✅ V58: agrega modo 🟢 Alcista Sana: señal CALL en 35/40/45 y revalidación/entrada AUTO 58
 // ✅ V60: Alcista Sana NO opera sola: solo señal; auto 58 requiere 4 puntos manuales COMPRA
 // ✅ V61: FIX Alcista Sana: los 4 puntos manuales pueden ejecutar COMPRA o VENTA al 58; el radar no bloquea VENTA
+// ✅ V62: agrega modo 🔁 Respuesta Sana: primer movimiento irregular/débil + segundo movimiento contrario sano/natural
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V61_ALCISTA_SANA_4PTS_COMPRA_VENTA_AUTO58_20260524";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V62_RESPUESTA_SANA_4PTS_AUTO58_20260526";
 
 /*
   Mapa rápido de módulos:
@@ -703,6 +704,7 @@ const MODE_GIRO_NIVEL = "GIRO DOBLE RECHAZO";
 const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
 const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_ALCISTA_SANA = "ALCISTA SANA";
+const MODE_RESPUESTA_SANA = "RESPUESTA SANA";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
@@ -716,6 +718,7 @@ const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_202605
 const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const ALCISTA_SANA_LOGIC_VERSION = "ALCISTA_SANA_RADAR_SENAL_4PTS_COMPRA_VENTA_AUTO58_V61_20260524";
+const RESPUESTA_SANA_LOGIC_VERSION = "RESPUESTA_SANA_DEBIL_A_RESPUESTA_FUERTE_4PTS_AUTO58_V62_20260526";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
@@ -726,6 +729,7 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (raw.includes("RESPUESTA") || raw.includes("DEBIL_RESPUESTA") || raw.includes("DEBIL A RESPUESTA") || raw === "RESPUESTA_SANA") return MODE_RESPUESTA_SANA;
   if (raw.includes("ALCISTA") || raw.includes("BULLISH") || raw === "ALCISTA_SANA") return MODE_ALCISTA_SANA;
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
@@ -741,12 +745,16 @@ function isSNRPolaridadMode(mode) {
 function isAlcistaSanaMode(mode) {
   return normalizeSignalMode(mode) === MODE_ALCISTA_SANA;
 }
+function isRespuestaSanaMode(mode) {
+  return normalizeSignalMode(mode) === MODE_RESPUESTA_SANA;
+}
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
   return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
 }
 function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
+  if (m === MODE_RESPUESTA_SANA) return RESPUESTA_SANA_LOGIC_VERSION;
   if (m === MODE_ALCISTA_SANA) return ALCISTA_SANA_LOGIC_VERSION;
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
@@ -770,6 +778,7 @@ function saveAnalysisMode(mode) {
 }
 function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
+  if (m === MODE_RESPUESTA_SANA) return "🔁 Respuesta Sana";
   if (m === MODE_ALCISTA_SANA) return "🟢 Alcista Sana";
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
@@ -779,11 +788,13 @@ function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
   if (m === MODE_SNR_POLARIDAD) return MODE_ALCISTA_SANA;
-  if (m === MODE_ALCISTA_SANA) return MODE_LINEA_DINAMICA;
+  if (m === MODE_ALCISTA_SANA) return MODE_RESPUESTA_SANA;
+  if (m === MODE_RESPUESTA_SANA) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 function getModeTitle(mode) {
   const m = normalizeSignalMode(mode);
+  if (m === MODE_RESPUESTA_SANA) return "Modo Respuesta Sana: primer movimiento irregular o débil + segundo movimiento contrario sano/fuerte. Solo avisa; AUTO 58 solo con 4 puntos manuales.";
   if (m === MODE_ALCISTA_SANA) return "Modo Alcista Sana: continuación compradora limpia. Solo avisa; NO opera sola. AUTO 58 únicamente si marcás 4 puntos manuales de COMPRA o VENTA.";
   if (m === MODE_LINEA_DINAMICA) return "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos.";
   if (m === MODE_SNR_POLARIDAD) return "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido.";
@@ -791,6 +802,7 @@ function getModeTitle(mode) {
 }
 function getModeToastText(mode) {
   const m = normalizeSignalMode(mode);
+  if (m === MODE_RESPUESTA_SANA) return "🔁 Modo Respuesta Sana";
   if (m === MODE_ALCISTA_SANA) return "🟢 Modo Alcista Sana";
   if (m === MODE_LINEA_DINAMICA) return "📐 Modo Línea dinámica";
   if (m === MODE_SNR_POLARIDAD) return "🧲 Modo SNR polaridad";
@@ -6454,6 +6466,7 @@ function buildExportPayloadVoted() {
       trade: it.trade || null,
       signalAutoEntry: it.signalAutoEntry || null,
       giroPolaridad: getSignalLevelMeta(it),
+      respuestaSana: it.respuestaSana || null,
       snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
       minuteComplete: !!it.minuteComplete,
@@ -6897,7 +6910,7 @@ function applyTheme(theme) {
     getSignalEvalButtons().forEach((b) => {
       const sec = parseInt(b.dataset.sec || "0", 10);
       b.classList.toggle("active", sec === EVAL_SEC);
-      b.title = sec === 35 ? "SNR: chequeo en 35s. Alcista Sana/Línea dinámica evalúan en 35s." : `SNR: radar 35-${sec}s. Alcista Sana/Línea dinámica evalúan en ${sec}s.`;
+      b.title = sec === 35 ? "SNR: chequeo en 35s. Alcista Sana/Respuesta Sana/Línea dinámica evalúan en 35s." : `SNR: radar 35-${sec}s. Alcista Sana/Respuesta Sana/Línea dinámica evalúan en ${sec}s.`;
     });
   paintEval();
   try { paintPracticeSecButtons(); } catch {}
@@ -7512,6 +7525,14 @@ function hasSignalMinimumConfirmations(item = modalCurrentItem, side = null) {
   return wanted ? enabled === wanted : !!enabled;
 }
 function getSignalConfirmationStatusText(item = modalCurrentItem) {
+  if (isRespuestaSanaMode(item?.mode)) {
+    const radar = item?.respuestaSana || {};
+    const score = Number.isFinite(Number(radar.score)) ? Number(radar.score) : 0;
+    const maxScore = Number.isFinite(Number(radar.maxScore)) ? Number(radar.maxScore) : 8;
+    const state = String(radar.state || (radar.validSignal ? "señal válida" : "observando"));
+    const dir = normalizeSignalConfirmationSide(radar.direction || item?.direction) === "PUT" ? "VENTA" : "COMPRA";
+    return `RESPUESTA ${dir} ${score}/${maxScore} · COMPRA ${getSignalNetBuyPoints(item)}/${SIGNAL_CONFIRM_MIN} · VENTA ${getSignalNetSellPoints(item)}/${SIGNAL_CONFIRM_MIN} · ${state}`;
+  }
   if (isAlcistaSanaMode(item?.mode)) {
     const radar = item?.alcistaSana || {};
     const score = Number.isFinite(Number(radar.score)) ? Number(radar.score) : 0;
@@ -8083,6 +8104,23 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   // Pero si el usuario marcó 4 puntos manuales, la ejecución al 58 respeta
   // el lado marcado (COMPRA o VENTA). El radar alcista se guarda como contexto,
   // pero no bloquea la decisión manual ni impide VENTA.
+  if (isRespuestaSanaMode(item.mode)) {
+    let respuestaGate = null;
+    try { respuestaGate = buildRespuestaSanaEntryGate(item, normalizeSignalConfirmationSide(side) || item.direction || "", SIGNAL_AUTO_ENTRY_MS); } catch {}
+    return {
+      ok: true,
+      pending: false,
+      reason: "auto58_4pts_manual_respuesta_sana_sin_bloqueo",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: SIGNAL_AUTO_ENTRY_MS,
+      check_sec: SIGNAL_AUTO_ENTRY_SEC,
+      message: `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s habilitado por 4 puntos manuales en Respuesta Sana; el radar queda como contexto y no bloquea ${normalizeSignalConfirmationSide(side) === "PUT" ? "VENTA" : "COMPRA"}.`,
+      respuesta_sana_gate: respuestaGate,
+      original_ok: !!respuestaGate?.ok,
+      original_reason: respuestaGate?.reason || "radar_contexto",
+    };
+  }
+
   if (isAlcistaSanaMode(item.mode)) {
     let alcistaGate = null;
     try { alcistaGate = buildAlcistaSanaEntryGate(item, "CALL", SIGNAL_AUTO_ENTRY_MS); } catch {}
@@ -8304,7 +8342,15 @@ function updateModalCandleStatusUI() {
     }
     const enabled = getSignalEnabledTradeSide(modalCurrentItem);
     const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
-    if (isAlcistaSanaMode(modalCurrentItem?.mode)) {
+    if (isRespuestaSanaMode(modalCurrentItem?.mode)) {
+      const checkMs = Math.min(SIGNAL_AUTO_ENTRY_MS, Math.max(0, getSignalConfirmationMs(modalCurrentItem)));
+      const gate = buildRespuestaSanaEntryGate(modalCurrentItem, modalCurrentItem?.direction || "", checkMs);
+      const enabledSide = getSignalEnabledTradeSide(modalCurrentItem);
+      const autoMsg = enabledSide
+        ? `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s ${enabledSide === "CALL" ? "COMPRA" : "VENTA"} habilitado`
+        : `NO opera sola · ${getSignalConfirmationStatusText(modalCurrentItem)}`;
+      bar.textContent = `🔁 Respuesta Sana · ${gate?.ok ? "radar válido" : "radar revisando"} · ${formatRespuestaSanaRadarSummary(gate?.radar || modalCurrentItem.respuestaSana)} · ${autoMsg}`;
+    } else if (isAlcistaSanaMode(modalCurrentItem?.mode)) {
       const checkMs = Math.min(SIGNAL_AUTO_ENTRY_MS, Math.max(0, getSignalConfirmationMs(modalCurrentItem)));
       const gate = buildAlcistaSanaEntryGate(modalCurrentItem, "CALL", checkMs);
       const enabledSide = getSignalEnabledTradeSide(modalCurrentItem);
@@ -10472,6 +10518,7 @@ function getSignalLifecycleStageInfo(item) {
   const status = String(item?.signalAutoEntry?.status || "");
 
   const dynamicMode = isDynamicLineMode(item.mode);
+  const respuestaMode = isRespuestaSanaMode(item.mode);
   const alcistaMode = isAlcistaSanaMode(item.mode);
 
   if (item.minuteComplete) {
@@ -10482,6 +10529,12 @@ function getSignalLifecycleStageInfo(item) {
         label: `📌 ${badge}`,
         title: `Operación asociada. No se elimina por filtro de cierre. ${pointsTxt}`,
       };
+    }
+    if (respuestaMode) {
+      const gate = buildRespuestaSanaEntryGate(item, item.direction || "", 60000);
+      return gate?.ok
+        ? { key: "closed_respuesta_ok", label: "✅ RESPUESTA SANA", title: `La vela cerró manteniendo la respuesta sana. ${formatRespuestaSanaRadarSummary(gate.radar || item.respuestaSana)}` }
+        : { key: "closed_respuesta_break", label: "❌ RESPUESTA ROTA", title: gate?.message || "La respuesta sana se rompió." };
     }
     if (alcistaMode) {
       const gate = buildAlcistaSanaEntryGate(item, "CALL", 60000);
@@ -10513,7 +10566,13 @@ function getSignalLifecycleStageInfo(item) {
   const ms = getSignalConfirmationMs(item);
   if (ms >= SIGNAL_AUTO_ENTRY_MS) {
     const side = getSignalEnabledTradeSide(item) || item.direction || "";
-    const gate = alcistaMode ? buildAlcistaSanaEntryGate(item, "CALL", SIGNAL_AUTO_ENTRY_MS) : dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    const gate = respuestaMode ? buildRespuestaSanaEntryGate(item, item.direction || side, SIGNAL_AUTO_ENTRY_MS) : alcistaMode ? buildAlcistaSanaEntryGate(item, "CALL", SIGNAL_AUTO_ENTRY_MS) : dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    if (respuestaMode) {
+      const manualSide = getSignalEnabledTradeSide(item);
+      if (manualSide) return { key: "auto_ready_respuesta", label: `🔁 AUTO ${autoSec}s`, title: `Respuesta Sana no opera sola; AUTO habilitado por 4 puntos manuales de ${manualSide === "CALL" ? "COMPRA" : "VENTA"}. ${pointsTxt}` };
+      if (gate?.ok) return { key: "radar_ok_respuesta", label: "🔁 RADAR OK", title: `Respuesta Sana válida, pero NO opera sola. Para AUTO ${autoSec}s necesitás 4 puntos manuales de COMPRA o VENTA. ${pointsTxt}` };
+      return { key: "auto_wait_respuesta", label: `⛔ RESPUESTA`, title: `${gate?.message || "Respuesta Sana todavía no habilita señal."} ${pointsTxt}` };
+    }
     if (alcistaMode) {
       const manualSide = getSignalEnabledTradeSide(item);
       if (manualSide) return { key: "auto_ready_alcista", label: `🟢 AUTO ${autoSec}s`, title: `Alcista Sana no opera sola; AUTO habilitado por 4 puntos manuales de ${manualSide === "CALL" ? "COMPRA" : "VENTA"}. ${pointsTxt}` };
@@ -10549,10 +10608,12 @@ function getSignalLifecycleStageInfo(item) {
 
   return {
     key: "prealert",
-    label: alcistaMode ? "🟢 ALCISTA SANA" : dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
-    title: alcistaMode
-      ? `Señal Alcista Sana en ${Math.round(preSec)}s. Solo avisa; NO opera sola. AUTO ${autoSec}s solo con 4 puntos manuales COMPRA + radar sano. ${formatAlcistaSanaRadarSummary(item.alcistaSana)}`
-      : dynamicMode
+    label: respuestaMode ? "🔁 RESPUESTA SANA" : alcistaMode ? "🟢 ALCISTA SANA" : dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
+    title: respuestaMode
+      ? `Señal Respuesta Sana en ${Math.round(preSec)}s. Primer movimiento débil/irregular y respuesta contraria sana. Solo avisa; AUTO ${autoSec}s solo con 4 puntos manuales. ${formatRespuestaSanaRadarSummary(item.respuestaSana)}`
+      : alcistaMode
+        ? `Señal Alcista Sana en ${Math.round(preSec)}s. Solo avisa; NO opera sola. AUTO ${autoSec}s solo con 4 puntos manuales COMPRA + radar sano. ${formatAlcistaSanaRadarSummary(item.alcistaSana)}`
+        : dynamicMode
         ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
         : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro de zona azul/amarilla. ${pointsTxt}`,
   };
@@ -11867,8 +11928,8 @@ function onTick(tick) {
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isAlcistaSanaMode(activeModeForTick)) {
-      // V59 Alcista Sana:
+    if (isAlcistaSanaMode(activeModeForTick) || isRespuestaSanaMode(activeModeForTick)) {
+      // V59/V62 Alcista Sana y Respuesta Sana:
       // El botón 35/40/45 marca el INICIO del radar. Si evaluábamos una sola vez
       // justo en ese segundo, muchas velas sanas quedaban afuera por 1 tick o por una
       // pausa mínima. Ahora escanea desde el segundo elegido hasta 57s.
@@ -16472,6 +16533,228 @@ function formatAlcistaSanaRadarSummary(radar) {
   return `CALL ${score}/${max} · Macro ${macro} · Micro ${micro} · Retroceso ${pullback} · Comprador ${buyer} · Rechazo ${rejection} · Resistencia ${resistance}`;
 }
 
+function getRespuestaSanaSegmentStats(ticks, dirSign) {
+  const pts = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 2) return null;
+  const open = Number(pts[0].quote);
+  const close = Number(pts[pts.length - 1].quote);
+  const high = Math.max(...pts.map((p) => Number(p.quote)));
+  const low = Math.min(...pts.map((p) => Number(p.quote)));
+  const range = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const net = (close - open) * Math.sign(dirSign);
+  const absNet = Math.abs(close - open);
+  const dirRatio = directionalRatio(pts, dirSign);
+  const retrace = maxRetraceAgainst(pts, dirSign);
+  const velocity = absNet / Math.max(1, Number(pts[pts.length - 1].ms) - Number(pts[0].ms));
+  const closePos = dirSign > 0 ? (close - low) / range : (high - close) / range;
+  return { pts, open, close, high, low, range, net, absNet, dirRatio, retrace, velocity, closePos };
+}
+
+function findRespuestaSanaPivot(pts, direction) {
+  const dir = normalizeSignalConfirmationSide(direction) || "CALL";
+  const n = Array.isArray(pts) ? pts.length : 0;
+  if (n < 7) return -1;
+  const start = Math.max(2, Math.floor(n * 0.24));
+  const end = Math.min(n - 3, Math.ceil(n * 0.78));
+  let bestIdx = -1;
+  let bestScore = -Infinity;
+  const open = Number(pts[0].quote);
+  const close = Number(pts[n - 1].quote);
+  const values = pts.map((p) => Number(p.quote));
+  const high = Math.max(...values);
+  const low = Math.min(...values);
+  const range = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+
+  for (let i = start; i <= end; i++) {
+    const q = Number(pts[i].quote);
+    let firstMove = 0;
+    let secondMove = 0;
+    if (dir === "CALL") {
+      firstMove = open - q;      // primer movimiento vendedor
+      secondMove = close - q;    // respuesta compradora
+    } else {
+      firstMove = q - open;      // primer movimiento comprador
+      secondMove = q - close;    // respuesta vendedora
+    }
+    if (firstMove <= range * 0.10 || secondMove <= range * 0.16) continue;
+    const balance = Math.min(firstMove, secondMove) / Math.max(firstMove, secondMove, 1e-9);
+    const pos = 1 - Math.abs(i / Math.max(1, n - 1) - 0.46);
+    const score = firstMove * 0.75 + secondMove * 1.15 + balance * range * 0.45 + pos * range * 0.10;
+    if (score > bestScore) { bestScore = score; bestIdx = i; }
+  }
+  return bestIdx;
+}
+
+function analyzeRespuestaSanaDirection(candidate, minute, direction, opts = {}) {
+  const dir = normalizeSignalConfirmationSide(direction) || "CALL";
+  const evalMs = Math.max(1000, Math.min(58000, Number.isFinite(Number(opts?.evalMs)) ? Number(opts.evalMs) : Number(EVAL_SEC || 45) * 1000));
+  const pts = (Array.isArray(candidate?.ticks) ? candidate.ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= evalMs)
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < Math.max(MIN_TICKS + 3, 7)) return null;
+
+  const allPrices = pts.map((p) => Number(p.quote));
+  const open = Number(pts[0].quote);
+  const close = Number(pts[pts.length - 1].quote);
+  const high = Math.max(...allPrices);
+  const low = Math.min(...allPrices);
+  const range = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const pivotIdx = findRespuestaSanaPivot(pts, dir);
+  if (pivotIdx < 0) return null;
+
+  const pivot = pts[pivotIdx];
+  const pivotMs = Number(pivot.ms);
+  const pivotQuote = Number(pivot.quote);
+  const firstTicks = pts.slice(0, pivotIdx + 1);
+  const secondTicks = pts.slice(pivotIdx);
+  const firstSign = dir === "CALL" ? -1 : 1;
+  const secondSign = dir === "CALL" ? 1 : -1;
+  const first = getRespuestaSanaSegmentStats(firstTicks, firstSign);
+  const second = getRespuestaSanaSegmentStats(secondTicks, secondSign);
+  if (!first || !second) return null;
+
+  const firstMove = dir === "CALL" ? open - pivotQuote : pivotQuote - open;
+  const secondMove = dir === "CALL" ? close - pivotQuote : pivotQuote - close;
+  const recovered = secondMove / Math.max(firstMove, 1e-9);
+  const firstDirRatio = Number(first.dirRatio || 0);
+  const secondDirRatio = Number(second.dirRatio || 0);
+  const firstRetraceRatio = Number(first.retrace || 0) / Math.max(firstMove, range * 0.10, 1e-9);
+  const secondRetraceRatio = Number(second.retrace || 0) / Math.max(secondMove, range * 0.10, 1e-9);
+
+  const firstMidIdx = Math.max(1, Math.min(firstTicks.length - 1, Math.floor(firstTicks.length * 0.55)));
+  const firstMidQ = Number(firstTicks[firstMidIdx].quote);
+  const earlyProgress = dir === "CALL" ? open - firstMidQ : firstMidQ - open;
+  const lateProgress = dir === "CALL" ? firstMidQ - pivotQuote : pivotQuote - firstMidQ;
+  const firstLosesForce = lateProgress <= Math.max(earlyProgress * 0.78, range * 0.10) || firstDirRatio <= 0.58;
+  const firstIrregular = firstDirRatio <= 0.66 || firstRetraceRatio >= 0.28;
+
+  const secondHealthy = secondDirRatio >= 0.52 && secondMove >= range * 0.20 && secondRetraceRatio <= 0.72 && second.closePos >= 0.48;
+  const betterAngle = second.velocity >= first.velocity * 0.88 || secondMove >= firstMove * 0.82 || secondDirRatio >= firstDirRatio + 0.08;
+  const secondDoesNotReturnAll = secondMove >= Math.max(firstMove * 0.48, range * 0.18) && secondRetraceRatio <= 0.80;
+  const clearOppositeResponse = recovered >= 0.42 && secondMove >= range * 0.18;
+
+  const scoreParts = [];
+  const reasons = [];
+  const blockers = [];
+
+  if (firstIrregular) { scoreParts.push({ key: "first_irregular", points: 2, label: "Primer movimiento irregular" }); reasons.push("Primer movimiento irregular"); }
+  if (firstLosesForce) { scoreParts.push({ key: "first_weakens", points: 2, label: "Primer movimiento pierde fuerza" }); reasons.push("Primer movimiento pierde fuerza"); }
+  if (secondHealthy) { scoreParts.push({ key: "second_healthy", points: 2, label: "Respuesta contraria sana/natural" }); reasons.push("Respuesta contraria sana/natural"); }
+  if (betterAngle) { scoreParts.push({ key: "better_angle", points: 1, label: "Segundo movimiento con mejor ángulo" }); reasons.push("Segundo movimiento con mejor ángulo"); }
+  if (secondDoesNotReturnAll) { scoreParts.push({ key: "second_holds", points: 1, label: "Segundo movimiento no devuelve todo" }); reasons.push("Segundo movimiento no devuelve todo"); }
+
+  if (firstMove < range * 0.12) blockers.push("Primer movimiento demasiado chico");
+  if (!firstIrregular && !firstLosesForce) blockers.push("Primer movimiento sano/fuerte, no débil");
+  if (!secondHealthy) blockers.push("Respuesta contraria débil o sucia");
+  if (!clearOppositeResponse) blockers.push("No hay cambio real de dominio");
+  if (secondRetraceRatio > 0.86) blockers.push("El segundo movimiento devuelve demasiado");
+  if ((dir === "CALL" && close <= pivotQuote + range * 0.12) || (dir === "PUT" && close >= pivotQuote - range * 0.12)) blockers.push("La respuesta no se sostiene");
+
+  const score = scoreParts.reduce((acc, x) => acc + Number(x.points || 0), 0);
+  const uniqueBlockers = Array.from(new Set(blockers.filter(Boolean)));
+  const valid = score >= 5 && uniqueBlockers.length === 0;
+  if (!valid) return null;
+
+  const state = score >= 7 ? "RESPUESTA FUERTE" : score >= 6 ? "RESPUESTA SANA" : "RESPUESTA VÁLIDA";
+  const meta = {
+    levelMode: "respuesta_sana",
+    mode: MODE_RESPUESTA_SANA,
+    direction: dir,
+    evalMs,
+    evalSec: Math.round(evalMs / 1000),
+    score,
+    maxScore: 8,
+    state,
+    validSignal: true,
+    validTrade: true,
+    firstMove: dir === "CALL" ? "vendedor débil/irregular" : "comprador débil/irregular",
+    secondMove: dir === "CALL" ? "comprador sano/natural" : "vendedor sano/natural",
+    first: firstIrregular ? "irregular" : firstLosesForce ? "débil" : "dudoso",
+    second: secondHealthy ? "sano" : "dudoso",
+    dominio: "cambiando",
+    reasons,
+    blockers: uniqueBlockers,
+    scoreParts,
+    metrics: {
+      open, close, high, low, range, pivotMs, pivotQuote, firstMove, secondMove, recovered,
+      firstDirRatio, secondDirRatio, firstRetraceRatio, secondRetraceRatio,
+      firstVelocity: first.velocity,
+      secondVelocity: second.velocity,
+    },
+  };
+
+  return {
+    direction: dir,
+    quality: score * 10 + Math.max(0, recovered * 5) + Math.max(0, secondDirRatio * 4) + (betterAngle ? 3 : 0),
+    points: score,
+    meta,
+    respuestaSana: meta,
+  };
+}
+
+function analyzeRespuestaSanaCandidate(candidate, minute, opts = {}) {
+  const call = analyzeRespuestaSanaDirection(candidate, minute, "CALL", opts);
+  const put = analyzeRespuestaSanaDirection(candidate, minute, "PUT", opts);
+  if (call && put) return call.quality >= put.quality ? call : put;
+  return call || put || null;
+}
+
+function buildRespuestaSanaEntryGate(item, side = "", checkMs = SIGNAL_AUTO_ENTRY_MS) {
+  if (!item) return { ok: false, pending: false, reason: "sin_senal", message: "No hay señal Respuesta Sana." };
+  const wanted = normalizeSignalConfirmationSide(side) || normalizeSignalConfirmationSide(item.direction) || "CALL";
+  const ticks = getSignalLiveTicksForEntryGate(item)
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (ticks.length < MIN_TICKS || Number(ticks[ticks.length - 1]?.ms) < Math.min(checkMs, SIGNAL_AUTO_ENTRY_MS) - 1300) {
+    return { ok: false, pending: true, reason: "ticks_insuficientes", message: "Todavía no hay ticks suficientes para revalidar Respuesta Sana." };
+  }
+  const radar = analyzeRespuestaSanaDirection({ symbol: item.symbol, ticks }, Number(item.minute), wanted, { evalMs: checkMs, evalSec: Math.round(checkMs / 1000), radar: false }) ||
+    analyzeRespuestaSanaCandidate({ symbol: item.symbol, ticks }, Number(item.minute), { evalMs: checkMs, evalSec: Math.round(checkMs / 1000), radar: false });
+  if (!radar?.respuestaSana?.validTrade) {
+    const q = Number(getSignalPriceAtEntryCheckMs(item, checkMs));
+    return {
+      ok: false,
+      pending: false,
+      reason: "respuesta_sana_rota",
+      side: wanted,
+      check_ms: checkMs,
+      check_sec: Math.round(checkMs / 1000),
+      price: Number.isFinite(q) ? q : null,
+      radar: item.respuestaSana || null,
+      message: `Cancelada: la respuesta sana se debilitó antes del ${Math.round(checkMs / 1000)}s`,
+    };
+  }
+  const meta = radar.respuestaSana;
+  const q = Number(meta?.metrics?.close);
+  return {
+    ok: true,
+    pending: false,
+    reason: "respuesta_sana_validada",
+    side: meta.direction || wanted,
+    check_ms: checkMs,
+    check_sec: Math.round(checkMs / 1000),
+    price: Number.isFinite(q) ? q : null,
+    radar: meta,
+    message: `Respuesta Sana validada ${Math.round(checkMs / 1000)}s: ${meta.direction === "CALL" ? "COMPRA" : "VENTA"} ${meta.score}/${meta.maxScore}`,
+  };
+}
+
+function formatRespuestaSanaRadarSummary(radar) {
+  if (!radar || typeof radar !== "object") return "radar pendiente";
+  const score = Number.isFinite(Number(radar.score)) ? Number(radar.score) : 0;
+  const max = Number.isFinite(Number(radar.maxScore)) ? Number(radar.maxScore) : 8;
+  const dir = normalizeSignalConfirmationSide(radar.direction) === "PUT" ? "VENTA" : "COMPRA";
+  const first = radar.first || radar.firstMove || "—";
+  const second = radar.second || radar.secondMove || "—";
+  const dominio = radar.dominio || "—";
+  return `${dir} ${score}/${max} · 1º ${first} · 2º ${second} · Dominio ${dominio}`;
+}
+
 function evaluateMinute(minute, opts = {}) {
   if (areSignalsPaused()) return false;
 
@@ -16511,7 +16794,10 @@ function evaluateMinute(minute, opts = {}) {
   for (const c of candidates) {
     let match = null;
     let matchSource = "SNR_INTERACCION_NIVEL";
-    if (isAlcistaSanaMode(activeMode)) {
+    if (isRespuestaSanaMode(activeMode)) {
+      match = analyzeRespuestaSanaCandidate(c, minute, evalOptions);
+      matchSource = "RESPUESTA_SANA";
+    } else if (isAlcistaSanaMode(activeMode)) {
       match = analyzeAlcistaSanaCandidate(c, minute, evalOptions);
       matchSource = "ALCISTA_SANA";
     } else if (isDynamicLineMode(activeMode)) {
@@ -16535,6 +16821,7 @@ function evaluateMinute(minute, opts = {}) {
       giroPolaridadPoints: match.points,
       giroPolaridadMeta: match.meta,
       alcistaSanaMeta: match.alcistaSana || (match.meta?.levelMode === "alcista_sana" ? match.meta : null),
+      respuestaSanaMeta: match.respuestaSana || (match.meta?.levelMode === "respuesta_sana" ? match.meta : null),
       dynamicLineMeta: String(match.meta?.levelMode || "") === "dynamic_line" ? match.meta : null,
       matchSource,
     });
@@ -16561,6 +16848,7 @@ function evaluateMinute(minute, opts = {}) {
     giroPolaridad: bestMatch.giroPolaridadMeta,
     dynamicLine: bestMatch.dynamicLineMeta,
     alcistaSana: bestMatch.alcistaSanaMeta,
+    respuestaSana: bestMatch.respuestaSanaMeta,
     aiLocalMatchSource: bestMatch.matchSource,
     signalLifecycleStage: "prealert",
     signalPrealertAtSec: prealertSec,
