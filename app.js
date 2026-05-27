@@ -40,10 +40,11 @@
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
+// ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V64_AUTO58_NEXT_CANDLE_EXPIRY_20260527";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V65_AUTO_POST58_NEXT_CANDLE_EXPIRY_20260527";
 
 /*
   Mapa rápido de módulos:
@@ -1589,6 +1590,10 @@ let manualGiroButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
 const SIGNAL_AUTO_ENTRY_MS = 58000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
+// V65: en el timing de próxima vela no compramos apenas el reloj marca 58s.
+// Esperamos a que haya llegado el tick real >=58s y solo disparamos dentro de esta ventana.
+const SIGNAL_AUTO_POST58_MAX_MS = 59200;
+const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
@@ -2456,8 +2461,8 @@ function ensureExecutionModeButton() {
 /* =========================
    Timing de entrada Rise/Fall
    - AUTO 58 normal: duration 1m.
-   - AUTO 58 cierre 60: envía en 58s, intenta programar inicio en la próxima vela
-     y cierre fijo al segundo 60 de esa próxima vela.
+   - AUTO post-58 cierre 60: espera el tick real >=58s, envía después de ese tick,
+     intenta programar inicio en la próxima vela y fija el cierre al segundo 60.
 ========================= */
 function normalizeEntryTimingMode(mode) {
   const m = String(mode || "").toUpperCase().trim();
@@ -2482,11 +2487,11 @@ function isEntryTimingStoredNextCandle() {
   return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
 }
 function getEntryTimingModeLabel() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "⏱️ AUTO 58 → cierre 60 (solo RF)" : "⏱️ AUTO 58 → cierre 60";
+  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "⏱️ AUTO post-58 → cierre 60 (solo RF)" : "⏱️ AUTO post-58 → cierre 60";
   return "⏱️ AUTO 58 normal";
 }
 function getEntryTimingShortText() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "AUTO 58 → cierre 60 (solo Rise/Fall)" : "AUTO 58 prepara · cierre vela sig.";
+  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "AUTO post-58 → cierre 60 (solo Rise/Fall)" : "AUTO post-58 · cierre vela sig.";
   return "AUTO 58 · duración 1m";
 }
 function buildNextCandleTimingPlan(item = null) {
@@ -2546,7 +2551,7 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
       timing: {
         ...plan,
         variant: "date_start_plus_date_expiry",
-        message: "AUTO 58: inicio programado en la próxima vela y cierre fijo al segundo 60.",
+        message: "AUTO post-58: orden enviada luego del tick >=58s; inicio programado en próxima vela y cierre fijo al segundo 60.",
       },
     },
     {
@@ -2559,7 +2564,7 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
         ...plan,
         variant: "date_expiry_only",
         fallback_from: "date_start_plus_date_expiry",
-        message: "AUTO 58: Deriv no aceptó inicio programado; se usa cierre fijo al segundo 60.",
+        message: "AUTO post-58: Deriv no aceptó inicio programado; se usa cierre fijo al segundo 60.",
       },
     },
   ];
@@ -2648,7 +2653,7 @@ function applyEntryTimingModeUI() {
   btn.textContent = getEntryTimingModeLabel();
   btn.classList.toggle("active", storedNext && !shouldUseAutoHighLowExecution());
   btn.title = storedNext
-    ? "Envía la orden en AUTO 58, intenta inicio programado en la próxima vela y cierre fijo al segundo 60. Si Deriv no acepta date_start, prueba date_expiry fijo. Solo aplica a Rise/Fall."
+    ? "Espera el tick real >=58s, envía después de ese tick, intenta inicio programado en la próxima vela y fija el cierre al segundo 60. Si Deriv no acepta date_start, prueba date_expiry fijo. Solo aplica a Rise/Fall."
     : "Modo anterior: AUTO 58 con duración 1 minuto desde la entrada real del contrato.";
 }
 function ensureEntryTimingModeButton() {
@@ -2673,7 +2678,7 @@ function ensureEntryTimingModeButton() {
     saveEntryTimingMode();
     applyEntryTimingModeUI();
     updateModalCandleStatusUI();
-    toast(entryTimingMode === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY ? "⏱️ AUTO 58 → cierre 60 ON" : "⏱️ AUTO 58 normal ON", 1700);
+    toast(entryTimingMode === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY ? "⏱️ AUTO post-58 → cierre 60 ON" : "⏱️ AUTO 58 normal ON", 1700);
   };
   applyEntryTimingModeUI();
   return btn;
@@ -4611,16 +4616,43 @@ function buildLiveManualTradeItem(side = "CALL") {
   };
 }
 
-function isLiveAutoEntryWindowOpen(sym = liveReplaySymbol) {
+function getLiveReplayLastTickMs(sym = liveReplaySymbol) {
+  const ticks = getLiveReplayTicks(sym);
+  return ticks.length ? Number(ticks[ticks.length - 1].ms) || 0 : 0;
+}
+function getPost58EntryReadinessForLive(sym = liveReplaySymbol) {
   const ms = getLiveReplayMsInMinute(sym);
-  return ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000;
+  const lastTickMs = getLiveReplayLastTickMs(sym);
+
+  if (!isNextCandleExpiryTiming()) {
+    return { ok: ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000, ms, lastTickMs, reason: "duration_1m_window" };
+  }
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_58" };
+  }
+  if (lastTickMs < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_tick_58" };
+  }
+  if (ms > SIGNAL_AUTO_POST58_MAX_MS) {
+    return { ok: false, late: true, ms, lastTickMs, reason: "tick_58_tarde" };
+  }
+  return { ok: true, ms, lastTickMs, reason: "post_tick_58_ok" };
+}
+function isLiveAutoEntryWindowOpen(sym = liveReplaySymbol) {
+  return !!getPost58EntryReadinessForLive(sym).ok;
 }
 function formatLiveAutoEntryWaitText(sym = liveReplaySymbol) {
-  const ms = getLiveReplayMsInMinute(sym);
-  const sec = Math.max(0, Math.min(60, Math.floor(ms / 1000)));
-  if (sec < SIGNAL_AUTO_ENTRY_SEC) return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
-  if (sec >= 60) return "vela cerrada";
-  return `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`;
+  const r = getPost58EntryReadinessForLive(sym);
+  const sec = Math.max(0, Math.min(60, Math.floor(Number(r.ms || 0) / 1000)));
+  if (!isNextCandleExpiryTiming()) {
+    if (sec < SIGNAL_AUTO_ENTRY_SEC) return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    if (sec >= 60) return "vela cerrada";
+    return `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`;
+  }
+  if (r.reason === "esperando_58") return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO post-58`;
+  if (r.reason === "esperando_tick_58") return "esperando tick real de 58s";
+  if (r.late) return `cancelado: pasó ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`;
+  return "AUTO post-58 listo";
 }
 async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -4630,7 +4662,14 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
   const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
   const key = getLiveSignalKey(sym);
   if (liveAutoEntryState?.minuteKey === key && liveAutoEntryState?.attempted) return false;
-  if (!isLiveAutoEntryWindowOpen(sym)) return false;
+  const post58 = getPost58EntryReadinessForLive(sym);
+  if (!post58.ok) {
+    if (post58.late) {
+      liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: `Cancelada: no llegó a comprar dentro de la ventana post-58 (${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s).` };
+      setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: llegó tarde después de ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`, "error");
+    }
+    return false;
+  }
   if (tradeInFlight) return false;
 
   const enabledSide = getLiveEnabledTradeSide();
@@ -4649,13 +4688,14 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
     reason: String(reason || "LIVE_AUTO_58"),
     at: Date.now(),
     confirmation_status: getLiveConfirmationStatusText(),
+    post58_readiness: post58,
   };
 
   liveAutoEntryState = { minuteKey: key, attempted: true, status: "sending", side: safeSide, contract_id: "", error: "" };
 
   try {
     setLiveTradeButtonsBusy(true);
-    setLiveTradeStatus(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+    setLiveTradeStatus(`🚀 AUTO post-58: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
 
     history.push(item);
     if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -7875,6 +7915,61 @@ function getSignalConfirmationMs(item = modalCurrentItem) {
       : Math.floor(now / 60000) * 60000);
   return Math.max(0, Math.min(60000, now - minuteStart));
 }
+function getSignalLastTickMsInMinute(item = modalCurrentItem) {
+  if (!item) return 0;
+  const minute = Number(item.minute);
+  const sym = String(item.symbol || "");
+  let ticks = [];
+
+  const liveTicks = Number.isFinite(minute) && sym ? minuteData?.[minute]?.[sym] : null;
+  if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
+  else if (Array.isArray(item.ticks) && item.ticks.length) ticks = item.ticks;
+
+  const clean = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => Number(p?.ms))
+    .filter((ms) => Number.isFinite(ms));
+  return clean.length ? Math.max(...clean) : 0;
+}
+function getPost58EntryReadinessForSignal(item = modalCurrentItem) {
+  const ms = getSignalConfirmationMs(item);
+
+  // El modo viejo conserva su comportamiento: desde 58s hasta antes de cerrar la vela.
+  if (!isNextCandleExpiryTiming()) {
+    return { ok: ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000, ms, lastTickMs: getSignalLastTickMsInMinute(item), reason: "duration_1m_window" };
+  }
+
+  const lastTickMs = getSignalLastTickMsInMinute(item);
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_58" };
+  }
+  if (lastTickMs < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_tick_58" };
+  }
+  if (ms > SIGNAL_AUTO_POST58_MAX_MS) {
+    return { ok: false, late: true, ms, lastTickMs, reason: "tick_58_tarde" };
+  }
+  return { ok: true, ms, lastTickMs, reason: "post_tick_58_ok" };
+}
+function cancelSignalAutoEntryLate(item, side, readiness, reason = "AUTO_POST58_LATE") {
+  if (!item || item?.signalAutoEntry?.attempted) return false;
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  item.signalAutoEntry = {
+    type: "AUTO_58_REAL",
+    attempted: true,
+    status: "cancelled",
+    side: normalizeSignalConfirmationSide(side) || "",
+    ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
+    sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
+    reason: String(reason || "AUTO_POST58_LATE"),
+    at: Date.now(),
+    error: `Cancelada: no llegó a comprar dentro de la ventana post-58 (${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s).`,
+    post58_readiness: { ...(readiness || {}) },
+  };
+  saveHistory(history);
+  if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
+  toast(`⛔ AUTO ${label} cancelada: llegó tarde después de ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`, 2200);
+  return true;
+}
 function addSignalConfirmation(side = "CALL") {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -8325,6 +8420,12 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   const side = getSignalEnabledTradeSide(item);
   if (!side) return false;
 
+  const post58 = getPost58EntryReadinessForSignal(item);
+  if (!post58.ok) {
+    if (post58.late) cancelSignalAutoEntryLate(item, side, post58, "AUTO_POST58_TICK_LATE");
+    return false;
+  }
+
   let gate = null;
   try {
     gate = assertSignalSNREntryGateAt57(side, item);
@@ -8346,11 +8447,12 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     at: Date.now(),
     confirmation_status: getSignalConfirmationStatusText(item),
     snr_entry_gate: gate,
+    post58_readiness: post58,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO post-58: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -11464,6 +11566,12 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     try {
       Object.assign(tradeExtra, compactAuditFields(extractContractAuditFields(res?.buy || {})));
       if (!tradeExtra.purchase_time) tradeExtra.purchase_time = Math.floor(serverNowMs() / 1000);
+      if (itemCtx?.signalAutoEntry?.post58_readiness) {
+        tradeExtra.entry_trigger_mode = isNextCandleExpiryTiming() ? "POST_TICK_58" : "AUTO58_NORMAL";
+        tradeExtra.entry_trigger_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.ms || 0));
+        tradeExtra.entry_trigger_last_tick_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.lastTickMs || 0));
+        tradeExtra.entry_trigger_reason = String(itemCtx.signalAutoEntry.post58_readiness.reason || "");
+      }
     } catch {}
 
     if (isC100Active()) markC100PendingContract(cid);
