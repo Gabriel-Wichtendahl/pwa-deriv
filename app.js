@@ -39,13 +39,14 @@
 // ✅ V57: En vivo opera igual que Señales: puntos manuales y ejecución automática al segundo 58
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
+// ✅ V68: Gestión IC2 5% escalonada por saldo hasta 2000, separada DEMO/REAL
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V66_PREPROPOSAL_POST58_CIERRE60_DISCIPLINA_OFF_20260527";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V68_IC2_5_ESCALONADO_HASTA_2000_DEMO_REAL_20260527";
 
 /*
   Mapa rápido de módulos:
@@ -122,11 +123,23 @@ const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no in
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
 const C100_MAX_LEVEL = 2;
-const C100_MODE_LABEL = "IC2";
+const C100_MODE_LABEL = "IC2 + 5% escalonado";
 const C100_LEVELS = [
   { level: 1, base: DEFAULT_STAKE, compound: DEFAULT_STAKE },
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
+
+// V68: stake base IC2 por escalones de saldo.
+// Menos de 210 => base 100 => stake 5.
+// 210/310/410/510/610... => base 200/300/400/500/600...
+// Tope final: al llegar a 2000 exactos o más => base 2000 / stake 100.
+const C100_BALANCE_STEP_ENABLED = true;
+const C100_BALANCE_STEP_PERCENT = 0.05;
+const C100_BALANCE_STEP_MIN_BASE = 100;
+const C100_BALANCE_STEP_MAX_BASE = 2000;
+const C100_BALANCE_STEP_FIRST_THRESHOLD = 210;
+const C100_BALANCE_STEP_SIZE = 100;
+const ACCOUNT_BALANCE_CACHE_TTL_MS = 15000;
 
 const EXECUTION_MODE_KEY = "executionMode_v1";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
@@ -176,6 +189,10 @@ let autoOpenChartOnSignal = false;
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
 let c100PanelEl = null;
+const accountBalanceCache = {
+  [ACCOUNT_MODE_DEMO]: { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 },
+  [ACCOUNT_MODE_REAL]: { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 },
+};
 
 /* =========================
    Disciplina
@@ -1997,10 +2014,10 @@ function ensureTradingAccountButton() {
     syncAccountScopedSettingsUI();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
-    if (c100State) {
-      c100State.accountMode = activeTradingAccount || ACCOUNT_MODE_DEMO;
-      saveC100State();
-    }
+    // V67: la gestión IC2 queda separada por cuenta. Al cambiar DEMO/REAL,
+    // cargamos el estado propio de esa cuenta en vez de pisar el anterior.
+    loadC100State();
+    void refreshAccountBalance({ force: true }).catch(() => {});
     updateC100PanelUI();
     updateDisciplineLockUI(false);
     if (chartModal && !chartModal.classList.contains("hidden")) {
@@ -2068,9 +2085,150 @@ function applyTradingAccountBannerUI() {
    Interés Compuesto 2 niveles
    Nota: se conservan nombres internos C100* para no romper integraciones antiguas.
 ========================= */
+function getCurrentAccountScope() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
+}
+function getScopedStorageKey(baseKey) {
+  return `${baseKey}_${getCurrentAccountScope()}`;
+}
+function getC100StateStorageKey() {
+  return getScopedStorageKey(C100_STATE_KEY);
+}
+function getScopedTradeStakeKey() {
+  return getScopedStorageKey(TRADE_STAKE_KEY);
+}
+function setCachedAccountBalance(balance, currency = DEFAULT_CURRENCY) {
+  const b = Number(balance);
+  if (!Number.isFinite(b)) return null;
+  const scope = getCurrentAccountScope();
+  accountBalanceCache[scope] = {
+    balance: Number(b.toFixed(2)),
+    currency: String(currency || DEFAULT_CURRENCY),
+    updatedAt: Date.now(),
+  };
+  try {
+    localStorage.setItem(getScopedStorageKey("derivAccountBalanceCache_v1"), JSON.stringify(accountBalanceCache[scope]));
+  } catch {}
+  return accountBalanceCache[scope];
+}
+function loadCachedAccountBalance() {
+  const scope = getCurrentAccountScope();
+  try {
+    const raw = localStorage.getItem(getScopedStorageKey("derivAccountBalanceCache_v1"));
+    if (raw) {
+      const obj = JSON.parse(raw);
+      const b = Number(obj?.balance);
+      if (Number.isFinite(b)) {
+        accountBalanceCache[scope] = {
+          balance: Number(b.toFixed(2)),
+          currency: String(obj?.currency || DEFAULT_CURRENCY),
+          updatedAt: Number(obj?.updatedAt || 0),
+        };
+      }
+    }
+  } catch {}
+  return accountBalanceCache[scope] || { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 };
+}
+function getCachedAccountBalance() {
+  const scope = getCurrentAccountScope();
+  const c = accountBalanceCache[scope];
+  if (c && Number.isFinite(Number(c.balance))) return c;
+  return loadCachedAccountBalance();
+}
+function adjustCachedAccountBalanceByProfit(profit) {
+  const p = Number(profit);
+  if (!Number.isFinite(p) || p === 0) return;
+  const c = getCachedAccountBalance();
+  const b = Number(c?.balance);
+  if (!Number.isFinite(b)) return;
+  setCachedAccountBalance(b + p, c.currency || DEFAULT_CURRENCY);
+}
+async function refreshAccountBalance({ force = false } = {}) {
+  const cached = getCachedAccountBalance();
+  if (!force && Number.isFinite(Number(cached.balance)) && Date.now() - Number(cached.updatedAt || 0) < ACCOUNT_BALANCE_CACHE_TTL_MS) {
+    return cached;
+  }
+  if (!ws || ws.readyState !== 1 || !getDerivToken()) return cached;
+
+  const res = await wsRequest({ balance: 1 }, 10000);
+  if (res?.error) throw new Error(res.error.message || "balance error");
+  const payload = res?.balance || {};
+  const b = Number(payload.balance ?? payload.amount ?? payload);
+  const cur = payload.currency || DEFAULT_CURRENCY;
+  return setCachedAccountBalance(b, cur) || cached;
+}
+function getC100StepInfo(balanceRaw = null) {
+  const cached = getCachedAccountBalance();
+  const balance = Number(balanceRaw ?? cached?.balance);
+  const hasBalance = Number.isFinite(balance);
+
+  if (!C100_BALANCE_STEP_ENABLED || !hasBalance) {
+    const manualStake = Number(getTradeStake());
+    const safeStake = Number.isFinite(manualStake) && manualStake > 0 ? manualStake : DEFAULT_STAKE;
+    return {
+      enabled: false,
+      hasBalance,
+      balance: hasBalance ? Number(balance.toFixed(2)) : null,
+      currency: cached?.currency || DEFAULT_CURRENCY,
+      base: null,
+      stake: Number(safeStake.toFixed(2)),
+      nextThreshold: null,
+      downThreshold: null,
+      capped: false,
+      source: hasBalance ? "manual_fallback" : "manual_sin_balance",
+    };
+  }
+
+  let base = C100_BALANCE_STEP_MIN_BASE;
+  if (balance >= C100_BALANCE_STEP_MAX_BASE) {
+    // Opción B: el último escalón se activa al llegar a 2000 exactos, no en 2010.
+    base = C100_BALANCE_STEP_MAX_BASE;
+  } else if (balance >= C100_BALANCE_STEP_FIRST_THRESHOLD) {
+    // Escalones: 210=>200, 310=>300, 410=>400, 510=>500, 610=>600...
+    base = Math.floor((balance - 10) / C100_BALANCE_STEP_SIZE) * C100_BALANCE_STEP_SIZE;
+  }
+
+  base = Math.max(C100_BALANCE_STEP_MIN_BASE, Math.min(C100_BALANCE_STEP_MAX_BASE, base));
+  const stake = Number((base * C100_BALANCE_STEP_PERCENT).toFixed(2));
+  const nextThreshold = base >= C100_BALANCE_STEP_MAX_BASE
+    ? null
+    : Math.min(C100_BALANCE_STEP_MAX_BASE, base + 110);
+  const downThreshold = base <= C100_BALANCE_STEP_MIN_BASE
+    ? null
+    : (base >= C100_BALANCE_STEP_MAX_BASE ? C100_BALANCE_STEP_MAX_BASE : base + 10);
+
+  return {
+    enabled: true,
+    hasBalance: true,
+    balance: Number(balance.toFixed(2)),
+    currency: cached?.currency || DEFAULT_CURRENCY,
+    base,
+    stake,
+    nextThreshold,
+    downThreshold,
+    capped: base >= C100_BALANCE_STEP_MAX_BASE,
+    source: "balance_step_5pct",
+  };
+}
 function getC100BaseStake() {
-  const n = Number(getTradeStake());
-  return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : Number(DEFAULT_STAKE.toFixed(2));
+  const info = getC100StepInfo();
+  return Number(info.stake.toFixed(2));
+}
+function getC100TradeAuditExtra(stakeUsed = null) {
+  if (!isC100Active()) return {};
+  const info = getC100StepInfo();
+  return {
+    c100_balance_step_enabled: !!info.enabled,
+    c100_balance_step_source: String(info.source || ""),
+    c100_balance: Number.isFinite(Number(info.balance)) ? Number(info.balance) : null,
+    c100_balance_currency: String(info.currency || DEFAULT_CURRENCY),
+    c100_balance_base: Number.isFinite(Number(info.base)) ? Number(info.base) : null,
+    c100_base_stake: Number(info.stake || 0),
+    c100_effective_stake: Number.isFinite(Number(stakeUsed)) ? Number(stakeUsed) : Number(getC100Stake()),
+    c100_next_threshold: info.nextThreshold,
+    c100_down_threshold: info.downThreshold,
+    c100_step_cap: info.capped ? C100_BALANCE_STEP_MAX_BASE : null,
+  };
 }
 function getC100Level(level = 1) {
   const base = getC100BaseStake();
@@ -2131,19 +2289,25 @@ function normalizeC100State(raw) {
 }
 function loadC100State() {
   try {
-    const raw = localStorage.getItem(C100_STATE_KEY);
+    const scopedKey = getC100StateStorageKey();
+    let raw = localStorage.getItem(scopedKey);
+    // Migración suave: si venías usando la clave vieja, solo la toma para DEMO.
+    if (raw === null && getCurrentAccountScope() === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(C100_STATE_KEY);
     c100State = normalizeC100State(raw ? JSON.parse(raw) : null);
+    c100State.accountMode = getCurrentAccountScope();
   } catch {
     c100State = makeFreshC100State();
   }
+  loadCachedAccountBalance();
   saveC100State();
   return c100State;
 }
 function saveC100State() {
   try {
     if (!c100State) c100State = makeFreshC100State();
+    c100State.accountMode = getCurrentAccountScope();
     c100State.updatedAt = Date.now();
-    localStorage.setItem(C100_STATE_KEY, JSON.stringify(c100State));
+    localStorage.setItem(getC100StateStorageKey(), JSON.stringify(c100State));
   } catch {}
 }
 function resetC100Gestion({ keepDay = true, keepEnabled = true } = {}) {
@@ -2187,7 +2351,9 @@ function getC100StatusText() {
   if (!c100State.enabled) return "Desactivado";
   if (c100State.pendingContractId) return "Contrato pendiente";
   if (Number(c100State.compoundStep || 0) === 1) return "Nivel 2: compuesto listo";
-  return "Nivel 1: stake base";
+  const info = getC100StepInfo();
+  if (info.enabled) return `Nivel 1: 5% de base ${info.base}`;
+  return "Nivel 1: stake manual";
 }
 function getC100DayNet() {
   return Number(c100State?.dayProfit || 0) - Number(c100State?.dayLoss || 0);
@@ -2268,6 +2434,10 @@ function updateC100PanelUI() {
   const baseStake = getC100BaseStake();
   const net = getC100DayNet();
   const status = getC100StatusText();
+  const stepInfo = getC100StepInfo();
+  const balanceTxt = Number.isFinite(Number(stepInfo.balance)) ? `$${Number(stepInfo.balance).toFixed(2)} ${escapeHtml(stepInfo.currency || DEFAULT_CURRENCY)}` : "sin saldo leído";
+  const nextTxt = stepInfo.nextThreshold ? `$${Number(stepInfo.nextThreshold).toFixed(2)}` : "tope 2000";
+  const downTxt = stepInfo.downThreshold ? `$${Number(stepInfo.downThreshold).toFixed(2)}` : "—";
 
   if (badge) {
     badge.textContent = active ? `ON · N${Number(c100State.compoundStep || 0) + 1}/2` : "OFF";
@@ -2288,10 +2458,13 @@ function updateC100PanelUI() {
     info.innerHTML = `
       <div>Modo: <b>${C100_MODE_LABEL}</b> · Cuenta activa: <b>${getTradingAccountLabel()}</b></div>
       <div>Timing: <b>${escapeHtml(getEntryTimingShortText())}</b></div>
-      <div>Regla: <b>Nivel 1 stake base → si gana, Nivel 2 stake + ganancia → reset</b></div>
+      <div>Saldo leído: <b>${balanceTxt}</b></div>
+      <div>Regla: <b>5% escalonado cada $100 hasta saldo $2000 · tope stake $100</b></div>
       <div>Nivel actual: <b>${Number(c100State.compoundStep || 0) + 1} / ${C100_MAX_LEVEL}</b></div>
+      <div>Base activa: <b>${stepInfo.enabled ? "$" + Number(stepInfo.base).toFixed(2) : "manual"}</b></div>
       <div>Stake base: <b>$${baseStake.toFixed(2)}</b></div>
       <div>Próximo stake: <b>$${stake.toFixed(2)}</b></div>
+      <div>Próximo aumento: <b>${nextTxt}</b> · Baja al anterior si cae de: <b>${downTxt}</b></div>
       <div>Estado: <b>${escapeHtml(status)}</b></div>
       <div>Ganancia/Pérdida del día: <b>${net >= 0 ? "+" : "-"}$${Math.abs(net).toFixed(2)}</b></div>
       ${c100State.pendingContractId ? `<div>Contrato pendiente: <b>${escapeHtml(c100State.pendingContractId)}</b></div>` : ""}
@@ -2330,6 +2503,7 @@ function updateC100AfterResult(result, profit = null) {
 
   c100State.pendingContractId = "";
   c100State.lastResult = normalized;
+  if (Number.isFinite(profitNum)) adjustCachedAccountBalanceByProfit(profitNum);
 
   if (normalized === "ITM") {
     const gain = Number.isFinite(profitNum) && profitNum > 0 ? profitNum : stakeUsed * (C100_PAYOUT_REQUIRED / 100);
@@ -2693,6 +2867,10 @@ async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preprop
   if (!isAutoPreProposalWindow(item)) return false;
 
   const symbol = String(item.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
+  try {
+    await ensureAuthorized();
+    await refreshAccountBalance({ force: false });
+  } catch {}
   const stake = Number(getEffectiveTradeStake().toFixed(2));
   const existing = getValidAutoPreProposal(item, safeSide, symbol, stake);
   if (existing) return true;
@@ -11383,7 +11561,12 @@ function clearDerivToken() {
 }
 
 function getTradeStake() {
-  const raw = localStorage.getItem(TRADE_STAKE_KEY);
+  let raw = null;
+  try {
+    raw = localStorage.getItem(getScopedTradeStakeKey());
+    // Migración suave: si no existe stake específico y estás en DEMO, usa el viejo.
+    if (raw === null && getCurrentAccountScope() === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(TRADE_STAKE_KEY);
+  } catch {}
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_STAKE;
 }
@@ -11391,7 +11574,7 @@ function setTradeStake(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return false;
   try {
-    localStorage.setItem(TRADE_STAKE_KEY, String(v));
+    localStorage.setItem(getScopedTradeStakeKey(), String(v));
     return true;
   } catch {
     return false;
@@ -11399,7 +11582,7 @@ function setTradeStake(n) {
 }
 function clearTradeStake() {
   try {
-    localStorage.removeItem(TRADE_STAKE_KEY);
+    localStorage.removeItem(getScopedTradeStakeKey());
   } catch {}
 }
 
@@ -11642,6 +11825,11 @@ async function ensureAuthorized() {
   authorizeInFlight = wsRequest({ authorize: token }, 15000)
     .then((res) => {
       if (res?.error) throw new Error(res.error.message || "authorize error");
+      try {
+        const auth = res?.authorize || {};
+        const b = Number(auth.balance);
+        if (Number.isFinite(b)) setCachedAccountBalance(b, auth.currency || DEFAULT_CURRENCY);
+      } catch {}
       isAuthorized = true;
       return true;
     })
@@ -11681,6 +11869,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
   try {
     await ensureAuthorized();
+    try { await refreshAccountBalance({ force: true }); } catch {}
     startNewDisciplineWindowIfNeeded();
 
     const symbol =
@@ -11688,7 +11877,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     const stake = Number(getEffectiveTradeStake().toFixed(2));
     let res = null;
     let contractLabel = side;
-    let tradeExtra = { side, symbol, stake };
+    let tradeExtra = { side, symbol, stake, ...getC100TradeAuditExtra(stake) };
     const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
       ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
       : null;
@@ -11924,6 +12113,7 @@ function initTokenAndStakeUI() {
       if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
       resetAuthState();
+      void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
       syncAccountScopedSettingsUI();
       toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
       alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
@@ -16903,6 +17093,7 @@ function connect() {
     }, 350);
 
     updateDisciplineLockUI(false);
+    void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
     await resubscribePendingContracts();
   };
 
