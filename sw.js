@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v65-auto-post58-next-candle-expiry";
+const CACHE = "deriv-assets-v66-preproposal-post58-cierre60";
 
 const ASSETS = [
   "./",

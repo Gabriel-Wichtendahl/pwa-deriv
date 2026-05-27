@@ -41,10 +41,11 @@
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
+// ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V65_AUTO_POST58_NEXT_CANDLE_EXPIRY_20260527";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V66_PREPROPOSAL_POST58_CIERRE60_DISCIPLINA_OFF_20260527";
 
 /*
   Mapa rápido de módulos:
@@ -1594,6 +1595,10 @@ const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 // Esperamos a que haya llegado el tick real >=58s y solo disparamos dentro de esta ventana.
 const SIGNAL_AUTO_POST58_MAX_MS = 59200;
 const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
+// V66: preparar proposal ANTES del post-58 para que en 58 solo se compre.
+const SIGNAL_AUTO_PREPROPOSAL_START_MS = 56000;
+const SIGNAL_AUTO_PREPROPOSAL_END_MS = 58000;
+const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 10000;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
@@ -1827,6 +1832,8 @@ let liveReplayLastDrawAt = 0;
 let liveSignalConfirmations = [];
 let liveSignalMinuteKey = "";
 let liveAutoEntryState = { minuteKey: "", attempted: false, status: "idle", side: "", contract_id: "", error: "" };
+const autoPreProposalInFlight = new Set();
+const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 
 // V32: caché específica para la vista Velas 1m del modal.
@@ -2463,6 +2470,7 @@ function ensureExecutionModeButton() {
    - AUTO 58 normal: duration 1m.
    - AUTO post-58 cierre 60: espera el tick real >=58s, envía después de ese tick,
      intenta programar inicio en la próxima vela y fija el cierre al segundo 60.
+   - V66: la proposal se prepara desde 56s para que al post-58 la compra sea inmediata.
 ========================= */
 function normalizeEntryTimingMode(mode) {
   const m = String(mode || "").toUpperCase().trim();
@@ -2487,11 +2495,11 @@ function isEntryTimingStoredNextCandle() {
   return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
 }
 function getEntryTimingModeLabel() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "⏱️ AUTO post-58 → cierre 60 (solo RF)" : "⏱️ AUTO post-58 → cierre 60";
+  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "⏱️ AUTO pre-56/post-58 → cierre 60 (solo RF)" : "⏱️ AUTO pre-56/post-58 → cierre 60";
   return "⏱️ AUTO 58 normal";
 }
 function getEntryTimingShortText() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "AUTO post-58 → cierre 60 (solo Rise/Fall)" : "AUTO post-58 · cierre vela sig.";
+  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "AUTO pre-56/post-58 → cierre 60 (solo Rise/Fall)" : "AUTO prearmado · cierre vela sig.";
   return "AUTO 58 · duración 1m";
 }
 function buildNextCandleTimingPlan(item = null) {
@@ -2551,7 +2559,7 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
       timing: {
         ...plan,
         variant: "date_start_plus_date_expiry",
-        message: "AUTO post-58: orden enviada luego del tick >=58s; inicio programado en próxima vela y cierre fijo al segundo 60.",
+        message: "AUTO pre-56/post-58: proposal prearmada; compra luego del tick >=58s; inicio programado en próxima vela y cierre fijo al segundo 60.",
       },
     },
     {
@@ -2564,7 +2572,7 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
         ...plan,
         variant: "date_expiry_only",
         fallback_from: "date_start_plus_date_expiry",
-        message: "AUTO post-58: Deriv no aceptó inicio programado; se usa cierre fijo al segundo 60.",
+        message: "AUTO pre-56/post-58: Deriv no aceptó inicio programado; se usa proposal prearmada con cierre fijo al segundo 60.",
       },
     },
   ];
@@ -2646,6 +2654,181 @@ async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, tim
   }
   throw new Error(`Deriv rechazó la compra con timing de próxima vela (${errors.join(" | ")}). Cambiá a AUTO 58 normal si querés usar duration 1m.`);
 }
+
+function getAutoPreProposalKey(item, side, symbol, stake) {
+  const plan = buildNextCandleTimingPlan(item);
+  const id = String(item?.id || `AUTO_PRE_${plan.current_minute}_${symbol}_${side}`);
+  return `${id}|${String(side || "")}|${String(symbol || "")}|${Number(stake || 0).toFixed(2)}|${plan.next_expiry_epoch_sec}`;
+}
+function isAutoPreProposalWindow(item = null) {
+  const ms = getSignalConfirmationMs(item);
+  return ms >= SIGNAL_AUTO_PREPROPOSAL_START_MS && ms <= SIGNAL_AUTO_PREPROPOSAL_END_MS;
+}
+function getValidAutoPreProposal(item, side, symbol, stake) {
+  const pp = item?.signalAutoPreProposal;
+  if (!pp || pp.status !== "ready") return null;
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide || String(pp.side || "") !== safeSide) return null;
+  if (String(pp.symbol || "") !== String(symbol || "")) return null;
+  const expectedStake = Number(stake);
+  const ppStake = Number(pp.stake);
+  if (!Number.isFinite(expectedStake) || !Number.isFinite(ppStake) || Math.abs(expectedStake - ppStake) > 0.005) return null;
+  if (!pp.proposal_id || !Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return null;
+  const plan = buildNextCandleTimingPlan(item);
+  if (Number(pp?.timing?.next_expiry_epoch_sec || 0) !== Number(plan.next_expiry_epoch_sec)) return null;
+  if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
+  return pp;
+}
+function markAutoPreProposalOnItem(item, payload) {
+  if (!item) return;
+  item.signalAutoPreProposal = payload && typeof payload === "object" ? { ...payload } : null;
+  try { saveHistory(history); } catch {}
+  try { if (modalCurrentItem && item.id && modalCurrentItem.id === item.id) updateSignalConfirmationUI(); } catch {}
+}
+async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preproposal") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!item || !safeSide) return false;
+  if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
+  if (item?.trade?.badge || item?.signalAutoEntry?.attempted) return false;
+  if (!isAutoPreProposalWindow(item)) return false;
+
+  const symbol = String(item.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
+  const stake = Number(getEffectiveTradeStake().toFixed(2));
+  const existing = getValidAutoPreProposal(item, safeSide, symbol, stake);
+  if (existing) return true;
+
+  const key = getAutoPreProposalKey(item, safeSide, symbol, stake);
+  if (autoPreProposalInFlight.has(key)) return false;
+  autoPreProposalInFlight.add(key);
+
+  markAutoPreProposalOnItem(item, {
+    status: "preparing",
+    side: safeSide,
+    symbol,
+    stake,
+    reason: String(reason || "auto_preproposal"),
+    prepared_start_at: Date.now(),
+    prepared_start_ms: Math.round(getSignalConfirmationMs(item)),
+  });
+
+  try {
+    await ensureAuthorized();
+    const pack = await requestRiseFallProposalWithTiming(safeSide, symbol, stake, item, 9000);
+    const proposal = pack?.res?.proposal;
+    const proposalId = proposal?.id ? String(proposal.id) : "";
+    const askPrice = Number(proposal?.ask_price);
+    const payout = Number(proposal?.payout);
+    if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
+      throw new Error("proposal prearmada inválida");
+    }
+    const profitPct = ((payout - askPrice) / askPrice) * 100;
+    markAutoPreProposalOnItem(item, {
+      status: "ready",
+      side: safeSide,
+      symbol,
+      stake,
+      proposal_id: proposalId,
+      ask_price: askPrice,
+      payout,
+      profit_pct: Number(profitPct),
+      timing: { ...(pack.timing || {}) },
+      label: String(pack.label || ""),
+      reason: String(reason || "auto_preproposal"),
+      prepared_at: Date.now(),
+      prepared_ms: Math.round(getSignalConfirmationMs(item)),
+      expires_local_at: Date.now() + SIGNAL_AUTO_PREPROPOSAL_TTL_MS,
+    });
+    return true;
+  } catch (e) {
+    markAutoPreProposalOnItem(item, {
+      status: "error",
+      side: safeSide,
+      symbol,
+      stake,
+      reason: String(reason || "auto_preproposal"),
+      error: e?.message || String(e),
+      error_at: Date.now(),
+      error_ms: Math.round(getSignalConfirmationMs(item)),
+    });
+    return false;
+  } finally {
+    autoPreProposalInFlight.delete(key);
+  }
+}
+function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUTO_PREPROPOSAL_MISSING") {
+  if (!item || item?.signalAutoEntry?.attempted) return false;
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  item.signalAutoEntry = {
+    type: "AUTO_58_REAL",
+    attempted: true,
+    status: "cancelled",
+    side: normalizeSignalConfirmationSide(side) || "",
+    ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
+    sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
+    reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
+    at: Date.now(),
+    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o cambiá a AUTO 58 normal.",
+    post58_readiness: { ...(readiness || {}) },
+    preproposal: item?.signalAutoPreProposal || null,
+  };
+  saveHistory(history);
+  if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
+  toast(`⛔ AUTO ${label} cancelada: proposal no prearmada`, 2400);
+  return true;
+}
+function scanSignalAutoPreProposals() {
+  try {
+    if (areSignalsPaused()) return false;
+    if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
+    const nowMinute = currentServerMinute();
+    let started = false;
+    const candidates = (history || [])
+      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => getSignalEnabledTradeSide(it))
+      .filter((it) => isAutoPreProposalWindow(it));
+    for (const it of candidates) {
+      const side = getSignalEnabledTradeSide(it);
+      if (side) {
+        void prepareRiseFallAutoPreProposal(it, side, "signal_scan_56_58");
+        started = true;
+      }
+    }
+    return started;
+  } catch { return false; }
+}
+function getLiveAutoPreProposalKey(sym, side, minute, stake) {
+  return `LIVE|${String(sym || "")}|${Number(minute || 0)}|${String(side || "")}|${Number(stake || 0).toFixed(2)}`;
+}
+function getLiveCachedAutoPreProposal(sym, side, minute, stake) {
+  const key = getLiveAutoPreProposalKey(sym, side, minute, stake);
+  const pp = liveAutoPreProposalCache.get(key) || null;
+  if (!pp || pp.status !== "ready") return null;
+  if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
+  return pp;
+}
+async function prepareLiveAutoPreProposalIfNeeded(reason = "live_preproposal") {
+  try {
+    if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
+    if ((localStorage.getItem("activeView") || "signals") !== "live") return false;
+    ensureLiveSignalConfirmationsForCurrentMinute();
+    const side = getLiveEnabledTradeSide();
+    if (!side) return false;
+    const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+    const minute = getLiveReplayMinute(sym);
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    if (getLiveCachedAutoPreProposal(sym, side, minute, stake)) return true;
+    const tmp = buildLiveManualTradeItem(side);
+    tmp.id = `LIVE_PREPROPOSAL-${minute}-${sym}-${side}`;
+    if (!isAutoPreProposalWindow(tmp)) return false;
+    const ok = await prepareRiseFallAutoPreProposal(tmp, side, reason);
+    if (ok && tmp.signalAutoPreProposal?.status === "ready") {
+      liveAutoPreProposalCache.set(getLiveAutoPreProposalKey(sym, side, minute, stake), { ...tmp.signalAutoPreProposal });
+      return true;
+    }
+    if (tmp.signalAutoPreProposal) liveAutoPreProposalCache.set(getLiveAutoPreProposalKey(sym, side, minute, stake), { ...tmp.signalAutoPreProposal });
+  } catch {}
+  return false;
+}
 function applyEntryTimingModeUI() {
   const btn = pickEl("entryTimingModeBtn");
   if (!btn) return;
@@ -2653,7 +2836,7 @@ function applyEntryTimingModeUI() {
   btn.textContent = getEntryTimingModeLabel();
   btn.classList.toggle("active", storedNext && !shouldUseAutoHighLowExecution());
   btn.title = storedNext
-    ? "Espera el tick real >=58s, envía después de ese tick, intenta inicio programado en la próxima vela y fija el cierre al segundo 60. Si Deriv no acepta date_start, prueba date_expiry fijo. Solo aplica a Rise/Fall."
+    ? "Prepara proposal desde 56s; espera el tick real >=58s y ahí solo compra con proposal lista. Intenta inicio programado y fija cierre al segundo 60; si Deriv no acepta date_start usa date_expiry fijo. Solo aplica a Rise/Fall."
     : "Modo anterior: AUTO 58 con duración 1 minuto desde la entrada real del contrato.";
 }
 function ensureEntryTimingModeButton() {
@@ -2678,7 +2861,7 @@ function ensureEntryTimingModeButton() {
     saveEntryTimingMode();
     applyEntryTimingModeUI();
     updateModalCandleStatusUI();
-    toast(entryTimingMode === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY ? "⏱️ AUTO post-58 → cierre 60 ON" : "⏱️ AUTO 58 normal ON", 1700);
+    toast(entryTimingMode === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY ? "⏱️ AUTO pre-56/post-58 → cierre 60 ON" : "⏱️ AUTO 58 normal ON", 1700);
   };
   applyEntryTimingModeUI();
   return btn;
@@ -3585,6 +3768,7 @@ function startUiTimers() {
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
     updateModalCandleStatusUI();
     refreshOpenSignalStageBadges();
+    scanSignalAutoPreProposals();
     scanSignalAutoEntriesAt57();
   }, getUiIntervalMs());
 }
@@ -4379,6 +4563,7 @@ function updateLiveConfirmationUI(reason = "") {
       ? `VENTA lista: se ejecuta automáticamente en el segundo ${SIGNAL_AUTO_ENTRY_SEC}`
       : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
   }
+  if (enabled === "CALL" || enabled === "PUT") void prepareLiveAutoPreProposalIfNeeded("live_ui_56_58");
 }
 function addLiveSignalConfirmation(side = "CALL") {
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -4387,8 +4572,10 @@ function addLiveSignalConfirmation(side = "CALL") {
   liveSignalConfirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(liveReplaySymbol), at: Date.now(), source: "live_tab_points" });
   updateLiveConfirmationUI();
   const enabled = getLiveEnabledTradeSide();
-  if (enabled === "CALL" || enabled === "PUT") toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
-  else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
+  if (enabled === "CALL" || enabled === "PUT") {
+    toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
+    void prepareLiveAutoPreProposalIfNeeded("live_points_enabled");
+  } else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
 }
 function removeLiveSignalConfirmation() {
   ensureLiveSignalConfirmationsForCurrentMinute();
@@ -4678,6 +4865,16 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
   const item = buildLiveManualTradeItem(safeSide);
   item.liveManualTrade = false;
   item.liveAuto59Trade = true;
+  try {
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    const pp = getLiveCachedAutoPreProposal(sym, safeSide, getLiveReplayMinute(sym), stake);
+    if (pp) item.signalAutoPreProposal = { ...pp };
+  } catch {}
+  if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && !item.signalAutoPreProposal) {
+    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: "Cancelada: proposal no prearmada antes del post-58." };
+    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: proposal no prearmada`, "error");
+    return false;
+  }
   item.signalAutoEntry = {
     type: "LIVE_AUTO_58",
     attempted: true,
@@ -4695,7 +4892,7 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
 
   try {
     setLiveTradeButtonsBusy(true);
-    setLiveTradeStatus(`🚀 AUTO post-58: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+    setLiveTradeStatus(`🚀 AUTO prearmado: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
 
     history.push(item);
     if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -7982,8 +8179,10 @@ function addSignalConfirmation(side = "CALL") {
 
   const enabled = getSignalEnabledTradeSide(modalCurrentItem);
   if (enabled === "CALL") {
+    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else if (enabled === "PUT") {
+    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
@@ -8426,6 +8625,16 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     return false;
   }
 
+  if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()) {
+    const symbol = String(item.symbol || SYMBOLS[0] || "R_25");
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    const pp = getValidAutoPreProposal(item, side, symbol, stake);
+    if (!pp) {
+      cancelSignalAutoEntryNoPreProposal(item, side, post58, "AUTO_PREPROPOSAL_MISSING");
+      return false;
+    }
+  }
+
   let gate = null;
   try {
     gate = assertSignalSNREntryGateAt57(side, item);
@@ -8452,7 +8661,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO post-58: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO prearmado: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -9857,7 +10066,9 @@ function removePendingContract(cid) {
   if (!disciplinePendingContracts.length) stopPendingContractWatchdog();
 }
 function isDisciplineBypassedForCurrentAccount() {
-  return activeTradingAccount === ACCOUNT_MODE_REAL;
+  // V66: disciplina 3 ITM / 2 OTM desactivada para poder seguir probando.
+  // Se conserva el tracking de contratos pendientes para no duplicar compras IC2/WS.
+  return true;
 }
 function isTradeLockedNow() {
   if (isDisciplineBypassedForCurrentAccount()) return false;
@@ -9957,7 +10168,7 @@ function disciplineTagText() {
   if (isDisciplineBypassedForCurrentAccount()) {
     const pend = (disciplinePendingContracts || []).length;
     const pTxt = pend ? ` • Pendientes:${pend}` : "";
-    return `Disciplina REAL: libre para pruebas${pTxt}`;
+    return `Disciplina OFF para pruebas${pTxt}`;
   }
 
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
@@ -10015,7 +10226,10 @@ function startNewDisciplineWindowIfNeeded() {
 }
 function applyDisciplineOutcome(isWin) {
   updateDisciplineLockUI(false);
-  if (isDisciplineBypassedForCurrentAccount()) return;
+  if (isDisciplineBypassedForCurrentAccount()) {
+    // V66: no sumar 3 ITM / 2 OTM ni bloquear durante pruebas.
+    return;
+  }
   if (isTradeLockedNow()) return;
 
   if (isWin) disciplineWins += 1;
@@ -11475,6 +11689,10 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     let res = null;
     let contractLabel = side;
     let tradeExtra = { side, symbol, stake };
+    const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
+      ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
+      : null;
+    const isStrictAutoPrearmedEntry = !!(isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
     if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
     if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
     else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
@@ -11518,25 +11736,44 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         };
       }
     } else if (isC100Active()) {
-      // IC2 pide proposal antes de comprar para capturar payout y ejecutar con el stake compuesto exacto.
-      // V64: en Rise/Fall puede usar AUTO 58 con date_start/date_expiry para apuntar a la vela siguiente completa.
-      const proposalPack = await requestRiseFallProposalWithTiming(side, symbol, stake, itemCtx, 12000);
-      const proposalRes = proposalPack.res;
+      // V66: si es AUTO post-58 con cierre 60, la proposal debe estar prearmada desde 56-58s.
+      // Así en el post-58 solo enviamos buy(proposal_id), sin gastar tiempo pidiendo proposal.
+      let proposalId = "";
+      let askPrice = NaN;
+      let payout = NaN;
+      let profitPct = NaN;
+      let timing = null;
+      let usedPreProposal = false;
 
-      const proposal = proposalRes?.proposal;
-      const proposalId = proposal?.id ? String(proposal.id) : "";
-      const askPrice = Number(proposal?.ask_price);
-      const payout = Number(proposal?.payout);
+      if (autoPreProposal) {
+        proposalId = String(autoPreProposal.proposal_id || "");
+        askPrice = Number(autoPreProposal.ask_price);
+        payout = Number(autoPreProposal.payout);
+        profitPct = Number(autoPreProposal.profit_pct);
+        timing = autoPreProposal.timing || null;
+        usedPreProposal = true;
+      } else {
+        if (isStrictAutoPrearmedEntry) {
+          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
+        }
+        const proposalPack = await requestRiseFallProposalWithTiming(side, symbol, stake, itemCtx, 12000);
+        const proposal = proposalPack?.res?.proposal;
+        proposalId = proposal?.id ? String(proposal.id) : "";
+        askPrice = Number(proposal?.ask_price);
+        payout = Number(proposal?.payout);
+        profitPct = ((payout - askPrice) / askPrice) * 100;
+        timing = proposalPack.timing;
+      }
+
       if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
         throw new Error("Deriv no confirmó proposal válida para IC2.");
       }
-      const profitPct = ((payout - askPrice) / askPrice) * 100;
       assertC100PayoutOK(profitPct);
 
       res = await wsRequest({ buy: proposalId, price: askPrice }, 20000);
       tradeExtra = {
         ...tradeExtra,
-        exec_mode: "IC2_RISE_FALL_PROPOSAL",
+        exec_mode: usedPreProposal ? "IC2_RISE_FALL_PREPROPOSAL" : "IC2_RISE_FALL_PROPOSAL",
         contract_type: side,
         payout_pct: Number(profitPct),
         proposal_id: proposalId,
@@ -11544,17 +11781,41 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         ic2_mode: C100_MODE_LABEL,
         ic2_level: c100State?.level || null,
         ic2_step: c100State?.compoundStep || 0,
-        ...getRiseFallTimingExtra(proposalPack.timing),
+        entry_preproposal_used: !!usedPreProposal,
+        entry_preproposal_prepared_ms: usedPreProposal ? Math.round(Number(autoPreProposal.prepared_ms || 0)) : null,
+        entry_preproposal_age_ms: usedPreProposal ? Math.max(0, Date.now() - Number(autoPreProposal.prepared_at || Date.now())) : null,
+        entry_preproposal_reason: usedPreProposal ? String(autoPreProposal.reason || "") : "",
+        ...getRiseFallTimingExtra(timing),
       };
     } else {
-      const buyPack = await buyRiseFallDirectWithTiming(side, symbol, stake, itemCtx, 20000);
-      res = buyPack.res;
-      tradeExtra = {
-        ...tradeExtra,
-        exec_mode: "RISE_FALL_BUY",
-        contract_type: side,
-        ...getRiseFallTimingExtra(buyPack.timing),
-      };
+      if (autoPreProposal) {
+        res = await wsRequest({ buy: autoPreProposal.proposal_id, price: Number(autoPreProposal.ask_price) }, 20000);
+        tradeExtra = {
+          ...tradeExtra,
+          exec_mode: "RISE_FALL_PREPROPOSAL",
+          contract_type: side,
+          payout_pct: Number(autoPreProposal.profit_pct),
+          proposal_id: String(autoPreProposal.proposal_id || ""),
+          entry_preproposal_used: true,
+          entry_preproposal_prepared_ms: Math.round(Number(autoPreProposal.prepared_ms || 0)),
+          entry_preproposal_age_ms: Math.max(0, Date.now() - Number(autoPreProposal.prepared_at || Date.now())),
+          entry_preproposal_reason: String(autoPreProposal.reason || ""),
+          ...getRiseFallTimingExtra(autoPreProposal.timing),
+        };
+      } else {
+        if (isStrictAutoPrearmedEntry) {
+          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
+        }
+        const buyPack = await buyRiseFallDirectWithTiming(side, symbol, stake, itemCtx, 20000);
+        res = buyPack.res;
+        tradeExtra = {
+          ...tradeExtra,
+          exec_mode: "RISE_FALL_BUY",
+          contract_type: side,
+          entry_preproposal_used: false,
+          ...getRiseFallTimingExtra(buyPack.timing),
+        };
+      }
     }
 
     if (res?.error) throw new Error(res.error.message || "buy error");
@@ -11567,7 +11828,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       Object.assign(tradeExtra, compactAuditFields(extractContractAuditFields(res?.buy || {})));
       if (!tradeExtra.purchase_time) tradeExtra.purchase_time = Math.floor(serverNowMs() / 1000);
       if (itemCtx?.signalAutoEntry?.post58_readiness) {
-        tradeExtra.entry_trigger_mode = isNextCandleExpiryTiming() ? "POST_TICK_58" : "AUTO58_NORMAL";
+        tradeExtra.entry_trigger_mode = isNextCandleExpiryTiming() ? "PREPROPOSAL_POST_TICK_58" : "AUTO58_NORMAL";
         tradeExtra.entry_trigger_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.ms || 0));
         tradeExtra.entry_trigger_last_tick_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.lastTickMs || 0));
         tradeExtra.entry_trigger_reason = String(itemCtx.signalAutoEntry.post58_readiness.reason || "");
