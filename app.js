@@ -49,7 +49,7 @@
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V71_RUPTURA_DEBIL_GIRO_20260528";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V72_RUPTURA_DEBIL_GIRO_ALCISTA_ONLY_20260528";
 
 /*
   Mapa rápido de módulos:
@@ -745,7 +745,7 @@ const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FU
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_INTRAVELA_V71_20260528";
+const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_ALCISTA_ONLY_V72_20260528";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -17138,12 +17138,21 @@ function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
   const range = Math.max(high - low, Math.abs(qs[0]) * 0.000001, 1e-9);
   if (!Number.isFinite(range) || range <= 0) return null;
 
+  // V72: este modo queda enfocado SOLO en velas alcistas:
+  // comprador rompe/supera zona, pero pierde calidad y prepara giro a VENTA.
+  // No se busca el espejo bajista en este modo.
+  const open = Number(pts[0]?.quote);
+  const current = Number(pts[pts.length - 1]?.quote);
+  const bullishTol = Math.max(range * 0.025, Math.abs(open) * 0.00000008, 1e-9);
+  if (!Number.isFinite(open) || !Number.isFinite(current) || current <= open + bullishTol) return null;
+
   const put = analyzeRupturaDebilGiroSide(pts, "PUT", range, evalMs);
-  const call = analyzeRupturaDebilGiroSide(pts, "CALL", range, evalMs);
-  const matches = [put, call].filter(Boolean);
-  if (!matches.length) return null;
-  matches.sort((a, b) => Number(b.quality) - Number(a.quality));
-  return matches[0];
+  if (!put) return null;
+  put.meta ||= {};
+  put.meta.bullishCandleOnly = true;
+  put.meta.disabledMirrorCall = true;
+  put.meta.status = `🔁 Ruptura Débil Giro: vela alcista; comprador rompe/supera, pierde calidad y prepara giro a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`;
+  return put;
 }
 
 function evaluateMinute(minute, opts = {}) {
