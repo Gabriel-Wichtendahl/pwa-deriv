@@ -47,13 +47,14 @@
 // ✅ V75: Ruptura Débil Giro con filtro duro: solo velas alcistas y solo VENTA/PUT.
 // ✅ V76: Ruptura Débil Giro enfocado en arranque irregular alcista temprano (0-30s), con prioridad si entra vendedor fuerte.
 // ✅ V77: Ajuste con ejemplos marcados: no depende de resistencia perfecta, prioriza devuelve fuerte/vendedor 20-30s y guarda logic explicativo.
+// ✅ V78: Ruptura Débil Giro: prealerta temprana oculta; señal visible recién 20-30s y bloquea pérdida fuerte del open antes de 20s.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V77_RUPTURA_DEBIL_EJEMPLOS_IRREG_ALCISTA_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V78_RUPTURA_DEBIL_CONFIRMACION_20_30S_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -775,7 +776,7 @@ const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FU
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_EJEMPLOS_IRREG_ALCISTA_V77_20260529";
+const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -7618,7 +7619,7 @@ function applyTheme(theme) {
     modeBtn.title = isDynamicLineMode(signalMode)
       ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos."
       : isRupturaDebilGiroMode(signalMode)
-        ? "Modo Ruptura Débil Giro: vela alcista con arranque irregular temprano. Señal cuando detecta; auto solo con 4 puntos."
+        ? "Modo Ruptura Débil Giro: observa 0-15s y confirma señal solo entre 20-30s; auto solo con 4 puntos."
         : isSNRPolaridadMode(signalMode)
           ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
           : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
@@ -12811,11 +12812,12 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isRupturaDebilGiroMode(activeModeForTick)) {
-      // V76 Ruptura Débil Giro:
-      // Solo velas alcistas y solo busca arranque irregular temprano.
-      // No depende del selector 35/40/45. Escanea desde el inicio operativo hasta 30s.
+      // V78 Ruptura Débil Giro:
+      // 0-15s queda como observación interna, pero NO se muestra señal todavía.
+      // La señal visible recién puede salir entre 20-30s, si la vela sigue alcista
+      // y no perdió el open con fuerza antes de los 20s.
       // La operación no sale sola por radar: requiere 4 puntos manuales como el resto.
-      const ruptureStartSec = 8;
+      const ruptureStartSec = 20;
       const ruptureEndSec = 30;
       if (sec >= ruptureStartSec && sec <= ruptureEndSec && lastEvaluatedMinute !== minute) {
         const ok = evaluateMinute(minute, {
@@ -17273,7 +17275,7 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
   if (clean.length < 6) return null;
 
   const evalTime = Number(evalMs || clean[clean.length - 1]?.ms || 0);
-  if (evalTime < 8000 || evalTime > 30000) return null;
+  if (evalTime < 20000 || evalTime > 30000) return null;
 
   const quotes = clean.map((p) => Number(p.quote));
   const open = Number(quotes[0]);
@@ -17287,6 +17289,17 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
     1e-9
   );
   const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+
+  // V78: no mostrar señal si la vela apenas subió y después perdió el open con fuerza.
+  // Queremos comprador irregular que sigue siendo comprador, no una caída temprana que recupera tarde.
+  const early20 = clean.filter((p) => Number(p.ms) <= 20000);
+  const early20Quotes = early20.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const early20Min = early20Quotes.length ? Math.min(...early20Quotes) : open;
+  const early20Close = early20.length ? Number(early20[early20.length - 1].quote) : current;
+  const earlyLossBelowOpen = Math.max(0, open - early20Min);
+  const earlyLostOpenStrong = earlyLossBelowOpen >= Math.max(localRange * 0.28, tol * 8);
+  const stillBelowOpenAt20 = Number.isFinite(early20Close) && early20Close <= open + Math.max(localRange * 0.010, tol * 1.2);
+  if (earlyLostOpenStrong || stillBelowOpenAt20) return null;
 
   // Filtro duro: solo vela alcista en el momento de detección.
   if (!isRupturaDebilGiroBullishOnlySetup(clean, localRange)) return null;
@@ -17320,9 +17333,10 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
   const lastUp = upMoves[upMoves.length - 1] || 0;
   const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
 
-  // V77: los ejemplos marcados muestran que no siempre hay una "ruptura perfecta".
+  // V78: los ejemplos buenos muestran comprador irregular, pero con intención alcista sostenida.
+  // Por eso la señal visible no sale en 0-15s: se espera confirmación 20-30s.
   // Lo importante es: comprador intenta avanzar alcista, pero los empujes salen desparejos,
-  // devuelve mucho o aparece vendedor antes de 30s.
+  // devuelve mucho o aparece vendedor antes de 30s, sin perder fuerte el open antes de 20s.
   const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.12, tol * 2.0);
   const decreasingPushes = upMoves.length >= 2 && (lastUp <= firstUp * (anySellerEntry ? 0.96 : 0.84));
   const unevenPushes = upMoves.length >= 3 && (upCv >= 0.30 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.60);
@@ -17396,10 +17410,10 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
   const hasIrregularCore = decreasingPushes || differentSizedBreaks || unevenPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || lateStall || buyerTriesTwiceAndFails || secondPushWeakAfterSeller || sellerAfter20;
   if (!hasIrregularCore) return null;
 
-  // Con irregularidad sola ya puede salir. Con vendedor fuerte gana prioridad.
+  // Con irregularidad sola ya puede salir, pero solo después de confirmación 20-30s. Con vendedor fuerte gana prioridad.
   if (points < 5) return null;
 
-  const earlyBonus = evalTime <= 15000 ? 18 : evalTime <= 22000 ? 10 : 4;
+  const earlyBonus = evalTime <= 22000 ? 12 : evalTime <= 26000 ? 8 : 4;
   const priorityBonus =
     (strongContrary ? 36 : 0) +
     (sellerAfter20 ? 14 : sellerAfter15 ? 8 : 0) +
@@ -17415,7 +17429,7 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
     Math.min(10, upCv * 12) -
     Math.max(0, evalTime - 15000) / 2200;
 
-  const logicText = `Vela alcista con arranque irregular ${evalTime <= 15000 ? "0-15s" : "15-30s"}: ${reasons.join(", ")}.`;
+  const logicText = `Vela alcista con arranque irregular confirmado 20-30s: ${reasons.join(", ")}. Filtro V78: no perdió fuerte el open antes de 20s.`;
 
   return {
     direction: "PUT",
@@ -17439,7 +17453,12 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
       low,
       range: localRange,
       evalSec: Math.round(evalTime / 1000),
-      earlyWindow: evalTime <= 15000 ? "0-15s" : "15-30s",
+      earlyWindow: "20-30s",
+      hiddenObservationWindow: "0-15s",
+      confirmationWindow: "20-30s",
+      earlyLossBelowOpen,
+      earlyLostOpenStrong,
+      stillBelowOpenAt20,
       analysisWindowMs: evalTime,
       bullishCandleOnly: true,
       disabledMirrorCall: true,
@@ -17470,11 +17489,11 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
       lateStall,
       breakMs: null,
       breakPrice: null,
-      stage: "ruptura_debil_giro_inicio_irregular_alcista_v77",
-      movementFilter: "vela_alcista_con_arranque_irregular_0_30s_ejemplos",
+      stage: "ruptura_debil_giro_inicio_irregular_alcista_v78_confirmada",
+      movementFilter: "vela_alcista_irregular_confirmada_20_30s_no_pierde_open",
       priority: strongContrary || sellerAfter20 ? "ALTA" : "NORMAL",
       logic: logicText,
-      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular temprano${strongContrary ? " + vendedor fuerte" : sellerAfter20 ? " + vendedor antes de 30s" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular confirmado 20-30s${strongContrary ? " + vendedor fuerte" : sellerAfter20 ? " + vendedor antes de 30s" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
@@ -17484,8 +17503,8 @@ function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
   if (ticks.length < 6) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(8000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
-  if (evalMs < 8000 || evalMs > 30000) return null;
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
   const pts = ensureTicksWithBoundary(ticks, evalMs);
   if (pts.length < 6) return null;
   const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
@@ -17495,8 +17514,9 @@ function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
   const range = Math.max(high - low, Math.abs(qs[0]) * 0.000001, 1e-9);
   if (!Number.isFinite(range) || range <= 0) return null;
 
-  // V76: este modo queda enfocado SOLO en velas alcistas con arranque irregular.
-  // Ya no exige ruptura clásica; la irregularidad temprana sola puede crear señal.
+  // V78: este modo queda enfocado SOLO en velas alcistas con arranque irregular,
+  // pero la señal visible se confirma recién entre 20-30s.
+  // La irregularidad temprana 0-15s queda como observación interna, no como señal inmediata.
   // Si además aparece una entrada fuerte vendedora, se prioriza frente a otros pares.
   if (!isRupturaDebilGiroBullishOnlySetup(pts, range)) return null;
 
@@ -17546,8 +17566,8 @@ function evaluateMinute(minute, opts = {}) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
     } else if (isRupturaDebilGiroMode(activeMode)) {
-      // V76: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
-      // Solo acepta velas alcistas con irregularidad temprana en 0-30s.
+      // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
+      // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
       const evalMsForRuptura = Number(evalOptions?.evalMs || 0);
       const ptsForRuptura = ensureTicksWithBoundary(c.ticks || [], Number.isFinite(evalMsForRuptura) && evalMsForRuptura > 0 ? evalMsForRuptura : Number((c.ticks || []).slice(-1)[0]?.ms || 0));
       const qsForRuptura = ptsForRuptura.map((p) => Number(p.quote)).filter(Number.isFinite);
