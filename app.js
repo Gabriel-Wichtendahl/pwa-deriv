@@ -46,13 +46,14 @@
 // ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
 // ✅ V75: Ruptura Débil Giro con filtro duro: solo velas alcistas y solo VENTA/PUT.
 // ✅ V76: Ruptura Débil Giro enfocado en arranque irregular alcista temprano (0-30s), con prioridad si entra vendedor fuerte.
+// ✅ V77: Ajuste con ejemplos marcados: no depende de resistencia perfecta, prioriza devuelve fuerte/vendedor 20-30s y guarda logic explicativo.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V76_RUPTURA_DEBIL_INICIO_IRREGULAR_ALCISTA_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V77_RUPTURA_DEBIL_EJEMPLOS_IRREG_ALCISTA_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -774,7 +775,7 @@ const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FU
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_INICIO_IRREGULAR_ALCISTA_V76_20260529";
+const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_EJEMPLOS_IRREG_ALCISTA_V77_20260529";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -17318,12 +17319,31 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
   const firstUp = upMoves[0] || 0;
   const lastUp = upMoves[upMoves.length - 1] || 0;
   const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
-  const decreasingPushes = upMoves.length >= 2 && lastUp <= firstUp * 0.78;
-  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.34 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.52);
-  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.28 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.35));
-  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.55 && stats.turns >= 2);
-  const givesBackMuch = pullbackRatio >= 0.28 || maxPullbackRatio >= 0.20;
-  const strongContrary = maxDownRun >= Math.max(localRange * 0.24, maxUpRun * 0.52, tol * 3.0);
+
+  // V77: los ejemplos marcados muestran que no siempre hay una "ruptura perfecta".
+  // Lo importante es: comprador intenta avanzar alcista, pero los empujes salen desparejos,
+  // devuelve mucho o aparece vendedor antes de 30s.
+  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.12, tol * 2.0);
+  const decreasingPushes = upMoves.length >= 2 && (lastUp <= firstUp * (anySellerEntry ? 0.96 : 0.84));
+  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.30 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.60);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.24 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.28));
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.42 && stats.turns >= 2);
+  const givesBackMuch = pullbackRatio >= 0.24 || maxPullbackRatio >= 0.17;
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.22, maxUpRun * 0.48, tol * 2.8);
+
+  const sellerRunsInWindow = downRuns.filter((r) => Number(r.startMs) <= 30000);
+  const sellerAfter15 = sellerRunsInWindow.some((r) => Number(r.startMs) >= 15000 && Number(r.startMs) <= 30000 && Number(r.move) >= Math.max(localRange * 0.14, tol * 2.1));
+  const sellerAfter20 = sellerRunsInWindow.some((r) => Number(r.startMs) >= 20000 && Number(r.startMs) <= 30000 && Number(r.move) >= Math.max(localRange * 0.16, tol * 2.3));
+  const buyerTriesTwiceAndFails =
+    upRuns.length >= 2 &&
+    downRuns.length >= 1 &&
+    totalDown >= totalUp * 0.18 &&
+    (decreasingPushes || differentSizedBreaks || givesBackMuch);
+  const secondPushWeakAfterSeller =
+    upRuns.length >= 2 &&
+    downRuns.length >= 1 &&
+    lastUp <= Math.max(firstUp * 0.98, avgUp * 0.88) &&
+    anySellerEntry;
 
   const highIdx = quotes.indexOf(high);
   const highMs = Number(clean[highIdx]?.ms || evalTime);
@@ -17362,28 +17382,40 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
   if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
   if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / avance desordenado"); }
   if (stalledAfterHigh || lateStall) { points += 1; reasons.push("se traba después de avanzar"); }
+  if (buyerTriesTwiceAndFails) { points += 2; reasons.push("comprador intenta dos veces y falla calidad"); }
+  if (secondPushWeakAfterSeller) { points += 1; reasons.push("segunda respuesta compradora débil tras vendedor"); }
   if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
-  else if (maxDownRun >= Math.max(localRange * 0.15, maxUpRun * 0.36, tol * 2.2)) {
+  else if (sellerAfter20) {
+    points += 2;
+    reasons.push("vendedor entra antes de 30s");
+  } else if (maxDownRun >= Math.max(localRange * 0.15, maxUpRun * 0.34, tol * 2.1)) {
     points += 1;
     reasons.push("presión vendedora presente");
   }
 
-  const hasIrregularCore = decreasingPushes || differentSizedBreaks || unevenPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || lateStall;
+  const hasIrregularCore = decreasingPushes || differentSizedBreaks || unevenPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || lateStall || buyerTriesTwiceAndFails || secondPushWeakAfterSeller || sellerAfter20;
   if (!hasIrregularCore) return null;
 
   // Con irregularidad sola ya puede salir. Con vendedor fuerte gana prioridad.
   if (points < 5) return null;
 
   const earlyBonus = evalTime <= 15000 ? 18 : evalTime <= 22000 ? 10 : 4;
+  const priorityBonus =
+    (strongContrary ? 36 : 0) +
+    (sellerAfter20 ? 14 : sellerAfter15 ? 8 : 0) +
+    (buyerTriesTwiceAndFails ? 12 : 0) +
+    (givesBackMuch ? 8 : 0);
   const quality =
     points * 14 +
     earlyBonus +
-    (strongContrary ? 32 : 0) +
+    priorityBonus +
     Math.min(18, stats.turns * 4) +
     Math.min(18, Math.max(0, stats.irregularity - 1) * 12) +
     Math.min(16, pullbackRatio * 18) +
     Math.min(10, upCv * 12) -
     Math.max(0, evalTime - 15000) / 2200;
+
+  const logicText = `Vela alcista con arranque irregular ${evalTime <= 15000 ? "0-15s" : "15-30s"}: ${reasons.join(", ")}.`;
 
   return {
     direction: "PUT",
@@ -17413,6 +17445,10 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
       disabledMirrorCall: true,
       earlyIrregularityOnly: true,
       strongContrary,
+      sellerAfter15,
+      sellerAfter20,
+      buyerTriesTwiceAndFails,
+      secondPushWeakAfterSeller,
       totalUp,
       totalDown,
       maxUpRun,
@@ -17434,10 +17470,11 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
       lateStall,
       breakMs: null,
       breakPrice: null,
-      stage: "ruptura_debil_giro_inicio_irregular_alcista",
-      movementFilter: "vela_alcista_con_arranque_irregular_0_30s",
-      priority: strongContrary ? "ALTA" : "NORMAL",
-      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular temprano${strongContrary ? " + vendedor fuerte" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      stage: "ruptura_debil_giro_inicio_irregular_alcista_v77",
+      movementFilter: "vela_alcista_con_arranque_irregular_0_30s_ejemplos",
+      priority: strongContrary || sellerAfter20 ? "ALTA" : "NORMAL",
+      logic: logicText,
+      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular temprano${strongContrary ? " + vendedor fuerte" : sellerAfter20 ? " + vendedor antes de 30s" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
@@ -17545,11 +17582,18 @@ function evaluateMinute(minute, opts = {}) {
   }
 
   if (!matches.length) return false;
-  matches.sort((a, b) =>
-    b.quality - a.quality ||
-    b.giroNivelPoints - a.giroNivelPoints ||
-    b.giroNivelScore - a.giroNivelScore
-  );
+  matches.sort((a, b) => {
+    if (isRupturaDebilGiroMode(activeMode)) {
+      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 ? 1 : 0;
+      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 ? 1 : 0;
+      if (bp !== ap) return bp - ap;
+    }
+    return (
+      b.quality - a.quality ||
+      b.giroNivelPoints - a.giroNivelPoints ||
+      b.giroNivelScore - a.giroNivelScore
+    );
+  });
 
   // V14: si hay interacción con nivel, se elige la mejor; no se cancela por empate de calidad.
 
