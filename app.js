@@ -44,13 +44,14 @@
 // ✅ V70: Merge verificado: conserva V68 escalonado + V69 disciplina REAL + V66 timing pre-proposal
 // ✅ V71: Nuevo modo 🔁 Ruptura Débil Giro: rompe zona pero no expande, responde irregular y prepara giro.
 // ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
+// ✅ V75: Ruptura Débil Giro con filtro duro: solo velas alcistas y solo VENTA/PUT.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V74_DESPEJE_MENTAL_IMAGEN_TIMER_CONSEJOS_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V75_RUPTURA_DEBIL_SOLO_ALCISTAS_DURO_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -772,7 +773,7 @@ const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FU
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_ALCISTA_ONLY_V72_20260528";
+const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_ALCISTA_ONLY_HARD_FILTER_V75_20260529";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -17191,6 +17192,24 @@ function getRupturaDebilGiroPathStats(pts) {
   const net = clean[clean.length - 1].quote - clean[0].quote;
   return { path, net, irregularity: path / Math.max(Math.abs(net), 1e-9), turns };
 }
+function isRupturaDebilGiroBullishOnlySetup(pts, range = null) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 3) return false;
+
+  const open = Number(clean[0]?.quote);
+  const current = Number(clean[clean.length - 1]?.quote);
+  const qs = clean.map((p) => Number(p.quote));
+  const localRange = Number.isFinite(Number(range)) && Number(range) > 0
+    ? Number(range)
+    : Math.max(Math.max(...qs) - Math.min(...qs), Math.abs(open) * 0.000001, 1e-9);
+
+  const bullishTol = Math.max(localRange * 0.025, Math.abs(open) * 0.00000008, 1e-9);
+  return Number.isFinite(open) && Number.isFinite(current) && current > open + bullishTol;
+}
+
 function analyzeRupturaDebilGiroSide(pts, side, range, evalMs) {
   const isPut = side === "PUT"; // comprador rompe arriba y pierde calidad => giro a venta
   const n = pts.length;
@@ -17340,13 +17359,10 @@ function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
   const range = Math.max(high - low, Math.abs(qs[0]) * 0.000001, 1e-9);
   if (!Number.isFinite(range) || range <= 0) return null;
 
-  // V72: este modo queda enfocado SOLO en velas alcistas:
+  // V75: filtro duro. Este modo queda enfocado SOLO en velas alcistas:
   // comprador rompe/supera zona, pero pierde calidad y prepara giro a VENTA.
   // No se busca el espejo bajista en este modo.
-  const open = Number(pts[0]?.quote);
-  const current = Number(pts[pts.length - 1]?.quote);
-  const bullishTol = Math.max(range * 0.025, Math.abs(open) * 0.00000008, 1e-9);
-  if (!Number.isFinite(open) || !Number.isFinite(current) || current <= open + bullishTol) return null;
+  if (!isRupturaDebilGiroBullishOnlySetup(pts, range)) return null;
 
   const put = analyzeRupturaDebilGiroSide(pts, "PUT", range, evalMs);
   if (!put) return null;
@@ -17400,7 +17416,18 @@ function evaluateMinute(minute, opts = {}) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
     } else if (isRupturaDebilGiroMode(activeMode)) {
+      // V75: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
+      // Si la vela actual no está alcista en el momento de detección, se ignora el candidato.
+      const evalMsForRuptura = Number(evalOptions?.evalMs || 0);
+      const ptsForRuptura = ensureTicksWithBoundary(c.ticks || [], Number.isFinite(evalMsForRuptura) && evalMsForRuptura > 0 ? evalMsForRuptura : Number((c.ticks || []).slice(-1)[0]?.ms || 0));
+      const qsForRuptura = ptsForRuptura.map((p) => Number(p.quote)).filter(Number.isFinite);
+      const rangeForRuptura = qsForRuptura.length
+        ? Math.max(Math.max(...qsForRuptura) - Math.min(...qsForRuptura), Math.abs(qsForRuptura[0]) * 0.000001, 1e-9)
+        : 0;
+      if (!isRupturaDebilGiroBullishOnlySetup(ptsForRuptura, rangeForRuptura)) continue;
+
       match = analyzeRupturaDebilGiroCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
       matchSource = "RUPTURA_DEBIL_GIRO";
     } else if (isSNRPolaridadMode(activeMode)) {
       match = analyzeSNRPolaridadCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
