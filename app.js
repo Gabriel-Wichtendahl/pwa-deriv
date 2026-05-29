@@ -45,13 +45,14 @@
 // ✅ V71: Nuevo modo 🔁 Ruptura Débil Giro: rompe zona pero no expande, responde irregular y prepara giro.
 // ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
 // ✅ V75: Ruptura Débil Giro con filtro duro: solo velas alcistas y solo VENTA/PUT.
+// ✅ V76: Ruptura Débil Giro enfocado en arranque irregular alcista temprano (0-30s), con prioridad si entra vendedor fuerte.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V75_RUPTURA_DEBIL_SOLO_ALCISTAS_DURO_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V76_RUPTURA_DEBIL_INICIO_IRREGULAR_ALCISTA_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -773,7 +774,7 @@ const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FU
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_ALCISTA_ONLY_HARD_FILTER_V75_20260529";
+const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_INICIO_IRREGULAR_ALCISTA_V76_20260529";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -7616,7 +7617,7 @@ function applyTheme(theme) {
     modeBtn.title = isDynamicLineMode(signalMode)
       ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos."
       : isRupturaDebilGiroMode(signalMode)
-        ? "Modo Ruptura Débil Giro: rompe zona, no expande, responde irregular y busca giro. Señal cuando detecta; auto solo con 4 puntos."
+        ? "Modo Ruptura Débil Giro: vela alcista con arranque irregular temprano. Señal cuando detecta; auto solo con 4 puntos."
         : isSNRPolaridadMode(signalMode)
           ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
           : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
@@ -12809,11 +12810,12 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isRupturaDebilGiroMode(activeModeForTick)) {
-      // V71 Ruptura Débil Giro:
-      // No depende del selector 35/40/45. Escanea cuando la secuencia aparece.
+      // V76 Ruptura Débil Giro:
+      // Solo velas alcistas y solo busca arranque irregular temprano.
+      // No depende del selector 35/40/45. Escanea desde el inicio operativo hasta 30s.
       // La operación no sale sola por radar: requiere 4 puntos manuales como el resto.
-      const ruptureStartSec = 12;
-      const ruptureEndSec = 57;
+      const ruptureStartSec = 8;
+      const ruptureEndSec = 30;
       if (sec >= ruptureStartSec && sec <= ruptureEndSec && lastEvaluatedMinute !== minute) {
         const ok = evaluateMinute(minute, {
           evalMs: Math.max(ruptureStartSec * 1000, Math.min(msInMinute, ruptureEndSec * 1000)),
@@ -17192,6 +17194,58 @@ function getRupturaDebilGiroPathStats(pts) {
   const net = clean[clean.length - 1].quote - clean[0].quote;
   return { path, net, irregularity: path / Math.max(Math.abs(net), 1e-9), turns };
 }
+
+function getRupturaDebilGiroRuns(pts, tol = 0) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  const runs = [];
+  let active = null;
+  for (let i = 1; i < clean.length; i++) {
+    const prev = clean[i - 1];
+    const cur = clean[i];
+    const d = cur.quote - prev.quote;
+    const sign = d > tol ? 1 : d < -tol ? -1 : 0;
+    if (!sign) continue;
+    if (!active || active.sign !== sign) {
+      if (active) runs.push(active);
+      active = {
+        sign,
+        startMs: Number(prev.ms),
+        endMs: Number(cur.ms),
+        move: Math.abs(d),
+        from: Number(prev.quote),
+        to: Number(cur.quote),
+        steps: 1,
+      };
+    } else {
+      active.endMs = Number(cur.ms);
+      active.move += Math.abs(d);
+      active.to = Number(cur.quote);
+      active.steps += 1;
+    }
+  }
+  if (active) runs.push(active);
+  return runs;
+}
+
+function getRupturaDebilGiroMaxPullback(pts) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 2) return 0;
+  let peak = Number(clean[0].quote);
+  let maxPullback = 0;
+  for (const p of clean) {
+    const q = Number(p.quote);
+    if (q > peak) peak = q;
+    maxPullback = Math.max(maxPullback, peak - q);
+  }
+  return maxPullback;
+}
+
 function isRupturaDebilGiroBullishOnlySetup(pts, range = null) {
   const clean = (Array.isArray(pts) ? pts : [])
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
@@ -17210,167 +17264,206 @@ function isRupturaDebilGiroBullishOnlySetup(pts, range = null) {
   return Number.isFinite(open) && Number.isFinite(current) && current > open + bullishTol;
 }
 
-function analyzeRupturaDebilGiroSide(pts, side, range, evalMs) {
-  const isPut = side === "PUT"; // comprador rompe arriba y pierde calidad => giro a venta
-  const n = pts.length;
-  if (n < 8) return null;
-  const quotes = pts.map((p) => Number(p.quote));
-  const p0 = quotes[0];
-  const stepTol = Math.max(range * 0.018, Math.abs(p0) * 0.00000008, 1e-9);
-  const minPreMove = Math.max(range * 0.22, stepTol * 2.2);
-  const minAfterTicks = 3;
-  const matches = [];
+function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
 
-  for (let i = 4; i <= n - minAfterTicks; i++) {
-    const prev = pts.slice(0, i);
-    const after = pts.slice(i);
-    const prevQuotes = prev.map((p) => Number(p.quote));
-    const afterQuotes = after.map((p) => Number(p.quote));
-    const preHigh = Math.max(...prevQuotes);
-    const preLow = Math.min(...prevQuotes);
-    const q = Number(pts[i].quote);
-    const level = isPut ? preHigh : preLow;
-    const broke = isPut ? q > level + stepTol : q < level - stepTol;
-    if (!broke) continue;
+  const evalTime = Number(evalMs || clean[clean.length - 1]?.ms || 0);
+  if (evalTime < 8000 || evalTime > 30000) return null;
 
-    const preMove = isPut ? preHigh - Math.min(p0, preLow) : Math.max(p0, preHigh) - preLow;
-    if (!Number.isFinite(preMove) || preMove < minPreMove) continue;
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(
+    Number(range || 0),
+    high - low,
+    Math.abs(open) * 0.000001,
+    1e-9
+  );
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
 
-    const postHigh = Math.max(...afterQuotes);
-    const postLow = Math.min(...afterQuotes);
-    const postExtreme = isPut ? postHigh : postLow;
-    const postExtension = isPut ? postHigh - level : level - postLow;
-    const extensionRatio = postExtension / Math.max(preMove, 1e-9);
-    const extensionShort = extensionRatio <= 0.72 || postExtension <= range * 0.28;
-    if (!extensionShort) continue;
+  // Filtro duro: solo vela alcista en el momento de detección.
+  if (!isRupturaDebilGiroBullishOnlySetup(clean, localRange)) return null;
 
-    const extremeIdxRel = afterQuotes.indexOf(postExtreme);
-    const extremeIdx = i + Math.max(0, extremeIdxRel);
-    const afterExtreme = pts.slice(extremeIdx);
-    if (afterExtreme.length < 2) continue;
-    const afterExtremeQuotes = afterExtreme.map((p) => Number(p.quote));
-    const oppositeReaction = isPut
-      ? postExtreme - Math.min(...afterExtremeQuotes)
-      : Math.max(...afterExtremeQuotes) - postExtreme;
-    const oppositeRatio = oppositeReaction / Math.max(range, 1e-9);
-    const oppositeBetterThanExtension = oppositeReaction >= Math.max(postExtension * 0.62, range * 0.085);
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const runs = getRupturaDebilGiroRuns(clean, tol);
+  const upRuns = runs.filter((r) => r.sign > 0 && r.move > tol * 1.2);
+  const downRuns = runs.filter((r) => r.sign < 0 && r.move > tol * 1.2);
+  const upMoves = upRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+  const downMoves = downRuns.map((r) => Number(r.move)).filter(Number.isFinite);
 
-    const postStats = getRupturaDebilGiroPathStats(after);
-    const postTime = Number(pts[n - 1].ms) - Number(pts[i].ms);
-    const timeToExtreme = Math.max(0, Number(pts[extremeIdx].ms) - Number(pts[i].ms));
-    const slowAfterBreak = timeToExtreme >= 6000 || (postTime >= 10000 && postExtension <= range * 0.22);
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxUpRun = upMoves.length ? Math.max(...upMoves) : 0;
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const avgUp = upMoves.length ? totalUp / upMoves.length : 0;
+  const upVar = upMoves.length >= 2
+    ? upMoves.reduce((a, b) => a + Math.pow(b - avgUp, 2), 0) / upMoves.length
+    : 0;
+  const upCv = avgUp > 0 ? Math.sqrt(upVar) / avgUp : 0;
 
-    const afterReactionLowHigh = isPut
-      ? Math.min(...afterExtremeQuotes)
-      : Math.max(...afterExtremeQuotes);
-    const afterReactionIdxRel = afterExtremeQuotes.indexOf(afterReactionLowHigh);
-    const afterReactionIdx = extremeIdx + Math.max(0, afterReactionIdxRel);
-    const reattempt = pts.slice(afterReactionIdx);
-    const reattemptQuotes = reattempt.map((p) => Number(p.quote));
-    const reattemptExtreme = reattemptQuotes.length
-      ? (isPut ? Math.max(...reattemptQuotes) : Math.min(...reattemptQuotes))
-      : postExtreme;
-    const reattemptNoExpansion = isPut
-      ? reattemptExtreme <= postExtreme + stepTol * 1.2
-      : reattemptExtreme >= postExtreme - stepTol * 1.2;
+  const net = current - open;
+  const highFromOpen = high - open;
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const path = Math.max(stats.path, totalUp + totalDown, 1e-9);
+  const efficiency = net / path;
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
 
-    const irregular = postStats.irregularity >= 1.65 || postStats.turns >= 2 || (slowAfterBreak && reattemptNoExpansion);
-    const closeTowardOpposite = isPut ? quotes[n - 1] < postExtreme - range * 0.075 : quotes[n - 1] > postExtreme + range * 0.075;
+  const firstUp = upMoves[0] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+  const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
+  const decreasingPushes = upMoves.length >= 2 && lastUp <= firstUp * 0.78;
+  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.34 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.52);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.28 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.35));
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.55 && stats.turns >= 2);
+  const givesBackMuch = pullbackRatio >= 0.28 || maxPullbackRatio >= 0.20;
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.24, maxUpRun * 0.52, tol * 3.0);
 
-    let points = 0;
-    const reasons = [];
-    points += 2; reasons.push(isPut ? "rompe máximo/zona" : "rompe mínimo/zona");
-    if (extensionShort) { points += 2; reasons.push("avance post-ruptura corto"); }
-    if (irregular) { points += 2; reasons.push("respuesta dominante irregular/lenta"); }
-    if (slowAfterBreak) { points += 1; reasons.push("tarda en avanzar tras romper"); }
-    if (reattemptNoExpansion) { points += 1; reasons.push("reintento sin expansión"); }
-    if (oppositeBetterThanExtension || closeTowardOpposite) { points += 1; reasons.push(isPut ? "vendedor responde mejor" : "comprador responde mejor"); }
+  const highIdx = quotes.indexOf(high);
+  const highMs = Number(clean[highIdx]?.ms || evalTime);
+  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.10, tol * 1.5);
+  const recent = clean.slice(Math.max(0, clean.length - 4));
+  const recentQuotes = recent.map((p) => Number(p.quote));
+  const recentRange = recentQuotes.length ? Math.max(...recentQuotes) - Math.min(...recentQuotes) : 0;
+  const lateStall = recent.length >= 3 && recentRange <= Math.max(localRange * 0.18, tol * 2.2) && highMs <= evalTime - 4000;
 
-    if (points < 6) continue;
-    if (!(oppositeBetterThanExtension || irregular || closeTowardOpposite)) continue;
+  // Evita marcar un CALL sano como giro: impulso limpio, poca devolución y alta eficiencia.
+  const cleanBullishContinuation =
+    efficiency >= 0.78 &&
+    pullbackRatio <= 0.18 &&
+    stats.turns <= 1 &&
+    !decreasingPushes &&
+    !unevenPushes &&
+    !strongContrary;
+  if (cleanBullishContinuation) return null;
 
-    const quality =
-      points * 12 +
-      Math.max(0, 1 - extensionRatio) * 22 +
-      Math.min(18, oppositeRatio * 80) +
-      Math.min(12, postStats.turns * 3) +
-      (slowAfterBreak ? 7 : 0) +
-      (reattemptNoExpansion ? 8 : 0);
+  // Debe haber desplazamiento alcista suficiente. No queremos ruido sin intención compradora.
+  const enoughBullishDisplacement = highFromOpen >= Math.max(localRange * 0.28, tol * 4.0) && net > tol * 1.3;
+  if (!enoughBullishDisplacement) return null;
 
-    matches.push({
-      direction: side,
-      quality,
-      points,
-      meta: {
-        level,
-        levelMode: "ruptura_debil_giro",
-        levelType: isPut ? "resistance" : "support",
-        direction: side,
-        tolerance: stepTol,
-        zone: Math.max(stepTol * 4, range * 0.10),
-        zoneLow: level - Math.max(stepTol * 2, range * 0.045),
-        zoneHigh: level + Math.max(stepTol * 2, range * 0.045),
-        points,
-        maxPoints: 9,
-        reasons,
-        p0,
-        pE: quotes[n - 1],
-        high: Math.max(...quotes),
-        low: Math.min(...quotes),
-        range,
-        evalSec: Math.round(Number(evalMs || pts[n - 1].ms) / 1000),
-        breakMs: Number(pts[i].ms),
-        breakPrice: q,
-        preMove,
-        postExtension,
-        extensionRatio,
-        oppositeReaction,
-        oppositeRatio,
-        postIrregularity: postStats.irregularity,
-        postTurns: postStats.turns,
-        slowAfterBreak,
-        reattemptNoExpansion,
-        stage: "ruptura_debil_giro",
-        movementFilter: isPut
-          ? "comprador_rompe_pero_no_expande_y_responde_irregular"
-          : "vendedor_rompe_pero_no_expande_y_responde_irregular",
-        status: `🔁 Ruptura Débil Giro: ${isPut ? "comprador" : "vendedor"} rompe, no expande bien y el contrario responde mejor. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
-      },
-    });
+  let points = 0;
+  const reasons = [];
+
+  // Base: vela alcista con intención, pero no sana/limpia.
+  points += 1;
+  reasons.push("vela alcista con desplazamiento inicial");
+
+  if (evalTime <= 15000) { points += 2; reasons.push("irregularidad en 0-15s"); }
+  else { points += 1; reasons.push("irregularidad en 15-30s"); }
+
+  if (decreasingPushes) { points += 2; reasons.push("empujes compradores cada vez más cortos"); }
+  if (differentSizedBreaks || unevenPushes) { points += 2; reasons.push("quiebres/impulsos de distinto tamaño"); }
+  if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
+  if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / avance desordenado"); }
+  if (stalledAfterHigh || lateStall) { points += 1; reasons.push("se traba después de avanzar"); }
+  if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
+  else if (maxDownRun >= Math.max(localRange * 0.15, maxUpRun * 0.36, tol * 2.2)) {
+    points += 1;
+    reasons.push("presión vendedora presente");
   }
 
-  if (!matches.length) return null;
-  matches.sort((a, b) => Number(b.quality) - Number(a.quality));
-  return matches[0];
+  const hasIrregularCore = decreasingPushes || differentSizedBreaks || unevenPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || lateStall;
+  if (!hasIrregularCore) return null;
+
+  // Con irregularidad sola ya puede salir. Con vendedor fuerte gana prioridad.
+  if (points < 5) return null;
+
+  const earlyBonus = evalTime <= 15000 ? 18 : evalTime <= 22000 ? 10 : 4;
+  const quality =
+    points * 14 +
+    earlyBonus +
+    (strongContrary ? 32 : 0) +
+    Math.min(18, stats.turns * 4) +
+    Math.min(18, Math.max(0, stats.irregularity - 1) * 12) +
+    Math.min(16, pullbackRatio * 18) +
+    Math.min(10, upCv * 12) -
+    Math.max(0, evalTime - 15000) / 2200;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "ruptura_debil_giro",
+      levelType: "early_bullish_irregularity",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 12,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalTime / 1000),
+      earlyWindow: evalTime <= 15000 ? "0-15s" : "15-30s",
+      analysisWindowMs: evalTime,
+      bullishCandleOnly: true,
+      disabledMirrorCall: true,
+      earlyIrregularityOnly: true,
+      strongContrary,
+      totalUp,
+      totalDown,
+      maxUpRun,
+      maxDownRun,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      efficiency,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      upCv,
+      decreasingPushes,
+      unevenPushes,
+      differentSizedBreaks,
+      zigzagDirty,
+      givesBackMuch,
+      stalledAfterHigh,
+      lateStall,
+      breakMs: null,
+      breakPrice: null,
+      stage: "ruptura_debil_giro_inicio_irregular_alcista",
+      movementFilter: "vela_alcista_con_arranque_irregular_0_30s",
+      priority: strongContrary ? "ALTA" : "NORMAL",
+      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular temprano${strongContrary ? " + vendedor fuerte" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
 }
+
 function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
-  if (ticks.length < 8) return null;
+  if (ticks.length < 6) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(1000, Math.min(57000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
-  if (evalMs < 12000) return null;
+  const evalMs = Math.max(8000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 8000 || evalMs > 30000) return null;
   const pts = ensureTicksWithBoundary(ticks, evalMs);
-  if (pts.length < 8) return null;
+  if (pts.length < 6) return null;
   const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (qs.length < 8) return null;
+  if (qs.length < 6) return null;
   const high = Math.max(...qs);
   const low = Math.min(...qs);
   const range = Math.max(high - low, Math.abs(qs[0]) * 0.000001, 1e-9);
   if (!Number.isFinite(range) || range <= 0) return null;
 
-  // V75: filtro duro. Este modo queda enfocado SOLO en velas alcistas:
-  // comprador rompe/supera zona, pero pierde calidad y prepara giro a VENTA.
-  // No se busca el espejo bajista en este modo.
+  // V76: este modo queda enfocado SOLO en velas alcistas con arranque irregular.
+  // Ya no exige ruptura clásica; la irregularidad temprana sola puede crear señal.
+  // Si además aparece una entrada fuerte vendedora, se prioriza frente a otros pares.
   if (!isRupturaDebilGiroBullishOnlySetup(pts, range)) return null;
 
-  const put = analyzeRupturaDebilGiroSide(pts, "PUT", range, evalMs);
-  if (!put) return null;
-  put.meta ||= {};
-  put.meta.bullishCandleOnly = true;
-  put.meta.disabledMirrorCall = true;
-  put.meta.status = `🔁 Ruptura Débil Giro: vela alcista; comprador rompe/supera, pierde calidad y prepara giro a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`;
-  return put;
+  return analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs);
 }
 
 function evaluateMinute(minute, opts = {}) {
@@ -17416,8 +17509,8 @@ function evaluateMinute(minute, opts = {}) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
     } else if (isRupturaDebilGiroMode(activeMode)) {
-      // V75: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
-      // Si la vela actual no está alcista en el momento de detección, se ignora el candidato.
+      // V76: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
+      // Solo acepta velas alcistas con irregularidad temprana en 0-30s.
       const evalMsForRuptura = Number(evalOptions?.evalMs || 0);
       const ptsForRuptura = ensureTicksWithBoundary(c.ticks || [], Number.isFinite(evalMsForRuptura) && evalMsForRuptura > 0 ? evalMsForRuptura : Number((c.ticks || []).slice(-1)[0]?.ms || 0));
       const qsForRuptura = ptsForRuptura.map((p) => Number(p.quote)).filter(Number.isFinite);
@@ -17428,7 +17521,7 @@ function evaluateMinute(minute, opts = {}) {
 
       match = analyzeRupturaDebilGiroCandidate(c, minute, evalOptions);
       if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
-      matchSource = "RUPTURA_DEBIL_GIRO";
+      matchSource = "RUPTURA_DEBIL_GIRO_INICIO_IRREGULAR";
     } else if (isSNRPolaridadMode(activeMode)) {
       match = analyzeSNRPolaridadCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
       matchSource = "SNR_POLARIDAD";
