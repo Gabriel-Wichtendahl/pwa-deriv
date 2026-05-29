@@ -48,13 +48,14 @@
 // ✅ V76: Ruptura Débil Giro enfocado en arranque irregular alcista temprano (0-30s), con prioridad si entra vendedor fuerte.
 // ✅ V77: Ajuste con ejemplos marcados: no depende de resistencia perfecta, prioriza devuelve fuerte/vendedor 20-30s y guarda logic explicativo.
 // ✅ V78: Ruptura Débil Giro: prealerta temprana oculta; señal visible recién 20-30s y bloquea pérdida fuerte del open antes de 20s.
+// ✅ V79: Autolimpieza de bloqueos vencidos/corruptos de Despeje mental y Disciplina REAL.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V78_RUPTURA_DEBIL_CONFIRMACION_20_30S_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V79_UNLOCK_EXPIRED_LOCKS_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -226,6 +227,8 @@ const MENTAL_COOLDOWN_UNTIL_KEY = "mentalCooldownUntilMs_v1";
 const MENTAL_COOLDOWN_REASON_KEY = "mentalCooldownReason_v1";
 const MENTAL_COOLDOWN_LAST_CONTRACT_KEY = "mentalCooldownLastContractId_v1";
 const MENTAL_COOLDOWN_MS = 10 * 60 * 1000;
+const MENTAL_COOLDOWN_MAX_STORED_MS = MENTAL_COOLDOWN_MS + 90 * 1000; // seguridad: nunca debe quedar más de ~11m30s
+const DISCIPLINE_LOCK_MAX_STORED_MS = DISCIPLINE_LOCK_MS + 2 * 60 * 1000; // seguridad: bloqueo REAL nunca debe quedar más de ~62m
 
 let mentalCooldownUntilMs = 0;
 let mentalCooldownReason = "";
@@ -10260,12 +10263,52 @@ function applyModalTradeButtonsLayout() {
    - Bloqueo total corto para cortar impulso/revancha.
    - No reemplaza el bloqueo REAL de 1 hora: ese queda como estaba.
 ========================= */
+
+function isExpiryValueCorruptOrExpired(until, maxStoredMs) {
+  const n = Number(until || 0);
+  if (!Number.isFinite(n) || n <= 0) return true;
+
+  // Si quedó guardado en segundos por error, ya es un valor inválido para Date.now() en ms.
+  if (n > 0 && n < 100000000000) return true;
+
+  const now = Date.now();
+  if (n <= now) return true;
+
+  // Si por cualquier motivo quedó un timestamp demasiado lejos, lo tratamos como bloqueo corrupto.
+  if (n - now > Number(maxStoredMs || 0)) return true;
+
+  return false;
+}
+function clearExpiredOrCorruptDisciplineLock({ silent = true } = {}) {
+  try {
+    if (isDisciplineBypassedForCurrentAccount()) return false;
+    const until = Number(disciplineLockUntilMs || 0);
+    if (!until) return false;
+    if (!isExpiryValueCorruptOrExpired(until, DISCIPLINE_LOCK_MAX_STORED_MS)) return false;
+
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    updateDisciplineBannerUI();
+    if (!silent) toast("✅ Bloqueo REAL vencido/corregido", 2200);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function loadMentalCooldown() {
   try {
     mentalCooldownUntilMs = Number(localStorage.getItem(MENTAL_COOLDOWN_UNTIL_KEY) || 0) || 0;
     mentalCooldownReason = String(localStorage.getItem(MENTAL_COOLDOWN_REASON_KEY) || "");
     mentalCooldownLastContractId = String(localStorage.getItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY) || "");
-    if (mentalCooldownUntilMs && Date.now() >= mentalCooldownUntilMs) clearMentalCooldown({ silent: true });
+
+    // V79: si quedó un bloqueo viejo, vencido o con fecha corrupta, se limpia al abrir.
+    if (mentalCooldownUntilMs && isExpiryValueCorruptOrExpired(mentalCooldownUntilMs, MENTAL_COOLDOWN_MAX_STORED_MS)) {
+      clearMentalCooldown({ silent: true });
+    }
   } catch {
     mentalCooldownUntilMs = 0;
     mentalCooldownReason = "";
@@ -10295,7 +10338,7 @@ function clearMentalCooldown({ silent = false } = {}) {
 function isMentalCooldownActive() {
   const until = Number(mentalCooldownUntilMs || 0);
   if (!until) return false;
-  if (Date.now() >= until) {
+  if (isExpiryValueCorruptOrExpired(until, MENTAL_COOLDOWN_MAX_STORED_MS)) {
     clearMentalCooldown({ silent: true });
     return false;
   }
@@ -10452,6 +10495,9 @@ function loadDiscipline() {
     const raw = readScopedDisciplineValue(DISCIPLINE_PENDING_CONTRACTS_KEY, "[]");
     const arr = JSON.parse(raw);
     disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
+
+    // V79: evita que quede una disciplina REAL vencida/corrupta pegada al volver a abrir.
+    clearExpiredOrCorruptDisciplineLock({ silent: true });
   } catch {
     resetDisciplineStateInMemory();
   }
@@ -10490,6 +10536,7 @@ function isDisciplineBypassedForCurrentAccount() {
 }
 function isTradeLockedNow() {
   if (isDisciplineBypassedForCurrentAccount()) return false;
+  clearExpiredOrCorruptDisciplineLock({ silent: true });
   const now = Date.now();
   return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
 }
@@ -10607,14 +10654,8 @@ function disciplineTagText() {
   return `Disciplina REAL: ${getDisciplineCounterText()}${pTxt}`;
 }
 function updateDisciplineLockUI(forceToast = false) {
-  if (!isDisciplineBypassedForCurrentAccount() && disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
-    disciplineLockUntilMs = 0;
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-    if (forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
-  }
+  const correctedExpiredLock = clearExpiredOrCorruptDisciplineLock({ silent: !forceToast });
+  if (correctedExpiredLock && forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
 
   const locked = isTradeLockedNow();
   const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
