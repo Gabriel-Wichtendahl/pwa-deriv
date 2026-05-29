@@ -43,13 +43,14 @@
 // ✅ V69: Disciplina REAL: 2 OTM o ciclo IC2 completo (2 ITM seguidos) bloquea 1h; DEMO libre para pruebas
 // ✅ V70: Merge verificado: conserva V68 escalonado + V69 disciplina REAL + V66 timing pre-proposal
 // ✅ V71: Nuevo modo 🔁 Ruptura Débil Giro: rompe zona pero no expande, responde irregular y prepara giro.
+// ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V72_RUPTURA_DEBIL_GIRO_ALCISTA_ONLY_20260528";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V74_DESPEJE_MENTAL_IMAGEN_TIMER_CONSEJOS_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -213,6 +214,32 @@ const DISCIPLINE_MAX_WINS = 2;
 const DISCIPLINE_MAX_LOSSES = 2;
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 const DISCIPLINE_SCOPE_LABEL = "REAL";
+
+// Despeje mental: bloqueo total corto después de 1 OTM.
+// Es global para la PWA (DEMO/REAL) para evitar operar por impulso.
+// El bloqueo REAL de 1 hora se mantiene como está y tiene prioridad visual.
+const MENTAL_COOLDOWN_UNTIL_KEY = "mentalCooldownUntilMs_v1";
+const MENTAL_COOLDOWN_REASON_KEY = "mentalCooldownReason_v1";
+const MENTAL_COOLDOWN_LAST_CONTRACT_KEY = "mentalCooldownLastContractId_v1";
+const MENTAL_COOLDOWN_MS = 10 * 60 * 1000;
+
+let mentalCooldownUntilMs = 0;
+let mentalCooldownReason = "";
+let mentalCooldownLastContractId = "";
+let mentalCooldownOverlayEl = null;
+const MENTAL_COOLDOWN_IMAGE_SRC = "./despeje-mental-bg.png";
+const MENTAL_COOLDOWN_TIPS = [
+  "Respirá profundo. No operes desde la urgencia.",
+  "Una pérdida no se recupera con impulso, se recupera con criterio.",
+  "Soltá el gráfico. La claridad vuelve cuando bajás el ritmo.",
+  "No busques revancha. Buscá una lectura limpia.",
+  "Tu mejor operación ahora es esperar.",
+  "Aceptá el OTM sin pelearlo. El plan sigue.",
+  "La próxima entrada necesita calma, no presión.",
+  "Volvé cuando puedas explicar la operación antes de tocar el botón.",
+  "Si no hay claridad, pasar también es disciplina.",
+  "Tu mente es tu herramienta principal. Cuidala."
+];
 
 let disciplineWindowStartMs = 0;
 let disciplineWins = 0;
@@ -3976,6 +4003,7 @@ function startUiTimers() {
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
+    updateMentalCooldownUI();
     updateDisciplineLockUI(false);
     updateC100PanelUI();
     // ✅ FIX AUTO 58 DEMO/REAL:
@@ -4151,10 +4179,12 @@ function areSignalsPaused(viewName = null) {
   // Pausa manual global + pausa automática cuando se abre la pestaña En vivo.
   // En vivo es un modo aparte: sigue recibiendo ticks para dibujar, pero no crea nuevas señales
   // ni dispara autoentradas de señales mientras esa pestaña está activa.
+  if (isMentalCooldownActive()) return true;
   const view = viewName || getActiveViewName();
   return !!liveAnalysisPaused || view === "live";
 }
 function getSignalsPauseReason(viewName = null) {
+  if (isMentalCooldownActive()) return "mental_cooldown";
   const view = viewName || getActiveViewName();
   if (view === "live") return "live_tab";
   if (liveAnalysisPaused) return "manual";
@@ -10220,6 +10250,173 @@ function applyModalTradeButtonsLayout() {
 /* =========================
    Disciplina (persistencia + UI)
 ========================= */
+
+/* =========================
+   Despeje mental post-OTM
+   - Bloqueo total corto para cortar impulso/revancha.
+   - No reemplaza el bloqueo REAL de 1 hora: ese queda como estaba.
+========================= */
+function loadMentalCooldown() {
+  try {
+    mentalCooldownUntilMs = Number(localStorage.getItem(MENTAL_COOLDOWN_UNTIL_KEY) || 0) || 0;
+    mentalCooldownReason = String(localStorage.getItem(MENTAL_COOLDOWN_REASON_KEY) || "");
+    mentalCooldownLastContractId = String(localStorage.getItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY) || "");
+    if (mentalCooldownUntilMs && Date.now() >= mentalCooldownUntilMs) clearMentalCooldown({ silent: true });
+  } catch {
+    mentalCooldownUntilMs = 0;
+    mentalCooldownReason = "";
+    mentalCooldownLastContractId = "";
+  }
+}
+function saveMentalCooldown() {
+  try {
+    localStorage.setItem(MENTAL_COOLDOWN_UNTIL_KEY, String(mentalCooldownUntilMs || 0));
+    localStorage.setItem(MENTAL_COOLDOWN_REASON_KEY, mentalCooldownReason || "");
+    localStorage.setItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY, mentalCooldownLastContractId || "");
+  } catch {}
+}
+function clearMentalCooldown({ silent = false } = {}) {
+  mentalCooldownUntilMs = 0;
+  mentalCooldownReason = "";
+  mentalCooldownLastContractId = "";
+  try {
+    localStorage.removeItem(MENTAL_COOLDOWN_UNTIL_KEY);
+    localStorage.removeItem(MENTAL_COOLDOWN_REASON_KEY);
+    localStorage.removeItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY);
+  } catch {}
+  updateMentalCooldownUI();
+  applyLiveAnalysisPauseUI();
+  if (!silent) toast("🌿 Despeje mental terminado. Volvé despacio.", 2200);
+}
+function isMentalCooldownActive() {
+  const until = Number(mentalCooldownUntilMs || 0);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    clearMentalCooldown({ silent: true });
+    return false;
+  }
+  return true;
+}
+function getMentalCooldownRemainingMs() {
+  return Math.max(0, Number(mentalCooldownUntilMs || 0) - Date.now());
+}
+function fmtMentalCooldownRemaining(ms) {
+  const s = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const m = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+function ensureMentalCooldownOverlay() {
+  if (mentalCooldownOverlayEl && mentalCooldownOverlayEl.isConnected) return mentalCooldownOverlayEl;
+
+  let el = document.getElementById("mentalCooldownOverlay");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "mentalCooldownOverlay";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.setAttribute("aria-label", "Despeje mental");
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.zIndex = "2147483000";
+    el.style.display = "none";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "center";
+    el.style.padding = "10px";
+    el.style.background = "rgba(2,6,23,.96)";
+    el.style.color = "#e5f7ff";
+    el.style.backdropFilter = "blur(10px)";
+    el.style.pointerEvents = "auto";
+    el.style.touchAction = "none";
+    el.innerHTML = `
+      <div id="mentalCooldownArtCard" style="position:relative;width:min(94vw,560px);max-height:96svh;aspect-ratio:941/1672;overflow:hidden;border-radius:26px;box-shadow:0 26px 90px rgba(0,0,0,.72),0 0 42px rgba(34,211,238,.16);">
+        <img id="mentalCooldownBgImg" src="${MENTAL_COOLDOWN_IMAGE_SRC}" alt="Despeje mental" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;pointer-events:none;" draggable="false" />
+
+        <div id="mentalCooldownCountdown" style="position:absolute;left:11.5%;right:11.5%;top:63.2%;height:11.8%;display:flex;align-items:center;justify-content:center;font-size:clamp(50px,15vw,104px);line-height:1;font-weight:950;font-variant-numeric:tabular-nums;letter-spacing:.045em;color:#7dfcff;text-shadow:0 0 10px rgba(125,252,255,.55),0 0 30px rgba(34,211,238,.34);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">10:00</div>
+
+        <div id="mentalCooldownAdviceLayer" style="position:absolute;left:11.5%;right:11.5%;top:77.2%;height:9.6%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+          <div id="mentalCooldownDots" style="display:flex;align-items:center;justify-content:center;gap:clamp(7px,1.9vw,13px);min-height:18px;" aria-label="Progreso de despeje mental"></div>
+          <div id="mentalCooldownTipText" style="max-width:92%;min-height:44px;display:flex;align-items:center;justify-content:center;color:#9ffdf0;text-shadow:0 0 12px rgba(34,211,238,.24);font-size:clamp(13px,3.2vw,18px);line-height:1.28;font-weight:760;">Respirá profundo. No operes desde la urgencia.</div>
+        </div>
+
+        <div id="mentalCooldownReasonText" style="position:absolute;left:11.5%;right:11.5%;bottom:4.3%;height:3.2%;display:flex;align-items:center;justify-content:center;font-size:clamp(10px,2.6vw,13px);font-weight:800;line-height:1.2;color:rgba(203,213,225,.78);text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;opacity:.0;pointer-events:none;">Señales y operaciones pausadas.</div>
+      </div>
+    `;
+
+    const dotsHost = el.querySelector("#mentalCooldownDots");
+    if (dotsHost) {
+      dotsHost.innerHTML = MENTAL_COOLDOWN_TIPS.map((_, i) => `<span class="mentalCooldownDot" data-i="${i}" style="width:clamp(8px,2vw,12px);height:clamp(8px,2vw,12px);border-radius:999px;background:rgba(45,212,191,.34);box-shadow:none;transition:background .25s ease, transform .25s ease, box-shadow .25s ease, opacity .25s ease;opacity:.72;"></span>`).join("");
+    }
+
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+    el.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+    }, { passive: false });
+    document.body.appendChild(el);
+  }
+
+  mentalCooldownOverlayEl = el;
+  return mentalCooldownOverlayEl;
+}
+function updateMentalCooldownAdviceUI(el, remainingMs) {
+  try {
+    const total = Number(MENTAL_COOLDOWN_MS || 600000);
+    const remain = Math.max(0, Number(remainingMs || 0));
+    const elapsed = Math.max(0, total - remain);
+    const stepMs = total / MENTAL_COOLDOWN_TIPS.length;
+    const idx = Math.min(MENTAL_COOLDOWN_TIPS.length - 1, Math.max(0, Math.floor(elapsed / stepMs)));
+    const tipEl = el?.querySelector?.("#mentalCooldownTipText");
+    if (tipEl) tipEl.textContent = MENTAL_COOLDOWN_TIPS[idx] || "Respirá profundo. No operes desde la urgencia.";
+
+    const dots = Array.from(el?.querySelectorAll?.(".mentalCooldownDot") || []);
+    dots.forEach((dot, i) => {
+      const isActive = i === idx;
+      const isDone = i < idx;
+      dot.style.background = isActive ? "#22f4e8" : isDone ? "rgba(34,244,232,.72)" : "rgba(45,212,191,.34)";
+      dot.style.opacity = isActive ? "1" : isDone ? ".88" : ".62";
+      dot.style.transform = isActive ? "scale(1.45)" : "scale(1)";
+      dot.style.boxShadow = isActive ? "0 0 16px rgba(34,244,232,.72), 0 0 26px rgba(34,211,238,.32)" : isDone ? "0 0 8px rgba(34,211,238,.22)" : "none";
+    });
+  } catch {}
+}
+function updateMentalCooldownUI() {
+  const active = isMentalCooldownActive();
+  const el = ensureMentalCooldownOverlay();
+  if (!el) return;
+  if (!active) {
+    el.style.display = "none";
+    return;
+  }
+  const remain = getMentalCooldownRemainingMs();
+  el.style.display = "flex";
+  const cd = el.querySelector("#mentalCooldownCountdown");
+  const rs = el.querySelector("#mentalCooldownReasonText");
+  if (cd) cd.textContent = fmtMentalCooldownRemaining(remain);
+  updateMentalCooldownAdviceUI(el, remain);
+  if (rs) rs.textContent = `${mentalCooldownReason || "OTM registrada"} · señales, gráfico y operaciones bloqueadas`;
+  try { setStatus(`🌿 Despeje mental · ${fmtMentalCooldownRemaining(remain)}`); } catch {}
+}
+function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada") {
+  // Si el OTM también disparó el bloqueo REAL de 1 hora, respetamos ese flujo como estaba:
+  // no mostramos overlay total para que puedas revisar Trades/velas durante la hora.
+  if (isTradeLockedNow()) return false;
+
+  const cid = String(contractId || "");
+  if (cid && cid === mentalCooldownLastContractId && isMentalCooldownActive()) return false;
+
+  mentalCooldownUntilMs = Date.now() + MENTAL_COOLDOWN_MS;
+  mentalCooldownReason = reason || "OTM registrada";
+  mentalCooldownLastContractId = cid;
+  saveMentalCooldown();
+  updateMentalCooldownUI();
+  applyLiveAnalysisPauseUI();
+  toast("🌿 Despeje mental: PWA bloqueada 10 minutos", 2600);
+  return true;
+}
+
 function getScopedDisciplineStorageKey(baseKey) {
   const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
   return `${baseKey}_${scope}`;
@@ -11772,6 +11969,7 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
 
     applyDisciplineOutcome(isWin);
     handleC100ContractClosed(cid, isWin, profit);
+    if (!isWin) startMentalCooldownAfterOtm(cid, `OTM ${String(poc?.underlying || poc?.display_name || "").trim() || "registrada"}`);
     removePendingContract(cid);
 
     const sid = contractSubs.get(cid);
@@ -11893,6 +12091,10 @@ async function ensureAuthorized() {
 }
 
 function assertCanTrade() {
+  updateMentalCooldownUI();
+  if (isMentalCooldownActive()) {
+    throw new Error(`Despeje mental activo (${fmtMentalCooldownRemaining(getMentalCooldownRemainingMs())})`);
+  }
   updateDisciplineLockUI(false);
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
@@ -17548,6 +17750,7 @@ loadLiveAnalysisPaused();
 loadAutoOpenChartSetting();
 loadTradingAccountMode();
 loadC100State();
+loadMentalCooldown();
 loadDiscipline();
 startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
@@ -17584,6 +17787,7 @@ try { ensureSettingsSelfCheckButton(); runSettingsMenuSelfCheck({ silent: true }
 
 applyModalTradeButtonsLayout();
 updateModalCandleStatusUI();
+updateMentalCooldownUI();
 updateDisciplineLockUI(false);
 
 seedTradesJournalFromHistory();
