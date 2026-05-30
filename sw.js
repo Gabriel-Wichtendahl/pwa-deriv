@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v82-merge-ruptura-soportes";
+const CACHE = "deriv-assets-v84-pausa-visual-imagen";
 
 const ASSETS = [
   "./",
@@ -14,6 +14,7 @@ const ASSETS = [
   "./alert.mp3",
   "./bg-neon.png",
   "./despeje-mental-bg.png",
+  "./pausa-visual-bg.png",
 ];
 
 self.addEventListener("install", (e) => {

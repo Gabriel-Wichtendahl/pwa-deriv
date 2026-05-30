@@ -52,13 +52,15 @@
 // ✅ V80: Corrige línea vertical falsa en gráfico en vivo al iniciar vela (dedupe ms=0 y no duplica open).
 // ✅ V81: Soportes estructurales recientes en gráfico vivo: cian = estructural, amarillo = polaridad/usado dos veces.
 // ✅ V82: Merge correcto: restaura Ruptura Débil Giro V78 + autolimpieza + línea viva limpia + soportes estructurales.
+// ✅ V83: Pausa visual 5m si salen 15 señales sin operación REAL; bloqueo total tipo overlay.
+// ✅ V84: Integra imagen Pausa visual con contador real y tips/progreso dinámicos.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V80_FIX_LIVE_OPEN_VERTICAL_LINE_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V84_PAUSA_VISUAL_IMAGEN_20260530";
 
 /*
   Mapa rápido de módulos:
@@ -249,6 +251,29 @@ const MENTAL_COOLDOWN_TIPS = [
   "Volvé cuando puedas explicar la operación antes de tocar el botón.",
   "Si no hay claridad, pasar también es disciplina.",
   "Tu mente es tu herramienta principal. Cuidala."
+];
+
+// V83: pausa visual por saturación de señales sin operar REAL.
+// Si se acumulan 15 señales en REAL sin ejecutar una operación real, bloquea toda la PWA 5 minutos.
+// No reemplaza la disciplina REAL de 1h: si la disciplina está activa, no dispara esta pausa para dejar estudiar Trades/velas.
+const SIGNAL_FATIGUE_COUNT_KEY = "signalFatigueCountSinceRealTrade_v1";
+const SIGNAL_FATIGUE_UNTIL_KEY = "signalFatigueUntilMs_v1";
+const SIGNAL_FATIGUE_REASON_KEY = "signalFatigueReason_v1";
+const SIGNAL_FATIGUE_LIMIT = 15;
+const SIGNAL_FATIGUE_MS = 5 * 60 * 1000;
+const SIGNAL_FATIGUE_MAX_STORED_MS = SIGNAL_FATIGUE_MS + 90 * 1000;
+
+let signalFatigueCount = 0;
+let signalFatigueUntilMs = 0;
+let signalFatigueReason = "";
+let signalFatigueOverlayEl = null;
+const SIGNAL_FATIGUE_IMAGE_SRC = "./pausa-visual-bg.png";
+const SIGNAL_FATIGUE_TIPS = [
+  "Soltá el gráfico. No toda señal pide una operación.",
+  "Cuando mirás de más, la lectura se vuelve ruido.",
+  "Esperar también es una decisión operativa.",
+  "Volvé solo si podés explicar por qué entrarías.",
+  "Cinco minutos sin pantalla pueden salvar una mala entrada."
 ];
 
 let disciplineWindowStartMs = 0;
@@ -3970,6 +3995,7 @@ function shouldAutoOpenChartNow() {
   // Si sale una señal nueva, la app cambia a Señales y abre/reemplaza el gráfico.
   // Solo se bloquea en Configuración para no tocar ajustes mientras los estás editando.
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
+  if (isSignalFatigueCooldownActive()) return false;
 
   return true;
 }
@@ -4014,6 +4040,7 @@ function startUiTimers() {
     updateTickHealthUI();
     updateCountdownUI();
     updateMentalCooldownUI();
+    updateSignalFatigueUI();
     updateDisciplineLockUI(false);
     updateC100PanelUI();
     // ✅ FIX AUTO 58 DEMO/REAL:
@@ -4190,11 +4217,13 @@ function areSignalsPaused(viewName = null) {
   // En vivo es un modo aparte: sigue recibiendo ticks para dibujar, pero no crea nuevas señales
   // ni dispara autoentradas de señales mientras esa pestaña está activa.
   if (isMentalCooldownActive()) return true;
+  if (isSignalFatigueCooldownActive()) return true;
   const view = viewName || getActiveViewName();
   return !!liveAnalysisPaused || view === "live";
 }
 function getSignalsPauseReason(viewName = null) {
   if (isMentalCooldownActive()) return "mental_cooldown";
+  if (isSignalFatigueCooldownActive()) return "signal_fatigue";
   const view = viewName || getActiveViewName();
   if (view === "live") return "live_tab";
   if (liveAnalysisPaused) return "manual";
@@ -10703,6 +10732,198 @@ function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada")
   return true;
 }
 
+
+function loadSignalFatigueCooldown() {
+  try {
+    signalFatigueCount = Number(localStorage.getItem(SIGNAL_FATIGUE_COUNT_KEY) || 0) || 0;
+    signalFatigueUntilMs = Number(localStorage.getItem(SIGNAL_FATIGUE_UNTIL_KEY) || 0) || 0;
+    signalFatigueReason = String(localStorage.getItem(SIGNAL_FATIGUE_REASON_KEY) || "");
+
+    if (signalFatigueUntilMs && isExpiryValueCorruptOrExpired(signalFatigueUntilMs, SIGNAL_FATIGUE_MAX_STORED_MS)) {
+      clearSignalFatigueCooldown({ silent: true, resetCount: true });
+    }
+  } catch {
+    signalFatigueCount = 0;
+    signalFatigueUntilMs = 0;
+    signalFatigueReason = "";
+  }
+}
+function saveSignalFatigueCooldown() {
+  try {
+    localStorage.setItem(SIGNAL_FATIGUE_COUNT_KEY, String(Math.max(0, Number(signalFatigueCount || 0))));
+    localStorage.setItem(SIGNAL_FATIGUE_UNTIL_KEY, String(signalFatigueUntilMs || 0));
+    localStorage.setItem(SIGNAL_FATIGUE_REASON_KEY, signalFatigueReason || "");
+  } catch {}
+}
+function clearSignalFatigueCooldown({ silent = false, resetCount = true } = {}) {
+  signalFatigueUntilMs = 0;
+  signalFatigueReason = "";
+  if (resetCount) signalFatigueCount = 0;
+  try {
+    if (resetCount) localStorage.removeItem(SIGNAL_FATIGUE_COUNT_KEY);
+    localStorage.removeItem(SIGNAL_FATIGUE_UNTIL_KEY);
+    localStorage.removeItem(SIGNAL_FATIGUE_REASON_KEY);
+  } catch {}
+  updateSignalFatigueUI();
+  applyLiveAnalysisPauseUI();
+  if (!silent) toast("👁️ Pausa visual terminada. Volvé con criterio.", 2200);
+}
+function isSignalFatigueCooldownActive() {
+  const until = Number(signalFatigueUntilMs || 0);
+  if (!until) return false;
+  if (isExpiryValueCorruptOrExpired(until, SIGNAL_FATIGUE_MAX_STORED_MS)) {
+    clearSignalFatigueCooldown({ silent: true, resetCount: true });
+    return false;
+  }
+  return true;
+}
+function getSignalFatigueRemainingMs() {
+  return Math.max(0, Number(signalFatigueUntilMs || 0) - Date.now());
+}
+function fmtSignalFatigueRemaining(ms) {
+  return fmtMentalCooldownRemaining(ms);
+}
+function ensureSignalFatigueOverlay() {
+  if (signalFatigueOverlayEl && signalFatigueOverlayEl.isConnected) return signalFatigueOverlayEl;
+
+  let el = document.getElementById("signalFatigueOverlay");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "signalFatigueOverlay";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.setAttribute("aria-label", "Pausa visual por señales");
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.zIndex = "2147482500";
+    el.style.display = "none";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "center";
+    el.style.padding = "10px";
+    el.style.background = "radial-gradient(circle at 50% 18%, rgba(124,58,237,.18), transparent 32%), radial-gradient(circle at 50% 82%, rgba(34,211,238,.13), transparent 34%), rgba(2,6,23,.972)";
+    el.style.color = "#e0f2fe";
+    el.style.backdropFilter = "blur(12px)";
+    el.style.pointerEvents = "auto";
+    el.style.touchAction = "none";
+    el.innerHTML = `
+      <div id="signalFatigueArtCard" style="position:relative;width:min(94vw,560px);max-height:96svh;aspect-ratio:941/1672;overflow:hidden;border-radius:26px;box-shadow:0 26px 90px rgba(0,0,0,.72),0 0 42px rgba(147,51,234,.18),0 0 36px rgba(34,211,238,.12);">
+        <img id="signalFatigueBgImg" src="${SIGNAL_FATIGUE_IMAGE_SRC}" alt="Pausa visual" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;pointer-events:none;" draggable="false" />
+
+        <div id="signalFatigueCountdown" style="position:absolute;left:11.2%;right:11.2%;top:58.6%;height:16.5%;display:flex;align-items:center;justify-content:center;font-size:clamp(54px,16vw,108px);line-height:1;font-weight:950;font-variant-numeric:tabular-nums;letter-spacing:.045em;color:#7dfcff;text-shadow:0 0 10px rgba(125,252,255,.55),0 0 30px rgba(34,211,238,.30),0 0 42px rgba(168,85,247,.20);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">05:00</div>
+
+        <div id="signalFatigueAdviceLayer" style="position:absolute;left:10.5%;right:10.5%;top:77.2%;height:11.2%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+          <div id="signalFatigueDots" style="display:flex;align-items:center;justify-content:center;gap:clamp(8px,2.2vw,14px);min-height:20px;" aria-label="Progreso de pausa visual"></div>
+          <div id="signalFatigueTipText" style="max-width:94%;min-height:46px;display:flex;align-items:center;justify-content:center;color:#d8b4fe;text-shadow:0 0 13px rgba(168,85,247,.30),0 0 12px rgba(34,211,238,.16);font-size:clamp(13px,3.15vw,18px);line-height:1.28;font-weight:770;">Soltá el gráfico. No toda señal pide una operación.</div>
+        </div>
+
+        <div id="signalFatigueReasonText" style="position:absolute;left:10%;right:10%;bottom:3.6%;height:3.4%;display:flex;align-items:center;justify-content:center;font-size:clamp(10px,2.55vw,13px);font-weight:800;line-height:1.2;color:rgba(203,213,225,.72);text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;opacity:0;pointer-events:none;">15 señales sin operación REAL.</div>
+      </div>
+    `;
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+    el.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
+    const dotsHost = el.querySelector("#signalFatigueDots");
+    if (dotsHost) {
+      dotsHost.innerHTML = SIGNAL_FATIGUE_TIPS.map((_, i) => `<span class="signalFatigueDot" data-i="${i}" style="width:clamp(9px,2.2vw,13px);height:clamp(9px,2.2vw,13px);border-radius:999px;background:rgba(168,85,247,.32);box-shadow:none;transition:background .25s ease, transform .25s ease, box-shadow .25s ease, opacity .25s ease;opacity:.72;"></span>`).join("");
+    }
+
+    document.body.appendChild(el);
+  }
+
+  signalFatigueOverlayEl = el;
+  return signalFatigueOverlayEl;
+}
+function updateSignalFatigueAdviceUI(remainMs) {
+  try {
+    const el = ensureSignalFatigueOverlay();
+    const tipEl = el?.querySelector?.("#signalFatigueTipText");
+    const dots = Array.from(el?.querySelectorAll?.(".signalFatigueDot") || []);
+    const total = Math.max(1, Number(SIGNAL_FATIGUE_MS || 1));
+    const elapsed = Math.max(0, Math.min(total, total - Math.max(0, Number(remainMs || 0))));
+    const chunk = total / Math.max(1, SIGNAL_FATIGUE_TIPS.length);
+    const idx = Math.min(SIGNAL_FATIGUE_TIPS.length - 1, Math.floor(elapsed / chunk));
+
+    if (tipEl) tipEl.textContent = SIGNAL_FATIGUE_TIPS[idx] || "Soltá el gráfico. Volvé con una decisión clara.";
+    dots.forEach((dot, i) => {
+      const done = i < idx;
+      const active = i === idx;
+      dot.style.background = active
+        ? "#a78bfa"
+        : done
+          ? "rgba(34,211,238,.78)"
+          : "rgba(168,85,247,.30)";
+      dot.style.boxShadow = active
+        ? "0 0 18px rgba(167,139,250,.80),0 0 26px rgba(34,211,238,.25)"
+        : done
+          ? "0 0 12px rgba(34,211,238,.38)"
+          : "none";
+      dot.style.transform = active ? "scale(1.28)" : "scale(1)";
+      dot.style.opacity = active || done ? "1" : ".58";
+    });
+  } catch {}
+}
+function updateSignalFatigueUI() {
+  const active = isSignalFatigueCooldownActive();
+  const el = ensureSignalFatigueOverlay();
+  if (!el) return;
+  if (!active) {
+    el.style.display = "none";
+    return;
+  }
+  const remain = getSignalFatigueRemainingMs();
+  el.style.display = "flex";
+  const cd = el.querySelector("#signalFatigueCountdown");
+  const rs = el.querySelector("#signalFatigueReasonText");
+  if (cd) cd.textContent = fmtSignalFatigueRemaining(remain);
+  updateSignalFatigueAdviceUI(remain);
+  if (rs) rs.textContent = signalFatigueReason || "15 señales sin operación REAL · señales, gráfico y operaciones pausadas.";
+  try { setStatus(`👁️ Pausa visual · ${fmtSignalFatigueRemaining(remain)}`); } catch {}
+}
+function startSignalFatigueCooldown(reason = "15 señales sin operación REAL") {
+  // No pisa el despeje mental OTM ni la disciplina REAL de 1h.
+  if (isMentalCooldownActive()) return false;
+  if (isTradeLockedNow()) return false;
+  signalFatigueUntilMs = Date.now() + SIGNAL_FATIGUE_MS;
+  signalFatigueReason = reason || "15 señales sin operación REAL";
+  saveSignalFatigueCooldown();
+  updateSignalFatigueUI();
+  applyLiveAnalysisPauseUI();
+  toast("👁️ Pausa visual: 15 señales sin operación REAL · 5 minutos", 3200);
+  return true;
+}
+function resetSignalFatigueCycleAfterRealTrade(contractId = "") {
+  // Una operación REAL corta el ciclo de señales acumuladas.
+  if (activeTradingAccount !== ACCOUNT_MODE_REAL) return;
+  signalFatigueCount = 0;
+  signalFatigueUntilMs = 0;
+  signalFatigueReason = "";
+  saveSignalFatigueCooldown();
+  updateSignalFatigueUI();
+}
+function registerSignalForFatigueGuard(item = null) {
+  try {
+    if (activeTradingAccount !== ACCOUNT_MODE_REAL) return false;
+    if (isTradeLockedNow()) return false;
+    if (isMentalCooldownActive() || isSignalFatigueCooldownActive()) return false;
+    if (item?.trade?.contract_id || item?.signalAutoEntry?.contract_id) return false;
+
+    signalFatigueCount = Math.max(0, Number(signalFatigueCount || 0)) + 1;
+    saveSignalFatigueCooldown();
+
+    if (signalFatigueCount >= SIGNAL_FATIGUE_LIMIT) {
+      return startSignalFatigueCooldown(`15 señales vistas sin operación REAL · pausa visual 5 minutos`);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function getScopedDisciplineStorageKey(baseKey) {
   const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
   return `${baseKey}_${scope}`;
@@ -12379,6 +12600,10 @@ function assertCanTrade() {
   if (isMentalCooldownActive()) {
     throw new Error(`Despeje mental activo (${fmtMentalCooldownRemaining(getMentalCooldownRemainingMs())})`);
   }
+  updateSignalFatigueUI();
+  if (isSignalFatigueCooldownActive()) {
+    throw new Error(`Pausa visual activa (${fmtSignalFatigueRemaining(getSignalFatigueRemainingMs())})`);
+  }
   updateDisciplineLockUI(false);
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
@@ -12550,6 +12775,8 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
+
+    resetSignalFatigueCycleAfterRealTrade(cid);
 
     try {
       Object.assign(tradeExtra, compactAuditFields(extractContractAuditFields(res?.buy || {})));
@@ -17975,6 +18202,9 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   updateRowChartBtn(item);
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
 
+  const fatigueTriggered = registerSignalForFatigueGuard(item);
+  if (fatigueTriggered) return item;
+
   if (soundEnabled && sound) {
     sound.currentTime = 0;
     sound.play().catch(() => {});
@@ -18225,6 +18455,7 @@ loadAutoOpenChartSetting();
 loadTradingAccountMode();
 loadC100State();
 loadMentalCooldown();
+loadSignalFatigueCooldown();
 loadDiscipline();
 startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
