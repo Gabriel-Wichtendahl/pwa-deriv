@@ -39,24 +39,10 @@
 // ✅ V57: En vivo opera igual que Señales: puntos manuales y ejecución automática al segundo 58
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
-// ✅ V68: Gestión IC2 5% escalonada por saldo hasta 2000, separada DEMO/REAL
-// ✅ V69: Disciplina REAL: 2 OTM o ciclo IC2 completo (2 ITM seguidos) bloquea 1h; DEMO libre para pruebas
-// ✅ V70: Merge verificado: conserva V68 escalonado + V69 disciplina REAL + V66 timing pre-proposal
-// ✅ V71: Nuevo modo 🔁 Ruptura Débil Giro: rompe zona pero no expande, responde irregular y prepara giro.
-// ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
-// ✅ V75: Ruptura Débil Giro con filtro duro: solo velas alcistas y solo VENTA/PUT.
-// ✅ V76: Ruptura Débil Giro enfocado en arranque irregular alcista temprano (0-30s), con prioridad si entra vendedor fuerte.
-// ✅ V77: Ajuste con ejemplos marcados: no depende de resistencia perfecta, prioriza devuelve fuerte/vendedor 20-30s y guarda logic explicativo.
-// ✅ V78: Ruptura Débil Giro: prealerta temprana oculta; señal visible recién 20-30s y bloquea pérdida fuerte del open antes de 20s.
-// ✅ V79: Autolimpieza de bloqueos vencidos/corruptos de Despeje mental y Disciplina REAL.
-// ✅ V80: Corrige línea vertical falsa en gráfico en vivo al iniciar vela (dedupe ms=0 y no duplica open).
-// ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
-// ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
-// ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V80_FIX_LIVE_OPEN_VERTICAL_LINE_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V10_MODAL_NAV_FEEDBACK_20260511";
 
 /*
   Mapa rápido de módulos:
@@ -133,31 +119,15 @@ const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no in
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
 const C100_MAX_LEVEL = 2;
-const C100_MODE_LABEL = "IC2 + 5% escalonado";
+const C100_MODE_LABEL = "IC2";
 const C100_LEVELS = [
   { level: 1, base: DEFAULT_STAKE, compound: DEFAULT_STAKE },
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
-// V68: stake base IC2 por escalones de saldo.
-// Menos de 210 => base 100 => stake 5.
-// 210/310/410/510/610... => base 200/300/400/500/600...
-// Tope final: al llegar a 2000 exactos o más => base 2000 / stake 100.
-const C100_BALANCE_STEP_ENABLED = true;
-const C100_BALANCE_STEP_PERCENT = 0.05;
-const C100_BALANCE_STEP_MIN_BASE = 100;
-const C100_BALANCE_STEP_MAX_BASE = 2000;
-const C100_BALANCE_STEP_FIRST_THRESHOLD = 210;
-const C100_BALANCE_STEP_SIZE = 100;
-const ACCOUNT_BALANCE_CACHE_TTL_MS = 15000;
-
 const EXECUTION_MODE_KEY = "executionMode_v1";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
-const ENTRY_TIMING_MODE_KEY = "entryTimingMode_v1";
-const ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY = "AUTO58_NEXT_CANDLE_EXPIRY";
-const ENTRY_TIMING_AUTO58_DURATION_1M = "AUTO58_DURATION_1M";
-let entryTimingMode = ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
@@ -199,10 +169,6 @@ let autoOpenChartOnSignal = false;
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
 let c100PanelEl = null;
-const accountBalanceCache = {
-  [ACCOUNT_MODE_DEMO]: { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 },
-  [ACCOUNT_MODE_REAL]: { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 },
-};
 
 /* =========================
    Disciplina
@@ -213,41 +179,9 @@ const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
 const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
 const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
 
-// V70: disciplina SOLO para REAL.
-// - 2 OTM acumulados en la ventana actual => bloqueo 1h.
-// - ciclo IC2 completo (2 ITM consecutivos: nivel 1 + nivel 2) => bloqueo 1h.
-const DISCIPLINE_MAX_WINS = 2;
+const DISCIPLINE_MAX_WINS = 3;
 const DISCIPLINE_MAX_LOSSES = 2;
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
-const DISCIPLINE_SCOPE_LABEL = "REAL";
-
-// Despeje mental: bloqueo total corto después de 1 OTM.
-// Es global para la PWA (DEMO/REAL) para evitar operar por impulso.
-// El bloqueo REAL de 1 hora se mantiene como está y tiene prioridad visual.
-const MENTAL_COOLDOWN_UNTIL_KEY = "mentalCooldownUntilMs_v1";
-const MENTAL_COOLDOWN_REASON_KEY = "mentalCooldownReason_v1";
-const MENTAL_COOLDOWN_LAST_CONTRACT_KEY = "mentalCooldownLastContractId_v1";
-const MENTAL_COOLDOWN_MS = 10 * 60 * 1000;
-const MENTAL_COOLDOWN_MAX_STORED_MS = MENTAL_COOLDOWN_MS + 90 * 1000; // seguridad: nunca debe quedar más de ~11m30s
-const DISCIPLINE_LOCK_MAX_STORED_MS = DISCIPLINE_LOCK_MS + 2 * 60 * 1000; // seguridad: bloqueo REAL nunca debe quedar más de ~62m
-
-let mentalCooldownUntilMs = 0;
-let mentalCooldownReason = "";
-let mentalCooldownLastContractId = "";
-let mentalCooldownOverlayEl = null;
-const MENTAL_COOLDOWN_IMAGE_SRC = "./despeje-mental-bg.png";
-const MENTAL_COOLDOWN_TIPS = [
-  "Respirá profundo. No operes desde la urgencia.",
-  "Una pérdida no se recupera con impulso, se recupera con criterio.",
-  "Soltá el gráfico. La claridad vuelve cuando bajás el ritmo.",
-  "No busques revancha. Buscá una lectura limpia.",
-  "Tu mejor operación ahora es esperar.",
-  "Aceptá el OTM sin pelearlo. El plan sigue.",
-  "La próxima entrada necesita calma, no presión.",
-  "Volvé cuando puedas explicar la operación antes de tocar el botón.",
-  "Si no hay claridad, pasar también es disciplina.",
-  "Tu mente es tu herramienta principal. Cuidala."
-];
 
 let disciplineWindowStartMs = 0;
 let disciplineWins = 0;
@@ -767,7 +701,6 @@ const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
 const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
-const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -780,7 +713,6 @@ const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FU
 const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
-const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -790,7 +722,6 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
-  if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
   return MODE_SNR_SEGUNDO_TOQUE;
@@ -801,9 +732,6 @@ function isDynamicLineMode(mode) {
 function isSNRPolaridadMode(mode) {
   return normalizeSignalMode(mode) === MODE_SNR_POLARIDAD;
 }
-function isRupturaDebilGiroMode(mode) {
-  return normalizeSignalMode(mode) === MODE_RUPTURA_DEBIL_GIRO;
-}
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
   return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
@@ -811,7 +739,6 @@ function isGiroFamilyMode(mode) {
 function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
-  if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
@@ -834,15 +761,13 @@ function saveAnalysisMode(mode) {
 function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
-  if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
-  if (m === MODE_SNR_POLARIDAD) return MODE_RUPTURA_DEBIL_GIRO;
-  if (m === MODE_RUPTURA_DEBIL_GIRO) return MODE_LINEA_DINAMICA;
+  if (m === MODE_SNR_POLARIDAD) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
@@ -1659,14 +1584,6 @@ let manualGiroButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
 const SIGNAL_AUTO_ENTRY_MS = 58000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
-// V65: en el timing de próxima vela no compramos apenas el reloj marca 58s.
-// Esperamos a que haya llegado el tick real >=58s y solo disparamos dentro de esta ventana.
-const SIGNAL_AUTO_POST58_MAX_MS = 59200;
-const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
-// V66: preparar proposal ANTES del post-58 para que en 58 solo se compre.
-const SIGNAL_AUTO_PREPROPOSAL_START_MS = 56000;
-const SIGNAL_AUTO_PREPROPOSAL_END_MS = 58000;
-const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 10000;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
@@ -1900,8 +1817,6 @@ let liveReplayLastDrawAt = 0;
 let liveSignalConfirmations = [];
 let liveSignalMinuteKey = "";
 let liveAutoEntryState = { minuteKey: "", attempted: false, status: "idle", side: "", contract_id: "", error: "" };
-const autoPreProposalInFlight = new Set();
-const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 
 // V32: caché específica para la vista Velas 1m del modal.
@@ -2065,10 +1980,10 @@ function ensureTradingAccountButton() {
     syncAccountScopedSettingsUI();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
-    // V67: la gestión IC2 queda separada por cuenta. Al cambiar DEMO/REAL,
-    // cargamos el estado propio de esa cuenta en vez de pisar el anterior.
-    loadC100State();
-    void refreshAccountBalance({ force: true }).catch(() => {});
+    if (c100State) {
+      c100State.accountMode = activeTradingAccount || ACCOUNT_MODE_DEMO;
+      saveC100State();
+    }
     updateC100PanelUI();
     updateDisciplineLockUI(false);
     if (chartModal && !chartModal.classList.contains("hidden")) {
@@ -2136,150 +2051,9 @@ function applyTradingAccountBannerUI() {
    Interés Compuesto 2 niveles
    Nota: se conservan nombres internos C100* para no romper integraciones antiguas.
 ========================= */
-function getCurrentAccountScope() {
-  return activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
-}
-function getScopedStorageKey(baseKey) {
-  return `${baseKey}_${getCurrentAccountScope()}`;
-}
-function getC100StateStorageKey() {
-  return getScopedStorageKey(C100_STATE_KEY);
-}
-function getScopedTradeStakeKey() {
-  return getScopedStorageKey(TRADE_STAKE_KEY);
-}
-function setCachedAccountBalance(balance, currency = DEFAULT_CURRENCY) {
-  const b = Number(balance);
-  if (!Number.isFinite(b)) return null;
-  const scope = getCurrentAccountScope();
-  accountBalanceCache[scope] = {
-    balance: Number(b.toFixed(2)),
-    currency: String(currency || DEFAULT_CURRENCY),
-    updatedAt: Date.now(),
-  };
-  try {
-    localStorage.setItem(getScopedStorageKey("derivAccountBalanceCache_v1"), JSON.stringify(accountBalanceCache[scope]));
-  } catch {}
-  return accountBalanceCache[scope];
-}
-function loadCachedAccountBalance() {
-  const scope = getCurrentAccountScope();
-  try {
-    const raw = localStorage.getItem(getScopedStorageKey("derivAccountBalanceCache_v1"));
-    if (raw) {
-      const obj = JSON.parse(raw);
-      const b = Number(obj?.balance);
-      if (Number.isFinite(b)) {
-        accountBalanceCache[scope] = {
-          balance: Number(b.toFixed(2)),
-          currency: String(obj?.currency || DEFAULT_CURRENCY),
-          updatedAt: Number(obj?.updatedAt || 0),
-        };
-      }
-    }
-  } catch {}
-  return accountBalanceCache[scope] || { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 };
-}
-function getCachedAccountBalance() {
-  const scope = getCurrentAccountScope();
-  const c = accountBalanceCache[scope];
-  if (c && Number.isFinite(Number(c.balance))) return c;
-  return loadCachedAccountBalance();
-}
-function adjustCachedAccountBalanceByProfit(profit) {
-  const p = Number(profit);
-  if (!Number.isFinite(p) || p === 0) return;
-  const c = getCachedAccountBalance();
-  const b = Number(c?.balance);
-  if (!Number.isFinite(b)) return;
-  setCachedAccountBalance(b + p, c.currency || DEFAULT_CURRENCY);
-}
-async function refreshAccountBalance({ force = false } = {}) {
-  const cached = getCachedAccountBalance();
-  if (!force && Number.isFinite(Number(cached.balance)) && Date.now() - Number(cached.updatedAt || 0) < ACCOUNT_BALANCE_CACHE_TTL_MS) {
-    return cached;
-  }
-  if (!ws || ws.readyState !== 1 || !getDerivToken()) return cached;
-
-  const res = await wsRequest({ balance: 1 }, 10000);
-  if (res?.error) throw new Error(res.error.message || "balance error");
-  const payload = res?.balance || {};
-  const b = Number(payload.balance ?? payload.amount ?? payload);
-  const cur = payload.currency || DEFAULT_CURRENCY;
-  return setCachedAccountBalance(b, cur) || cached;
-}
-function getC100StepInfo(balanceRaw = null) {
-  const cached = getCachedAccountBalance();
-  const balance = Number(balanceRaw ?? cached?.balance);
-  const hasBalance = Number.isFinite(balance);
-
-  if (!C100_BALANCE_STEP_ENABLED || !hasBalance) {
-    const manualStake = Number(getTradeStake());
-    const safeStake = Number.isFinite(manualStake) && manualStake > 0 ? manualStake : DEFAULT_STAKE;
-    return {
-      enabled: false,
-      hasBalance,
-      balance: hasBalance ? Number(balance.toFixed(2)) : null,
-      currency: cached?.currency || DEFAULT_CURRENCY,
-      base: null,
-      stake: Number(safeStake.toFixed(2)),
-      nextThreshold: null,
-      downThreshold: null,
-      capped: false,
-      source: hasBalance ? "manual_fallback" : "manual_sin_balance",
-    };
-  }
-
-  let base = C100_BALANCE_STEP_MIN_BASE;
-  if (balance >= C100_BALANCE_STEP_MAX_BASE) {
-    // Opción B: el último escalón se activa al llegar a 2000 exactos, no en 2010.
-    base = C100_BALANCE_STEP_MAX_BASE;
-  } else if (balance >= C100_BALANCE_STEP_FIRST_THRESHOLD) {
-    // Escalones: 210=>200, 310=>300, 410=>400, 510=>500, 610=>600...
-    base = Math.floor((balance - 10) / C100_BALANCE_STEP_SIZE) * C100_BALANCE_STEP_SIZE;
-  }
-
-  base = Math.max(C100_BALANCE_STEP_MIN_BASE, Math.min(C100_BALANCE_STEP_MAX_BASE, base));
-  const stake = Number((base * C100_BALANCE_STEP_PERCENT).toFixed(2));
-  const nextThreshold = base >= C100_BALANCE_STEP_MAX_BASE
-    ? null
-    : Math.min(C100_BALANCE_STEP_MAX_BASE, base + 110);
-  const downThreshold = base <= C100_BALANCE_STEP_MIN_BASE
-    ? null
-    : (base >= C100_BALANCE_STEP_MAX_BASE ? C100_BALANCE_STEP_MAX_BASE : base + 10);
-
-  return {
-    enabled: true,
-    hasBalance: true,
-    balance: Number(balance.toFixed(2)),
-    currency: cached?.currency || DEFAULT_CURRENCY,
-    base,
-    stake,
-    nextThreshold,
-    downThreshold,
-    capped: base >= C100_BALANCE_STEP_MAX_BASE,
-    source: "balance_step_5pct",
-  };
-}
 function getC100BaseStake() {
-  const info = getC100StepInfo();
-  return Number(info.stake.toFixed(2));
-}
-function getC100TradeAuditExtra(stakeUsed = null) {
-  if (!isC100Active()) return {};
-  const info = getC100StepInfo();
-  return {
-    c100_balance_step_enabled: !!info.enabled,
-    c100_balance_step_source: String(info.source || ""),
-    c100_balance: Number.isFinite(Number(info.balance)) ? Number(info.balance) : null,
-    c100_balance_currency: String(info.currency || DEFAULT_CURRENCY),
-    c100_balance_base: Number.isFinite(Number(info.base)) ? Number(info.base) : null,
-    c100_base_stake: Number(info.stake || 0),
-    c100_effective_stake: Number.isFinite(Number(stakeUsed)) ? Number(stakeUsed) : Number(getC100Stake()),
-    c100_next_threshold: info.nextThreshold,
-    c100_down_threshold: info.downThreshold,
-    c100_step_cap: info.capped ? C100_BALANCE_STEP_MAX_BASE : null,
-  };
+  const n = Number(getTradeStake());
+  return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : Number(DEFAULT_STAKE.toFixed(2));
 }
 function getC100Level(level = 1) {
   const base = getC100BaseStake();
@@ -2340,25 +2114,19 @@ function normalizeC100State(raw) {
 }
 function loadC100State() {
   try {
-    const scopedKey = getC100StateStorageKey();
-    let raw = localStorage.getItem(scopedKey);
-    // Migración suave: si venías usando la clave vieja, solo la toma para DEMO.
-    if (raw === null && getCurrentAccountScope() === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(C100_STATE_KEY);
+    const raw = localStorage.getItem(C100_STATE_KEY);
     c100State = normalizeC100State(raw ? JSON.parse(raw) : null);
-    c100State.accountMode = getCurrentAccountScope();
   } catch {
     c100State = makeFreshC100State();
   }
-  loadCachedAccountBalance();
   saveC100State();
   return c100State;
 }
 function saveC100State() {
   try {
     if (!c100State) c100State = makeFreshC100State();
-    c100State.accountMode = getCurrentAccountScope();
     c100State.updatedAt = Date.now();
-    localStorage.setItem(getC100StateStorageKey(), JSON.stringify(c100State));
+    localStorage.setItem(C100_STATE_KEY, JSON.stringify(c100State));
   } catch {}
 }
 function resetC100Gestion({ keepDay = true, keepEnabled = true } = {}) {
@@ -2402,9 +2170,7 @@ function getC100StatusText() {
   if (!c100State.enabled) return "Desactivado";
   if (c100State.pendingContractId) return "Contrato pendiente";
   if (Number(c100State.compoundStep || 0) === 1) return "Nivel 2: compuesto listo";
-  const info = getC100StepInfo();
-  if (info.enabled) return `Nivel 1: 5% de base ${info.base}`;
-  return "Nivel 1: stake manual";
+  return "Nivel 1: stake base";
 }
 function getC100DayNet() {
   return Number(c100State?.dayProfit || 0) - Number(c100State?.dayLoss || 0);
@@ -2485,10 +2251,6 @@ function updateC100PanelUI() {
   const baseStake = getC100BaseStake();
   const net = getC100DayNet();
   const status = getC100StatusText();
-  const stepInfo = getC100StepInfo();
-  const balanceTxt = Number.isFinite(Number(stepInfo.balance)) ? `$${Number(stepInfo.balance).toFixed(2)} ${escapeHtml(stepInfo.currency || DEFAULT_CURRENCY)}` : "sin saldo leído";
-  const nextTxt = stepInfo.nextThreshold ? `$${Number(stepInfo.nextThreshold).toFixed(2)}` : "tope 2000";
-  const downTxt = stepInfo.downThreshold ? `$${Number(stepInfo.downThreshold).toFixed(2)}` : "—";
 
   if (badge) {
     badge.textContent = active ? `ON · N${Number(c100State.compoundStep || 0) + 1}/2` : "OFF";
@@ -2508,14 +2270,10 @@ function updateC100PanelUI() {
   if (info) {
     info.innerHTML = `
       <div>Modo: <b>${C100_MODE_LABEL}</b> · Cuenta activa: <b>${getTradingAccountLabel()}</b></div>
-      <div>Timing: <b>${escapeHtml(getEntryTimingShortText())}</b></div>
-      <div>Saldo leído: <b>${balanceTxt}</b></div>
-      <div>Regla: <b>5% escalonado cada $100 hasta saldo $2000 · tope stake $100</b></div>
+      <div>Regla: <b>Nivel 1 stake base → si gana, Nivel 2 stake + ganancia → reset</b></div>
       <div>Nivel actual: <b>${Number(c100State.compoundStep || 0) + 1} / ${C100_MAX_LEVEL}</b></div>
-      <div>Base activa: <b>${stepInfo.enabled ? "$" + Number(stepInfo.base).toFixed(2) : "manual"}</b></div>
       <div>Stake base: <b>$${baseStake.toFixed(2)}</b></div>
       <div>Próximo stake: <b>$${stake.toFixed(2)}</b></div>
-      <div>Próximo aumento: <b>${nextTxt}</b> · Baja al anterior si cae de: <b>${downTxt}</b></div>
       <div>Estado: <b>${escapeHtml(status)}</b></div>
       <div>Ganancia/Pérdida del día: <b>${net >= 0 ? "+" : "-"}$${Math.abs(net).toFixed(2)}</b></div>
       ${c100State.pendingContractId ? `<div>Contrato pendiente: <b>${escapeHtml(c100State.pendingContractId)}</b></div>` : ""}
@@ -2554,7 +2312,6 @@ function updateC100AfterResult(result, profit = null) {
 
   c100State.pendingContractId = "";
   c100State.lastResult = normalized;
-  if (Number.isFinite(profitNum)) adjustCachedAccountBalanceByProfit(profitNum);
 
   if (normalized === "ITM") {
     const gain = Number.isFinite(profitNum) && profitNum > 0 ? profitNum : stakeUsed * (C100_PAYOUT_REQUIRED / 100);
@@ -2567,12 +2324,6 @@ function updateC100AfterResult(result, profit = null) {
       c100State.nextCompoundStake = nextStake;
       c100State.currentStake = nextStake;
       c100State.lastResult = "ITM_NIVEL_1_PASA_A_NIVEL_2";
-
-      // V69: en REAL, primer ITM del ciclo IC2. No bloquea todavía.
-      if (!isDisciplineBypassedForCurrentAccount() && !isTradeLockedNow()) {
-        disciplineWins = 1;
-        saveDiscipline();
-      }
     } else {
       const dayProfit = Number(c100State.dayProfit || 0);
       const dayLoss = Number(c100State.dayLoss || 0);
@@ -2581,13 +2332,6 @@ function updateC100AfterResult(result, profit = null) {
       c100State.dayProfit = dayProfit;
       c100State.dayLoss = dayLoss;
       c100State.lastResult = "CICLO_IC2_COMPLETO";
-
-      // V69: dos ITM consecutivos completando IC2 => bloqueo REAL por 1h.
-      if (!isDisciplineBypassedForCurrentAccount() && !isTradeLockedNow()) {
-        disciplineWins = DISCIPLINE_MAX_WINS;
-        saveDiscipline();
-        lockRealDiscipline("IC2 completo: 2 ITM seguidos");
-      }
     }
   } else {
     const loss = Number.isFinite(profitNum) && profitNum < 0 ? Math.abs(profitNum) : stakeUsed;
@@ -2598,12 +2342,6 @@ function updateC100AfterResult(result, profit = null) {
     c100State.dayProfit = dayProfit;
     c100State.dayLoss = dayLoss;
     c100State.lastResult = wasLevel2 ? "OTM_NIVEL_2_RESET" : "OTM_NIVEL_1_RESET";
-
-    // V69: una OTM corta la secuencia de 2 ITM IC2.
-    if (!isDisciplineBypassedForCurrentAccount()) {
-      disciplineWins = 0;
-      saveDiscipline();
-    }
   }
 
   saveC100State();
@@ -2613,11 +2351,9 @@ function updateC100AfterResult(result, profit = null) {
   if (normalized === "ITM" && !wasLevel2) {
     toast(`✅ IC2: nivel 1 ganado · próximo stake $${getC100Stake().toFixed(2)}`, 2400);
   } else if (normalized === "ITM" && wasLevel2) {
-    if (isTradeLockedNow()) toast("🔒 IC2 completo: REAL bloqueada 1h", 4200);
-    else toast("✅ IC2: ciclo de 2 niveles completo · vuelve al stake base", 2600);
+    toast("✅ IC2: ciclo de 2 niveles completo · vuelve al stake base", 2600);
   } else {
-    if (isTradeLockedNow() && disciplineLosses >= DISCIPLINE_MAX_LOSSES) toast("🔒 2 OTM: REAL bloqueada 1h", 4200);
-    else toast("↺ IC2: OTM registrado · vuelve al stake base", 2400);
+    toast("↺ IC2: OTM registrado · vuelve al stake base", 2400);
   }
 }
 function handleC100ContractClosed(contractId, isWin, profit = null) {
@@ -2696,7 +2432,6 @@ function ensureExecutionModeButton() {
     executionMode = shouldUseAutoHighLowExecution() ? EXECUTION_MODE_RISE_FALL : EXECUTION_MODE_HIGHLOW_AUTO;
     saveExecutionMode();
     applyExecutionModeUI();
-    applyEntryTimingModeUI();
     if (shouldUseAutoHighLowExecution()) {
       for (const it of history.slice(-12)) ensureSignalAutoPrecalc(it);
     } else {
@@ -2707,413 +2442,6 @@ function ensureExecutionModeButton() {
   };
 
   applyExecutionModeUI();
-  return btn;
-}
-
-
-/* =========================
-   Timing de entrada Rise/Fall
-   - AUTO 58 normal: duration 1m.
-   - AUTO post-58 cierre 60: espera el tick real >=58s, envía después de ese tick,
-     intenta programar inicio en la próxima vela y fija el cierre al segundo 60.
-   - V66: la proposal se prepara desde 56s para que al post-58 la compra sea inmediata.
-========================= */
-function normalizeEntryTimingMode(mode) {
-  const m = String(mode || "").toUpperCase().trim();
-  if (m === ENTRY_TIMING_AUTO58_DURATION_1M) return ENTRY_TIMING_AUTO58_DURATION_1M;
-  return ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
-}
-function loadEntryTimingMode() {
-  try {
-    entryTimingMode = normalizeEntryTimingMode(localStorage.getItem(ENTRY_TIMING_MODE_KEY) || ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY);
-  } catch {
-    entryTimingMode = ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
-  }
-}
-function saveEntryTimingMode() {
-  try { localStorage.setItem(ENTRY_TIMING_MODE_KEY, normalizeEntryTimingMode(entryTimingMode)); } catch {}
-}
-function isNextCandleExpiryTiming() {
-  // High/Low usa barreras/proposals propios; este timing aplica a Rise/Fall.
-  return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY && !shouldUseAutoHighLowExecution();
-}
-function isEntryTimingStoredNextCandle() {
-  return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
-}
-function getEntryTimingModeLabel() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "⏱️ AUTO pre-56/post-58 → cierre 60 (solo RF)" : "⏱️ AUTO pre-56/post-58 → cierre 60";
-  return "⏱️ AUTO 58 normal";
-}
-function getEntryTimingShortText() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "AUTO pre-56/post-58 → cierre 60 (solo Rise/Fall)" : "AUTO prearmado · cierre vela sig.";
-  return "AUTO 58 · duración 1m";
-}
-function buildNextCandleTimingPlan(item = null) {
-  const itemMinute = Number(item?.minute);
-  const baseMinute = Number.isFinite(itemMinute) && itemMinute > 0 ? itemMinute : currentServerMinute();
-  const currentStartEpochSec = baseMinute * 60;
-  const nextStartEpochSec = currentStartEpochSec + 60;
-  const nextExpiryEpochSec = nextStartEpochSec + 60;
-  const nowEpochSec = Math.floor(serverNowMs() / 1000);
-  return {
-    mode: ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY,
-    current_minute: baseMinute,
-    current_start_epoch_sec: currentStartEpochSec,
-    next_start_epoch_sec: nextStartEpochSec,
-    next_expiry_epoch_sec: nextExpiryEpochSec,
-    now_epoch_sec: nowEpochSec,
-    planned_duration_sec: nextExpiryEpochSec - nextStartEpochSec,
-  };
-}
-function buildRiseFallBaseParams(side, symbol, stake) {
-  return {
-    amount: stake,
-    basis: "stake",
-    contract_type: side,
-    currency: DEFAULT_CURRENCY,
-    symbol,
-  };
-}
-function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
-  const base = buildRiseFallBaseParams(side, symbol, stake);
-  if (!isNextCandleExpiryTiming()) {
-    return [{
-      label: ENTRY_TIMING_AUTO58_DURATION_1M,
-      params: {
-        ...base,
-        duration: Number(DEFAULT_DURATION) || 1,
-        duration_unit: DEFAULT_DURATION_UNIT || "m",
-      },
-      timing: {
-        mode: ENTRY_TIMING_AUTO58_DURATION_1M,
-        variant: "duration_1m",
-        duration: Number(DEFAULT_DURATION) || 1,
-        duration_unit: DEFAULT_DURATION_UNIT || "m",
-      },
-    }];
-  }
-
-  const plan = buildNextCandleTimingPlan(item);
-  return [
-    {
-      label: "AUTO58_DATE_START_EXPIRY",
-      params: {
-        ...base,
-        date_start: plan.next_start_epoch_sec,
-        date_expiry: plan.next_expiry_epoch_sec,
-      },
-      timing: {
-        ...plan,
-        variant: "date_start_plus_date_expiry",
-        message: "AUTO pre-56/post-58: proposal prearmada; compra luego del tick >=58s; inicio programado en próxima vela y cierre fijo al segundo 60.",
-      },
-    },
-    {
-      label: "AUTO58_DATE_EXPIRY_ONLY",
-      params: {
-        ...base,
-        date_expiry: plan.next_expiry_epoch_sec,
-      },
-      timing: {
-        ...plan,
-        variant: "date_expiry_only",
-        fallback_from: "date_start_plus_date_expiry",
-        message: "AUTO pre-56/post-58: Deriv no aceptó inicio programado; se usa proposal prearmada con cierre fijo al segundo 60.",
-      },
-    },
-  ];
-}
-function getRiseFallTimingExtra(timing = null) {
-  if (!timing || typeof timing !== "object") return {};
-  return {
-    entry_timing_mode: String(timing.mode || ""),
-    entry_timing_variant: String(timing.variant || ""),
-    planned_next_start_time: Number(timing.next_start_epoch_sec || 0) || null,
-    planned_expiry_time: Number(timing.next_expiry_epoch_sec || 0) || null,
-    planned_duration_sec: Number(timing.planned_duration_sec || 0) || null,
-    entry_timing_message: String(timing.message || ""),
-    entry_timing: { ...timing },
-  };
-}
-function extractContractAuditFields(src = null) {
-  const o = src && typeof src === "object" ? src : {};
-  const num = (...keys) => {
-    for (const k of keys) {
-      const v = Number(o?.[k]);
-      if (Number.isFinite(v)) return v;
-    }
-    return null;
-  };
-  const str = (...keys) => {
-    for (const k of keys) {
-      const v = o?.[k];
-      if (v !== undefined && v !== null && String(v) !== "") return String(v);
-    }
-    return "";
-  };
-  return {
-    purchase_time: num("purchase_time", "buy_time", "transaction_time"),
-    start_time: num("date_start", "start_time"),
-    expiry_time: num("date_expiry", "expiry_time"),
-    entry_spot: num("entry_spot", "entry_tick", "entry_spot_display_value"),
-    entry_spot_time: num("entry_spot_time", "entry_tick_time"),
-    exit_spot: num("exit_spot", "exit_tick", "exit_spot_display_value"),
-    exit_spot_time: num("exit_spot_time", "exit_tick_time"),
-    buy_price: num("buy_price", "ask_price"),
-    sell_price: num("sell_price"),
-    payout: num("payout"),
-    longcode: str("longcode", "shortcode"),
-  };
-}
-function compactAuditFields(obj = {}) {
-  const out = {};
-  for (const [k, v] of Object.entries(obj || {})) {
-    if (v !== null && v !== undefined && v !== "") out[k] = v;
-  }
-  return out;
-}
-async function requestRiseFallProposalWithTiming(side, symbol, stake, item = null, timeoutMs = 12000) {
-  const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
-  const errors = [];
-  for (const variant of variants) {
-    try {
-      const res = await wsRequest({ proposal: 1, ...variant.params }, timeoutMs);
-      if (res?.error) throw new Error(res.error.message || res.error.code || "proposal error");
-      return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
-    } catch (e) {
-      errors.push(`${variant.label}: ${e?.message || e}`);
-    }
-  }
-  throw new Error(`Deriv rechazó el timing de próxima vela (${errors.join(" | ")}). Cambiá a AUTO 58 normal si querés usar duration 1m.`);
-}
-async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, timeoutMs = 20000) {
-  const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
-  const errors = [];
-  for (const variant of variants) {
-    try {
-      const res = await wsRequest({ buy: 1, price: stake, parameters: variant.params }, timeoutMs);
-      if (res?.error) throw new Error(res.error.message || res.error.code || "buy error");
-      return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
-    } catch (e) {
-      errors.push(`${variant.label}: ${e?.message || e}`);
-    }
-  }
-  throw new Error(`Deriv rechazó la compra con timing de próxima vela (${errors.join(" | ")}). Cambiá a AUTO 58 normal si querés usar duration 1m.`);
-}
-
-function getAutoPreProposalKey(item, side, symbol, stake) {
-  const plan = buildNextCandleTimingPlan(item);
-  const id = String(item?.id || `AUTO_PRE_${plan.current_minute}_${symbol}_${side}`);
-  return `${id}|${String(side || "")}|${String(symbol || "")}|${Number(stake || 0).toFixed(2)}|${plan.next_expiry_epoch_sec}`;
-}
-function isAutoPreProposalWindow(item = null) {
-  const ms = getSignalConfirmationMs(item);
-  return ms >= SIGNAL_AUTO_PREPROPOSAL_START_MS && ms <= SIGNAL_AUTO_PREPROPOSAL_END_MS;
-}
-function getValidAutoPreProposal(item, side, symbol, stake) {
-  const pp = item?.signalAutoPreProposal;
-  if (!pp || pp.status !== "ready") return null;
-  const safeSide = normalizeSignalConfirmationSide(side);
-  if (!safeSide || String(pp.side || "") !== safeSide) return null;
-  if (String(pp.symbol || "") !== String(symbol || "")) return null;
-  const expectedStake = Number(stake);
-  const ppStake = Number(pp.stake);
-  if (!Number.isFinite(expectedStake) || !Number.isFinite(ppStake) || Math.abs(expectedStake - ppStake) > 0.005) return null;
-  if (!pp.proposal_id || !Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return null;
-  const plan = buildNextCandleTimingPlan(item);
-  if (Number(pp?.timing?.next_expiry_epoch_sec || 0) !== Number(plan.next_expiry_epoch_sec)) return null;
-  if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
-  return pp;
-}
-function markAutoPreProposalOnItem(item, payload) {
-  if (!item) return;
-  item.signalAutoPreProposal = payload && typeof payload === "object" ? { ...payload } : null;
-  try { saveHistory(history); } catch {}
-  try { if (modalCurrentItem && item.id && modalCurrentItem.id === item.id) updateSignalConfirmationUI(); } catch {}
-}
-async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preproposal") {
-  const safeSide = normalizeSignalConfirmationSide(side);
-  if (!item || !safeSide) return false;
-  if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
-  if (item?.trade?.badge || item?.signalAutoEntry?.attempted) return false;
-  if (!isAutoPreProposalWindow(item)) return false;
-
-  const symbol = String(item.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
-  try {
-    await ensureAuthorized();
-    await refreshAccountBalance({ force: false });
-  } catch {}
-  const stake = Number(getEffectiveTradeStake().toFixed(2));
-  const existing = getValidAutoPreProposal(item, safeSide, symbol, stake);
-  if (existing) return true;
-
-  const key = getAutoPreProposalKey(item, safeSide, symbol, stake);
-  if (autoPreProposalInFlight.has(key)) return false;
-  autoPreProposalInFlight.add(key);
-
-  markAutoPreProposalOnItem(item, {
-    status: "preparing",
-    side: safeSide,
-    symbol,
-    stake,
-    reason: String(reason || "auto_preproposal"),
-    prepared_start_at: Date.now(),
-    prepared_start_ms: Math.round(getSignalConfirmationMs(item)),
-  });
-
-  try {
-    await ensureAuthorized();
-    const pack = await requestRiseFallProposalWithTiming(safeSide, symbol, stake, item, 9000);
-    const proposal = pack?.res?.proposal;
-    const proposalId = proposal?.id ? String(proposal.id) : "";
-    const askPrice = Number(proposal?.ask_price);
-    const payout = Number(proposal?.payout);
-    if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
-      throw new Error("proposal prearmada inválida");
-    }
-    const profitPct = ((payout - askPrice) / askPrice) * 100;
-    markAutoPreProposalOnItem(item, {
-      status: "ready",
-      side: safeSide,
-      symbol,
-      stake,
-      proposal_id: proposalId,
-      ask_price: askPrice,
-      payout,
-      profit_pct: Number(profitPct),
-      timing: { ...(pack.timing || {}) },
-      label: String(pack.label || ""),
-      reason: String(reason || "auto_preproposal"),
-      prepared_at: Date.now(),
-      prepared_ms: Math.round(getSignalConfirmationMs(item)),
-      expires_local_at: Date.now() + SIGNAL_AUTO_PREPROPOSAL_TTL_MS,
-    });
-    return true;
-  } catch (e) {
-    markAutoPreProposalOnItem(item, {
-      status: "error",
-      side: safeSide,
-      symbol,
-      stake,
-      reason: String(reason || "auto_preproposal"),
-      error: e?.message || String(e),
-      error_at: Date.now(),
-      error_ms: Math.round(getSignalConfirmationMs(item)),
-    });
-    return false;
-  } finally {
-    autoPreProposalInFlight.delete(key);
-  }
-}
-function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUTO_PREPROPOSAL_MISSING") {
-  if (!item || item?.signalAutoEntry?.attempted) return false;
-  const label = side === "CALL" ? "COMPRA" : "VENTA";
-  item.signalAutoEntry = {
-    type: "AUTO_58_REAL",
-    attempted: true,
-    status: "cancelled",
-    side: normalizeSignalConfirmationSide(side) || "",
-    ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
-    sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
-    reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
-    at: Date.now(),
-    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o cambiá a AUTO 58 normal.",
-    post58_readiness: { ...(readiness || {}) },
-    preproposal: item?.signalAutoPreProposal || null,
-  };
-  saveHistory(history);
-  if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-  toast(`⛔ AUTO ${label} cancelada: proposal no prearmada`, 2400);
-  return true;
-}
-function scanSignalAutoPreProposals() {
-  try {
-    if (areSignalsPaused()) return false;
-    if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
-    const nowMinute = currentServerMinute();
-    let started = false;
-    const candidates = (history || [])
-      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
-      .filter((it) => getSignalEnabledTradeSide(it))
-      .filter((it) => isAutoPreProposalWindow(it));
-    for (const it of candidates) {
-      const side = getSignalEnabledTradeSide(it);
-      if (side) {
-        void prepareRiseFallAutoPreProposal(it, side, "signal_scan_56_58");
-        started = true;
-      }
-    }
-    return started;
-  } catch { return false; }
-}
-function getLiveAutoPreProposalKey(sym, side, minute, stake) {
-  return `LIVE|${String(sym || "")}|${Number(minute || 0)}|${String(side || "")}|${Number(stake || 0).toFixed(2)}`;
-}
-function getLiveCachedAutoPreProposal(sym, side, minute, stake) {
-  const key = getLiveAutoPreProposalKey(sym, side, minute, stake);
-  const pp = liveAutoPreProposalCache.get(key) || null;
-  if (!pp || pp.status !== "ready") return null;
-  if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
-  return pp;
-}
-async function prepareLiveAutoPreProposalIfNeeded(reason = "live_preproposal") {
-  try {
-    if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
-    if ((localStorage.getItem("activeView") || "signals") !== "live") return false;
-    ensureLiveSignalConfirmationsForCurrentMinute();
-    const side = getLiveEnabledTradeSide();
-    if (!side) return false;
-    const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
-    const minute = getLiveReplayMinute(sym);
-    const stake = Number(getEffectiveTradeStake().toFixed(2));
-    if (getLiveCachedAutoPreProposal(sym, side, minute, stake)) return true;
-    const tmp = buildLiveManualTradeItem(side);
-    tmp.id = `LIVE_PREPROPOSAL-${minute}-${sym}-${side}`;
-    if (!isAutoPreProposalWindow(tmp)) return false;
-    const ok = await prepareRiseFallAutoPreProposal(tmp, side, reason);
-    if (ok && tmp.signalAutoPreProposal?.status === "ready") {
-      liveAutoPreProposalCache.set(getLiveAutoPreProposalKey(sym, side, minute, stake), { ...tmp.signalAutoPreProposal });
-      return true;
-    }
-    if (tmp.signalAutoPreProposal) liveAutoPreProposalCache.set(getLiveAutoPreProposalKey(sym, side, minute, stake), { ...tmp.signalAutoPreProposal });
-  } catch {}
-  return false;
-}
-function applyEntryTimingModeUI() {
-  const btn = pickEl("entryTimingModeBtn");
-  if (!btn) return;
-  const storedNext = isEntryTimingStoredNextCandle();
-  btn.textContent = getEntryTimingModeLabel();
-  btn.classList.toggle("active", storedNext && !shouldUseAutoHighLowExecution());
-  btn.title = storedNext
-    ? "Prepara proposal desde 56s; espera el tick real >=58s y ahí solo compra con proposal lista. Intenta inicio programado y fija cierre al segundo 60; si Deriv no acepta date_start usa date_expiry fijo. Solo aplica a Rise/Fall."
-    : "Modo anterior: AUTO 58 con duración 1 minuto desde la entrada real del contrato.";
-}
-function ensureEntryTimingModeButton() {
-  let btn = pickEl("entryTimingModeBtn");
-  if (!btn) {
-    const host =
-      document.querySelector("#settingsModal .settingsBody .controls") ||
-      document.querySelector(".settingsBody .controls") ||
-      null;
-    if (!host) return null;
-    btn = document.createElement("button");
-    btn.id = "entryTimingModeBtn";
-    btn.type = "button";
-    btn.className = "btn btnGhost";
-    btn.style.gridColumn = "1 / -1";
-    const execBtn = pickEl("executionModeBtn");
-    if (execBtn && execBtn.parentElement === host) execBtn.insertAdjacentElement("afterend", btn);
-    else host.appendChild(btn);
-  }
-  btn.onclick = () => {
-    entryTimingMode = isEntryTimingStoredNextCandle() ? ENTRY_TIMING_AUTO58_DURATION_1M : ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
-    saveEntryTimingMode();
-    applyEntryTimingModeUI();
-    updateModalCandleStatusUI();
-    toast(entryTimingMode === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY ? "⏱️ AUTO pre-56/post-58 → cierre 60 ON" : "⏱️ AUTO 58 normal ON", 1700);
-  };
-  applyEntryTimingModeUI();
   return btn;
 }
 
@@ -4011,7 +3339,6 @@ function startUiTimers() {
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
-    updateMentalCooldownUI();
     updateDisciplineLockUI(false);
     updateC100PanelUI();
     // ✅ FIX AUTO 58 DEMO/REAL:
@@ -4019,7 +3346,6 @@ function startUiTimers() {
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
     updateModalCandleStatusUI();
     refreshOpenSignalStageBadges();
-    scanSignalAutoPreProposals();
     scanSignalAutoEntriesAt57();
   }, getUiIntervalMs());
 }
@@ -4187,12 +3513,10 @@ function areSignalsPaused(viewName = null) {
   // Pausa manual global + pausa automática cuando se abre la pestaña En vivo.
   // En vivo es un modo aparte: sigue recibiendo ticks para dibujar, pero no crea nuevas señales
   // ni dispara autoentradas de señales mientras esa pestaña está activa.
-  if (isMentalCooldownActive()) return true;
   const view = viewName || getActiveViewName();
   return !!liveAnalysisPaused || view === "live";
 }
 function getSignalsPauseReason(viewName = null) {
-  if (isMentalCooldownActive()) return "mental_cooldown";
   const view = viewName || getActiveViewName();
   if (view === "live") return "live_tab";
   if (liveAnalysisPaused) return "manual";
@@ -4816,7 +4140,6 @@ function updateLiveConfirmationUI(reason = "") {
       ? `VENTA lista: se ejecuta automáticamente en el segundo ${SIGNAL_AUTO_ENTRY_SEC}`
       : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
   }
-  if (enabled === "CALL" || enabled === "PUT") void prepareLiveAutoPreProposalIfNeeded("live_ui_56_58");
 }
 function addLiveSignalConfirmation(side = "CALL") {
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -4825,41 +4148,13 @@ function addLiveSignalConfirmation(side = "CALL") {
   liveSignalConfirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(liveReplaySymbol), at: Date.now(), source: "live_tab_points" });
   updateLiveConfirmationUI();
   const enabled = getLiveEnabledTradeSide();
-  if (enabled === "CALL" || enabled === "PUT") {
-    toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
-    void prepareLiveAutoPreProposalIfNeeded("live_points_enabled");
-  } else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
+  if (enabled === "CALL" || enabled === "PUT") toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
+  else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
 }
 function removeLiveSignalConfirmation() {
   ensureLiveSignalConfirmationsForCurrentMinute();
   liveSignalConfirmations.pop();
   updateLiveConfirmationUI();
-}
-
-
-function normalizeChartTicksNoDuplicateMs(rawTicks = []) {
-  const normalized = (Array.isArray(rawTicks) ? rawTicks : [])
-    .map((p, idx) => ({
-      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
-      quote: Number(p?.quote),
-      idx,
-    }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
-
-  const out = [];
-  for (const p of normalized) {
-    const last = out[out.length - 1];
-    // Si hay dos puntos en el mismo milisegundo (muy común en ms=0 cuando se inyecta el
-    // cierre anterior como open y llega el primer tick real), dibujar ambos genera una
-    // línea vertical falsa. Para el gráfico mantenemos solo el último precio real de ese ms.
-    if (last && Math.round(Number(last.ms)) === Math.round(Number(p.ms))) {
-      out[out.length - 1] = { ms: p.ms, quote: p.quote };
-    } else {
-      out.push({ ms: p.ms, quote: p.quote });
-    }
-  }
-  return out;
 }
 
 function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
@@ -4881,7 +4176,15 @@ function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   ctx.fillRect(0, 0, w, h);
   ctx.globalAlpha = 1;
 
-  let ticks = normalizeChartTicksNoDuplicateMs(item.ticks);
+  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
+  ticks = ticks
+    .map((p, idx) => ({
+      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
+      quote: Number(p?.quote),
+      idx,
+    }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
 
   if (ticks.length < 2) {
     drawMiniCandlesLoading(ctx, w, h, "Esperando ticks en vivo…");
@@ -5074,43 +4377,16 @@ function buildLiveManualTradeItem(side = "CALL") {
   };
 }
 
-function getLiveReplayLastTickMs(sym = liveReplaySymbol) {
-  const ticks = getLiveReplayTicks(sym);
-  return ticks.length ? Number(ticks[ticks.length - 1].ms) || 0 : 0;
-}
-function getPost58EntryReadinessForLive(sym = liveReplaySymbol) {
-  const ms = getLiveReplayMsInMinute(sym);
-  const lastTickMs = getLiveReplayLastTickMs(sym);
-
-  if (!isNextCandleExpiryTiming()) {
-    return { ok: ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000, ms, lastTickMs, reason: "duration_1m_window" };
-  }
-  if (ms < SIGNAL_AUTO_ENTRY_MS) {
-    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_58" };
-  }
-  if (lastTickMs < SIGNAL_AUTO_ENTRY_MS) {
-    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_tick_58" };
-  }
-  if (ms > SIGNAL_AUTO_POST58_MAX_MS) {
-    return { ok: false, late: true, ms, lastTickMs, reason: "tick_58_tarde" };
-  }
-  return { ok: true, ms, lastTickMs, reason: "post_tick_58_ok" };
-}
 function isLiveAutoEntryWindowOpen(sym = liveReplaySymbol) {
-  return !!getPost58EntryReadinessForLive(sym).ok;
+  const ms = getLiveReplayMsInMinute(sym);
+  return ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000;
 }
 function formatLiveAutoEntryWaitText(sym = liveReplaySymbol) {
-  const r = getPost58EntryReadinessForLive(sym);
-  const sec = Math.max(0, Math.min(60, Math.floor(Number(r.ms || 0) / 1000)));
-  if (!isNextCandleExpiryTiming()) {
-    if (sec < SIGNAL_AUTO_ENTRY_SEC) return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
-    if (sec >= 60) return "vela cerrada";
-    return `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`;
-  }
-  if (r.reason === "esperando_58") return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO post-58`;
-  if (r.reason === "esperando_tick_58") return "esperando tick real de 58s";
-  if (r.late) return `cancelado: pasó ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`;
-  return "AUTO post-58 listo";
+  const ms = getLiveReplayMsInMinute(sym);
+  const sec = Math.max(0, Math.min(60, Math.floor(ms / 1000)));
+  if (sec < SIGNAL_AUTO_ENTRY_SEC) return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+  if (sec >= 60) return "vela cerrada";
+  return `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`;
 }
 async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -5120,14 +4396,7 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
   const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
   const key = getLiveSignalKey(sym);
   if (liveAutoEntryState?.minuteKey === key && liveAutoEntryState?.attempted) return false;
-  const post58 = getPost58EntryReadinessForLive(sym);
-  if (!post58.ok) {
-    if (post58.late) {
-      liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: `Cancelada: no llegó a comprar dentro de la ventana post-58 (${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s).` };
-      setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: llegó tarde después de ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`, "error");
-    }
-    return false;
-  }
+  if (!isLiveAutoEntryWindowOpen(sym)) return false;
   if (tradeInFlight) return false;
 
   const enabledSide = getLiveEnabledTradeSide();
@@ -5136,16 +4405,6 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
   const item = buildLiveManualTradeItem(safeSide);
   item.liveManualTrade = false;
   item.liveAuto59Trade = true;
-  try {
-    const stake = Number(getEffectiveTradeStake().toFixed(2));
-    const pp = getLiveCachedAutoPreProposal(sym, safeSide, getLiveReplayMinute(sym), stake);
-    if (pp) item.signalAutoPreProposal = { ...pp };
-  } catch {}
-  if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && !item.signalAutoPreProposal) {
-    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: "Cancelada: proposal no prearmada antes del post-58." };
-    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: proposal no prearmada`, "error");
-    return false;
-  }
   item.signalAutoEntry = {
     type: "LIVE_AUTO_58",
     attempted: true,
@@ -5156,14 +4415,13 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
     reason: String(reason || "LIVE_AUTO_58"),
     at: Date.now(),
     confirmation_status: getLiveConfirmationStatusText(),
-    post58_readiness: post58,
   };
 
   liveAutoEntryState = { minuteKey: key, attempted: true, status: "sending", side: safeSide, contract_id: "", error: "" };
 
   try {
     setLiveTradeButtonsBusy(true);
-    setLiveTradeStatus(`🚀 AUTO prearmado: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+    setLiveTradeStatus(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
 
     history.push(item);
     if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
@@ -6334,7 +5592,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = normalizeChartTicksNoDuplicateMs(ticks);
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
   const quotes = pts.map((p) => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
@@ -7507,7 +6765,6 @@ function ensureSplitClearButtons() {
 function repairSettingsMenuBindings() {
   try { ensureTradingAccountButton(); } catch {}
   try { ensureExecutionModeButton(); applyExecutionModeUI(); } catch {}
-  try { ensureEntryTimingModeButton(); applyEntryTimingModeUI(); } catch {}
   try { ensureAutoOpenChartButton(); applyAutoOpenChartUI(); } catch {}
   try { ensureLowPowerButton(); applyLowPowerModeUI(); } catch {}
   try { ensureResetCacheButton(); } catch {}
@@ -7525,7 +6782,6 @@ function getSettingsMenuSelfCheckItems() {
     ["Cerrar configuración", (!!settingsCloseBtn && typeof settingsCloseBtn.onclick === "function") || (!!settingsCloseBtn2 && typeof settingsCloseBtn2.onclick === "function")],
     ["Cuenta DEMO/REAL", !!pickEl("tradingAccountBtn") && typeof pickEl("tradingAccountBtn").onclick === "function"],
     ["Modo ejecución", !!pickEl("executionModeBtn") && typeof pickEl("executionModeBtn").onclick === "function"],
-    ["Timing entrada", !!pickEl("entryTimingModeBtn") && typeof pickEl("entryTimingModeBtn").onclick === "function"],
     ["IC2 activar", !!pickEl("c100ToggleBtn") && typeof pickEl("c100ToggleBtn").onclick === "function"],
     ["IC2 reset", !!pickEl("c100ResetBtn") && typeof pickEl("c100ResetBtn").onclick === "function"],
     ["Bajo consumo", !!pickEl("lowPowerBtn") && typeof pickEl("lowPowerBtn").onclick === "function"],
@@ -7640,11 +6896,9 @@ function applyTheme(theme) {
     modeBtn.classList.add("active");
     modeBtn.title = isDynamicLineMode(signalMode)
       ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos."
-      : isRupturaDebilGiroMode(signalMode)
-        ? "Modo Ruptura Débil Giro: observa 0-15s y confirma señal solo entre 20-30s; auto solo con 4 puntos."
-        : isSNRPolaridadMode(signalMode)
-          ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
-          : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
+      : isSNRPolaridadMode(signalMode)
+        ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
+        : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
   };
   paintMode();
 
@@ -7653,7 +6907,7 @@ function applyTheme(theme) {
       signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isRupturaDebilGiroMode(signalMode) ? "🔁 Modo Ruptura Débil Giro" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
+      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
     };
 })();
 
@@ -7833,6 +7087,208 @@ function showNotification(symbol, direction, modeLabel, item = null) {
 /* =========================
    Canvas chart
 ========================= */
+
+// V81: marcadores visuales de soportes estructurales recientes en el gráfico vivo.
+// - Cian: soporte estructural reciente de la formación actual.
+// - Amarillo: soporte de polaridad / nivel usado más de una vez.
+// - Sin carteles: solo líneas limpias dentro del gráfico.
+const LIVE_STRUCTURAL_SUPPORTS_ENABLED = true;
+const LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS = 42000;
+const LIVE_STRUCT_SUPPORT_MIN_CONFIRM_MS = 12000;
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, Number(v) || 0));
+}
+function medianNumber(values) {
+  const arr = (values || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!arr.length) return NaN;
+  const mid = Math.floor(arr.length / 2);
+  return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+}
+function dedupeTickPointsByMs(points) {
+  const map = new Map();
+  for (const p of points || []) {
+    const ms = Math.round(Number(p?.ms));
+    const quote = Number(p?.quote);
+    if (!Number.isFinite(ms) || !Number.isFinite(quote)) continue;
+    map.set(ms, { ms: Math.max(0, Math.min(60000, ms)), quote });
+  }
+  return [...map.values()].sort((a, b) => a.ms - b.ms);
+}
+function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null) {
+  if (!LIVE_STRUCTURAL_SUPPORTS_ENABLED) return [];
+  const pts = dedupeTickPointsByMs(points);
+  if (pts.length < 8) return [];
+
+  const msNow = Number.isFinite(Number(msNowArg))
+    ? Math.max(0, Math.min(60000, Number(msNowArg)))
+    : Number(pts[pts.length - 1]?.ms || 0);
+  if (msNow < LIVE_STRUCT_SUPPORT_MIN_CONFIRM_MS) return [];
+
+  const quotes = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const minQ = Math.min(...quotes);
+  const maxQ = Math.max(...quotes);
+  const fullRange = Math.max(1e-12, maxQ - minQ);
+  const recentStart = Math.max(0, msNow - LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS, 10000);
+  const visibleEnd = Math.min(60000, Math.max(msNow, Number(pts[pts.length - 1]?.ms || msNow)));
+  const recent = pts.filter((p) => p.ms >= recentStart && p.ms <= visibleEnd);
+  if (recent.length < 5) return [];
+
+  const recentQuotes = recent.map((p) => p.quote);
+  const recentRange = Math.max(1e-12, Math.max(...recentQuotes) - Math.min(...recentQuotes));
+  const diffs = [];
+  for (let i = 1; i < pts.length; i++) diffs.push(Math.abs(pts[i].quote - pts[i - 1].quote));
+  const medStep = medianNumber(diffs) || (fullRange * 0.025);
+  const tol = Math.max(fullRange * 0.018, recentRange * 0.022, medStep * 1.15, 1e-9);
+  const minRebound = Math.max(fullRange * 0.07, recentRange * 0.10, medStep * 2.4, 1e-9);
+
+  const localMin = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i];
+    if (p.ms < recentStart || p.ms > visibleEnd) continue;
+    const prev = pts.slice(Math.max(0, i - 3), i);
+    const next = pts.slice(i + 1, Math.min(pts.length, i + 4));
+    if (!prev.length || !next.length) continue;
+    const prevMin = Math.min(...prev.map((x) => x.quote));
+    const nextMin = Math.min(...next.map((x) => x.quote));
+    const prevMax = Math.max(...prev.map((x) => x.quote));
+    const nextMax = Math.max(...next.map((x) => x.quote));
+
+    // Swing low real: es piso local y después hay defensa/rebote.
+    const isLow = p.quote <= prevMin + tol && p.quote <= nextMin + tol;
+    const hasRebound = Math.max(prevMax - p.quote, nextMax - p.quote) >= minRebound * 0.55
+      || nextMax - p.quote >= minRebound * 0.42;
+    if (!isLow || !hasRebound) continue;
+
+    // Evita marcar pisos demasiado viejos o que ya quedaron totalmente anulados por una caída fuerte posterior.
+    const later = pts.filter((x) => x.ms > p.ms && x.ms <= visibleEnd);
+    const laterLow = later.length ? Math.min(...later.map((x) => x.quote)) : p.quote;
+    const badlyBroken = laterLow < p.quote - tol * 2.8;
+    localMin.push({ ms: p.ms, level: p.quote, score: (hasRebound ? 2 : 0) - (badlyBroken ? 1.2 : 0), badlyBroken });
+  }
+  if (!localMin.length) return [];
+
+  // Agrupa mínimos cercanos para detectar niveles usados dos veces.
+  const clusters = [];
+  for (const m of localMin) {
+    let c = clusters.find((cl) => Math.abs(cl.level - m.level) <= tol * 1.8);
+    if (!c) {
+      c = { level: m.level, touches: [], firstMs: m.ms, lastMs: m.ms, score: 0, badlyBrokenCount: 0 };
+      clusters.push(c);
+    }
+    c.touches.push(m);
+    c.level = c.touches.reduce((acc, x) => acc + x.level, 0) / c.touches.length;
+    c.firstMs = Math.min(c.firstMs, m.ms);
+    c.lastMs = Math.max(c.lastMs, m.ms);
+    c.score += m.score;
+    if (m.badlyBroken) c.badlyBrokenCount += 1;
+  }
+
+  // Detecta polaridad simple: un máximo/resistencia previa queda cerca del nivel y luego se defiende como soporte.
+  const localHighs = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i];
+    if (p.ms < recentStart - 8000 || p.ms > visibleEnd) continue;
+    const prev = pts.slice(Math.max(0, i - 3), i);
+    const next = pts.slice(i + 1, Math.min(pts.length, i + 4));
+    if (!prev.length || !next.length) continue;
+    const prevMax = Math.max(...prev.map((x) => x.quote));
+    const nextMax = Math.max(...next.map((x) => x.quote));
+    if (p.quote >= prevMax - tol && p.quote >= nextMax - tol) localHighs.push(p);
+  }
+
+  const markers = [];
+  for (const c of clusters) {
+    const touchSpread = c.lastMs - c.firstMs;
+    const usedTwice = c.touches.length >= 2 && touchSpread >= 5000;
+    const priorHigh = localHighs.find((hi) => hi.ms < c.lastMs - 2000 && Math.abs(hi.quote - c.level) <= tol * 2.2);
+    const polarity = !!priorHigh || usedTwice;
+
+    // Para formación reciente: preferimos el soporte principal y el soporte reciente; no base antigua.
+    const lastTouchMs = c.lastMs;
+    if (lastTouchMs < Math.max(10000, msNow - LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS)) continue;
+
+    const after = pts.filter((p) => p.ms >= lastTouchMs && p.ms <= visibleEnd);
+    const afterHigh = after.length ? Math.max(...after.map((p) => p.quote)) : c.level;
+    const defended = afterHigh - c.level >= minRebound * 0.35;
+    if (!defended && !polarity) continue;
+
+    const xStartMs = polarity
+      ? Math.max(recentStart, Math.min(c.firstMs, priorHigh?.ms ?? c.firstMs) - 2500)
+      : Math.max(recentStart, lastTouchMs - 3500);
+    const xEndMs = polarity
+      ? Math.min(60000, Math.max(c.lastMs + 14000, visibleEnd, msNow + 3000))
+      : Math.min(60000, Math.max(lastTouchMs + 11000, msNow + 2500));
+
+    markers.push({
+      level: c.level,
+      type: polarity ? "polarity" : "structural",
+      touches: c.touches.length,
+      firstMs: c.firstMs,
+      lastMs: c.lastMs,
+      xStartMs,
+      xEndMs,
+      score: c.score + (polarity ? 2.5 : 0) + (defended ? 1.4 : 0) - c.badlyBrokenCount,
+    });
+  }
+
+  // Deja pocos niveles limpios: los más recientes/relevantes. Prioriza polaridad y último soporte.
+  markers.sort((a, b) => {
+    const pol = (b.type === "polarity") - (a.type === "polarity");
+    if (pol) return pol;
+    const score = (b.score || 0) - (a.score || 0);
+    if (Math.abs(score) > 0.25) return score;
+    return (b.lastMs || 0) - (a.lastMs || 0);
+  });
+
+  const out = [];
+  for (const m of markers) {
+    if (out.some((x) => Math.abs(x.level - m.level) <= tol * 2.2)) continue;
+    out.push(m);
+    if (out.length >= 3) break;
+  }
+  return out.sort((a, b) => a.level - b.level);
+}
+function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
+  if (!ctx || !Array.isArray(markers) || !markers.length) return;
+  ctx.save();
+  for (const m of markers) {
+    const y = yOf(Number(m.level));
+    if (!Number.isFinite(y)) continue;
+    const x1 = Math.max(8, Math.min(w - 8, xOf(Number(m.xStartMs ?? m.firstMs ?? 0))));
+    const x2 = Math.max(8, Math.min(w - 8, xOf(Number(m.xEndMs ?? m.lastMs ?? 60000))));
+    if (Math.abs(x2 - x1) < 10) continue;
+    const isPol = m.type === "polarity";
+    const col = isPol ? "rgba(250,204,21,0.92)" : "rgba(34,211,238,0.92)";
+    const glow = isPol ? "rgba(250,204,21,0.34)" : "rgba(34,211,238,0.32)";
+
+    ctx.save();
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = isPol ? 8 : 7;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = isPol ? 2.0 : 1.8;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(Math.min(x1, x2), y);
+    ctx.lineTo(Math.max(x1, x2), y);
+    ctx.stroke();
+
+    // Si el nivel fue usado varias veces, marca sutilmente los toques sin cartel.
+    if (Number(m.touches || 0) >= 2 || isPol) {
+      ctx.fillStyle = isPol ? "rgba(254,240,138,0.96)" : "rgba(165,243,252,0.92)";
+      for (const ms of [m.firstMs, m.lastMs]) {
+        const x = xOf(Number(ms));
+        if (!Number.isFinite(x) || x < 8 || x > w - 8) continue;
+        ctx.beginPath();
+        ctx.arc(x, y, isPol ? 2.6 : 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
 
@@ -7880,6 +7336,19 @@ function drawDerivLikeChart(canvas, ticks) {
     min = Math.min(min, Number(modalSNRNearArea.nearLow), Number(modalSNRNearArea.zoneLow));
     max = Math.max(max, Number(modalSNRNearArea.nearHigh), Number(modalSNRNearArea.zoneHigh));
   }
+
+  const msNowForSupports = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
+    : null;
+  const liveStructuralSupportMarkers = getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports);
+  if (liveStructuralSupportMarkers.length) {
+    for (const m of liveStructuralSupportMarkers) {
+      if (Number.isFinite(Number(m.level))) {
+        min = Math.min(min, Number(m.level));
+        max = Math.max(max, Number(m.level));
+      }
+    }
+  }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
   const pad = range * 0.08;
@@ -7889,9 +7358,9 @@ function drawDerivLikeChart(canvas, ticks) {
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
-  const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+  const msNow = msNowForSupports != null ? msNowForSupports : (modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
     ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
-    : null;
+    : null);
 
   const segments = [
     { start: 0, end: 15000, label: "0s" },
@@ -8031,6 +7500,10 @@ function drawDerivLikeChart(canvas, ticks) {
     // para evitar contaminación visual dentro del modal.
     ctx.restore();
   }
+
+  // Soportes estructurales recientes del gráfico vivo (sin carteles).
+  // Cian = soporte estructural reciente. Amarillo = polaridad / nivel usado dos veces.
+  drawLiveStructuralSupportMarkers(ctx, liveStructuralSupportMarkers, xOf, yOf, w, h);
 
   // Línea dinámica de tendencia (soporte/resistencia inclinada)
   if (modalDynamicLine) {
@@ -8385,61 +7858,6 @@ function getSignalConfirmationMs(item = modalCurrentItem) {
       : Math.floor(now / 60000) * 60000);
   return Math.max(0, Math.min(60000, now - minuteStart));
 }
-function getSignalLastTickMsInMinute(item = modalCurrentItem) {
-  if (!item) return 0;
-  const minute = Number(item.minute);
-  const sym = String(item.symbol || "");
-  let ticks = [];
-
-  const liveTicks = Number.isFinite(minute) && sym ? minuteData?.[minute]?.[sym] : null;
-  if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
-  else if (Array.isArray(item.ticks) && item.ticks.length) ticks = item.ticks;
-
-  const clean = (Array.isArray(ticks) ? ticks : [])
-    .map((p) => Number(p?.ms))
-    .filter((ms) => Number.isFinite(ms));
-  return clean.length ? Math.max(...clean) : 0;
-}
-function getPost58EntryReadinessForSignal(item = modalCurrentItem) {
-  const ms = getSignalConfirmationMs(item);
-
-  // El modo viejo conserva su comportamiento: desde 58s hasta antes de cerrar la vela.
-  if (!isNextCandleExpiryTiming()) {
-    return { ok: ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000, ms, lastTickMs: getSignalLastTickMsInMinute(item), reason: "duration_1m_window" };
-  }
-
-  const lastTickMs = getSignalLastTickMsInMinute(item);
-  if (ms < SIGNAL_AUTO_ENTRY_MS) {
-    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_58" };
-  }
-  if (lastTickMs < SIGNAL_AUTO_ENTRY_MS) {
-    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_tick_58" };
-  }
-  if (ms > SIGNAL_AUTO_POST58_MAX_MS) {
-    return { ok: false, late: true, ms, lastTickMs, reason: "tick_58_tarde" };
-  }
-  return { ok: true, ms, lastTickMs, reason: "post_tick_58_ok" };
-}
-function cancelSignalAutoEntryLate(item, side, readiness, reason = "AUTO_POST58_LATE") {
-  if (!item || item?.signalAutoEntry?.attempted) return false;
-  const label = side === "CALL" ? "COMPRA" : "VENTA";
-  item.signalAutoEntry = {
-    type: "AUTO_58_REAL",
-    attempted: true,
-    status: "cancelled",
-    side: normalizeSignalConfirmationSide(side) || "",
-    ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
-    sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
-    reason: String(reason || "AUTO_POST58_LATE"),
-    at: Date.now(),
-    error: `Cancelada: no llegó a comprar dentro de la ventana post-58 (${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s).`,
-    post58_readiness: { ...(readiness || {}) },
-  };
-  saveHistory(history);
-  if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-  toast(`⛔ AUTO ${label} cancelada: llegó tarde después de ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`, 2200);
-  return true;
-}
 function addSignalConfirmation(side = "CALL") {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -8452,10 +7870,8 @@ function addSignalConfirmation(side = "CALL") {
 
   const enabled = getSignalEnabledTradeSide(modalCurrentItem);
   if (enabled === "CALL") {
-    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else if (enabled === "PUT") {
-    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
@@ -8892,22 +8308,6 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   const side = getSignalEnabledTradeSide(item);
   if (!side) return false;
 
-  const post58 = getPost58EntryReadinessForSignal(item);
-  if (!post58.ok) {
-    if (post58.late) cancelSignalAutoEntryLate(item, side, post58, "AUTO_POST58_TICK_LATE");
-    return false;
-  }
-
-  if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()) {
-    const symbol = String(item.symbol || SYMBOLS[0] || "R_25");
-    const stake = Number(getEffectiveTradeStake().toFixed(2));
-    const pp = getValidAutoPreProposal(item, side, symbol, stake);
-    if (!pp) {
-      cancelSignalAutoEntryNoPreProposal(item, side, post58, "AUTO_PREPROPOSAL_MISSING");
-      return false;
-    }
-  }
-
   let gate = null;
   try {
     gate = assertSignalSNREntryGateAt57(side, item);
@@ -8929,12 +8329,11 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     at: Date.now(),
     confirmation_status: getSignalConfirmationStatusText(item),
     snr_entry_gate: gate,
-    post58_readiness: post58,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO prearmado: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -10276,213 +9675,6 @@ function applyModalTradeButtonsLayout() {
 /* =========================
    Disciplina (persistencia + UI)
 ========================= */
-
-/* =========================
-   Despeje mental post-OTM
-   - Bloqueo total corto para cortar impulso/revancha.
-   - No reemplaza el bloqueo REAL de 1 hora: ese queda como estaba.
-========================= */
-
-function isExpiryValueCorruptOrExpired(until, maxStoredMs) {
-  const n = Number(until || 0);
-  if (!Number.isFinite(n) || n <= 0) return true;
-
-  // Si quedó guardado en segundos por error, ya es un valor inválido para Date.now() en ms.
-  if (n > 0 && n < 100000000000) return true;
-
-  const now = Date.now();
-  if (n <= now) return true;
-
-  // Si por cualquier motivo quedó un timestamp demasiado lejos, lo tratamos como bloqueo corrupto.
-  if (n - now > Number(maxStoredMs || 0)) return true;
-
-  return false;
-}
-function clearExpiredOrCorruptDisciplineLock({ silent = true } = {}) {
-  try {
-    if (isDisciplineBypassedForCurrentAccount()) return false;
-    const until = Number(disciplineLockUntilMs || 0);
-    if (!until) return false;
-    if (!isExpiryValueCorruptOrExpired(until, DISCIPLINE_LOCK_MAX_STORED_MS)) return false;
-
-    disciplineLockUntilMs = 0;
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-    updateDisciplineBannerUI();
-    if (!silent) toast("✅ Bloqueo REAL vencido/corregido", 2200);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function loadMentalCooldown() {
-  try {
-    mentalCooldownUntilMs = Number(localStorage.getItem(MENTAL_COOLDOWN_UNTIL_KEY) || 0) || 0;
-    mentalCooldownReason = String(localStorage.getItem(MENTAL_COOLDOWN_REASON_KEY) || "");
-    mentalCooldownLastContractId = String(localStorage.getItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY) || "");
-
-    // V79: si quedó un bloqueo viejo, vencido o con fecha corrupta, se limpia al abrir.
-    if (mentalCooldownUntilMs && isExpiryValueCorruptOrExpired(mentalCooldownUntilMs, MENTAL_COOLDOWN_MAX_STORED_MS)) {
-      clearMentalCooldown({ silent: true });
-    }
-  } catch {
-    mentalCooldownUntilMs = 0;
-    mentalCooldownReason = "";
-    mentalCooldownLastContractId = "";
-  }
-}
-function saveMentalCooldown() {
-  try {
-    localStorage.setItem(MENTAL_COOLDOWN_UNTIL_KEY, String(mentalCooldownUntilMs || 0));
-    localStorage.setItem(MENTAL_COOLDOWN_REASON_KEY, mentalCooldownReason || "");
-    localStorage.setItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY, mentalCooldownLastContractId || "");
-  } catch {}
-}
-function clearMentalCooldown({ silent = false } = {}) {
-  mentalCooldownUntilMs = 0;
-  mentalCooldownReason = "";
-  mentalCooldownLastContractId = "";
-  try {
-    localStorage.removeItem(MENTAL_COOLDOWN_UNTIL_KEY);
-    localStorage.removeItem(MENTAL_COOLDOWN_REASON_KEY);
-    localStorage.removeItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY);
-  } catch {}
-  updateMentalCooldownUI();
-  applyLiveAnalysisPauseUI();
-  if (!silent) toast("🌿 Despeje mental terminado. Volvé despacio.", 2200);
-}
-function isMentalCooldownActive() {
-  const until = Number(mentalCooldownUntilMs || 0);
-  if (!until) return false;
-  if (isExpiryValueCorruptOrExpired(until, MENTAL_COOLDOWN_MAX_STORED_MS)) {
-    clearMentalCooldown({ silent: true });
-    return false;
-  }
-  return true;
-}
-function getMentalCooldownRemainingMs() {
-  return Math.max(0, Number(mentalCooldownUntilMs || 0) - Date.now());
-}
-function fmtMentalCooldownRemaining(ms) {
-  const s = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
-  const m = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
-}
-function ensureMentalCooldownOverlay() {
-  if (mentalCooldownOverlayEl && mentalCooldownOverlayEl.isConnected) return mentalCooldownOverlayEl;
-
-  let el = document.getElementById("mentalCooldownOverlay");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "mentalCooldownOverlay";
-    el.setAttribute("role", "dialog");
-    el.setAttribute("aria-modal", "true");
-    el.setAttribute("aria-label", "Despeje mental");
-    el.style.position = "fixed";
-    el.style.inset = "0";
-    el.style.zIndex = "2147483000";
-    el.style.display = "none";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "center";
-    el.style.padding = "10px";
-    el.style.background = "rgba(2,6,23,.96)";
-    el.style.color = "#e5f7ff";
-    el.style.backdropFilter = "blur(10px)";
-    el.style.pointerEvents = "auto";
-    el.style.touchAction = "none";
-    el.innerHTML = `
-      <div id="mentalCooldownArtCard" style="position:relative;width:min(94vw,560px);max-height:96svh;aspect-ratio:941/1672;overflow:hidden;border-radius:26px;box-shadow:0 26px 90px rgba(0,0,0,.72),0 0 42px rgba(34,211,238,.16);">
-        <img id="mentalCooldownBgImg" src="${MENTAL_COOLDOWN_IMAGE_SRC}" alt="Despeje mental" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;pointer-events:none;" draggable="false" />
-
-        <div id="mentalCooldownCountdown" style="position:absolute;left:11.5%;right:11.5%;top:63.2%;height:11.8%;display:flex;align-items:center;justify-content:center;font-size:clamp(50px,15vw,104px);line-height:1;font-weight:950;font-variant-numeric:tabular-nums;letter-spacing:.045em;color:#7dfcff;text-shadow:0 0 10px rgba(125,252,255,.55),0 0 30px rgba(34,211,238,.34);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">10:00</div>
-
-        <div id="mentalCooldownAdviceLayer" style="position:absolute;left:11.5%;right:11.5%;top:77.2%;height:9.6%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
-          <div id="mentalCooldownDots" style="display:flex;align-items:center;justify-content:center;gap:clamp(7px,1.9vw,13px);min-height:18px;" aria-label="Progreso de despeje mental"></div>
-          <div id="mentalCooldownTipText" style="max-width:92%;min-height:44px;display:flex;align-items:center;justify-content:center;color:#9ffdf0;text-shadow:0 0 12px rgba(34,211,238,.24);font-size:clamp(13px,3.2vw,18px);line-height:1.28;font-weight:760;">Respirá profundo. No operes desde la urgencia.</div>
-        </div>
-
-        <div id="mentalCooldownReasonText" style="position:absolute;left:11.5%;right:11.5%;bottom:4.3%;height:3.2%;display:flex;align-items:center;justify-content:center;font-size:clamp(10px,2.6vw,13px);font-weight:800;line-height:1.2;color:rgba(203,213,225,.78);text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;opacity:.0;pointer-events:none;">Señales y operaciones pausadas.</div>
-      </div>
-    `;
-
-    const dotsHost = el.querySelector("#mentalCooldownDots");
-    if (dotsHost) {
-      dotsHost.innerHTML = MENTAL_COOLDOWN_TIPS.map((_, i) => `<span class="mentalCooldownDot" data-i="${i}" style="width:clamp(8px,2vw,12px);height:clamp(8px,2vw,12px);border-radius:999px;background:rgba(45,212,191,.34);box-shadow:none;transition:background .25s ease, transform .25s ease, box-shadow .25s ease, opacity .25s ease;opacity:.72;"></span>`).join("");
-    }
-
-    el.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    }, true);
-    el.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-    }, { passive: false });
-    document.body.appendChild(el);
-  }
-
-  mentalCooldownOverlayEl = el;
-  return mentalCooldownOverlayEl;
-}
-function updateMentalCooldownAdviceUI(el, remainingMs) {
-  try {
-    const total = Number(MENTAL_COOLDOWN_MS || 600000);
-    const remain = Math.max(0, Number(remainingMs || 0));
-    const elapsed = Math.max(0, total - remain);
-    const stepMs = total / MENTAL_COOLDOWN_TIPS.length;
-    const idx = Math.min(MENTAL_COOLDOWN_TIPS.length - 1, Math.max(0, Math.floor(elapsed / stepMs)));
-    const tipEl = el?.querySelector?.("#mentalCooldownTipText");
-    if (tipEl) tipEl.textContent = MENTAL_COOLDOWN_TIPS[idx] || "Respirá profundo. No operes desde la urgencia.";
-
-    const dots = Array.from(el?.querySelectorAll?.(".mentalCooldownDot") || []);
-    dots.forEach((dot, i) => {
-      const isActive = i === idx;
-      const isDone = i < idx;
-      dot.style.background = isActive ? "#22f4e8" : isDone ? "rgba(34,244,232,.72)" : "rgba(45,212,191,.34)";
-      dot.style.opacity = isActive ? "1" : isDone ? ".88" : ".62";
-      dot.style.transform = isActive ? "scale(1.45)" : "scale(1)";
-      dot.style.boxShadow = isActive ? "0 0 16px rgba(34,244,232,.72), 0 0 26px rgba(34,211,238,.32)" : isDone ? "0 0 8px rgba(34,211,238,.22)" : "none";
-    });
-  } catch {}
-}
-function updateMentalCooldownUI() {
-  const active = isMentalCooldownActive();
-  const el = ensureMentalCooldownOverlay();
-  if (!el) return;
-  if (!active) {
-    el.style.display = "none";
-    return;
-  }
-  const remain = getMentalCooldownRemainingMs();
-  el.style.display = "flex";
-  const cd = el.querySelector("#mentalCooldownCountdown");
-  const rs = el.querySelector("#mentalCooldownReasonText");
-  if (cd) cd.textContent = fmtMentalCooldownRemaining(remain);
-  updateMentalCooldownAdviceUI(el, remain);
-  if (rs) rs.textContent = `${mentalCooldownReason || "OTM registrada"} · señales, gráfico y operaciones bloqueadas`;
-  try { setStatus(`🌿 Despeje mental · ${fmtMentalCooldownRemaining(remain)}`); } catch {}
-}
-function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada") {
-  // Si el OTM también disparó el bloqueo REAL de 1 hora, respetamos ese flujo como estaba:
-  // no mostramos overlay total para que puedas revisar Trades/velas durante la hora.
-  if (isTradeLockedNow()) return false;
-
-  const cid = String(contractId || "");
-  if (cid && cid === mentalCooldownLastContractId && isMentalCooldownActive()) return false;
-
-  mentalCooldownUntilMs = Date.now() + MENTAL_COOLDOWN_MS;
-  mentalCooldownReason = reason || "OTM registrada";
-  mentalCooldownLastContractId = cid;
-  saveMentalCooldown();
-  updateMentalCooldownUI();
-  applyLiveAnalysisPauseUI();
-  toast("🌿 Despeje mental: PWA bloqueada 10 minutos", 2600);
-  return true;
-}
-
 function getScopedDisciplineStorageKey(baseKey) {
   const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
   return `${baseKey}_${scope}`;
@@ -10514,9 +9706,6 @@ function loadDiscipline() {
     const raw = readScopedDisciplineValue(DISCIPLINE_PENDING_CONTRACTS_KEY, "[]");
     const arr = JSON.parse(raw);
     disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
-
-    // V79: evita que quede una disciplina REAL vencida/corrupta pegada al volver a abrir.
-    clearExpiredOrCorruptDisciplineLock({ silent: true });
   } catch {
     resetDisciplineStateInMemory();
   }
@@ -10549,13 +9738,10 @@ function removePendingContract(cid) {
   if (!disciplinePendingContracts.length) stopPendingContractWatchdog();
 }
 function isDisciplineBypassedForCurrentAccount() {
-  // V70: la disciplina de bloqueo se aplica solo en REAL.
-  // En DEMO queda libre para pruebas, pero se siguen controlando contratos pendientes.
-  return activeTradingAccount !== ACCOUNT_MODE_REAL;
+  return activeTradingAccount === ACCOUNT_MODE_REAL;
 }
 function isTradeLockedNow() {
   if (isDisciplineBypassedForCurrentAccount()) return false;
-  clearExpiredOrCorruptDisciplineLock({ silent: true });
   const now = Date.now();
   return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
 }
@@ -10569,12 +9755,12 @@ function fmtRemaining(ms) {
 }
 
 function getDisciplineLockReasonText() {
-  if (disciplineWins >= DISCIPLINE_MAX_WINS) return `IC2 completo: 2 ITM seguidos`;
+  if (disciplineWins >= DISCIPLINE_MAX_WINS) return `3 ITM alcanzados`;
   if (disciplineLosses >= DISCIPLINE_MAX_LOSSES) return `2 OTM alcanzados`;
-  return `límite REAL alcanzado`;
+  return `límite alcanzado`;
 }
 function getDisciplineCounterText() {
-  return `IC2 ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM · ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`;
+  return `${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM · ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`;
 }
 function ensureDisciplineBanner() {
   if (disciplineBannerEl && disciplineBannerEl.isConnected) return disciplineBannerEl;
@@ -10632,7 +9818,7 @@ function updateDisciplineBannerUI() {
     el.style.borderColor = "rgba(248,113,113,.82)";
     el.style.background = "linear-gradient(180deg, rgba(127,29,29,.92), rgba(69,10,10,.92))";
     el.style.boxShadow = "0 12px 30px rgba(0,0,0,.42), 0 0 16px rgba(239,68,68,.16)";
-    el.innerHTML = `🔒 <b>REAL bloqueada</b> · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
+    el.innerHTML = `🔒 <b>DEMO bloqueada</b> · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     return;
   }
 
@@ -10642,7 +9828,7 @@ function updateDisciplineBannerUI() {
     el.style.borderColor = "rgba(251,191,36,.72)";
     el.style.background = "linear-gradient(180deg, rgba(120,53,15,.96), rgba(69,26,3,.96))";
     el.style.boxShadow = "0 18px 44px rgba(0,0,0,.45), 0 0 22px rgba(251,191,36,.24)";
-    el.innerHTML = `⚠️ <b>DISCIPLINA REAL</b><br>${getDisciplineCounterText()} · bloquea con 2 OTM o ciclo IC2 completo`;
+    el.innerHTML = `⚠️ <b>DISCIPLINA DEMO</b><br>${getDisciplineCounterText()} · bloquea con 3 ITM o 2 OTM`;
     return;
   }
 
@@ -10652,7 +9838,7 @@ function disciplineTagText() {
   if (isDisciplineBypassedForCurrentAccount()) {
     const pend = (disciplinePendingContracts || []).length;
     const pTxt = pend ? ` • Pendientes:${pend}` : "";
-    return `Disciplina DEMO: libre para pruebas${pTxt}`;
+    return `Disciplina REAL: libre para pruebas${pTxt}`;
   }
 
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
@@ -10665,16 +9851,22 @@ function disciplineTagText() {
 
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
-    return `🔒 REAL BLOQUEADA ${fmtRemaining(remain)} · ${getDisciplineLockReasonText()} · ${getDisciplineCounterText()}`;
+    return `🔒 DEMO BLOQUEADA ${fmtRemaining(remain)} · ${getDisciplineLockReasonText()} · ${getDisciplineCounterText()}`;
   }
 
   const pend = (disciplinePendingContracts || []).length;
   const pTxt = pend ? ` • Pendientes:${pend}` : "";
-  return `Disciplina REAL: ${getDisciplineCounterText()}${pTxt}`;
+  return `Disciplina DEMO: ${getDisciplineCounterText()}${pTxt}`;
 }
 function updateDisciplineLockUI(forceToast = false) {
-  const correctedExpiredLock = clearExpiredOrCorruptDisciplineLock({ silent: !forceToast });
-  if (correctedExpiredLock && forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
+  if (!isDisciplineBypassedForCurrentAccount() && disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    if (forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
+  }
 
   const locked = isTradeLockedNow();
   const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
@@ -10702,41 +9894,25 @@ function startNewDisciplineWindowIfNeeded() {
     saveDiscipline();
   }
 }
-function lockRealDiscipline(reason = "") {
-  if (isDisciplineBypassedForCurrentAccount()) return false;
-  if (isTradeLockedNow()) return true;
-  disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
-  saveDiscipline();
-  updateDisciplineLockUI(true);
-  const msgReason = reason || getDisciplineLockReasonText();
-  toast(`🔒 REAL BLOQUEADA 1h: ${msgReason} · ${getDisciplineCounterText()}`, 5200);
-  return true;
-}
-
 function applyDisciplineOutcome(isWin) {
   updateDisciplineLockUI(false);
   if (isDisciplineBypassedForCurrentAccount()) return;
   if (isTradeLockedNow()) return;
 
-  // V70: los ITM consecutivos se manejan desde IC2, porque solo bloquean
-  // cuando se completa el ciclo de dos niveles. Acá contamos OTM reales.
-  if (!isWin) {
-    disciplineLosses += 1;
-    disciplineWins = 0; // corta la secuencia IC2 de 2 ITM seguidos
+  if (isWin) disciplineWins += 1;
+  else disciplineLosses += 1;
+
+  saveDiscipline();
+
+  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
+    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
     saveDiscipline();
-
-    if (disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
-      lockRealDiscipline("2 OTM alcanzados");
-      return;
-    }
-
-    toast(`⚠️ Disciplina REAL: ${getDisciplineCounterText()}`, 1900);
-    updateDisciplineLockUI(false);
+    updateDisciplineLockUI(true);
+    toast(`🔒 DEMO BLOQUEADA: ${getDisciplineLockReasonText()} · ${getDisciplineCounterText()} · falta ${fmtRemaining(DISCIPLINE_LOCK_MS)}`, 4200);
     return;
   }
 
-  // ITM nivel 1/nivel 2 se registra en updateC100AfterResult().
-  saveDiscipline();
+  toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
   updateDisciplineLockUI(false);
 }
 
@@ -11874,12 +11050,7 @@ function clearDerivToken() {
 }
 
 function getTradeStake() {
-  let raw = null;
-  try {
-    raw = localStorage.getItem(getScopedTradeStakeKey());
-    // Migración suave: si no existe stake específico y estás en DEMO, usa el viejo.
-    if (raw === null && getCurrentAccountScope() === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(TRADE_STAKE_KEY);
-  } catch {}
+  const raw = localStorage.getItem(TRADE_STAKE_KEY);
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_STAKE;
 }
@@ -11887,7 +11058,7 @@ function setTradeStake(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return false;
   try {
-    localStorage.setItem(getScopedTradeStakeKey(), String(v));
+    localStorage.setItem(TRADE_STAKE_KEY, String(v));
     return true;
   } catch {
     return false;
@@ -11895,7 +11066,7 @@ function setTradeStake(n) {
 }
 function clearTradeStake() {
   try {
-    localStorage.removeItem(getScopedTradeStakeKey());
+    localStorage.removeItem(TRADE_STAKE_KEY);
   } catch {}
 }
 
@@ -12012,7 +11183,6 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
         sold_time: Number(poc.sell_time || 0),
         contract_id: cid,
         outcome_source: sourceLabel,
-        ...compactAuditFields(extractContractAuditFields(poc)),
       };
       const it = signalId ? findHistoryItemById(signalId) : null;
       if (it) {
@@ -12033,7 +11203,6 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
 
     applyDisciplineOutcome(isWin);
     handleC100ContractClosed(cid, isWin, profit);
-    if (!isWin) startMentalCooldownAfterOtm(cid, `OTM ${String(poc?.underlying || poc?.display_name || "").trim() || "registrada"}`);
     removePendingContract(cid);
 
     const sid = contractSubs.get(cid);
@@ -12139,11 +11308,6 @@ async function ensureAuthorized() {
   authorizeInFlight = wsRequest({ authorize: token }, 15000)
     .then((res) => {
       if (res?.error) throw new Error(res.error.message || "authorize error");
-      try {
-        const auth = res?.authorize || {};
-        const b = Number(auth.balance);
-        if (Number.isFinite(b)) setCachedAccountBalance(b, auth.currency || DEFAULT_CURRENCY);
-      } catch {}
       isAuthorized = true;
       return true;
     })
@@ -12155,10 +11319,6 @@ async function ensureAuthorized() {
 }
 
 function assertCanTrade() {
-  updateMentalCooldownUI();
-  if (isMentalCooldownActive()) {
-    throw new Error(`Despeje mental activo (${fmtMentalCooldownRemaining(getMentalCooldownRemainingMs())})`);
-  }
   updateDisciplineLockUI(false);
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
@@ -12187,7 +11347,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
   try {
     await ensureAuthorized();
-    try { await refreshAccountBalance({ force: true }); } catch {}
     startNewDisciplineWindowIfNeeded();
 
     const symbol =
@@ -12195,11 +11354,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     const stake = Number(getEffectiveTradeStake().toFixed(2));
     let res = null;
     let contractLabel = side;
-    let tradeExtra = { side, symbol, stake, ...getC100TradeAuditExtra(stake) };
-    const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
-      ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
-      : null;
-    const isStrictAutoPrearmedEntry = !!(isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
+    let tradeExtra = { side, symbol, stake };
     if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
     if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
     else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
@@ -12243,44 +11398,36 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         };
       }
     } else if (isC100Active()) {
-      // V66: si es AUTO post-58 con cierre 60, la proposal debe estar prearmada desde 56-58s.
-      // Así en el post-58 solo enviamos buy(proposal_id), sin gastar tiempo pidiendo proposal.
-      let proposalId = "";
-      let askPrice = NaN;
-      let payout = NaN;
-      let profitPct = NaN;
-      let timing = null;
-      let usedPreProposal = false;
+      // IC2 pide proposal antes de comprar para capturar payout y ejecutar con el stake compuesto exacto.
+      const proposalRes = await wsRequest(
+        {
+          proposal: 1,
+          amount: stake,
+          basis: "stake",
+          contract_type: side,
+          currency: DEFAULT_CURRENCY,
+          duration: Number(DEFAULT_DURATION) || 1,
+          duration_unit: DEFAULT_DURATION_UNIT || "m",
+          symbol,
+        },
+        12000
+      );
+      if (proposalRes?.error) throw new Error(proposalRes.error.message || "proposal error");
 
-      if (autoPreProposal) {
-        proposalId = String(autoPreProposal.proposal_id || "");
-        askPrice = Number(autoPreProposal.ask_price);
-        payout = Number(autoPreProposal.payout);
-        profitPct = Number(autoPreProposal.profit_pct);
-        timing = autoPreProposal.timing || null;
-        usedPreProposal = true;
-      } else {
-        if (isStrictAutoPrearmedEntry) {
-          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
-        }
-        const proposalPack = await requestRiseFallProposalWithTiming(side, symbol, stake, itemCtx, 12000);
-        const proposal = proposalPack?.res?.proposal;
-        proposalId = proposal?.id ? String(proposal.id) : "";
-        askPrice = Number(proposal?.ask_price);
-        payout = Number(proposal?.payout);
-        profitPct = ((payout - askPrice) / askPrice) * 100;
-        timing = proposalPack.timing;
-      }
-
+      const proposal = proposalRes?.proposal;
+      const proposalId = proposal?.id ? String(proposal.id) : "";
+      const askPrice = Number(proposal?.ask_price);
+      const payout = Number(proposal?.payout);
       if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
         throw new Error("Deriv no confirmó proposal válida para IC2.");
       }
+      const profitPct = ((payout - askPrice) / askPrice) * 100;
       assertC100PayoutOK(profitPct);
 
       res = await wsRequest({ buy: proposalId, price: askPrice }, 20000);
       tradeExtra = {
         ...tradeExtra,
-        exec_mode: usedPreProposal ? "IC2_RISE_FALL_PREPROPOSAL" : "IC2_RISE_FALL_PROPOSAL",
+        exec_mode: "IC2_RISE_FALL_PROPOSAL",
         contract_type: side,
         payout_pct: Number(profitPct),
         proposal_id: proposalId,
@@ -12288,41 +11435,24 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         ic2_mode: C100_MODE_LABEL,
         ic2_level: c100State?.level || null,
         ic2_step: c100State?.compoundStep || 0,
-        entry_preproposal_used: !!usedPreProposal,
-        entry_preproposal_prepared_ms: usedPreProposal ? Math.round(Number(autoPreProposal.prepared_ms || 0)) : null,
-        entry_preproposal_age_ms: usedPreProposal ? Math.max(0, Date.now() - Number(autoPreProposal.prepared_at || Date.now())) : null,
-        entry_preproposal_reason: usedPreProposal ? String(autoPreProposal.reason || "") : "",
-        ...getRiseFallTimingExtra(timing),
       };
     } else {
-      if (autoPreProposal) {
-        res = await wsRequest({ buy: autoPreProposal.proposal_id, price: Number(autoPreProposal.ask_price) }, 20000);
-        tradeExtra = {
-          ...tradeExtra,
-          exec_mode: "RISE_FALL_PREPROPOSAL",
-          contract_type: side,
-          payout_pct: Number(autoPreProposal.profit_pct),
-          proposal_id: String(autoPreProposal.proposal_id || ""),
-          entry_preproposal_used: true,
-          entry_preproposal_prepared_ms: Math.round(Number(autoPreProposal.prepared_ms || 0)),
-          entry_preproposal_age_ms: Math.max(0, Date.now() - Number(autoPreProposal.prepared_at || Date.now())),
-          entry_preproposal_reason: String(autoPreProposal.reason || ""),
-          ...getRiseFallTimingExtra(autoPreProposal.timing),
-        };
-      } else {
-        if (isStrictAutoPrearmedEntry) {
-          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
-        }
-        const buyPack = await buyRiseFallDirectWithTiming(side, symbol, stake, itemCtx, 20000);
-        res = buyPack.res;
-        tradeExtra = {
-          ...tradeExtra,
-          exec_mode: "RISE_FALL_BUY",
-          contract_type: side,
-          entry_preproposal_used: false,
-          ...getRiseFallTimingExtra(buyPack.timing),
-        };
-      }
+      res = await wsRequest(
+        {
+          buy: 1,
+          price: stake,
+          parameters: {
+            amount: stake,
+            basis: "stake",
+            contract_type: side,
+            currency: DEFAULT_CURRENCY,
+            duration: Number(DEFAULT_DURATION) || 1,
+            duration_unit: DEFAULT_DURATION_UNIT || "m",
+            symbol,
+          },
+        },
+        20000
+      );
     }
 
     if (res?.error) throw new Error(res.error.message || "buy error");
@@ -12330,17 +11460,6 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
-
-    try {
-      Object.assign(tradeExtra, compactAuditFields(extractContractAuditFields(res?.buy || {})));
-      if (!tradeExtra.purchase_time) tradeExtra.purchase_time = Math.floor(serverNowMs() / 1000);
-      if (itemCtx?.signalAutoEntry?.post58_readiness) {
-        tradeExtra.entry_trigger_mode = isNextCandleExpiryTiming() ? "PREPROPOSAL_POST_TICK_58" : "AUTO58_NORMAL";
-        tradeExtra.entry_trigger_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.ms || 0));
-        tradeExtra.entry_trigger_last_tick_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.lastTickMs || 0));
-        tradeExtra.entry_trigger_reason = String(itemCtx.signalAutoEntry.post58_readiness.reason || "");
-      }
-    } catch {}
 
     if (isC100Active()) markC100PendingContract(cid);
 
@@ -12431,7 +11550,6 @@ function initTokenAndStakeUI() {
       if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
       resetAuthState();
-      void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
       syncAccountScopedSettingsUI();
       toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
       alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
@@ -12814,11 +11932,7 @@ function onTick(tick) {
     lastMinuteSeenBySymbol[symbol] = minute;
     minuteData[minute] ||= {};
     minuteData[minute][symbol] ||= [];
-    // No inyectar el cierre anterior como open si el primer tick real ya llegó en ms=0.
-    // Si se inyectan ambos en ms=0, el gráfico en vivo dibuja una línea vertical falsa
-    // al inicio de la vela. Cuando el primer tick llega tarde (>0), sí usamos prevLast
-    // para mostrar continuidad visual desde 0s.
-    if (minuteData[minute][symbol].length === 0 && prevLast != null && Number(msInMinute) > 0) {
+    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
       minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
   }
@@ -12832,13 +11946,7 @@ function onTick(tick) {
 
   minuteData[minute] ||= {};
   minuteData[minute][symbol] ||= [];
-  const currentMinuteTicks = minuteData[minute][symbol];
-  const lastMinutePoint = currentMinuteTicks[currentMinuteTicks.length - 1];
-  if (lastMinutePoint && Math.round(Number(lastMinutePoint.ms)) === Math.round(Number(msInMinute))) {
-    currentMinuteTicks[currentMinuteTicks.length - 1] = { ms: msInMinute, quote: tick.quote };
-  } else {
-    currentMinuteTicks.push({ ms: msInMinute, quote: tick.quote });
-  }
+  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
 
   candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) {
@@ -12881,27 +11989,7 @@ function onTick(tick) {
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isRupturaDebilGiroMode(activeModeForTick)) {
-      // V78 Ruptura Débil Giro:
-      // 0-15s queda como observación interna, pero NO se muestra señal todavía.
-      // La señal visible recién puede salir entre 20-30s, si la vela sigue alcista
-      // y no perdió el open con fuerza antes de los 20s.
-      // La operación no sale sola por radar: requiere 4 puntos manuales como el resto.
-      const ruptureStartSec = 20;
-      const ruptureEndSec = 30;
-      if (sec >= ruptureStartSec && sec <= ruptureEndSec && lastEvaluatedMinute !== minute) {
-        const ok = evaluateMinute(minute, {
-          evalMs: Math.max(ruptureStartSec * 1000, Math.min(msInMinute, ruptureEndSec * 1000)),
-          evalSec: sec,
-          radar: true,
-          radarStartSec: ruptureStartSec,
-          radarEndSec: ruptureEndSec,
-        });
-        if (ok) lastEvaluatedMinute = minute;
-      } else if (sec > ruptureEndSec && lastEvaluatedMinute !== minute) {
-        lastEvaluatedMinute = minute;
-      }
-    } else if (isDynamicLineMode(activeModeForTick)) {
+    if (isDynamicLineMode(activeModeForTick)) {
       // Línea dinámica queda igual: evalúa una sola vez en el segundo elegido.
       if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
         lastEvaluatedMinute = minute;
@@ -17247,352 +16335,6 @@ function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_
   };
 }
 
-
-function getRupturaDebilGiroPathStats(pts) {
-  const clean = (Array.isArray(pts) ? pts : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  if (clean.length < 2) return { path: 0, net: 0, irregularity: 0, turns: 0 };
-  let path = 0;
-  let turns = 0;
-  let lastSign = 0;
-  for (let i = 1; i < clean.length; i++) {
-    const d = clean[i].quote - clean[i - 1].quote;
-    path += Math.abs(d);
-    const sign = d > 0 ? 1 : d < 0 ? -1 : 0;
-    if (sign && lastSign && sign !== lastSign) turns++;
-    if (sign) lastSign = sign;
-  }
-  const net = clean[clean.length - 1].quote - clean[0].quote;
-  return { path, net, irregularity: path / Math.max(Math.abs(net), 1e-9), turns };
-}
-
-function getRupturaDebilGiroRuns(pts, tol = 0) {
-  const clean = (Array.isArray(pts) ? pts : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  const runs = [];
-  let active = null;
-  for (let i = 1; i < clean.length; i++) {
-    const prev = clean[i - 1];
-    const cur = clean[i];
-    const d = cur.quote - prev.quote;
-    const sign = d > tol ? 1 : d < -tol ? -1 : 0;
-    if (!sign) continue;
-    if (!active || active.sign !== sign) {
-      if (active) runs.push(active);
-      active = {
-        sign,
-        startMs: Number(prev.ms),
-        endMs: Number(cur.ms),
-        move: Math.abs(d),
-        from: Number(prev.quote),
-        to: Number(cur.quote),
-        steps: 1,
-      };
-    } else {
-      active.endMs = Number(cur.ms);
-      active.move += Math.abs(d);
-      active.to = Number(cur.quote);
-      active.steps += 1;
-    }
-  }
-  if (active) runs.push(active);
-  return runs;
-}
-
-function getRupturaDebilGiroMaxPullback(pts) {
-  const clean = (Array.isArray(pts) ? pts : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  if (clean.length < 2) return 0;
-  let peak = Number(clean[0].quote);
-  let maxPullback = 0;
-  for (const p of clean) {
-    const q = Number(p.quote);
-    if (q > peak) peak = q;
-    maxPullback = Math.max(maxPullback, peak - q);
-  }
-  return maxPullback;
-}
-
-function isRupturaDebilGiroBullishOnlySetup(pts, range = null) {
-  const clean = (Array.isArray(pts) ? pts : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  if (clean.length < 3) return false;
-
-  const open = Number(clean[0]?.quote);
-  const current = Number(clean[clean.length - 1]?.quote);
-  const qs = clean.map((p) => Number(p.quote));
-  const localRange = Number.isFinite(Number(range)) && Number(range) > 0
-    ? Number(range)
-    : Math.max(Math.max(...qs) - Math.min(...qs), Math.abs(open) * 0.000001, 1e-9);
-
-  const bullishTol = Math.max(localRange * 0.025, Math.abs(open) * 0.00000008, 1e-9);
-  return Number.isFinite(open) && Number.isFinite(current) && current > open + bullishTol;
-}
-
-function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
-  const clean = (Array.isArray(pts) ? pts : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  if (clean.length < 6) return null;
-
-  const evalTime = Number(evalMs || clean[clean.length - 1]?.ms || 0);
-  if (evalTime < 20000 || evalTime > 30000) return null;
-
-  const quotes = clean.map((p) => Number(p.quote));
-  const open = Number(quotes[0]);
-  const current = Number(quotes[quotes.length - 1]);
-  const high = Math.max(...quotes);
-  const low = Math.min(...quotes);
-  const localRange = Math.max(
-    Number(range || 0),
-    high - low,
-    Math.abs(open) * 0.000001,
-    1e-9
-  );
-  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
-
-  // V78: no mostrar señal si la vela apenas subió y después perdió el open con fuerza.
-  // Queremos comprador irregular que sigue siendo comprador, no una caída temprana que recupera tarde.
-  const early20 = clean.filter((p) => Number(p.ms) <= 20000);
-  const early20Quotes = early20.map((p) => Number(p.quote)).filter(Number.isFinite);
-  const early20Min = early20Quotes.length ? Math.min(...early20Quotes) : open;
-  const early20Close = early20.length ? Number(early20[early20.length - 1].quote) : current;
-  const earlyLossBelowOpen = Math.max(0, open - early20Min);
-  const earlyLostOpenStrong = earlyLossBelowOpen >= Math.max(localRange * 0.28, tol * 8);
-  const stillBelowOpenAt20 = Number.isFinite(early20Close) && early20Close <= open + Math.max(localRange * 0.010, tol * 1.2);
-  if (earlyLostOpenStrong || stillBelowOpenAt20) return null;
-
-  // Filtro duro: solo vela alcista en el momento de detección.
-  if (!isRupturaDebilGiroBullishOnlySetup(clean, localRange)) return null;
-
-  const stats = getRupturaDebilGiroPathStats(clean);
-  const runs = getRupturaDebilGiroRuns(clean, tol);
-  const upRuns = runs.filter((r) => r.sign > 0 && r.move > tol * 1.2);
-  const downRuns = runs.filter((r) => r.sign < 0 && r.move > tol * 1.2);
-  const upMoves = upRuns.map((r) => Number(r.move)).filter(Number.isFinite);
-  const downMoves = downRuns.map((r) => Number(r.move)).filter(Number.isFinite);
-
-  const totalUp = upMoves.reduce((a, b) => a + b, 0);
-  const totalDown = downMoves.reduce((a, b) => a + b, 0);
-  const maxUpRun = upMoves.length ? Math.max(...upMoves) : 0;
-  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
-  const avgUp = upMoves.length ? totalUp / upMoves.length : 0;
-  const upVar = upMoves.length >= 2
-    ? upMoves.reduce((a, b) => a + Math.pow(b - avgUp, 2), 0) / upMoves.length
-    : 0;
-  const upCv = avgUp > 0 ? Math.sqrt(upVar) / avgUp : 0;
-
-  const net = current - open;
-  const highFromOpen = high - open;
-  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
-  const path = Math.max(stats.path, totalUp + totalDown, 1e-9);
-  const efficiency = net / path;
-  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
-  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
-
-  const firstUp = upMoves[0] || 0;
-  const lastUp = upMoves[upMoves.length - 1] || 0;
-  const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
-
-  // V78: los ejemplos buenos muestran comprador irregular, pero con intención alcista sostenida.
-  // Por eso la señal visible no sale en 0-15s: se espera confirmación 20-30s.
-  // Lo importante es: comprador intenta avanzar alcista, pero los empujes salen desparejos,
-  // devuelve mucho o aparece vendedor antes de 30s, sin perder fuerte el open antes de 20s.
-  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.12, tol * 2.0);
-  const decreasingPushes = upMoves.length >= 2 && (lastUp <= firstUp * (anySellerEntry ? 0.96 : 0.84));
-  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.30 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.60);
-  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.24 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.28));
-  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.42 && stats.turns >= 2);
-  const givesBackMuch = pullbackRatio >= 0.24 || maxPullbackRatio >= 0.17;
-  const strongContrary = maxDownRun >= Math.max(localRange * 0.22, maxUpRun * 0.48, tol * 2.8);
-
-  const sellerRunsInWindow = downRuns.filter((r) => Number(r.startMs) <= 30000);
-  const sellerAfter15 = sellerRunsInWindow.some((r) => Number(r.startMs) >= 15000 && Number(r.startMs) <= 30000 && Number(r.move) >= Math.max(localRange * 0.14, tol * 2.1));
-  const sellerAfter20 = sellerRunsInWindow.some((r) => Number(r.startMs) >= 20000 && Number(r.startMs) <= 30000 && Number(r.move) >= Math.max(localRange * 0.16, tol * 2.3));
-  const buyerTriesTwiceAndFails =
-    upRuns.length >= 2 &&
-    downRuns.length >= 1 &&
-    totalDown >= totalUp * 0.18 &&
-    (decreasingPushes || differentSizedBreaks || givesBackMuch);
-  const secondPushWeakAfterSeller =
-    upRuns.length >= 2 &&
-    downRuns.length >= 1 &&
-    lastUp <= Math.max(firstUp * 0.98, avgUp * 0.88) &&
-    anySellerEntry;
-
-  const highIdx = quotes.indexOf(high);
-  const highMs = Number(clean[highIdx]?.ms || evalTime);
-  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.10, tol * 1.5);
-  const recent = clean.slice(Math.max(0, clean.length - 4));
-  const recentQuotes = recent.map((p) => Number(p.quote));
-  const recentRange = recentQuotes.length ? Math.max(...recentQuotes) - Math.min(...recentQuotes) : 0;
-  const lateStall = recent.length >= 3 && recentRange <= Math.max(localRange * 0.18, tol * 2.2) && highMs <= evalTime - 4000;
-
-  // Evita marcar un CALL sano como giro: impulso limpio, poca devolución y alta eficiencia.
-  const cleanBullishContinuation =
-    efficiency >= 0.78 &&
-    pullbackRatio <= 0.18 &&
-    stats.turns <= 1 &&
-    !decreasingPushes &&
-    !unevenPushes &&
-    !strongContrary;
-  if (cleanBullishContinuation) return null;
-
-  // Debe haber desplazamiento alcista suficiente. No queremos ruido sin intención compradora.
-  const enoughBullishDisplacement = highFromOpen >= Math.max(localRange * 0.28, tol * 4.0) && net > tol * 1.3;
-  if (!enoughBullishDisplacement) return null;
-
-  let points = 0;
-  const reasons = [];
-
-  // Base: vela alcista con intención, pero no sana/limpia.
-  points += 1;
-  reasons.push("vela alcista con desplazamiento inicial");
-
-  if (evalTime <= 15000) { points += 2; reasons.push("irregularidad en 0-15s"); }
-  else { points += 1; reasons.push("irregularidad en 15-30s"); }
-
-  if (decreasingPushes) { points += 2; reasons.push("empujes compradores cada vez más cortos"); }
-  if (differentSizedBreaks || unevenPushes) { points += 2; reasons.push("quiebres/impulsos de distinto tamaño"); }
-  if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
-  if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / avance desordenado"); }
-  if (stalledAfterHigh || lateStall) { points += 1; reasons.push("se traba después de avanzar"); }
-  if (buyerTriesTwiceAndFails) { points += 2; reasons.push("comprador intenta dos veces y falla calidad"); }
-  if (secondPushWeakAfterSeller) { points += 1; reasons.push("segunda respuesta compradora débil tras vendedor"); }
-  if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
-  else if (sellerAfter20) {
-    points += 2;
-    reasons.push("vendedor entra antes de 30s");
-  } else if (maxDownRun >= Math.max(localRange * 0.15, maxUpRun * 0.34, tol * 2.1)) {
-    points += 1;
-    reasons.push("presión vendedora presente");
-  }
-
-  const hasIrregularCore = decreasingPushes || differentSizedBreaks || unevenPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || lateStall || buyerTriesTwiceAndFails || secondPushWeakAfterSeller || sellerAfter20;
-  if (!hasIrregularCore) return null;
-
-  // Con irregularidad sola ya puede salir, pero solo después de confirmación 20-30s. Con vendedor fuerte gana prioridad.
-  if (points < 5) return null;
-
-  const earlyBonus = evalTime <= 22000 ? 12 : evalTime <= 26000 ? 8 : 4;
-  const priorityBonus =
-    (strongContrary ? 36 : 0) +
-    (sellerAfter20 ? 14 : sellerAfter15 ? 8 : 0) +
-    (buyerTriesTwiceAndFails ? 12 : 0) +
-    (givesBackMuch ? 8 : 0);
-  const quality =
-    points * 14 +
-    earlyBonus +
-    priorityBonus +
-    Math.min(18, stats.turns * 4) +
-    Math.min(18, Math.max(0, stats.irregularity - 1) * 12) +
-    Math.min(16, pullbackRatio * 18) +
-    Math.min(10, upCv * 12) -
-    Math.max(0, evalTime - 15000) / 2200;
-
-  const logicText = `Vela alcista con arranque irregular confirmado 20-30s: ${reasons.join(", ")}. Filtro V78: no perdió fuerte el open antes de 20s.`;
-
-  return {
-    direction: "PUT",
-    quality,
-    points,
-    meta: {
-      level: high,
-      levelMode: "ruptura_debil_giro",
-      levelType: "early_bullish_irregularity",
-      direction: "PUT",
-      tolerance: tol,
-      zone: Math.max(tol * 4, localRange * 0.10),
-      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
-      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
-      points,
-      maxPoints: 12,
-      reasons,
-      p0: open,
-      pE: current,
-      high,
-      low,
-      range: localRange,
-      evalSec: Math.round(evalTime / 1000),
-      earlyWindow: "20-30s",
-      hiddenObservationWindow: "0-15s",
-      confirmationWindow: "20-30s",
-      earlyLossBelowOpen,
-      earlyLostOpenStrong,
-      stillBelowOpenAt20,
-      analysisWindowMs: evalTime,
-      bullishCandleOnly: true,
-      disabledMirrorCall: true,
-      earlyIrregularityOnly: true,
-      strongContrary,
-      sellerAfter15,
-      sellerAfter20,
-      buyerTriesTwiceAndFails,
-      secondPushWeakAfterSeller,
-      totalUp,
-      totalDown,
-      maxUpRun,
-      maxDownRun,
-      pullbackRatio,
-      maxPullback,
-      maxPullbackRatio,
-      pathStats: stats,
-      efficiency,
-      upRuns: upMoves,
-      downRuns: downMoves,
-      upCv,
-      decreasingPushes,
-      unevenPushes,
-      differentSizedBreaks,
-      zigzagDirty,
-      givesBackMuch,
-      stalledAfterHigh,
-      lateStall,
-      breakMs: null,
-      breakPrice: null,
-      stage: "ruptura_debil_giro_inicio_irregular_alcista_v78_confirmada",
-      movementFilter: "vela_alcista_irregular_confirmada_20_30s_no_pierde_open",
-      priority: strongContrary || sellerAfter20 ? "ALTA" : "NORMAL",
-      logic: logicText,
-      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular confirmado 20-30s${strongContrary ? " + vendedor fuerte" : sellerAfter20 ? " + vendedor antes de 30s" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
-    },
-  };
-}
-
-function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
-  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
-  if (ticks.length < 6) return null;
-  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
-  const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
-  if (evalMs < 20000 || evalMs > 30000) return null;
-  const pts = ensureTicksWithBoundary(ticks, evalMs);
-  if (pts.length < 6) return null;
-  const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
-  if (qs.length < 6) return null;
-  const high = Math.max(...qs);
-  const low = Math.min(...qs);
-  const range = Math.max(high - low, Math.abs(qs[0]) * 0.000001, 1e-9);
-  if (!Number.isFinite(range) || range <= 0) return null;
-
-  // V78: este modo queda enfocado SOLO en velas alcistas con arranque irregular,
-  // pero la señal visible se confirma recién entre 20-30s.
-  // La irregularidad temprana 0-15s queda como observación interna, no como señal inmediata.
-  // Si además aparece una entrada fuerte vendedora, se prioriza frente a otros pares.
-  if (!isRupturaDebilGiroBullishOnlySetup(pts, range)) return null;
-
-  return analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs);
-}
-
 function evaluateMinute(minute, opts = {}) {
   if (areSignalsPaused()) return false;
 
@@ -17635,20 +16377,6 @@ function evaluateMinute(minute, opts = {}) {
     if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
-    } else if (isRupturaDebilGiroMode(activeMode)) {
-      // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
-      // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
-      const evalMsForRuptura = Number(evalOptions?.evalMs || 0);
-      const ptsForRuptura = ensureTicksWithBoundary(c.ticks || [], Number.isFinite(evalMsForRuptura) && evalMsForRuptura > 0 ? evalMsForRuptura : Number((c.ticks || []).slice(-1)[0]?.ms || 0));
-      const qsForRuptura = ptsForRuptura.map((p) => Number(p.quote)).filter(Number.isFinite);
-      const rangeForRuptura = qsForRuptura.length
-        ? Math.max(Math.max(...qsForRuptura) - Math.min(...qsForRuptura), Math.abs(qsForRuptura[0]) * 0.000001, 1e-9)
-        : 0;
-      if (!isRupturaDebilGiroBullishOnlySetup(ptsForRuptura, rangeForRuptura)) continue;
-
-      match = analyzeRupturaDebilGiroCandidate(c, minute, evalOptions);
-      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
-      matchSource = "RUPTURA_DEBIL_GIRO_INICIO_IRREGULAR";
     } else if (isSNRPolaridadMode(activeMode)) {
       match = analyzeSNRPolaridadCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
       matchSource = "SNR_POLARIDAD";
@@ -17672,18 +16400,11 @@ function evaluateMinute(minute, opts = {}) {
   }
 
   if (!matches.length) return false;
-  matches.sort((a, b) => {
-    if (isRupturaDebilGiroMode(activeMode)) {
-      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 ? 1 : 0;
-      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 ? 1 : 0;
-      if (bp !== ap) return bp - ap;
-    }
-    return (
-      b.quality - a.quality ||
-      b.giroNivelPoints - a.giroNivelPoints ||
-      b.giroNivelScore - a.giroNivelScore
-    );
-  });
+  matches.sort((a, b) =>
+    b.quality - a.quality ||
+    b.giroNivelPoints - a.giroNivelPoints ||
+    b.giroNivelScore - a.giroNivelScore
+  );
 
   // V14: si hay interacción con nivel, se elige la mejor; no se cancela por empate de calidad.
 
@@ -17808,7 +16529,6 @@ function connect() {
     }, 350);
 
     updateDisciplineLockUI(false);
-    void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
     await resubscribePendingContracts();
   };
 
@@ -18004,12 +16724,10 @@ loadLiveAnalysisPaused();
 loadAutoOpenChartSetting();
 loadTradingAccountMode();
 loadC100State();
-loadMentalCooldown();
 loadDiscipline();
 startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
 loadExecutionMode();
-loadEntryTimingMode();
 loadKeepClosedAwaySignals();
 
 renderHistory();
@@ -18024,8 +16742,6 @@ ensureAutoOpenChartButton();
 applyAutoOpenChartUI();
 ensureExecutionModeButton();
 applyExecutionModeUI();
-ensureEntryTimingModeButton();
-applyEntryTimingModeUI();
 
 ensureTradingAccountButton();
 applyTradingAccountUI();
@@ -18041,7 +16757,6 @@ try { ensureSettingsSelfCheckButton(); runSettingsMenuSelfCheck({ silent: true }
 
 applyModalTradeButtonsLayout();
 updateModalCandleStatusUI();
-updateMentalCooldownUI();
 updateDisciplineLockUI(false);
 
 seedTradesJournalFromHistory();

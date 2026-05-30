@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v80-fix-live-open-vertical-line";
+const CACHE = "deriv-assets-v81-soportes-estructurales-vivo";
 
 const ASSETS = [
   "./",
@@ -13,7 +13,6 @@ const ASSETS = [
   "./icon-512.png",
   "./alert.mp3",
   "./bg-neon.png",
-  "./despeje-mental-bg.png",
 ];
 
 self.addEventListener("install", (e) => {
