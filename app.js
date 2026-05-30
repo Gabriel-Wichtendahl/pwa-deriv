@@ -49,13 +49,14 @@
 // ✅ V77: Ajuste con ejemplos marcados: no depende de resistencia perfecta, prioriza devuelve fuerte/vendedor 20-30s y guarda logic explicativo.
 // ✅ V78: Ruptura Débil Giro: prealerta temprana oculta; señal visible recién 20-30s y bloquea pérdida fuerte del open antes de 20s.
 // ✅ V79: Autolimpieza de bloqueos vencidos/corruptos de Despeje mental y Disciplina REAL.
+// ✅ V80: Corrige línea vertical falsa en gráfico en vivo al iniciar vela (dedupe ms=0 y no duplica open).
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V79_UNLOCK_EXPIRED_LOCKS_20260529";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V80_FIX_LIVE_OPEN_VERTICAL_LINE_20260529";
 
 /*
   Mapa rápido de módulos:
@@ -4835,6 +4836,32 @@ function removeLiveSignalConfirmation() {
   updateLiveConfirmationUI();
 }
 
+
+function normalizeChartTicksNoDuplicateMs(rawTicks = []) {
+  const normalized = (Array.isArray(rawTicks) ? rawTicks : [])
+    .map((p, idx) => ({
+      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
+      quote: Number(p?.quote),
+      idx,
+    }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
+
+  const out = [];
+  for (const p of normalized) {
+    const last = out[out.length - 1];
+    // Si hay dos puntos en el mismo milisegundo (muy común en ms=0 cuando se inyecta el
+    // cierre anterior como open y llega el primer tick real), dibujar ambos genera una
+    // línea vertical falsa. Para el gráfico mantenemos solo el último precio real de ese ms.
+    if (last && Math.round(Number(last.ms)) === Math.round(Number(p.ms))) {
+      out[out.length - 1] = { ms: p.ms, quote: p.quote };
+    } else {
+      out.push({ ms: p.ms, quote: p.quote });
+    }
+  }
+  return out;
+}
+
 function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   if (!canvas || !item) return;
 
@@ -4854,15 +4881,7 @@ function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   ctx.fillRect(0, 0, w, h);
   ctx.globalAlpha = 1;
 
-  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
-  ticks = ticks
-    .map((p, idx) => ({
-      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
-      quote: Number(p?.quote),
-      idx,
-    }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
+  let ticks = normalizeChartTicksNoDuplicateMs(item.ticks);
 
   if (ticks.length < 2) {
     drawMiniCandlesLoading(ctx, w, h, "Esperando ticks en vivo…");
@@ -6315,7 +6334,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+  const pts = normalizeChartTicksNoDuplicateMs(ticks);
   const quotes = pts.map((p) => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
@@ -12795,7 +12814,11 @@ function onTick(tick) {
     lastMinuteSeenBySymbol[symbol] = minute;
     minuteData[minute] ||= {};
     minuteData[minute][symbol] ||= [];
-    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
+    // No inyectar el cierre anterior como open si el primer tick real ya llegó en ms=0.
+    // Si se inyectan ambos en ms=0, el gráfico en vivo dibuja una línea vertical falsa
+    // al inicio de la vela. Cuando el primer tick llega tarde (>0), sí usamos prevLast
+    // para mostrar continuidad visual desde 0s.
+    if (minuteData[minute][symbol].length === 0 && prevLast != null && Number(msInMinute) > 0) {
       minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
   }
@@ -12809,7 +12832,13 @@ function onTick(tick) {
 
   minuteData[minute] ||= {};
   minuteData[minute][symbol] ||= [];
-  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
+  const currentMinuteTicks = minuteData[minute][symbol];
+  const lastMinutePoint = currentMinuteTicks[currentMinuteTicks.length - 1];
+  if (lastMinutePoint && Math.round(Number(lastMinutePoint.ms)) === Math.round(Number(msInMinute))) {
+    currentMinuteTicks[currentMinuteTicks.length - 1] = { ms: msInMinute, quote: tick.quote };
+  } else {
+    currentMinuteTicks.push({ ms: msInMinute, quote: tick.quote });
+  }
 
   candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) {
