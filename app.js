@@ -54,6 +54,7 @@
 // ✅ V82: Merge correcto: restaura Ruptura Débil Giro V78 + autolimpieza + línea viva limpia + soportes estructurales.
 // ✅ V83: Pausa visual 5m si salen 15 señales sin operación REAL; bloqueo total tipo overlay.
 // ✅ V84: Integra imagen Pausa visual con contador real y tips/progreso dinámicos.
+// ✅ V85: Despeje mental post-OTM solo en REAL; DEMO queda libre para pruebas.
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
@@ -2088,6 +2089,9 @@ function ensureTradingAccountButton() {
     activeTradingAccount = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_DEMO : ACCOUNT_MODE_REAL;
     saveTradingAccountMode();
     loadDiscipline();
+    loadMentalCooldown();
+    updateMentalCooldownUI();
+    applyLiveAnalysisPauseUI();
     resetAuthState();
     syncAccountScopedSettingsUI();
     applyTradingAccountUI();
@@ -10567,13 +10571,41 @@ function clearExpiredOrCorruptDisciplineLock({ silent = true } = {}) {
   }
 }
 
+function isMentalCooldownEnabledForCurrentAccount() {
+  // V85: el despeje mental post-OTM queda solo para REAL.
+  // En DEMO no se dispara ni bloquea, para poder seguir probando libremente.
+  return activeTradingAccount === ACCOUNT_MODE_REAL;
+}
+function getScopedMentalCooldownStorageKey(baseKey) {
+  // Lo dejamos preparado por cuenta, pero actualmente solo REAL puede guardar/leer el bloqueo.
+  const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
+  return `${baseKey}_${scope}`;
+}
+function clearLegacyMentalCooldownKeys() {
+  // Limpieza de claves globales viejas de v73/v84 para evitar que un despeje generado en DEMO
+  // quede pegado y después bloquee cuando se cambia a REAL.
+  try {
+    localStorage.removeItem(MENTAL_COOLDOWN_UNTIL_KEY);
+    localStorage.removeItem(MENTAL_COOLDOWN_REASON_KEY);
+    localStorage.removeItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY);
+  } catch {}
+}
 function loadMentalCooldown() {
   try {
-    mentalCooldownUntilMs = Number(localStorage.getItem(MENTAL_COOLDOWN_UNTIL_KEY) || 0) || 0;
-    mentalCooldownReason = String(localStorage.getItem(MENTAL_COOLDOWN_REASON_KEY) || "");
-    mentalCooldownLastContractId = String(localStorage.getItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY) || "");
+    clearLegacyMentalCooldownKeys();
 
-    // V79: si quedó un bloqueo viejo, vencido o con fecha corrupta, se limpia al abrir.
+    if (!isMentalCooldownEnabledForCurrentAccount()) {
+      mentalCooldownUntilMs = 0;
+      mentalCooldownReason = "";
+      mentalCooldownLastContractId = "";
+      return;
+    }
+
+    mentalCooldownUntilMs = Number(localStorage.getItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_UNTIL_KEY)) || 0) || 0;
+    mentalCooldownReason = String(localStorage.getItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_REASON_KEY)) || "");
+    mentalCooldownLastContractId = String(localStorage.getItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_LAST_CONTRACT_KEY)) || "");
+
+    // V79/V85: si quedó un bloqueo viejo, vencido o con fecha corrupta, se limpia al abrir.
     if (mentalCooldownUntilMs && isExpiryValueCorruptOrExpired(mentalCooldownUntilMs, MENTAL_COOLDOWN_MAX_STORED_MS)) {
       clearMentalCooldown({ silent: true });
     }
@@ -10585,9 +10617,11 @@ function loadMentalCooldown() {
 }
 function saveMentalCooldown() {
   try {
-    localStorage.setItem(MENTAL_COOLDOWN_UNTIL_KEY, String(mentalCooldownUntilMs || 0));
-    localStorage.setItem(MENTAL_COOLDOWN_REASON_KEY, mentalCooldownReason || "");
-    localStorage.setItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY, mentalCooldownLastContractId || "");
+    clearLegacyMentalCooldownKeys();
+    if (!isMentalCooldownEnabledForCurrentAccount()) return;
+    localStorage.setItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_UNTIL_KEY), String(mentalCooldownUntilMs || 0));
+    localStorage.setItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_REASON_KEY), mentalCooldownReason || "");
+    localStorage.setItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_LAST_CONTRACT_KEY), mentalCooldownLastContractId || "");
   } catch {}
 }
 function clearMentalCooldown({ silent = false } = {}) {
@@ -10595,15 +10629,17 @@ function clearMentalCooldown({ silent = false } = {}) {
   mentalCooldownReason = "";
   mentalCooldownLastContractId = "";
   try {
-    localStorage.removeItem(MENTAL_COOLDOWN_UNTIL_KEY);
-    localStorage.removeItem(MENTAL_COOLDOWN_REASON_KEY);
-    localStorage.removeItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY);
+    localStorage.removeItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_UNTIL_KEY));
+    localStorage.removeItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_REASON_KEY));
+    localStorage.removeItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_LAST_CONTRACT_KEY));
+    clearLegacyMentalCooldownKeys();
   } catch {}
   updateMentalCooldownUI();
   applyLiveAnalysisPauseUI();
   if (!silent) toast("🌿 Despeje mental terminado. Volvé despacio.", 2200);
 }
 function isMentalCooldownActive() {
+  if (!isMentalCooldownEnabledForCurrentAccount()) return false;
   const until = Number(mentalCooldownUntilMs || 0);
   if (!until) return false;
   if (isExpiryValueCorruptOrExpired(until, MENTAL_COOLDOWN_MAX_STORED_MS)) {
@@ -10715,6 +10751,9 @@ function updateMentalCooldownUI() {
   try { setStatus(`🌿 Despeje mental · ${fmtMentalCooldownRemaining(remain)}`); } catch {}
 }
 function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada") {
+  // V85: en DEMO no hay despeje mental. Solo REAL activa el bloqueo total de 10 minutos.
+  if (!isMentalCooldownEnabledForCurrentAccount()) return false;
+
   // Si el OTM también disparó el bloqueo REAL de 1 hora, respetamos ese flujo como estaba:
   // no mostramos overlay total para que puedas revisar Trades/velas durante la hora.
   if (isTradeLockedNow()) return false;

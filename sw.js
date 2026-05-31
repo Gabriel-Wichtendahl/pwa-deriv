@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v84-pausa-visual-imagen";
+const CACHE = "deriv-assets-v85-despeje-real-only";
 
 const ASSETS = [
   "./",
