@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v85-despeje-real-only";
+const CACHE = "deriv-assets-v86-modal-controles-fuera-grafico";
 
 const ASSETS = [
   "./",
@@ -13,8 +13,6 @@ const ASSETS = [
   "./icon-512.png",
   "./alert.mp3",
   "./bg-neon.png",
-  "./despeje-mental-bg.png",
-  "./pausa-visual-bg.png",
 ];
 
 self.addEventListener("install", (e) => {
