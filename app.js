@@ -201,6 +201,14 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
 ========================= */
 const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
+
+// V90: ayuda visual automática: abre replay X2 al segundo 28 si el modal sigue abierto.
+const AUTO_REPLAY_X2_KEY = "autoReplayX2OnSignal_v1";
+const AUTO_REPLAY_X2_TRIGGER_MS = 28000;
+const AUTO_REPLAY_X2_SPEED = 2;
+let autoReplayX2OnSignal = true;
+let modalAutoReplayTimer = null;
+let modalAutoReplayToken = "";
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
 let c100PanelEl = null;
@@ -1668,6 +1676,7 @@ const minuteCanvas = $("minuteCanvas");
 const modalCandle1mBtn = $("modalCandle1mBtn");
 const modalReplayBtn = $("modalReplayBtn");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
+const autoReplayX2Btn = $("autoReplayX2Btn");
 
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
@@ -4011,6 +4020,111 @@ function shouldAutoOpenChartNow() {
   if (isSignalFatigueCooldownActive()) return false;
 
   return true;
+}
+
+/* =========================
+   Auto Replay X2 en modal de señal
+========================= */
+function loadAutoReplayX2Setting() {
+  try {
+    const raw = localStorage.getItem(AUTO_REPLAY_X2_KEY);
+    // Por defecto ON: es una ayuda visual, no ejecuta operaciones ni suma puntos.
+    autoReplayX2OnSignal = raw == null ? true : raw === "1";
+  } catch {
+    autoReplayX2OnSignal = true;
+  }
+}
+function saveAutoReplayX2Setting() {
+  try { localStorage.setItem(AUTO_REPLAY_X2_KEY, autoReplayX2OnSignal ? "1" : "0"); } catch {}
+}
+function applyAutoReplayX2UI() {
+  const btn = pickEl("autoReplayX2Btn");
+  if (!btn) return;
+  btn.textContent = autoReplayX2OnSignal ? "🎬 Auto Replay X2 ON" : "🎬 Auto Replay X2 OFF";
+  btn.classList.toggle("active", !!autoReplayX2OnSignal);
+  btn.title = autoReplayX2OnSignal
+    ? "Si el modal de una señal sigue abierto, al segundo 28 cambia solo a Replay y reproduce en X2. Si cerrás el modal, se cancela."
+    : "No cambia automáticamente a Replay X2";
+}
+function ensureAutoReplayX2Button() {
+  let btn = pickEl("autoReplayX2Btn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+
+    btn = document.createElement("button");
+    btn.id = "autoReplayX2Btn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    const autoOpen = pickEl("autoOpenChartBtn");
+    if (autoOpen?.parentNode === host && autoOpen.nextSibling) host.insertBefore(btn, autoOpen.nextSibling);
+    else host.appendChild(btn);
+  }
+
+  btn.onclick = () => {
+    autoReplayX2OnSignal = !autoReplayX2OnSignal;
+    saveAutoReplayX2Setting();
+    applyAutoReplayX2UI();
+    if (!autoReplayX2OnSignal) cancelModalAutoReplayX2();
+    else scheduleModalAutoReplayX2(modalCurrentItem, "toggle_on");
+    toast(autoReplayX2OnSignal ? "🎬 Auto Replay X2 ON" : "🎬 Auto Replay X2 OFF", 1200);
+  };
+
+  applyAutoReplayX2UI();
+  return btn;
+}
+function cancelModalAutoReplayX2() {
+  if (modalAutoReplayTimer) clearTimeout(modalAutoReplayTimer);
+  modalAutoReplayTimer = null;
+  modalAutoReplayToken = "";
+}
+function getModalAutoReplayToken(item = modalCurrentItem) {
+  if (!item) return "";
+  return `${String(item.id || "")}|${String(item.symbol || "")}|${Number(item.minute) || 0}|${String(modalOpenContext?.source || "")}`;
+}
+function isModalAutoReplayEligible(item = modalCurrentItem) {
+  if (!autoReplayX2OnSignal) return false;
+  if (!item || !chartModal || chartModal.classList.contains("hidden")) return false;
+  if (modalReplayState?.open) return false;
+  if (!isItemLiveMinute(item)) return false;
+  const ms = getSignalConfirmationMs(item);
+  // Si ya pasó demasiado el punto de cambio, no forzamos replay tarde para no confundirte.
+  return ms >= 0 && ms <= 36000;
+}
+function scheduleModalAutoReplayX2(item = modalCurrentItem, reason = "open") {
+  cancelModalAutoReplayX2();
+  if (!isModalAutoReplayEligible(item)) return;
+  const token = getModalAutoReplayToken(item);
+  if (!token) return;
+
+  modalAutoReplayToken = token;
+  const ms = getSignalConfirmationMs(item);
+  const delay = Math.max(250, AUTO_REPLAY_X2_TRIGGER_MS - ms);
+
+  modalAutoReplayTimer = setTimeout(() => {
+    modalAutoReplayTimer = null;
+    runModalAutoReplayX2(token, reason);
+  }, delay);
+}
+function runModalAutoReplayX2(token, reason = "timer") {
+  if (!autoReplayX2OnSignal) return;
+  if (!modalCurrentItem || getModalAutoReplayToken(modalCurrentItem) !== token) return;
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (!isItemLiveMinute(modalCurrentItem)) return;
+
+  const ms = getSignalConfirmationMs(modalCurrentItem);
+  if (ms < AUTO_REPLAY_X2_TRIGGER_MS - 450) {
+    scheduleModalAutoReplayX2(modalCurrentItem, "early_retry");
+    return;
+  }
+  if (ms > 36000 || modalReplayState?.open) return;
+
+  if (modalChartView !== "candles1m") setModalChartView("candles1m");
+  openModalReplay({ speed: AUTO_REPLAY_X2_SPEED, source: "auto_x2" });
+  toast("🎬 Replay X2 automático", 900);
 }
 
 /* =========================
@@ -7553,6 +7667,7 @@ function repairSettingsMenuBindings() {
   try { ensureExecutionModeButton(); applyExecutionModeUI(); } catch {}
   try { ensureEntryTimingModeButton(); applyEntryTimingModeUI(); } catch {}
   try { ensureAutoOpenChartButton(); applyAutoOpenChartUI(); } catch {}
+  try { ensureAutoReplayX2Button(); applyAutoReplayX2UI(); } catch {}
   try { ensureLowPowerButton(); applyLowPowerModeUI(); } catch {}
   try { ensureResetCacheButton(); } catch {}
   try { ensureC100Panel(); updateC100PanelUI(); } catch {}
@@ -9923,7 +10038,7 @@ function updateModalReplayControlsUI() {
   if (speedBtn) speedBtn.textContent = `${Number(modalReplayState.speed || 1)}x`;
   if (seek) seek.value = String(Math.max(0, Math.min(60000, Number(modalReplayState.currentMs || 0))));
 }
-function openModalReplay() {
+function openModalReplay(options = {}) {
   if (!modalCurrentItem) return;
   const ticks = getModalReplayTicks(modalCurrentItem);
   if (ticks.length < 2) {
@@ -9935,8 +10050,8 @@ function openModalReplay() {
   box.classList.remove("hidden");
   modalReplayState.open = true;
   modalReplayState.playing = true;
-  modalReplayState.speed = 1;
-  modalReplayState.currentMs = 0;
+  modalReplayState.speed = [1, 2, 4].includes(Number(options.speed)) ? Number(options.speed) : 1;
+  modalReplayState.currentMs = Math.max(0, Math.min(60000, Number(options.currentMs || 0)));
   modalReplayState.lastFrameTs = 0;
   updateModalReplayControlsUI();
   startModalReplayLoop();
@@ -10159,6 +10274,9 @@ function requestModalDraw(force = false) {
 
     updateModalCandleStatusUI();
     updateModalNavVoteUI();
+    if (modalAutoReplayToken && !modalReplayState.open && getSignalConfirmationMs(it) >= AUTO_REPLAY_X2_TRIGGER_MS) {
+      runModalAutoReplayX2(modalAutoReplayToken, "draw_tick");
+    }
   });
 }
 
@@ -11476,6 +11594,7 @@ function navigateModalItem(step = 1) {
    Chart modal
 ========================= */
 function openChartModal(item, opts = {}) {
+  cancelModalAutoReplayX2();
   closeModalReplay();
   modalCurrentItem = item;
   modalOpenContext = normalizeModalContext(opts, item);
@@ -11513,8 +11632,10 @@ function openChartModal(item, opts = {}) {
   updateModalChartViewBtnUI();
 
   requestModalDraw(true);
+  scheduleModalAutoReplayX2(modalCurrentItem, "open_modal");
 }
 function closeChartModal() {
+  cancelModalAutoReplayX2();
   closeModalReplay();
   if (!chartModal) return;
   chartModal.classList.add("hidden");
@@ -18735,6 +18856,7 @@ if (practiceCanvas) {
 loadLowPowerMode();
 loadLiveAnalysisPaused();
 loadAutoOpenChartSetting();
+loadAutoReplayX2Setting();
 loadTradingAccountMode();
 loadC100State();
 loadMentalCooldown();
