@@ -796,6 +796,7 @@ const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
+const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR 25S";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -809,6 +810,7 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_25S_CONFIRMACION_20_25S_V89_20260602";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -818,6 +820,7 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
+  if ((raw.includes("ALCISTA") && raw.includes("IRREGULAR")) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25")) return MODE_ALCISTA_IRREGULAR_25S;
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
@@ -832,6 +835,9 @@ function isSNRPolaridadMode(mode) {
 function isRupturaDebilGiroMode(mode) {
   return normalizeSignalMode(mode) === MODE_RUPTURA_DEBIL_GIRO;
 }
+function isAlcistaIrregular25sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_ALCISTA_IRREGULAR_25S;
+}
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
   return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
@@ -840,6 +846,7 @@ function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
   if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return ALCISTA_IRREGULAR_25S_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
@@ -863,6 +870,7 @@ function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🟢 Alcista irregular 25s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -870,7 +878,8 @@ function nextSignalMode(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
   if (m === MODE_SNR_POLARIDAD) return MODE_RUPTURA_DEBIL_GIRO;
-  if (m === MODE_RUPTURA_DEBIL_GIRO) return MODE_LINEA_DINAMICA;
+  if (m === MODE_RUPTURA_DEBIL_GIRO) return MODE_ALCISTA_IRREGULAR_25S;
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
@@ -7677,9 +7686,11 @@ function applyTheme(theme) {
       ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos."
       : isRupturaDebilGiroMode(signalMode)
         ? "Modo Ruptura Débil Giro: observa 0-15s y confirma señal solo entre 20-30s; auto solo con 4 puntos."
-        : isSNRPolaridadMode(signalMode)
-          ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
-          : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
+        : isAlcistaIrregular25sMode(signalMode)
+          ? "Modo Alcista irregular 25s: vela verde con estructura insana/irregularidad confirmada entre 20-25s. Solo señal a VENTA con 4 puntos manuales."
+          : isSNRPolaridadMode(signalMode)
+            ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
+            : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
   };
   paintMode();
 
@@ -7688,7 +7699,7 @@ function applyTheme(theme) {
       signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isRupturaDebilGiroMode(signalMode) ? "🔁 Modo Ruptura Débil Giro" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
+      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isAlcistaIrregular25sMode(signalMode) ? "🟢 Modo Alcista irregular 25s" : isRupturaDebilGiroMode(signalMode) ? "🔁 Modo Ruptura Débil Giro" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
     };
 })();
 
@@ -13367,7 +13378,25 @@ function onTick(tick) {
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isRupturaDebilGiroMode(activeModeForTick)) {
+    if (isAlcistaIrregular25sMode(activeModeForTick)) {
+      // V89 Alcista irregular 25s:
+      // Analiza solo hasta 25s. La señal visible puede salir entre 20-25s
+      // si la vela está verde y muestra avance irregular / estructura insana.
+      const irregularStartSec = 20;
+      const irregularEndSec = 25;
+      if (sec >= irregularStartSec && sec <= irregularEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(irregularStartSec * 1000, Math.min(msInMinute, irregularEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec: irregularStartSec,
+          radarEndSec: irregularEndSec,
+        });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > irregularEndSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+      }
+    } else if (isRupturaDebilGiroMode(activeModeForTick)) {
       // V78 Ruptura Débil Giro:
       // 0-15s queda como observación interna, pero NO se muestra señal todavía.
       // La señal visible recién puede salir entre 20-30s, si la vela sigue alcista
@@ -18054,6 +18083,217 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
   };
 }
 
+
+function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(20000, Math.min(25000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 25000) return null;
+
+  const pts = ensureTicksWithBoundary(ticks, evalMs);
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+  const bullishTol = Math.max(localRange * 0.018, tol * 1.6);
+
+  // Este modo acepta que la vela cambie de color en el arranque, pero al confirmar
+  // entre 20-25s tiene que estar verde. Si quedó demasiado tiempo abajo y no retomó,
+  // se deja pasar.
+  if (!Number.isFinite(open) || !Number.isFinite(current) || current <= open + bullishTol) return null;
+
+  let belowMs = 0;
+  let maxBelowRunMs = 0;
+  let activeBelowStart = null;
+  for (let i = 1; i < clean.length; i++) {
+    const a = clean[i - 1];
+    const b = clean[i];
+    const mid = (Number(a.quote) + Number(b.quote)) / 2;
+    const dt = Math.max(0, Math.min(Number(b.ms), evalMs) - Math.max(Number(a.ms), 0));
+    if (mid < open - tol * 1.2) {
+      belowMs += dt;
+      if (activeBelowStart === null) activeBelowStart = Number(a.ms);
+      maxBelowRunMs = Math.max(maxBelowRunMs, Math.min(Number(b.ms), evalMs) - activeBelowStart);
+    } else {
+      activeBelowStart = null;
+    }
+  }
+
+  const early15 = clean.filter((p) => Number(p.ms) <= 15000);
+  const early15Quotes = early15.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const early15High = early15Quotes.length ? Math.max(...early15Quotes) : open;
+  const early15Low = early15Quotes.length ? Math.min(...early15Quotes) : open;
+  const early15Range = Math.max(early15High - early15Low, tol);
+  const wasRedEarly = low < open - Math.max(localRange * 0.06, tol * 2.0);
+  const retookGreen = wasRedEarly && current > open + Math.max(localRange * 0.045, tol * 2.0);
+  const tooMuchTimeBelowWithoutControl = maxBelowRunMs >= 9000 && belowMs >= 11000 && (current - open) < Math.max(localRange * 0.16, tol * 5);
+  if (tooMuchTimeBelowWithoutControl) return null;
+
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const runs = getRupturaDebilGiroRuns(clean, tol);
+  const upRuns = runs.filter((r) => r.sign > 0 && r.move > tol * 1.2);
+  const downRuns = runs.filter((r) => r.sign < 0 && r.move > tol * 1.2);
+  const upMoves = upRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+  const downMoves = downRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxUpRun = upMoves.length ? Math.max(...upMoves) : 0;
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const avgUp = upMoves.length ? totalUp / upMoves.length : 0;
+  const upVar = upMoves.length >= 2
+    ? upMoves.reduce((a, b) => a + Math.pow(b - avgUp, 2), 0) / upMoves.length
+    : 0;
+  const upCv = avgUp > 0 ? Math.sqrt(upVar) / avgUp : 0;
+
+  const net = current - open;
+  const highFromOpen = high - open;
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const path = Math.max(stats.path, totalUp + totalDown, 1e-9);
+  const efficiency = net / path;
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
+  const firstUp = upMoves[0] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+  const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
+
+  // Tiene que haber avance comprador visible, pero no una continuación sana/limpia.
+  const enoughBullishDisplacement = highFromOpen >= Math.max(localRange * 0.30, tol * 4.0) && net >= Math.max(localRange * 0.055, tol * 1.8);
+  if (!enoughBullishDisplacement) return null;
+
+  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.12, tol * 2.0);
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.22, maxUpRun * 0.45, tol * 2.8);
+  const decreasingPushes = upMoves.length >= 2 && lastUp <= firstUp * (anySellerEntry ? 0.98 : 0.88);
+  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.28 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.64);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.23 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.25));
+  const givesBackMuch = pullbackRatio >= 0.22 || maxPullbackRatio >= 0.15;
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.34 && stats.turns >= 2);
+  const colorFlipAndRetake = retookGreen && (stats.turns >= 2 || givesBackMuch || strongContrary);
+  const badBullishStructure = upRuns.length >= 2 && downRuns.length >= 1 && (differentSizedBreaks || givesBackMuch || zigzagDirty || decreasingPushes);
+
+  const highIdx = quotes.indexOf(high);
+  const highMs = Number(clean[highIdx]?.ms || evalMs);
+  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.08, tol * 1.4);
+  const cleanBullishContinuation =
+    efficiency >= 0.78 &&
+    pullbackRatio <= 0.17 &&
+    stats.turns <= 1 &&
+    !unevenPushes &&
+    !decreasingPushes &&
+    !differentSizedBreaks &&
+    !strongContrary &&
+    !colorFlipAndRetake;
+  if (cleanBullishContinuation) return null;
+
+  const hasIrregularCore = decreasingPushes || unevenPushes || differentSizedBreaks || givesBackMuch || zigzagDirty || colorFlipAndRetake || badBullishStructure || stalledAfterHigh;
+  if (!hasIrregularCore) return null;
+
+  let points = 0;
+  const reasons = [];
+  points += 2;
+  reasons.push("vela verde al confirmar 20-25s");
+  points += 1;
+  reasons.push("desplazamiento comprador visible");
+  if (evalMs <= 22000) { points += 1; reasons.push("irregularidad muy clara desde 20s"); }
+  if (decreasingPushes) { points += 2; reasons.push("empujes compradores se reducen"); }
+  if (unevenPushes || differentSizedBreaks) { points += 2; reasons.push("impulsos de distintos tamaños"); }
+  if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
+  if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / estructura insana"); }
+  if (colorFlipAndRetake) { points += 2; reasons.push("se pone roja y retoma verde con avance irregular"); }
+  if (badBullishStructure) { points += 1; reasons.push("comprador domina, pero con estructura mala"); }
+  if (stalledAfterHigh) { points += 1; reasons.push("se frena después de avanzar"); }
+  if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
+  else if (anySellerEntry) { points += 1; reasons.push("presión vendedora presente"); }
+
+  if (points < 6) return null;
+
+  const priorityBonus = (strongContrary ? 34 : anySellerEntry ? 10 : 0) + (colorFlipAndRetake ? 12 : 0) + (givesBackMuch ? 8 : 0);
+  const quality =
+    points * 14 +
+    priorityBonus +
+    Math.min(20, stats.turns * 4) +
+    Math.min(18, Math.max(0, stats.irregularity - 1) * 12) +
+    Math.min(16, upCv * 12) +
+    Math.min(14, pullbackRatio * 18) -
+    Math.max(0, evalMs - 20000) / 2200;
+
+  const logicText = `Vela alcista irregular confirmada 20-25s: ${reasons.join(", ")}. Regla V89: puede cambiar de color, pero debe retomar verde antes de 25s y mantener estructura alcista irregular.`;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "alcista_irregular_25s",
+      levelType: "early_bullish_irregularity_25s",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 14,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      confirmationWindow: "20-25s",
+      maxAnalysisSec: 25,
+      signalFromSec: 20,
+      bullishCandleOnly: true,
+      canFlipRedButMustRetakeGreen: true,
+      belowMs,
+      maxBelowRunMs,
+      wasRedEarly,
+      retookGreen,
+      strongContrary,
+      anySellerEntry,
+      totalUp,
+      totalDown,
+      maxUpRun,
+      maxDownRun,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      efficiency,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      upCv,
+      decreasingPushes,
+      unevenPushes,
+      differentSizedBreaks,
+      zigzagDirty,
+      givesBackMuch,
+      colorFlipAndRetake,
+      badBullishStructure,
+      stalledAfterHigh,
+      highMs,
+      stage: "alcista_irregular_25s_confirmada",
+      movementFilter: "vela_verde_20_25s_avance_irregular_estructura_insana",
+      priority: strongContrary ? "ALTA" : "NORMAL",
+      logic: logicText,
+      status: `🟢 Alcista irregular 25s: vela verde con irregularidad/estructura insana confirmada${strongContrary ? " + vendedor fuerte" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
+}
+
 function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
   if (ticks.length < 6) return null;
@@ -18121,6 +18361,10 @@ function evaluateMinute(minute, opts = {}) {
     if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
+    } else if (isAlcistaIrregular25sMode(activeMode)) {
+      match = analyzeAlcistaIrregular25sCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
+      matchSource = "ALCISTA_IRREGULAR_25S";
     } else if (isRupturaDebilGiroMode(activeMode)) {
       // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
       // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
@@ -18159,9 +18403,9 @@ function evaluateMinute(minute, opts = {}) {
 
   if (!matches.length) return false;
   matches.sort((a, b) => {
-    if (isRupturaDebilGiroMode(activeMode)) {
-      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 ? 1 : 0;
-      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 ? 1 : 0;
+    if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode)) {
+      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake ? 1 : 0;
+      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake ? 1 : 0;
       if (bp !== ap) return bp - ap;
     }
     return (
