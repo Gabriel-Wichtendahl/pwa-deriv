@@ -818,7 +818,7 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_25S_CONFIRMACION_20_25S_V89_20260602";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_25S_COMPRADOR_INSANO_VENDEDOR_PRESIONA_V91_20260602";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -18227,22 +18227,25 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const low = Math.min(...quotes);
   const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
   const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
-  const bullishTol = Math.max(localRange * 0.018, tol * 1.6);
+  const greenTol = Math.max(localRange * 0.016, tol * 1.45);
 
-  // Este modo acepta que la vela cambie de color en el arranque, pero al confirmar
-  // entre 20-25s tiene que estar verde. Si quedó demasiado tiempo abajo y no retomó,
-  // se deja pasar.
-  if (!Number.isFinite(open) || !Number.isFinite(current) || current <= open + bullishTol) return null;
+  // V91: el patrón buscado no es "cualquier irregularidad". Es:
+  // comprador con avance visible, pero estructura insana + vendedor presionando,
+  // confirmado solo entre 20-25s. Puede ponerse roja antes, pero debe retomar verde.
+  if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
+  const greenAtConfirm = current > open + greenTol;
+  if (!greenAtConfirm) return null;
 
   let belowMs = 0;
   let maxBelowRunMs = 0;
   let activeBelowStart = null;
+  const belowLine = open - Math.max(localRange * 0.035, tol * 1.8);
   for (let i = 1; i < clean.length; i++) {
     const a = clean[i - 1];
     const b = clean[i];
     const mid = (Number(a.quote) + Number(b.quote)) / 2;
     const dt = Math.max(0, Math.min(Number(b.ms), evalMs) - Math.max(Number(a.ms), 0));
-    if (mid < open - tol * 1.2) {
+    if (mid < belowLine) {
       belowMs += dt;
       if (activeBelowStart === null) activeBelowStart = Number(a.ms);
       maxBelowRunMs = Math.max(maxBelowRunMs, Math.min(Number(b.ms), evalMs) - activeBelowStart);
@@ -18250,16 +18253,6 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       activeBelowStart = null;
     }
   }
-
-  const early15 = clean.filter((p) => Number(p.ms) <= 15000);
-  const early15Quotes = early15.map((p) => Number(p.quote)).filter(Number.isFinite);
-  const early15High = early15Quotes.length ? Math.max(...early15Quotes) : open;
-  const early15Low = early15Quotes.length ? Math.min(...early15Quotes) : open;
-  const early15Range = Math.max(early15High - early15Low, tol);
-  const wasRedEarly = low < open - Math.max(localRange * 0.06, tol * 2.0);
-  const retookGreen = wasRedEarly && current > open + Math.max(localRange * 0.045, tol * 2.0);
-  const tooMuchTimeBelowWithoutControl = maxBelowRunMs >= 9000 && belowMs >= 11000 && (current - open) < Math.max(localRange * 0.16, tol * 5);
-  if (tooMuchTimeBelowWithoutControl) return null;
 
   const stats = getRupturaDebilGiroPathStats(clean);
   const runs = getRupturaDebilGiroRuns(clean, tol);
@@ -18289,67 +18282,99 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const lastUp = upMoves[upMoves.length - 1] || 0;
   const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
 
-  // Tiene que haber avance comprador visible, pero no una continuación sana/limpia.
-  const enoughBullishDisplacement = highFromOpen >= Math.max(localRange * 0.30, tol * 4.0) && net >= Math.max(localRange * 0.055, tol * 1.8);
-  if (!enoughBullishDisplacement) return null;
+  // El comprador tiene que haber avanzado de verdad, no ser solo ruido verde.
+  const buyerAdvanceVisible =
+    highFromOpen >= Math.max(localRange * 0.32, tol * 4.0) &&
+    totalUp >= Math.max(localRange * 0.50, tol * 5.0) &&
+    net >= Math.max(localRange * 0.045, tol * 1.55);
+  if (!buyerAdvanceVisible) return null;
 
-  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.12, tol * 2.0);
-  const strongContrary = maxDownRun >= Math.max(localRange * 0.22, maxUpRun * 0.45, tol * 2.8);
-  const decreasingPushes = upMoves.length >= 2 && lastUp <= firstUp * (anySellerEntry ? 0.98 : 0.88);
-  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.28 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.64);
-  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.23 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.25));
-  const givesBackMuch = pullbackRatio >= 0.22 || maxPullbackRatio >= 0.15;
-  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.34 && stats.turns >= 2);
-  const colorFlipAndRetake = retookGreen && (stats.turns >= 2 || givesBackMuch || strongContrary);
+  const wasRedEarly = low < open - Math.max(localRange * 0.045, tol * 2.0);
+  const retookGreen = wasRedEarly && current > open + Math.max(localRange * 0.040, tol * 2.0);
+  const strongRetakeGreen = wasRedEarly && current > open + Math.max(localRange * 0.075, tol * 3.0);
+  const tooMuchTimeBelowWithoutControl =
+    (maxBelowRunMs >= 9500 || belowMs >= 12000) &&
+    !strongRetakeGreen;
+  if (tooMuchTimeBelowWithoutControl) return null;
+
+  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.10, tol * 2.0);
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.20, maxUpRun * 0.42, tol * 2.6);
+  const sellerPressureCore =
+    strongContrary ||
+    anySellerEntry ||
+    pullbackRatio >= 0.20 ||
+    maxPullbackRatio >= 0.13 ||
+    totalDown >= Math.max(totalUp * 0.18, tol * 3.0);
+
+  const decreasingPushes = upMoves.length >= 2 && lastUp <= firstUp * (sellerPressureCore ? 1.02 : 0.90);
+  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.25 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.68);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.22 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.24));
+  const givesBackMuch = pullbackRatio >= 0.20 || maxPullbackRatio >= 0.13;
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.28 && stats.turns >= 2);
+  const colorFlipAndRetake = retookGreen && (stats.turns >= 2 || givesBackMuch || sellerPressureCore);
   const badBullishStructure = upRuns.length >= 2 && downRuns.length >= 1 && (differentSizedBreaks || givesBackMuch || zigzagDirty || decreasingPushes);
 
   const highIdx = quotes.indexOf(high);
   const highMs = Number(clean[highIdx]?.ms || evalMs);
-  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.08, tol * 1.4);
+  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.075, tol * 1.35);
+  const buyerDominantButUnhealthy = greenAtConfirm && buyerAdvanceVisible && (badBullishStructure || colorFlipAndRetake || zigzagDirty || givesBackMuch || unevenPushes || decreasingPushes);
+
+  // Bloqueo más duro de continuaciones sanas: si sube limpio y el vendedor no presiona, no es este modo.
   const cleanBullishContinuation =
-    efficiency >= 0.78 &&
-    pullbackRatio <= 0.17 &&
+    efficiency >= 0.72 &&
+    pullbackRatio <= 0.16 &&
+    maxPullbackRatio <= 0.11 &&
     stats.turns <= 1 &&
+    !sellerPressureCore &&
     !unevenPushes &&
     !decreasingPushes &&
     !differentSizedBreaks &&
-    !strongContrary &&
     !colorFlipAndRetake;
   if (cleanBullishContinuation) return null;
 
   const hasIrregularCore = decreasingPushes || unevenPushes || differentSizedBreaks || givesBackMuch || zigzagDirty || colorFlipAndRetake || badBullishStructure || stalledAfterHigh;
   if (!hasIrregularCore) return null;
 
+  // V91: en los ejemplos buenos el vendedor siempre deja alguna presión. Si no hay presión,
+  // solo aceptamos irregularidad extrema, para no confundir una continuación alcista sana.
+  const extremeIrregularWithoutSeller = !sellerPressureCore && stats.turns >= 4 && upCv >= 0.35 && efficiency <= 0.55;
+  if (!sellerPressureCore && !extremeIrregularWithoutSeller) return null;
+
   let points = 0;
   const reasons = [];
   points += 2;
   reasons.push("vela verde al confirmar 20-25s");
-  points += 1;
-  reasons.push("desplazamiento comprador visible");
-  if (evalMs <= 22000) { points += 1; reasons.push("irregularidad muy clara desde 20s"); }
+  points += 2;
+  reasons.push("comprador avanza, pero con estructura insana");
+  if (buyerDominantButUnhealthy) { points += 2; reasons.push("comprador dominante pero desordenado"); }
   if (decreasingPushes) { points += 2; reasons.push("empujes compradores se reducen"); }
   if (unevenPushes || differentSizedBreaks) { points += 2; reasons.push("impulsos de distintos tamaños"); }
   if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
   if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / estructura insana"); }
-  if (colorFlipAndRetake) { points += 2; reasons.push("se pone roja y retoma verde con avance irregular"); }
-  if (badBullishStructure) { points += 1; reasons.push("comprador domina, pero con estructura mala"); }
+  if (colorFlipAndRetake) { points += 2; reasons.push("vendedor la pone roja/casi roja y el comprador retoma verde"); }
+  if (badBullishStructure) { points += 1; reasons.push("comprador sostiene verde con mala calidad"); }
   if (stalledAfterHigh) { points += 1; reasons.push("se frena después de avanzar"); }
   if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
-  else if (anySellerEntry) { points += 1; reasons.push("presión vendedora presente"); }
+  else if (sellerPressureCore) { points += 2; reasons.push("vendedor presiona dentro de 0-25s"); }
 
-  if (points < 6) return null;
+  if (points < 7) return null;
 
-  const priorityBonus = (strongContrary ? 34 : anySellerEntry ? 10 : 0) + (colorFlipAndRetake ? 12 : 0) + (givesBackMuch ? 8 : 0);
+  const priorityBonus =
+    (strongContrary ? 38 : sellerPressureCore ? 16 : 0) +
+    (colorFlipAndRetake ? 16 : 0) +
+    (buyerDominantButUnhealthy ? 12 : 0) +
+    (givesBackMuch ? 8 : 0) +
+    (evalMs <= 22000 ? 6 : 0);
   const quality =
     points * 14 +
     priorityBonus +
-    Math.min(20, stats.turns * 4) +
-    Math.min(18, Math.max(0, stats.irregularity - 1) * 12) +
-    Math.min(16, upCv * 12) +
-    Math.min(14, pullbackRatio * 18) -
+    Math.min(22, stats.turns * 4) +
+    Math.min(20, Math.max(0, stats.irregularity - 1) * 12) +
+    Math.min(18, upCv * 12) +
+    Math.min(16, pullbackRatio * 18) -
     Math.max(0, evalMs - 20000) / 2200;
 
-  const logicText = `Vela alcista irregular confirmada 20-25s: ${reasons.join(", ")}. Regla V89: puede cambiar de color, pero debe retomar verde antes de 25s y mantener estructura alcista irregular.`;
+  const logicText = `Vela alcista irregular V91 confirmada 20-25s: ${reasons.join(", ")}. Regla V91: comprador verde/dominante pero insano + vendedor presiona; puede ponerse roja, pero debe retomar verde y no permanecer demasiado tiempo abajo.`;
 
   return {
     direction: "PUT",
@@ -18358,14 +18383,14 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     meta: {
       level: high,
       levelMode: "alcista_irregular_25s",
-      levelType: "early_bullish_irregularity_25s",
+      levelType: "buyer_dominant_unhealthy_seller_pressure_25s",
       direction: "PUT",
       tolerance: tol,
       zone: Math.max(tol * 4, localRange * 0.10),
       zoneLow: high - Math.max(tol * 2, localRange * 0.045),
       zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
       points,
-      maxPoints: 14,
+      maxPoints: 18,
       reasons,
       p0: open,
       pE: current,
@@ -18378,11 +18403,17 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       maxAnalysisSec: 25,
       signalFromSec: 20,
       bullishCandleOnly: true,
+      greenAtConfirm,
+      buyerAdvanceVisible,
+      buyerDominantButUnhealthy,
+      sellerPressureCore,
       canFlipRedButMustRetakeGreen: true,
       belowMs,
       maxBelowRunMs,
       wasRedEarly,
       retookGreen,
+      strongRetakeGreen,
+      tooMuchTimeBelowWithoutControl,
       strongContrary,
       anySellerEntry,
       totalUp,
@@ -18406,11 +18437,11 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       badBullishStructure,
       stalledAfterHigh,
       highMs,
-      stage: "alcista_irregular_25s_confirmada",
-      movementFilter: "vela_verde_20_25s_avance_irregular_estructura_insana",
-      priority: strongContrary ? "ALTA" : "NORMAL",
+      stage: "alcista_irregular_25s_v91_comprador_insano_vendedor_presiona",
+      movementFilter: "verde_20_25s_comprador_insano_vendedor_presiona",
+      priority: strongContrary || colorFlipAndRetake ? "ALTA" : "NORMAL",
       logic: logicText,
-      status: `🟢 Alcista irregular 25s: vela verde con irregularidad/estructura insana confirmada${strongContrary ? " + vendedor fuerte" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🟢 Alcista irregular 25s V91: comprador verde con estructura insana${strongContrary ? " + vendedor fuerte" : " + vendedor presiona"}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
