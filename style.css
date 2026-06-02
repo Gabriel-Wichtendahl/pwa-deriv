@@ -540,6 +540,18 @@ body.light .settingsModalHeader{
   width:100%;
   margin:10px 0 8px;
   flex:0 0 auto;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+.minuteCanvasToolbar{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
 }
 
 #minuteCanvas{
@@ -556,10 +568,9 @@ body.light .settingsModalHeader{
 }
 
 .modalChartViewBtn{
-  position:absolute;
-  top:10px;
-  right:10px;
-  z-index:9;
+  position:static;
+  z-index:1;
+  margin-left:auto;
   border-radius:999px;
   border:1px solid rgba(255,255,255,.18);
   background:rgba(2,6,23,.72);
@@ -568,7 +579,7 @@ body.light .settingsModalHeader{
   font-weight:900;
   line-height:1;
   padding:8px 10px;
-  box-shadow:0 8px 24px rgba(0,0,0,.28);
+  box-shadow:0 8px 24px rgba(0,0,0,.18);
   backdrop-filter:blur(10px);
 }
 .modalChartViewBtn[aria-pressed="true"]{
@@ -594,20 +605,19 @@ body.light .settingsModalHeader{
 }
 
 .modalNavVoteBar{
-  position:absolute;
-  left:50%;
-  bottom:10px;
-  transform:translateX(-50%);
-  z-index:8;
+  position:static;
+  transform:none;
+  z-index:1;
   display:none;
   align-items:center;
   justify-content:center;
   gap:7px;
+  width:100%;
   padding:5px;
   border-radius:999px;
   border:1px solid rgba(148,163,184,.28);
   background:rgba(2,6,23,.58);
-  box-shadow:0 10px 24px rgba(0,0,0,.24), inset 0 0 0 1px rgba(255,255,255,.045);
+  box-shadow:0 10px 24px rgba(0,0,0,.18), inset 0 0 0 1px rgba(255,255,255,.045);
   backdrop-filter:blur(10px);
   -webkit-backdrop-filter:blur(10px);
 }
@@ -1261,10 +1271,8 @@ body.light .settingsModalHeader{
    Replay vela señal
 ========================= */
 .modalReplayBtn{
-  position:absolute;
-  top:10px;
-  left:10px;
-  z-index:9;
+  position:static;
+  z-index:1;
   border-radius:999px;
   border:1px solid rgba(255,255,255,.18);
   background:rgba(2,6,23,.72);
@@ -1273,7 +1281,7 @@ body.light .settingsModalHeader{
   font-weight:900;
   line-height:1;
   padding:8px 10px;
-  box-shadow:0 8px 24px rgba(0,0,0,.28);
+  box-shadow:0 8px 24px rgba(0,0,0,.18);
   backdrop-filter:blur(10px);
 }
 .modalReplayBtn:hover{
@@ -1461,9 +1469,12 @@ body.light .settingsModalHeader{
   }
 
   .modalNavVoteBar{
-    bottom:8px;
     gap:5px;
     padding:4px;
+  }
+
+  .minuteCanvasToolbar{
+    gap:8px;
   }
 
   .modalQuickBtn{
