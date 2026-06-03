@@ -807,7 +807,7 @@ const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
-const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR 25S";
+const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR 30S";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -821,7 +821,7 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_25S_FILTRO_FUERZA_CONTRARIA_V96_20260603";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_FILTRO_FUERZA_CONTRARIA_V98_20260603";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -831,7 +831,7 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
-  if ((raw.includes("ALCISTA") && raw.includes("IRREGULAR")) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25")) return MODE_ALCISTA_IRREGULAR_25S;
+  if ((raw.includes("ALCISTA") && raw.includes("IRREGULAR")) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
@@ -881,7 +881,7 @@ function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
-  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🟢 Alcista irregular 25s";
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🟢 Alcista irregular 30s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -7854,7 +7854,7 @@ function applyTheme(theme) {
       : isRupturaDebilGiroMode(signalMode)
         ? "Modo Ruptura Débil Giro: observa 0-15s y confirma señal solo entre 20-30s; auto solo con 4 puntos."
         : isAlcistaIrregular25sMode(signalMode)
-          ? "Modo Alcista irregular 25s: vela verde con estructura insana/irregularidad confirmada entre 20-25s. Solo señal a VENTA con 4 puntos manuales."
+          ? "Modo Alcista irregular 30s: vela verde con estructura insana/irregularidad confirmada entre 20-30s. Solo señal a VENTA con 4 puntos manuales."
           : isSNRPolaridadMode(signalMode)
             ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
             : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
@@ -7866,7 +7866,7 @@ function applyTheme(theme) {
       signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isAlcistaIrregular25sMode(signalMode) ? "🟢 Modo Alcista irregular 25s" : isRupturaDebilGiroMode(signalMode) ? "🔁 Modo Ruptura Débil Giro" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
+      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isAlcistaIrregular25sMode(signalMode) ? "🟢 Modo Alcista irregular 30s" : isRupturaDebilGiroMode(signalMode) ? "🔁 Modo Ruptura Débil Giro" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
     };
 })();
 
@@ -13555,11 +13555,11 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isAlcistaIrregular25sMode(activeModeForTick)) {
-      // V89 Alcista irregular 25s:
-      // Analiza solo hasta 25s. La señal visible puede salir entre 20-25s
+      // V98 Alcista irregular 30s:
+      // Analiza hasta 30s. La señal visible puede salir entre 20-30s
       // si la vela está verde y muestra avance irregular / estructura insana.
       const irregularStartSec = 20;
-      const irregularEndSec = 25;
+      const irregularEndSec = 30;
       if (sec >= irregularStartSec && sec <= irregularEndSec && lastEvaluatedMinute !== minute) {
         const ok = evaluateMinute(minute, {
           evalMs: Math.max(irregularStartSec * 1000, Math.min(msInMinute, irregularEndSec * 1000)),
@@ -18265,8 +18265,8 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   if (ticks.length < 6) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(20000, Math.min(25000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
-  if (evalMs < 20000 || evalMs > 25000) return null;
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
 
   const pts = ensureTicksWithBoundary(ticks, evalMs);
   const clean = (Array.isArray(pts) ? pts : [])
@@ -18285,7 +18285,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const greenTol = Math.max(localRange * 0.014, tol * 1.35);
 
   // V95: calibrado con ejemplos marcados como "movimiento irregular claro".
-  // El foco ya no es vendedor obligatorio, sino irregularidad real del comprador entre 0-25s:
+  // El foco ya no es vendedor obligatorio, sino irregularidad real del comprador entre 0-30s:
   // grande-mediano-pequeño, empujes que reducen, cambios de tamaño, devoluciones y estructura insana.
   if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
   const greenAtConfirm = current > open + greenTol;
@@ -18489,7 +18489,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   let points = 0;
   const reasons = [];
   points += 2;
-  reasons.push("vela verde al confirmar 20-25s");
+  reasons.push("vela verde al confirmar 20-30s");
   points += 2;
   reasons.push("comprador avanza, pero irregular");
   if (decreasingPushes) { points += 4; reasons.push(threeStepReduction ? "irregularidad que reduce: grande-mediano-pequeño" : "empujes compradores se reducen"); }
@@ -18537,7 +18537,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     Math.max(0, evalMs - 20000) / 2200;
 
   const priority = decreasingPushes || clearReductionAfterExpansion || sellerStrengthCore || colorFlipAndRetake ? "ALTA" : "NORMAL";
-  const logicText = `Vela alcista irregular V96 confirmada 20-25s: ${reasons.join(", ")}. Regla V96: se descarta comprador fuerte con vendedor débil/reduciendo; se prioriza comprador que reduce, cambios visibles no simétricos y vendedor que aumenta o entra fuerte sin reducir.`;
+  const logicText = `Vela alcista irregular V98 confirmada 20-30s: ${reasons.join(", ")}. Regla V98: se descarta comprador fuerte con vendedor débil/reduciendo; se prioriza irregularidad clara dentro de 0-30s, comprador que reduce, cambios visibles no simétricos y vendedor que aumenta o entra fuerte sin reducir.`;
 
   return {
     direction: "PUT",
@@ -18545,8 +18545,8 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     points,
     meta: {
       level: high,
-      levelMode: "alcista_irregular_25s",
-      levelType: "clear_buyer_irregularity_0_25",
+      levelMode: "alcista_irregular_30s",
+      levelType: "clear_buyer_irregularity_0_30",
       direction: "PUT",
       tolerance: tol,
       zone: Math.max(tol * 4, localRange * 0.10),
@@ -18562,9 +18562,9 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       range: localRange,
       evalSec: Math.round(evalMs / 1000),
       analysisWindowMs: evalMs,
-      irregularityWindow: "0-25s",
-      confirmationWindow: "20-25s",
-      maxAnalysisSec: 25,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "20-30s",
+      maxAnalysisSec: 30,
       signalFromSec: 20,
       bullishCandleOnly: true,
       greenAtConfirm,
@@ -18611,7 +18611,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       colorFlipAndRetake,
       stalledAfterHigh,
       highMs,
-      stage: "alcista_irregular_25s_v96_filtro_fuerza_contraria",
+      stage: "alcista_irregular_30s_v98_filtro_fuerza_contraria",
       buyerWeaknessCore,
       sellerStrengthCore,
       buyerEarlyExpansion,
@@ -18624,10 +18624,10 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       clearReductionAfterExpansion,
       dangerousBuyerIncreasing,
       oppositeSetupBuyerStrongSellerWeak,
-      movementFilter: "irregularidad_clara_v96_no_comprador_fuerte_vendedor_debil",
+      movementFilter: "irregularidad_clara_v98_0_30_no_comprador_fuerte_vendedor_debil",
       priority,
       logic: logicText,
-      status: `🟢 Alcista irregular 25s V96: ${decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🟢 Alcista irregular 30s V98: ${decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
@@ -18702,7 +18702,7 @@ function evaluateMinute(minute, opts = {}) {
     } else if (isAlcistaIrregular25sMode(activeMode)) {
       match = analyzeAlcistaIrregular25sCandidate(c, minute, evalOptions);
       if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
-      matchSource = "ALCISTA_IRREGULAR_25S";
+      matchSource = "ALCISTA_IRREGULAR_30S";
     } else if (isRupturaDebilGiroMode(activeMode)) {
       // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
       // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
