@@ -794,6 +794,40 @@ function saveTradesJournal(arr) {
 }
 let tradesJournal = loadTradesJournal();
 
+// V99: la pestaña Trades se separa por cuenta activa.
+// Los trades nuevos guardan account_mode dentro del trade y en el journal.
+function normalizeAccountModeValue(v) {
+  const s = String(v || "").toLowerCase().trim();
+  if (s === ACCOUNT_MODE_REAL || s === "real" || s === "live") return ACCOUNT_MODE_REAL;
+  if (s === ACCOUNT_MODE_DEMO || s === "demo" || s === "virtual") return ACCOUNT_MODE_DEMO;
+  return "";
+}
+function getTradeJournalAccountMode(entry) {
+  const direct = normalizeAccountModeValue(entry?.account_mode || entry?.accountMode || entry?.account || entry?.trade_account_mode || entry?.tradeAccountMode);
+  if (direct) return direct;
+  const tr = entry?.trade || {};
+  return normalizeAccountModeValue(tr.account_mode || tr.accountMode || tr.account || tr.trade_account_mode || tr.tradeAccountMode);
+}
+function getTradeJournalVisibleList() {
+  const scope = getCurrentAccountScope();
+  return (tradesJournal || []).filter((entry) => {
+    const m = getTradeJournalAccountMode(entry);
+    // Registros viejos sin cuenta: se muestran solo en DEMO para no contaminar REAL.
+    // Desde v99 todos los trades nuevos quedan separados correctamente.
+    return m ? m === scope : scope === ACCOUNT_MODE_DEMO;
+  });
+}
+function getTradeJournalVisibleCount() {
+  return getTradeJournalVisibleList().length;
+}
+function getTradeJournalHiddenOtherCount() {
+  const scope = getCurrentAccountScope();
+  return (tradesJournal || []).filter((entry) => {
+    const m = getTradeJournalAccountMode(entry);
+    return m && m !== scope;
+  }).length;
+}
+
 const MODE_NORMAL = "NORMAL";
 const MODE_GIRO = "GIRO";
 const MODE_GIRO_FLEX = "GIRO FLEX";
@@ -1487,6 +1521,8 @@ function upsertTradeJournalFromSignal(it) {
   const entry = {
     journal_id: makeJournalIdFromSignal(it),
     saved_at: Date.now(),
+    account_mode: getTradeJournalAccountMode({ trade: it.trade }) || getCurrentAccountScope(),
+    account_label: (getTradeJournalAccountMode({ trade: it.trade }) || getCurrentAccountScope()) === ACCOUNT_MODE_REAL ? "REAL" : "DEMO",
 
     // snapshot señal
     id: it.id,
@@ -1525,6 +1561,8 @@ function upsertTradeJournalFromSignal(it) {
       comment: prev.comment || "",
       feedback_at: prev.feedback_at || 0,
       feedback_source: prev.feedback_source || "",
+      account_mode: entry.account_mode || prev.account_mode || getTradeJournalAccountMode(prev) || getCurrentAccountScope(),
+      account_label: entry.account_label || prev.account_label || ((entry.account_mode || prev.account_mode) === ACCOUNT_MODE_REAL ? "REAL" : "DEMO"),
     };
   } else {
     tradesJournal.unshift({
@@ -2117,6 +2155,10 @@ function ensureTradingAccountButton() {
     syncAccountScopedSettingsUI();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
+    try {
+      if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView();
+      else updateCounter(getActiveViewName ? getActiveViewName() : null);
+    } catch {}
     // V67: la gestión IC2 queda separada por cuenta. Al cambiar DEMO/REAL,
     // cargamos el estado propio de esa cuenta en vez de pisar el anterior.
     loadC100State();
@@ -4498,7 +4540,7 @@ function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
   if (!counterEl) return;
   if (activeView === "trades") {
-    counterEl.textContent = `Trades: ${tradesJournal.length}`;
+    counterEl.textContent = `Trades ${getTradingAccountLabel()}: ${getTradeJournalVisibleCount()}`;
     return;
   }
   if (activeView === "practice") {
@@ -4699,10 +4741,28 @@ function renderTradesView() {
   updateCounter("trades");
   list.innerHTML = "";
 
-  if (!tradesJournal.length) {
-    list.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
+  const visibleTrades = getTradeJournalVisibleList();
+  const otherCount = getTradeJournalHiddenOtherCount();
+  const scopeLabel = getTradingAccountLabel();
+  const scopeIcon = getTradingAccountIcon();
+
+  const header = document.createElement("div");
+  header.className = "tradesScopeNotice";
+  header.style.padding = "10px 12px";
+  header.style.margin = "8px 0 10px";
+  header.style.borderRadius = "14px";
+  header.style.border = "1px solid rgba(34,211,238,.22)";
+  header.style.background = "rgba(8,47,73,.24)";
+  header.style.fontWeight = "900";
+  header.style.fontSize = "13px";
+  header.style.color = "rgba(255,255,255,.88)";
+  header.textContent = `${scopeIcon} Trades ${scopeLabel}: ${visibleTrades.length}${otherCount ? ` · ocultos de la otra cuenta: ${otherCount}` : ""}`;
+  list.appendChild(header);
+
+  if (!visibleTrades.length) {
+    list.insertAdjacentHTML("beforeend", `<div style="padding:12px; opacity:.9;">Todavía no hay trades ${scopeLabel} guardados para estudio.</div>`);
   } else {
-    for (const entry of tradesJournal) {
+    for (const entry of visibleTrades) {
       const item = {
         id: entry.id,
         minute: entry.minute,
@@ -4717,6 +4777,7 @@ function renderTradesView() {
         journal_id: entry.journal_id || "",
         feedback_at: entry.feedback_at || 0,
         feedback_source: entry.feedback_source || "",
+        account_mode: getTradeJournalAccountMode(entry) || ACCOUNT_MODE_DEMO,
         ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
         nextOutcome: entry.nextOutcome || "",
         minuteComplete: true,
@@ -4777,7 +4838,14 @@ function clearSignalsOnly() {
   toast("🧹 Señales borradas", 1600);
 }
 function clearTradesOnly() {
-  tradesJournal = [];
+  const scope = getCurrentAccountScope();
+  const before = (tradesJournal || []).length;
+  tradesJournal = (tradesJournal || []).filter((entry) => {
+    const m = getTradeJournalAccountMode(entry);
+    // Registros viejos sin cuenta pertenecen visualmente a DEMO, por compatibilidad.
+    const visibleInScope = m ? m === scope : scope === ACCOUNT_MODE_DEMO;
+    return !visibleInScope;
+  });
   saveTradesJournal(tradesJournal);
   practiceQueue = [];
   clearPracticeQueueState();
@@ -4789,7 +4857,8 @@ function clearTradesOnly() {
     if (av === "trades") renderTradesView();
     if (av === "practice") ensurePracticeReady();
   } catch {}
-  toast("🗑️ Trades borrados", 1600);
+  const removed = Math.max(0, before - (tradesJournal || []).length);
+  toast(`🗑️ Trades ${getTradingAccountLabel()} borrados: ${removed}`, 1800);
 }
 
 function ensureViewActionButton(viewName, opts) {
@@ -12685,6 +12754,12 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
           tradesJournal[idx].trade ||= {};
           tradesJournal[idx].trade.badge = isWin ? "ITM" : "OTM";
           Object.assign(tradesJournal[idx].trade, outcomeExtra);
+          if (!getTradeJournalAccountMode(tradesJournal[idx])) {
+            tradesJournal[idx].account_mode = getCurrentAccountScope();
+            tradesJournal[idx].account_label = getCurrentAccountScope() === ACCOUNT_MODE_REAL ? "REAL" : "DEMO";
+            tradesJournal[idx].trade.account_mode = tradesJournal[idx].account_mode;
+            tradesJournal[idx].trade.account_label = tradesJournal[idx].account_label;
+          }
           tradesJournal[idx].saved_at = Date.now();
           saveTradesJournal(tradesJournal);
           try { if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView(); } catch {}
@@ -12860,7 +12935,16 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     const stake = Number(getEffectiveTradeStake().toFixed(2));
     let res = null;
     let contractLabel = side;
-    let tradeExtra = { side, symbol, stake, ...getC100TradeAuditExtra(stake) };
+    const tradeAccountMode = getCurrentAccountScope();
+    let tradeExtra = {
+      side,
+      symbol,
+      stake,
+      account_mode: tradeAccountMode,
+      account_label: tradeAccountMode === ACCOUNT_MODE_REAL ? "REAL" : "DEMO",
+      account_scope: tradeAccountMode,
+      ...getC100TradeAuditExtra(stake)
+    };
     const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
       ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
       : null;
