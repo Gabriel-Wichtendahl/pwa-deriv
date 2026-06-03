@@ -10030,7 +10030,6 @@ function ensureModalReplayBox() {
       <button id="modalReplayCloseBtn" class="modalReplayClose" type="button" aria-label="Cerrar replay">✖</button>
     </div>
     <canvas id="modalReplayCanvas"></canvas>
-    <div id="modalReplayInfo" class="modalReplayInfo">—</div>
     <div class="modalReplayControls">
       <button id="modalReplayPlayBtn" class="modalReplayControlBtn" type="button">▶️</button>
       <button id="modalReplayResetBtn" class="modalReplayControlBtn" type="button">↺</button>
@@ -10143,8 +10142,7 @@ function drawModalReplayFrame() {
   const box = document.getElementById("modalReplayBox");
   if (!box || box.classList.contains("hidden") || !modalCurrentItem) return;
   const canvas = box.querySelector("#modalReplayCanvas");
-  const info = box.querySelector("#modalReplayInfo");
-  drawModalReplayCanvas(canvas, modalCurrentItem, Number(modalReplayState.currentMs || 0), info);
+  drawModalReplayCanvas(canvas, modalCurrentItem, Number(modalReplayState.currentMs || 0), null);
   updateModalReplayControlsUI();
 }
 function drawModalReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
@@ -10285,10 +10283,9 @@ function drawModalReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   ctx.fillText("60s", xOf(60000), h - 5);
   ctx.restore();
 
-  if (infoEl) {
-    const tickTxt = `${lastIdx + 1}/${ticks.length} ticks`;
-    infoEl.textContent = `${(ms / 1000).toFixed(1)}s · ${tickTxt} · precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
-  }
+  // V97: datos técnicos del replay ocultos para liberar espacio visual.
+  // El gráfico y la vela siguen actualizándose igual; solo no se muestra la línea de segundos/ticks/precios.
+  if (infoEl) infoEl.textContent = "";
 }
 
 /* =========================
