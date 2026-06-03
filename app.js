@@ -52,6 +52,7 @@
 // ✅ V80: Corrige línea vertical falsa en gráfico en vivo al iniciar vela (dedupe ms=0 y no duplica open).
 // ✅ V81: Soportes estructurales recientes en gráfico vivo: cian = estructural, amarillo = polaridad/usado dos veces.
 // ✅ V100: Modal live solo marca soportes: horizontales y dinámicos con 2+ toques; sin resistencias ni niveles de un toque.
+// ✅ V101: Fix soportes falsos: no marca línea pegada al precio/current/high; exige estructura real, profundidad y rebote.
 // ✅ V82: Merge correcto: restaura Ruptura Débil Giro V78 + autolimpieza + línea viva limpia + soportes estructurales.
 // ✅ V83: Pausa visual 5m si salen 15 señales sin operación REAL; bloqueo total tipo overlay.
 // ✅ V84: Integra imagen Pausa visual con contador real y tips/progreso dinámicos.
@@ -8122,7 +8123,7 @@ function showNotification(symbol, direction, modeLabel, item = null) {
 // - Sin carteles: solo líneas limpias dentro del gráfico.
 const LIVE_STRUCTURAL_SUPPORTS_ENABLED = true;
 const LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS = 42000;
-const LIVE_STRUCT_SUPPORT_MIN_CONFIRM_MS = 12000;
+const LIVE_STRUCT_SUPPORT_MIN_CONFIRM_MS = 22000;
 
 function clamp01(v) {
   return Math.max(0, Math.min(1, Number(v) || 0));
@@ -8146,7 +8147,7 @@ function dedupeTickPointsByMs(points) {
 function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null) {
   if (!LIVE_STRUCTURAL_SUPPORTS_ENABLED) return [];
   const pts = dedupeTickPointsByMs(points);
-  if (pts.length < 8) return [];
+  if (pts.length < 14) return [];
 
   const msNow = Number.isFinite(Number(msNowArg))
     ? Math.max(0, Math.min(60000, Number(msNowArg)))
@@ -8160,7 +8161,7 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
   const recentStart = Math.max(0, msNow - LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS, 10000);
   const visibleEnd = Math.min(60000, Math.max(msNow, Number(pts[pts.length - 1]?.ms || msNow)));
   const recent = pts.filter((p) => p.ms >= recentStart && p.ms <= visibleEnd);
-  if (recent.length < 5) return [];
+  if (recent.length < 9) return [];
 
   const recentQuotes = recent.map((p) => p.quote);
   const recentRange = Math.max(1e-12, Math.max(...recentQuotes) - Math.min(...recentQuotes));
@@ -8169,6 +8170,12 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
   const medStep = medianNumber(diffs) || (fullRange * 0.025);
   const tol = Math.max(fullRange * 0.018, recentRange * 0.022, medStep * 1.15, 1e-9);
   const minRebound = Math.max(fullRange * 0.07, recentRange * 0.10, medStep * 2.4, 1e-9);
+  const currentPrice = Number(pts.filter((p) => p.ms <= visibleEnd).slice(-1)[0]?.quote);
+  const supportDepth = Math.max(fullRange * 0.10, recentRange * 0.12, medStep * 1.9, tol * 2.6, 1e-9);
+
+  // V101: si todavía no hay recorrido real, no inventar soportes.
+  // Esto evita la línea horizontal pegada al precio cuando la vela recién está plana.
+  if (!Number.isFinite(currentPrice) || recentRange < Math.max(medStep * 2.2, fullRange * 0.045)) return [];
 
   const localMin = [];
   for (let i = 1; i < pts.length - 1; i++) {
@@ -8186,9 +8193,13 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
     const isLow = p.quote <= prevMin + tol && p.quote <= nextMin + tol;
     const reboundBefore = prevMax - p.quote;
     const reboundAfter = nextMax - p.quote;
-    const hasRebound = Math.max(reboundBefore, reboundAfter) >= minRebound * 0.55
-      || reboundAfter >= minRebound * 0.42;
+    const hasRebound = reboundAfter >= minRebound * 0.62
+      || (reboundBefore >= minRebound * 0.60 && reboundAfter >= minRebound * 0.42);
     if (!isLow || !hasRebound) continue;
+
+    // V101: un soporte debe estar por debajo del precio vivo con margen visible;
+    // si está pegado al precio actual, suele ser el precio/techo vivo, no soporte.
+    if (currentPrice - p.quote < supportDepth * 0.55) continue;
 
     const later = pts.filter((x) => x.ms > p.ms && x.ms <= visibleEnd);
     const laterLow = later.length ? Math.min(...later.map((x) => x.quote)) : p.quote;
@@ -8228,8 +8239,12 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
 
     const after = pts.filter((p) => p.ms >= c.lastMs && p.ms <= visibleEnd);
     const afterHigh = after.length ? Math.max(...after.map((p) => p.quote)) : c.level;
-    const defended = afterHigh - c.level >= minRebound * 0.25;
-    if (!defended && c.badlyBrokenCount > 0) continue;
+    const defended = afterHigh - c.level >= minRebound * 0.35;
+    const currentAboveSupport = currentPrice - c.level >= supportDepth;
+    const allTouchQuotes = c.touches.map((t) => Number(t.level)).filter(Number.isFinite);
+    const touchBand = allTouchQuotes.length ? Math.max(...allTouchQuotes) - Math.min(...allTouchQuotes) : 0;
+    if (!defended || !currentAboveSupport || touchBand > tol * 3.2) continue;
+    if (c.badlyBrokenCount > 0) continue;
 
     markers.push({
       kind: "horizontal_support",
@@ -8239,8 +8254,9 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
       touchMs: c.touches.map((t) => t.ms),
       firstMs: c.firstMs,
       lastMs: c.lastMs,
-      xStartMs: Math.max(recentStart, c.firstMs - 2200),
-      xEndMs: Math.min(60000, Math.max(c.lastMs + 12000, visibleEnd, msNow + 2500)),
+      xStartMs: Math.max(recentStart, c.firstMs - 1500),
+      // V101: mostrar solo el tramo usado por los toques, no extender hasta el precio vivo.
+      xEndMs: Math.min(60000, c.lastMs + 3500),
       score: c.score + c.touches.length * 2 + (defended ? 1.5 : 0) - c.badlyBrokenCount * 1.2,
     });
   }
@@ -8281,7 +8297,8 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
       const lastLine = lineAt(visibleEnd);
       const lastPrice = Number(pts.filter((p) => p.ms <= visibleEnd).slice(-1)[0]?.quote);
       const respectsNow = !Number.isFinite(lastPrice) || lastPrice >= lastLine - tol * 2.4;
-      if (hardBreakCount >= 2 || belowCount > Math.max(2, Math.floor(segmentPts.length * 0.20)) || !respectsNow) continue;
+      const currentAboveDynamic = Number.isFinite(lastPrice) && Number.isFinite(lastLine) && (lastPrice - lastLine >= supportDepth * 0.75);
+      if (hardBreakCount >= 2 || belowCount > Math.max(2, Math.floor(segmentPts.length * 0.20)) || !respectsNow || !currentAboveDynamic) continue;
 
       const reboundScore = uniqueTouches.reduce((acc, t) => acc + Math.min(2, Number(t.reboundAfter || 0) / Math.max(minRebound, 1e-9)), 0);
       dynCandidates.push({
@@ -8294,8 +8311,9 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
         touchMs: uniqueTouches.map((t) => t.ms),
         firstMs: uniqueTouches[0].ms,
         lastMs: uniqueTouches[uniqueTouches.length - 1].ms,
-        xStartMs: Math.max(recentStart, uniqueTouches[0].ms - 2500),
-        xEndMs: Math.min(60000, Math.max(visibleEnd, msNow + 3000, uniqueTouches[uniqueTouches.length - 1].ms + 12000)),
+        xStartMs: Math.max(recentStart, uniqueTouches[0].ms - 1500),
+        // V101: línea dinámica solo a lo largo de sus toques confirmados.
+        xEndMs: Math.min(60000, uniqueTouches[uniqueTouches.length - 1].ms + 4500),
         score: uniqueTouches.length * 4 + reboundScore + Math.max(0, 2 - hardBreakCount) - belowCount * 0.25,
         lineAtMs(ms) { return pA.level + slope * (Number(ms) - pA.ms); },
       });
@@ -8345,6 +8363,11 @@ function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
     const isDynamic = m.kind === "dynamic_support";
     const y = isDynamic ? yOf(Number(m.lineAtMs?.(m.lastMs ?? 0))) : yOf(Number(m.level));
     if (!Number.isFinite(y)) continue;
+
+    // V102: si el soporte queda fuera del rango visible del precio, no forzar escala
+    // ni dibujarlo pegado al borde. Primero debe verse el movimiento del precio.
+    if (y < 8 || y > h - 22) continue;
+
     const x1 = Math.max(8, Math.min(w - 8, xOf(Number(m.xStartMs ?? m.firstMs ?? 0))));
     const x2 = Math.max(8, Math.min(w - 8, xOf(Number(m.xEndMs ?? m.lastMs ?? 60000))));
     if (Math.abs(x2 - x1) < 10) continue;
@@ -8362,6 +8385,7 @@ function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
       const y1 = yOf(Number(m.lineAtMs?.(Number(m.xStartMs ?? m.firstMs ?? 0))));
       const y2 = yOf(Number(m.lineAtMs?.(Number(m.xEndMs ?? m.lastMs ?? 60000))));
       if (!Number.isFinite(y1) || !Number.isFinite(y2)) { ctx.restore(); continue; }
+      if ((y1 < 8 && y2 < 8) || (y1 > h - 22 && y2 > h - 22)) { ctx.restore(); continue; }
       ctx.moveTo(Math.min(x1, x2), x1 <= x2 ? y1 : y2);
       ctx.lineTo(Math.max(x1, x2), x1 <= x2 ? y2 : y1);
     } else {
@@ -8439,19 +8463,11 @@ function drawDerivLikeChart(canvas, ticks) {
     ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
     : null;
   const liveStructuralSupportMarkers = liveSupportOnly ? getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports) : [];
-  if (liveStructuralSupportMarkers.length) {
-    for (const m of liveStructuralSupportMarkers) {
-      const vals = m.kind === "dynamic_support"
-        ? [Number(m.lineAtMs?.(m.xStartMs ?? m.firstMs ?? 0)), Number(m.lineAtMs?.(m.xEndMs ?? m.lastMs ?? 60000))]
-        : [Number(m.level)];
-      for (const v of vals) {
-        if (Number.isFinite(v)) {
-          min = Math.min(min, v);
-          max = Math.max(max, v);
-        }
-      }
-    }
-  }
+  // V102: los soportes NO modifican la escala vertical del gráfico vivo.
+  // Si los niveles de soporte quedan muy lejos del precio actual, al meterlos en min/max
+  // aplastan el recorrido y parece que el precio es una línea recta.
+  // La escala queda basada solo en el precio; los soportes se dibujan solo si caen dentro
+  // del rango visible del movimiento.
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
   const pad = range * 0.08;
@@ -8674,19 +8690,23 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // precio actual / último punto: guía horizontal suave + punto más visible
+  // precio actual / último punto.
+  // V102: no dibujar una guía horizontal de punta a punta porque cuando el movimiento es chico
+  // parece una "línea recta hacia adelante" y tapa la lectura del precio.
   const lastPoint = pts[pts.length - 1];
   const lx = xOf(lastPoint.ms);
   const ly = yOf(lastPoint.quote);
 
   ctx.save();
-  ctx.setLineDash([3, 5]);
-  ctx.strokeStyle = "rgba(255,255,255,0.30)";
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(8, ly);
-  ctx.lineTo(w - 8, ly);
-  ctx.stroke();
+  if (Number.isFinite(lx) && lx < w - 18) {
+    ctx.setLineDash([3, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.max(8, lx), ly);
+    ctx.lineTo(w - 8, ly);
+    ctx.stroke();
+  }
   ctx.restore();
 
   ctx.save();
