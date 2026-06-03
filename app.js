@@ -61,6 +61,8 @@
 
 "use strict";
 
+// ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
+
 const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V84_PAUSA_VISUAL_IMAGEN_20260530";
 
 /*
@@ -2814,11 +2816,35 @@ function buildNextCandleTimingPlan(item = null) {
     planned_duration_sec: nextExpiryEpochSec - nextStartEpochSec,
   };
 }
+const RISE_FALL_ALLOW_EQUALS_ENABLED = true;
+function getRiseFallDerivContractType(side) {
+  const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  if (!RISE_FALL_ALLOW_EQUALS_ENABLED) return s || String(side || "").toUpperCase();
+  if (s === "CALL") return "CALLE";
+  if (s === "PUT") return "PUTE";
+  return String(side || "").toUpperCase();
+}
+function isRiseFallAllowEqualsContractType(contractType) {
+  const c = String(contractType || "").toUpperCase();
+  return c === "CALLE" || c === "PUTE";
+}
+function getRiseFallAllowEqualsAudit(side) {
+  const derivType = getRiseFallDerivContractType(side);
+  const sideNorm = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  return {
+    allow_equals: RISE_FALL_ALLOW_EQUALS_ENABLED,
+    deriv_contract_type: derivType,
+    deriv_contract_side: sideNorm,
+    allow_equals_rule: RISE_FALL_ALLOW_EQUALS_ENABLED
+      ? (sideNorm === "CALL" ? "CALL gana si salida >= entrada" : sideNorm === "PUT" ? "PUT gana si salida <= entrada" : "")
+      : "",
+  };
+}
 function buildRiseFallBaseParams(side, symbol, stake) {
   return {
     amount: stake,
     basis: "stake",
-    contract_type: side,
+    contract_type: getRiseFallDerivContractType(side),
     currency: DEFAULT_CURRENCY,
     symbol,
   };
@@ -3030,6 +3056,8 @@ async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preprop
       ask_price: askPrice,
       payout,
       profit_pct: Number(profitPct),
+      contract_type: getRiseFallDerivContractType(safeSide),
+      ...getRiseFallAllowEqualsAudit(safeSide),
       timing: { ...(pack.timing || {}) },
       label: String(pack.label || ""),
       reason: String(reason || "auto_preproposal"),
@@ -8562,8 +8590,8 @@ function ensureModalCandleStatusBar() {
 }
 function normalizeSignalConfirmationSide(side) {
   const s = String(side || "").toUpperCase();
-  if (s === "CALL" || s === "BUY" || s === "COMPRA") return "CALL";
-  if (s === "PUT" || s === "SELL" || s === "VENTA") return "PUT";
+  if (s === "CALL" || s === "CALLE" || s === "BUY" || s === "COMPRA") return "CALL";
+  if (s === "PUT" || s === "PUTE" || s === "SELL" || s === "VENTA") return "PUT";
   return "";
 }
 function getSignalConfirmationEvents(item = modalCurrentItem) {
@@ -12897,7 +12925,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       tradeExtra = {
         ...tradeExtra,
         exec_mode: usedPreProposal ? "IC2_RISE_FALL_PREPROPOSAL" : "IC2_RISE_FALL_PROPOSAL",
-        contract_type: side,
+        contract_type: getRiseFallDerivContractType(side),
+        side,
+        ...getRiseFallAllowEqualsAudit(side),
         payout_pct: Number(profitPct),
         proposal_id: proposalId,
         ic2_enabled: true,
@@ -12916,7 +12946,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         tradeExtra = {
           ...tradeExtra,
           exec_mode: "RISE_FALL_PREPROPOSAL",
-          contract_type: side,
+          contract_type: String(autoPreProposal.contract_type || getRiseFallDerivContractType(side)),
+          side,
+          ...getRiseFallAllowEqualsAudit(side),
           payout_pct: Number(autoPreProposal.profit_pct),
           proposal_id: String(autoPreProposal.proposal_id || ""),
           entry_preproposal_used: true,
@@ -12934,7 +12966,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         tradeExtra = {
           ...tradeExtra,
           exec_mode: "RISE_FALL_BUY",
-          contract_type: side,
+          contract_type: getRiseFallDerivContractType(side),
+          side,
+          ...getRiseFallAllowEqualsAudit(side),
           entry_preproposal_used: false,
           ...getRiseFallTimingExtra(buyPack.timing),
         };
@@ -14404,8 +14438,8 @@ const RULES_LIKE_MANTENIDO = {
 
 function normalizeTradeDirection(dir) {
   const d = String(dir || "").toUpperCase();
-  if (d === "CALL" || d === "BUY" || d === "COMPRA") return "CALL";
-  if (d === "PUT" || d === "SELL" || d === "VENTA") return "PUT";
+  if (d === "CALL" || d === "CALLE" || d === "BUY" || d === "COMPRA") return "CALL";
+  if (d === "PUT" || d === "PUTE" || d === "SELL" || d === "VENTA") return "PUT";
   return "";
 }
 
