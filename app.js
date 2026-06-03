@@ -8433,12 +8433,15 @@ function drawDerivLikeChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+  const pts = normalizeChartTicksNoDuplicateMs(ticks)
+    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 2) return;
 
-  const quotes = pts.map((p) => p.quote);
+  const quotes = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  const liveSupportOnly = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem);
+  const liveSupportOnly = isModalDrawingLiveMinuteItem(modalCurrentItem);
   const modalPolarityLevel = liveSupportOnly ? null : modalCurrentItem?.giroPolaridad?.level;
   const modalDynamicLine = liveSupportOnly ? null : getSignalDynamicLineMeta(modalCurrentItem);
   const modalSNRNearArea = (!liveSupportOnly && modalCurrentItem?.giroPolaridad)
@@ -8459,7 +8462,7 @@ function drawDerivLikeChart(canvas, ticks) {
     max = Math.max(max, Number(modalSNRNearArea.nearHigh), Number(modalSNRNearArea.zoneHigh));
   }
 
-  const msNowForSupports = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+  const msNowForSupports = liveSupportOnly
     ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
     : null;
   const liveStructuralSupportMarkers = liveSupportOnly ? getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports) : [];
@@ -8477,7 +8480,7 @@ function drawDerivLikeChart(canvas, ticks) {
   const xOf = (ms) => (ms / 60000) * (w - 20) + 10;
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
-  const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+  const msNow = liveSupportOnly
     ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
     : null;
 
@@ -8734,6 +8737,42 @@ function currentServerMinute() {
 function isItemLiveMinute(item) {
   if (!item) return false;
   return item.minute === currentServerMinute();
+}
+
+// V103: el modal de una señal viva debe dibujarse con los mismos ticks de la vela actual
+// que usa el gráfico "En vivo". Antes dependía de modalLive y a veces quedaba usando
+// el snapshot de la señal; por eso el recorrido se veía como una línea recta.
+function getCurrentMinuteNumberLoose() {
+  const a = currentServerMinute();
+  const b = Number.isFinite(Number(currentMinuteStartMs)) && Number(currentMinuteStartMs) > 0
+    ? Math.floor(Number(currentMinuteStartMs) / 60000)
+    : a;
+  return { serverMinute: a, currentStartMinute: b };
+}
+function isItemCurrentMinuteLoose(item) {
+  if (!item) return false;
+  const m = Number(item.minute);
+  if (!Number.isFinite(m)) return false;
+  const { serverMinute, currentStartMinute } = getCurrentMinuteNumberLoose();
+  return m === serverMinute || m === currentStartMinute;
+}
+function getLiveTicksForModalItem(item) {
+  if (!item || !isItemCurrentMinuteLoose(item)) return null;
+  const sym = String(item.symbol || "");
+  if (!sym) return null;
+  const { serverMinute, currentStartMinute } = getCurrentMinuteNumberLoose();
+  const candidates = [
+    minuteData?.[Number(item.minute)]?.[sym],
+    minuteData?.[currentStartMinute]?.[sym],
+    minuteData?.[serverMinute]?.[sym],
+  ];
+  for (const arr of candidates) {
+    if (Array.isArray(arr) && arr.length >= 2) return arr;
+  }
+  return null;
+}
+function isModalDrawingLiveMinuteItem(item = modalCurrentItem) {
+  return Array.isArray(getLiveTicksForModalItem(item));
 }
 
 function getCurrentMinuteRemainingSec() {
@@ -10478,9 +10517,13 @@ function requestModalDraw(force = false) {
     if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
 
     let ticks = it.ticks || [];
-    if (modalLive && isItemLiveMinute(it)) {
-      const liveTicks = minuteData?.[it.minute]?.[it.symbol];
-      if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
+
+    // V103: si la señal pertenece a la vela actual, dibujar SIEMPRE con los ticks vivos
+    // del mismo símbolo. Así el modal de señal se ve igual que el gráfico En vivo y no
+    // queda congelado/aplanado con el snapshot tomado al crear la señal.
+    const liveTicksForSignal = getLiveTicksForModalItem(it);
+    if (Array.isArray(liveTicksForSignal) && liveTicksForSignal.length >= 2) {
+      ticks = liveTicksForSignal;
     }
 
     if (modalChartView === "candles1m") drawDerivLikeOneMinuteCandles(minuteCanvas, it, ticks);
