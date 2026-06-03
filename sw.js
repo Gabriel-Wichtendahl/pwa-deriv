@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v104-revert-soportes-modal-precio-normal";
+const CACHE = "deriv-assets-v105-prioridad-reducciones-claras-30s";
 
 const ASSETS = [
   "./",

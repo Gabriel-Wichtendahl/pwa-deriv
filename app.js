@@ -1,3 +1,4 @@
+// v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
 // Se vuelve a la base v99 porque los soportes horizontales/dinámicos aplanaban el gráfico modal.
 // app.js — BASE V3 CONFIG RESTAURADA: estética/funciones originales preservadas, motores de señal desactivados
@@ -857,7 +858,7 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_FILTRO_FUERZA_CONTRARIA_V98_20260603";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_PRIORIDAD_REDUCCIONES_CLARAS_V105_20260603";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -18446,10 +18447,29 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     !strongRetakeGreen;
   if (tooMuchTimeBelowWithoutControl) return null;
 
-  // Comprador irregular: preferencia clara por reducción, pero también acepta cambios fuertes de tamaño.
-  const threeStepReduction = upMoves.length >= 3 && firstUp > secondUp * 1.08 && secondUp > thirdUp * 1.08;
-  const broadReduction = upMoves.length >= 2 && lastUp <= firstUp * 0.88;
-  const decreasingPushes = threeStepReduction || broadReduction;
+  // V105: prioridad fuerte al tipo exacto que buscás:
+  // - reducción clara del comprador dentro de 0-30s
+  // - grande → mediano → chico
+  // - grande → chico
+  // - ideal: dos reducciones alcistas visibles en la misma formación.
+  const visibleUpMoveMin = Math.max(localRange * 0.055, tol * 2.0);
+  const clearReductionPairs = [];
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    const a = Number(upMoves[i] || 0);
+    const b = Number(upMoves[i + 1] || 0);
+    if (a >= visibleUpMoveMin && b >= Math.max(tol * 1.15, visibleUpMoveMin * 0.22) && a >= b * 1.32) {
+      clearReductionPairs.push({ from: a, to: b, index: i, ratio: a / Math.max(b, 1e-9) });
+    }
+  }
+  const clearBigSmallReduction = clearReductionPairs.some((p) => p.ratio >= 1.55);
+  const threeStepReduction = upMoves.length >= 3 &&
+    firstUp >= Math.max(visibleUpMoveMin, secondUp * 1.16) &&
+    secondUp >= Math.max(tol * 1.35, thirdUp * 1.16) &&
+    thirdUp >= Math.max(tol * 1.05, visibleUpMoveMin * 0.18);
+  const broadReduction = upMoves.length >= 2 && lastUp <= firstUp * 0.80 && firstUp >= visibleUpMoveMin;
+  const visibleReductionCount = (threeStepReduction ? 1 : 0) + clearReductionPairs.length;
+  const doubleClearBuyerReduction = visibleReductionCount >= 2 || (threeStepReduction && clearBigSmallReduction);
+  const decreasingPushes = threeStepReduction || clearBigSmallReduction || broadReduction || doubleClearBuyerReduction;
   const sizeRatioUp = minUpRun > 0 ? maxUpRun / minUpRun : 0;
   const mixedSizes = upMoves.length >= 3 && (sizeRatioUp >= 1.55 || upCv >= 0.30);
   const veryMixedSizes = upMoves.length >= 3 && (sizeRatioUp >= 2.05 || upCv >= 0.44);
@@ -18516,12 +18536,14 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     (sellerReducing || sellerWeakVsBuyer) &&
     !sellerMomentumIncreasing &&
     !threeStepReduction &&
+    !doubleClearBuyerReduction &&
+    !clearBigSmallReduction &&
     !clearReductionAfterExpansion;
   if (oppositeSetupBuyerStrongSellerWeak) return null;
 
   // Si el comprador va claramente de menor a mayor y no aparece una reducción visible o fuerza bajista creciente,
   // se considera continuación/peligro, aunque el movimiento sea "irregular" visualmente.
-  const dangerousBuyerIncreasing = buyerEarlyExpansion && !threeStepReduction && !clearReductionAfterExpansion && !sellerMomentumIncreasing && !(strongContrary && sellerNotReducing);
+  const dangerousBuyerIncreasing = buyerEarlyExpansion && !threeStepReduction && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion && !sellerMomentumIncreasing && !(strongContrary && sellerNotReducing);
   if (dangerousBuyerIncreasing) return null;
 
   const colorFlipAndRetake = retookGreen && (stats.turns >= 2 || givesBackMuch || sellerPressureCore) && !buyerStrongResponseAfterSeller;
@@ -18529,7 +18551,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const highMs = Number(clean[highIdx]?.ms || evalMs);
   const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.070, tol * 1.25);
 
-  const buyerWeaknessCore = decreasingPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || clearReductionAfterExpansion;
+  const buyerWeaknessCore = decreasingPushes || doubleClearBuyerReduction || clearBigSmallReduction || givesBackMuch || zigzagDirty || stalledAfterHigh || clearReductionAfterExpansion;
   const sellerStrengthCore = sellerMomentumIncreasing || (strongContrary && sellerNotReducing);
   const buyerDominantButIrregular = greenAtConfirm && buyerAdvanceVisible && (
     buyerWeaknessCore ||
@@ -18565,12 +18587,12 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
 
   // Si lo único que hay es vendedor que se va apagando, no lo usamos como confirmación.
   // La presión contraria ayuda, pero no reemplaza la irregularidad del comprador.
-  const irregularCore = buyerWeaknessCore || (mixedSizes && !buyerEarlyExpansion) || veryMixedSizes || colorFlipAndRetake || sellerStrengthCore;
+  const irregularCore = buyerWeaknessCore || doubleClearBuyerReduction || clearBigSmallReduction || (mixedSizes && !buyerEarlyExpansion) || veryMixedSizes || colorFlipAndRetake || sellerStrengthCore;
   if (!irregularCore) return null;
 
-  if (increasingOnly && !clearReductionAfterExpansion && !colorFlipAndRetake && !sellerStrengthCore && !givesBackMuch) return null;
-  if (sellerReducing && buyerStrongResponseAfterSeller && !sellerStrengthCore) return null;
-  if (sellerReducing && !decreasingPushes && !clearReductionAfterExpansion && !colorFlipAndRetake && !givesBackMuch && !sellerStrengthCore) return null;
+  if (increasingOnly && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion && !colorFlipAndRetake && !sellerStrengthCore && !givesBackMuch) return null;
+  if (sellerReducing && buyerStrongResponseAfterSeller && !doubleClearBuyerReduction && !threeStepReduction && !clearBigSmallReduction && !sellerStrengthCore) return null;
+  if (sellerReducing && !decreasingPushes && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion && !colorFlipAndRetake && !givesBackMuch && !sellerStrengthCore) return null;
 
   let points = 0;
   const reasons = [];
@@ -18578,7 +18600,10 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   reasons.push("vela verde al confirmar 20-30s");
   points += 2;
   reasons.push("comprador avanza, pero irregular");
-  if (decreasingPushes) { points += 4; reasons.push(threeStepReduction ? "irregularidad que reduce: grande-mediano-pequeño" : "empujes compradores se reducen"); }
+  if (doubleClearBuyerReduction) { points += 7; reasons.push("doble reducción clara del comprador"); }
+  else if (threeStepReduction) { points += 6; reasons.push("irregularidad que reduce: grande-mediano-pequeño"); }
+  else if (clearBigSmallReduction) { points += 5; reasons.push("reducción clara: grande-chico"); }
+  else if (decreasingPushes) { points += 4; reasons.push("empujes compradores se reducen"); }
   if (veryMixedSizes) { points += 3; reasons.push("cambios de tamaño muy claros"); }
   else if (mixedSizes || differentSizedBreaks) { points += 2; reasons.push("impulsos compradores de distintos tamaños"); }
   if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
@@ -18590,16 +18615,18 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   if (strongContrary && sellerNotReducing) { points += 2; reasons.push("entrada fuerte del vendedor sin reducir"); }
   else if (sellerPressureCore && sellerNotReducing && !sellerWeakVsBuyer) { points += 1; reasons.push("vendedor presiona sin reducir"); }
   else if (sellerReducing) { points -= 2; reasons.push("vendedor reduce: debilidad bajista"); }
-  if (buyerStrongResponseAfterSeller) { points -= 3; reasons.push("comprador responde más fuerte al vendedor"); }
-  if (buyerEarlyExpansion && !clearReductionAfterExpansion) { points -= 3; reasons.push("comprador va de pequeño/mediano a grande"); }
+  if (buyerStrongResponseAfterSeller && !doubleClearBuyerReduction && !threeStepReduction && !clearBigSmallReduction) { points -= 3; reasons.push("comprador responde más fuerte al vendedor"); }
+  if (buyerEarlyExpansion && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion) { points -= 3; reasons.push("comprador va de pequeño/mediano a grande"); }
   if (buyerStraightForce) { points -= 2; reasons.push("comprador recto con fuerza"); }
   if (increasingOnly) { points -= 3; reasons.push("irregularidad en aumento: más peligrosa"); }
 
   if (points < 8) return null;
 
   const priorityBonus =
+    (doubleClearBuyerReduction ? 42 : 0) +
     (decreasingPushes ? 30 : 0) +
-    (threeStepReduction ? 14 : 0) +
+    (threeStepReduction ? 20 : 0) +
+    (clearBigSmallReduction ? 18 : 0) +
     (clearReductionAfterExpansion ? 10 : 0) +
     (veryMixedSizes && !buyerEarlyExpansion ? 14 : mixedSizes && !buyerEarlyExpansion ? 6 : 0) +
     (colorFlipAndRetake ? 10 : 0) +
@@ -18622,8 +18649,8 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     Math.min(16, pullbackRatio * 18) -
     Math.max(0, evalMs - 20000) / 2200;
 
-  const priority = decreasingPushes || clearReductionAfterExpansion || sellerStrengthCore || colorFlipAndRetake ? "ALTA" : "NORMAL";
-  const logicText = `Vela alcista irregular V98 confirmada 20-30s: ${reasons.join(", ")}. Regla V98: se descarta comprador fuerte con vendedor débil/reduciendo; se prioriza irregularidad clara dentro de 0-30s, comprador que reduce, cambios visibles no simétricos y vendedor que aumenta o entra fuerte sin reducir.`;
+  const priority = doubleClearBuyerReduction || threeStepReduction || clearBigSmallReduction || decreasingPushes || clearReductionAfterExpansion || sellerStrengthCore || colorFlipAndRetake ? "ALTA" : "NORMAL";
+  const logicText = `Vela alcista irregular V105 confirmada 20-30s: ${reasons.join(", ")}. Regla V105: máxima prioridad a reducciones claras del comprador dentro de 0-30s: grande-mediano-chico, grande-chico o doble reducción visible. Se descarta comprador fuerte con vendedor débil/reduciendo salvo que exista reducción compradora clara.`;
 
   return {
     direction: "PUT",
@@ -18659,6 +18686,10 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       irregularCore,
       decreasingPushes,
       threeStepReduction,
+      clearBigSmallReduction,
+      doubleClearBuyerReduction,
+      visibleReductionCount,
+      clearReductionPairs,
       mixedSizes,
       veryMixedSizes,
       differentSizedBreaks,
@@ -18697,7 +18728,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       colorFlipAndRetake,
       stalledAfterHigh,
       highMs,
-      stage: "alcista_irregular_30s_v98_filtro_fuerza_contraria",
+      stage: "alcista_irregular_30s_v105_prioridad_reducciones_claras",
       buyerWeaknessCore,
       sellerStrengthCore,
       buyerEarlyExpansion,
@@ -18710,10 +18741,10 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       clearReductionAfterExpansion,
       dangerousBuyerIncreasing,
       oppositeSetupBuyerStrongSellerWeak,
-      movementFilter: "irregularidad_clara_v98_0_30_no_comprador_fuerte_vendedor_debil",
+      movementFilter: "prioridad_reducciones_claras_v105_grande_mediano_chico_grande_chico",
       priority,
       logic: logicText,
-      status: `🟢 Alcista irregular 30s V98: ${decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🟢 Alcista irregular 30s V105: ${doubleClearBuyerReduction ? "doble reducción compradora" : threeStepReduction ? "grande-mediano-chico" : clearBigSmallReduction ? "grande-chico" : decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
