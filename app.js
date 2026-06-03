@@ -51,6 +51,7 @@
 // ✅ V79: Autolimpieza de bloqueos vencidos/corruptos de Despeje mental y Disciplina REAL.
 // ✅ V80: Corrige línea vertical falsa en gráfico en vivo al iniciar vela (dedupe ms=0 y no duplica open).
 // ✅ V81: Soportes estructurales recientes en gráfico vivo: cian = estructural, amarillo = polaridad/usado dos veces.
+// ✅ V100: Modal live solo marca soportes: horizontales y dinámicos con 2+ toques; sin resistencias ni niveles de un toque.
 // ✅ V82: Merge correcto: restaura Ruptura Débil Giro V78 + autolimpieza + línea viva limpia + soportes estructurales.
 // ✅ V83: Pausa visual 5m si salen 15 señales sin operación REAL; bloqueo total tipo overlay.
 // ✅ V84: Integra imagen Pausa visual con contador real y tips/progreso dinámicos.
@@ -8181,21 +8182,30 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
     const prevMax = Math.max(...prev.map((x) => x.quote));
     const nextMax = Math.max(...next.map((x) => x.quote));
 
-    // Swing low real: es piso local y después hay defensa/rebote.
+    // Swing low real: solo piso local con rebote/defensa. No marca techos/resistencias.
     const isLow = p.quote <= prevMin + tol && p.quote <= nextMin + tol;
-    const hasRebound = Math.max(prevMax - p.quote, nextMax - p.quote) >= minRebound * 0.55
-      || nextMax - p.quote >= minRebound * 0.42;
+    const reboundBefore = prevMax - p.quote;
+    const reboundAfter = nextMax - p.quote;
+    const hasRebound = Math.max(reboundBefore, reboundAfter) >= minRebound * 0.55
+      || reboundAfter >= minRebound * 0.42;
     if (!isLow || !hasRebound) continue;
 
-    // Evita marcar pisos demasiado viejos o que ya quedaron totalmente anulados por una caída fuerte posterior.
     const later = pts.filter((x) => x.ms > p.ms && x.ms <= visibleEnd);
     const laterLow = later.length ? Math.min(...later.map((x) => x.quote)) : p.quote;
     const badlyBroken = laterLow < p.quote - tol * 2.8;
-    localMin.push({ ms: p.ms, level: p.quote, score: (hasRebound ? 2 : 0) - (badlyBroken ? 1.2 : 0), badlyBroken });
+    localMin.push({
+      ms: p.ms,
+      level: p.quote,
+      score: (hasRebound ? 2 : 0) + Math.min(2, reboundAfter / Math.max(minRebound, 1e-9)) - (badlyBroken ? 1.5 : 0),
+      badlyBroken,
+      reboundAfter,
+    });
   }
-  if (!localMin.length) return [];
+  if (localMin.length < 2) return [];
 
-  // Agrupa mínimos cercanos para detectar niveles usados dos veces.
+  const markers = [];
+
+  // Soporte horizontal: exige 2 o más toques separados. Se eliminan niveles de un solo toque.
   const clusters = [];
   for (const m of localMin) {
     let c = clusters.find((cl) => Math.abs(cl.level - m.level) <= tol * 1.8);
@@ -8211,58 +8221,100 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
     if (m.badlyBroken) c.badlyBrokenCount += 1;
   }
 
-  // Detecta polaridad simple: un máximo/resistencia previa queda cerca del nivel y luego se defiende como soporte.
-  const localHighs = [];
-  for (let i = 1; i < pts.length - 1; i++) {
-    const p = pts[i];
-    if (p.ms < recentStart - 8000 || p.ms > visibleEnd) continue;
-    const prev = pts.slice(Math.max(0, i - 3), i);
-    const next = pts.slice(i + 1, Math.min(pts.length, i + 4));
-    if (!prev.length || !next.length) continue;
-    const prevMax = Math.max(...prev.map((x) => x.quote));
-    const nextMax = Math.max(...next.map((x) => x.quote));
-    if (p.quote >= prevMax - tol && p.quote >= nextMax - tol) localHighs.push(p);
-  }
-
-  const markers = [];
   for (const c of clusters) {
     const touchSpread = c.lastMs - c.firstMs;
-    const usedTwice = c.touches.length >= 2 && touchSpread >= 5000;
-    const priorHigh = localHighs.find((hi) => hi.ms < c.lastMs - 2000 && Math.abs(hi.quote - c.level) <= tol * 2.2);
-    const polarity = !!priorHigh || usedTwice;
+    const usedTwice = c.touches.length >= 2 && touchSpread >= 4500;
+    if (!usedTwice) continue;
 
-    // Para formación reciente: preferimos el soporte principal y el soporte reciente; no base antigua.
-    const lastTouchMs = c.lastMs;
-    if (lastTouchMs < Math.max(10000, msNow - LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS)) continue;
-
-    const after = pts.filter((p) => p.ms >= lastTouchMs && p.ms <= visibleEnd);
+    const after = pts.filter((p) => p.ms >= c.lastMs && p.ms <= visibleEnd);
     const afterHigh = after.length ? Math.max(...after.map((p) => p.quote)) : c.level;
-    const defended = afterHigh - c.level >= minRebound * 0.35;
-    if (!defended && !polarity) continue;
-
-    const xStartMs = polarity
-      ? Math.max(recentStart, Math.min(c.firstMs, priorHigh?.ms ?? c.firstMs) - 2500)
-      : Math.max(recentStart, lastTouchMs - 3500);
-    const xEndMs = polarity
-      ? Math.min(60000, Math.max(c.lastMs + 14000, visibleEnd, msNow + 3000))
-      : Math.min(60000, Math.max(lastTouchMs + 11000, msNow + 2500));
+    const defended = afterHigh - c.level >= minRebound * 0.25;
+    if (!defended && c.badlyBrokenCount > 0) continue;
 
     markers.push({
+      kind: "horizontal_support",
       level: c.level,
-      type: polarity ? "polarity" : "structural",
+      type: "support",
       touches: c.touches.length,
+      touchMs: c.touches.map((t) => t.ms),
       firstMs: c.firstMs,
       lastMs: c.lastMs,
-      xStartMs,
-      xEndMs,
-      score: c.score + (polarity ? 2.5 : 0) + (defended ? 1.4 : 0) - c.badlyBrokenCount,
+      xStartMs: Math.max(recentStart, c.firstMs - 2200),
+      xEndMs: Math.min(60000, Math.max(c.lastMs + 12000, visibleEnd, msNow + 2500)),
+      score: c.score + c.touches.length * 2 + (defended ? 1.5 : 0) - c.badlyBrokenCount * 1.2,
     });
   }
 
-  // Deja pocos niveles limpios: los más recientes/relevantes. Prioriza polaridad y último soporte.
+  // Soporte dinámico: línea por mínimos recientes, siempre con 2+ toques y sin quiebre claro debajo.
+  const dynCandidates = [];
+  const mins = localMin.slice().sort((a, b) => a.ms - b.ms);
+  for (let a = 0; a < mins.length - 1; a++) {
+    for (let b = a + 1; b < mins.length; b++) {
+      const pA = mins[a];
+      const pB = mins[b];
+      const spreadMs = pB.ms - pA.ms;
+      if (spreadMs < 8000) continue;
+      const slope = (pB.level - pA.level) / Math.max(spreadMs, 1);
+      const lineAt = (ms) => pA.level + slope * (Number(ms) - pA.ms);
+
+      const touches = [];
+      for (const m of mins) {
+        if (m.ms < pA.ms - 1200 || m.ms > visibleEnd) continue;
+        const line = lineAt(m.ms);
+        if (Math.abs(m.level - line) <= tol * 2.2) touches.push(m);
+      }
+      const uniqueTouches = [];
+      for (const t of touches) {
+        if (uniqueTouches.some((x) => Math.abs(x.ms - t.ms) < 3500)) continue;
+        uniqueTouches.push(t);
+      }
+      if (uniqueTouches.length < 2) continue;
+
+      const segmentPts = pts.filter((p) => p.ms >= Math.max(recentStart, pA.ms - 2000) && p.ms <= visibleEnd);
+      let belowCount = 0;
+      let hardBreakCount = 0;
+      for (const p of segmentPts) {
+        const d = lineAt(p.ms) - p.quote;
+        if (d > tol * 1.7) belowCount += 1;
+        if (d > tol * 3.4) hardBreakCount += 1;
+      }
+      const lastLine = lineAt(visibleEnd);
+      const lastPrice = Number(pts.filter((p) => p.ms <= visibleEnd).slice(-1)[0]?.quote);
+      const respectsNow = !Number.isFinite(lastPrice) || lastPrice >= lastLine - tol * 2.4;
+      if (hardBreakCount >= 2 || belowCount > Math.max(2, Math.floor(segmentPts.length * 0.20)) || !respectsNow) continue;
+
+      const reboundScore = uniqueTouches.reduce((acc, t) => acc + Math.min(2, Number(t.reboundAfter || 0) / Math.max(minRebound, 1e-9)), 0);
+      dynCandidates.push({
+        kind: "dynamic_support",
+        type: "support_dynamic",
+        anchorMs: pA.ms,
+        anchorLevel: pA.level,
+        slopePerMs: slope,
+        touches: uniqueTouches.length,
+        touchMs: uniqueTouches.map((t) => t.ms),
+        firstMs: uniqueTouches[0].ms,
+        lastMs: uniqueTouches[uniqueTouches.length - 1].ms,
+        xStartMs: Math.max(recentStart, uniqueTouches[0].ms - 2500),
+        xEndMs: Math.min(60000, Math.max(visibleEnd, msNow + 3000, uniqueTouches[uniqueTouches.length - 1].ms + 12000)),
+        score: uniqueTouches.length * 4 + reboundScore + Math.max(0, 2 - hardBreakCount) - belowCount * 0.25,
+        lineAtMs(ms) { return pA.level + slope * (Number(ms) - pA.ms); },
+      });
+    }
+  }
+
+  dynCandidates.sort((a, b) => (b.score || 0) - (a.score || 0) || (b.lastMs || 0) - (a.lastMs || 0));
+  for (const d of dynCandidates) {
+    if (markers.some((m) => {
+      if (m.kind === "horizontal_support") return Math.abs(Number(m.level) - Number(d.lineAtMs?.(m.lastMs) ?? NaN)) <= tol * 2.2;
+      return Math.abs(Number(m.lineAtMs?.(d.lastMs) ?? NaN) - Number(d.lineAtMs?.(d.lastMs) ?? NaN)) <= tol * 2.2;
+    })) continue;
+    markers.push(d);
+    break;
+  }
+
   markers.sort((a, b) => {
-    const pol = (b.type === "polarity") - (a.type === "polarity");
-    if (pol) return pol;
+    const dyn = (b.kind === "dynamic_support") - (a.kind === "dynamic_support");
+    if (dyn) return dyn;
     const score = (b.score || 0) - (a.score || 0);
     if (Math.abs(score) > 0.25) return score;
     return (b.lastMs || 0) - (a.lastMs || 0);
@@ -8270,46 +8322,64 @@ function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null)
 
   const out = [];
   for (const m of markers) {
-    if (out.some((x) => Math.abs(x.level - m.level) <= tol * 2.2)) continue;
+    const comparable = (x) => {
+      const ms = Math.max(Number(m.lastMs || 0), Number(x.lastMs || 0));
+      const a = m.kind === "dynamic_support" ? Number(m.lineAtMs?.(ms)) : Number(m.level);
+      const b = x.kind === "dynamic_support" ? Number(x.lineAtMs?.(ms)) : Number(x.level);
+      return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= tol * 2.2;
+    };
+    if (out.some(comparable)) continue;
     out.push(m);
     if (out.length >= 3) break;
   }
-  return out.sort((a, b) => a.level - b.level);
+  return out.sort((a, b) => {
+    const aVal = a.kind === "dynamic_support" ? Number(a.lineAtMs?.(a.lastMs)) : Number(a.level);
+    const bVal = b.kind === "dynamic_support" ? Number(b.lineAtMs?.(b.lastMs)) : Number(b.level);
+    return aVal - bVal;
+  });
 }
 function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
   if (!ctx || !Array.isArray(markers) || !markers.length) return;
   ctx.save();
   for (const m of markers) {
-    const y = yOf(Number(m.level));
+    const isDynamic = m.kind === "dynamic_support";
+    const y = isDynamic ? yOf(Number(m.lineAtMs?.(m.lastMs ?? 0))) : yOf(Number(m.level));
     if (!Number.isFinite(y)) continue;
     const x1 = Math.max(8, Math.min(w - 8, xOf(Number(m.xStartMs ?? m.firstMs ?? 0))));
     const x2 = Math.max(8, Math.min(w - 8, xOf(Number(m.xEndMs ?? m.lastMs ?? 60000))));
     if (Math.abs(x2 - x1) < 10) continue;
-    const isPol = m.type === "polarity";
-    const col = isPol ? "rgba(250,204,21,0.92)" : "rgba(34,211,238,0.92)";
-    const glow = isPol ? "rgba(250,204,21,0.34)" : "rgba(34,211,238,0.32)";
+    const col = isDynamic ? "rgba(250,204,21,0.92)" : "rgba(34,211,238,0.92)";
+    const glow = isDynamic ? "rgba(250,204,21,0.34)" : "rgba(34,211,238,0.32)";
 
     ctx.save();
     ctx.shadowColor = glow;
-    ctx.shadowBlur = isPol ? 8 : 7;
+    ctx.shadowBlur = isDynamic ? 8 : 7;
     ctx.strokeStyle = col;
-    ctx.lineWidth = isPol ? 2.0 : 1.8;
+    ctx.lineWidth = isDynamic ? 2.0 : 1.8;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(Math.min(x1, x2), y);
-    ctx.lineTo(Math.max(x1, x2), y);
+    if (isDynamic) {
+      const y1 = yOf(Number(m.lineAtMs?.(Number(m.xStartMs ?? m.firstMs ?? 0))));
+      const y2 = yOf(Number(m.lineAtMs?.(Number(m.xEndMs ?? m.lastMs ?? 60000))));
+      if (!Number.isFinite(y1) || !Number.isFinite(y2)) { ctx.restore(); continue; }
+      ctx.moveTo(Math.min(x1, x2), x1 <= x2 ? y1 : y2);
+      ctx.lineTo(Math.max(x1, x2), x1 <= x2 ? y2 : y1);
+    } else {
+      ctx.moveTo(Math.min(x1, x2), y);
+      ctx.lineTo(Math.max(x1, x2), y);
+    }
     ctx.stroke();
 
-    // Si el nivel fue usado varias veces, marca sutilmente los toques sin cartel.
-    if (Number(m.touches || 0) >= 2 || isPol) {
-      ctx.fillStyle = isPol ? "rgba(254,240,138,0.96)" : "rgba(165,243,252,0.92)";
-      for (const ms of [m.firstMs, m.lastMs]) {
-        const x = xOf(Number(ms));
-        if (!Number.isFinite(x) || x < 8 || x > w - 8) continue;
-        ctx.beginPath();
-        ctx.arc(x, y, isPol ? 2.6 : 2.2, 0, Math.PI * 2);
-        ctx.fill();
-      }
+    // Toques sutiles, sin carteles.
+    ctx.fillStyle = isDynamic ? "rgba(254,240,138,0.96)" : "rgba(165,243,252,0.92)";
+    const touchMs = Array.isArray(m.touchMs) ? m.touchMs : [m.firstMs, m.lastMs];
+    for (const ms of touchMs) {
+      const x = xOf(Number(ms));
+      const yy = isDynamic ? yOf(Number(m.lineAtMs?.(ms))) : y;
+      if (!Number.isFinite(x) || !Number.isFinite(yy) || x < 8 || x > w - 8) continue;
+      ctx.beginPath();
+      ctx.arc(x, yy, isDynamic ? 2.6 : 2.3, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
   }
@@ -8344,9 +8414,10 @@ function drawDerivLikeChart(canvas, ticks) {
   const quotes = pts.map((p) => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  const modalPolarityLevel = modalCurrentItem?.giroPolaridad?.level;
-  const modalDynamicLine = getSignalDynamicLineMeta(modalCurrentItem);
-  const modalSNRNearArea = modalCurrentItem?.giroPolaridad
+  const liveSupportOnly = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem);
+  const modalPolarityLevel = liveSupportOnly ? null : modalCurrentItem?.giroPolaridad?.level;
+  const modalDynamicLine = liveSupportOnly ? null : getSignalDynamicLineMeta(modalCurrentItem);
+  const modalSNRNearArea = (!liveSupportOnly && modalCurrentItem?.giroPolaridad)
     ? buildSNRNearAreaMetaFromLevel(modalCurrentItem.giroPolaridad)
     : null;
   if (Number.isFinite(Number(modalPolarityLevel))) {
@@ -8367,12 +8438,17 @@ function drawDerivLikeChart(canvas, ticks) {
   const msNowForSupports = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
     ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
     : null;
-  const liveStructuralSupportMarkers = getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports);
+  const liveStructuralSupportMarkers = liveSupportOnly ? getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports) : [];
   if (liveStructuralSupportMarkers.length) {
     for (const m of liveStructuralSupportMarkers) {
-      if (Number.isFinite(Number(m.level))) {
-        min = Math.min(min, Number(m.level));
-        max = Math.max(max, Number(m.level));
+      const vals = m.kind === "dynamic_support"
+        ? [Number(m.lineAtMs?.(m.xStartMs ?? m.firstMs ?? 0)), Number(m.lineAtMs?.(m.xEndMs ?? m.lastMs ?? 60000))]
+        : [Number(m.level)];
+      for (const v of vals) {
+        if (Number.isFinite(v)) {
+          min = Math.min(min, v);
+          max = Math.max(max, v);
+        }
       }
     }
   }
@@ -8446,8 +8522,9 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.fillText(label, Math.min(w - 26, x + 4), h - 6);
   }
 
-  // Nivel de polaridad / SNR en el modal (si la señal lo trae)
-  if (modalCurrentItem?.giroPolaridad && Number.isFinite(Number(modalCurrentItem.giroPolaridad.level))) {
+  // Nivel de polaridad / SNR en el modal (si la señal lo trae).
+  // V100: mientras la formación está viva, se oculta para dejar solo soportes 2+ toques.
+  if (!liveSupportOnly && modalCurrentItem?.giroPolaridad && Number.isFinite(Number(modalCurrentItem.giroPolaridad.level))) {
     const pol = modalCurrentItem.giroPolaridad;
     const level = Number(pol.level);
     const yLevel = yOf(level);
@@ -8528,12 +8605,14 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.restore();
   }
 
-  // Soportes estructurales recientes del gráfico vivo (sin carteles).
-  // Cian = soporte estructural reciente. Amarillo = polaridad / nivel usado dos veces.
+  // Soportes recientes del gráfico vivo (sin carteles).
+  // V100: solo soportes horizontales/dinámicos con dos o más toques.
+  // Cian = soporte horizontal. Amarillo = soporte dinámico.
   drawLiveStructuralSupportMarkers(ctx, liveStructuralSupportMarkers, xOf, yOf, w, h);
 
-  // Línea dinámica de tendencia (soporte/resistencia inclinada)
-  if (modalDynamicLine) {
+  // Línea dinámica de tendencia histórica de la señal.
+  // V100: durante formación viva se oculta para no mostrar resistencias ni líneas de un toque.
+  if (!liveSupportOnly && modalDynamicLine) {
     const y0v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 0));
     const y1v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 60000));
     if (Number.isFinite(y0v) && Number.isFinite(y1v)) {
