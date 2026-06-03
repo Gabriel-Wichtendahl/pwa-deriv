@@ -163,8 +163,9 @@ const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
 const ENTRY_TIMING_MODE_KEY = "entryTimingMode_v1";
 const ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY = "AUTO58_NEXT_CANDLE_EXPIRY";
+const ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY = "AUTO58_VISUAL_58_EXPIRY";
 const ENTRY_TIMING_AUTO58_DURATION_1M = "AUTO58_DURATION_1M";
-let entryTimingMode = ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
+let entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
@@ -820,7 +821,7 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_25S_COMPRADOR_INSANO_VENDEDOR_PRESIONA_V91_20260602";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_25S_IRREGULARIDAD_CLARA_0_25_V95_20260603";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -2764,56 +2765,70 @@ function ensureExecutionModeButton() {
 
 /* =========================
    Timing de entrada Rise/Fall
-   - AUTO 58 normal: duration 1m.
    - AUTO post-58 cierre 60: espera el tick real >=58s, envía después de ese tick,
      intenta programar inicio en la próxima vela y fija el cierre al segundo 60.
+   - V94: Cierre visual (vela) ON/OFF: misma entrada, pero vencimiento next_start+58
+     para probar acople con el gráfico de velas visual de Deriv.
    - V66: la proposal se prepara desde 56s para que al post-58 la compra sea inmediata.
 ========================= */
 function normalizeEntryTimingMode(mode) {
   const m = String(mode || "").toUpperCase().trim();
-  if (m === ENTRY_TIMING_AUTO58_DURATION_1M) return ENTRY_TIMING_AUTO58_DURATION_1M;
+  // V94: dejamos solo ON/OFF para Cierre visual (vela).
+  // Si venía guardado el modo viejo duration_1m, lo tratamos como OFF (cierre 60s).
+  if (m === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY) return ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
   return ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
 }
 function loadEntryTimingMode() {
   try {
-    entryTimingMode = normalizeEntryTimingMode(localStorage.getItem(ENTRY_TIMING_MODE_KEY) || ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY);
+    entryTimingMode = normalizeEntryTimingMode(localStorage.getItem(ENTRY_TIMING_MODE_KEY) || ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY);
   } catch {
-    entryTimingMode = ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
+    entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
   }
 }
 function saveEntryTimingMode() {
   try { localStorage.setItem(ENTRY_TIMING_MODE_KEY, normalizeEntryTimingMode(entryTimingMode)); } catch {}
 }
+function isEntryTimingVisual58() {
+  return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
+}
 function isNextCandleExpiryTiming() {
   // High/Low usa barreras/proposals propios; este timing aplica a Rise/Fall.
-  return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY && !shouldUseAutoHighLowExecution();
+  const m = normalizeEntryTimingMode(entryTimingMode);
+  return (m === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY || m === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY) && !shouldUseAutoHighLowExecution();
 }
 function isEntryTimingStoredNextCandle() {
-  return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
+  const m = normalizeEntryTimingMode(entryTimingMode);
+  return m === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY || m === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
 }
 function getEntryTimingModeLabel() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "⏱️ AUTO pre-56/post-58 → cierre 60 (solo RF)" : "⏱️ AUTO pre-56/post-58 → cierre 60";
-  return "⏱️ AUTO 58 normal";
+  const visualOn = isEntryTimingVisual58();
+  if (shouldUseAutoHighLowExecution()) return visualOn ? "⏱️ Cierre visual (vela) ON · solo RF" : "⏱️ Cierre visual (vela) OFF · solo RF";
+  return visualOn ? "⏱️ Cierre visual (vela) ON" : "⏱️ Cierre visual (vela) OFF";
 }
 function getEntryTimingShortText() {
-  if (isEntryTimingStoredNextCandle()) return shouldUseAutoHighLowExecution() ? "AUTO pre-56/post-58 → cierre 60 (solo Rise/Fall)" : "AUTO prearmado · cierre vela sig.";
-  return "AUTO 58 · duración 1m";
+  const visualOn = isEntryTimingVisual58();
+  if (shouldUseAutoHighLowExecution()) return visualOn ? "Cierre visual (vela) 58s · solo Rise/Fall" : "Cierre 60s · solo Rise/Fall";
+  return visualOn ? "AUTO prearmado · cierre visual (vela) 58s" : "AUTO prearmado · cierre 60s";
 }
 function buildNextCandleTimingPlan(item = null) {
   const itemMinute = Number(item?.minute);
   const baseMinute = Number.isFinite(itemMinute) && itemMinute > 0 ? itemMinute : currentServerMinute();
   const currentStartEpochSec = baseMinute * 60;
   const nextStartEpochSec = currentStartEpochSec + 60;
-  const nextExpiryEpochSec = nextStartEpochSec + 60;
+  const visual58 = isEntryTimingVisual58();
+  const nextExpiryEpochSec = nextStartEpochSec + (visual58 ? 58 : 60);
   const nowEpochSec = Math.floor(serverNowMs() / 1000);
   return {
-    mode: ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY,
+    mode: visual58 ? ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY : ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY,
     current_minute: baseMinute,
     current_start_epoch_sec: currentStartEpochSec,
     next_start_epoch_sec: nextStartEpochSec,
     next_expiry_epoch_sec: nextExpiryEpochSec,
     now_epoch_sec: nowEpochSec,
     planned_duration_sec: nextExpiryEpochSec - nextStartEpochSec,
+    visual_candle_sync: visual58,
+    visual_candle_expiry_second: visual58 ? 58 : 60,
+    expected_contract_duration_if_bought_at_58: visual58 ? 60 : 62,
   };
 }
 const RISE_FALL_ALLOW_EQUALS_ENABLED = true;
@@ -2869,9 +2884,13 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
   }
 
   const plan = buildNextCandleTimingPlan(item);
+  const suffix = plan.visual_candle_sync ? "visual58" : "cierre60";
+  const closeMsg = plan.visual_candle_sync
+    ? "cierre visual (vela) al segundo 58 de la vela operada"
+    : "cierre fijo al segundo 60";
   return [
     {
-      label: "AUTO58_DATE_START_EXPIRY",
+      label: `AUTO58_DATE_START_EXPIRY_${suffix}`,
       params: {
         ...base,
         date_start: plan.next_start_epoch_sec,
@@ -2879,21 +2898,21 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
       },
       timing: {
         ...plan,
-        variant: "date_start_plus_date_expiry",
-        message: "AUTO pre-56/post-58: proposal prearmada; compra luego del tick >=58s; inicio programado en próxima vela y cierre fijo al segundo 60.",
+        variant: plan.visual_candle_sync ? "date_start_plus_date_expiry_visual58" : "date_start_plus_date_expiry",
+        message: `AUTO pre-56/post-58: proposal prearmada; compra luego del tick >=58s; inicio programado en próxima vela y ${closeMsg}.`,
       },
     },
     {
-      label: "AUTO58_DATE_EXPIRY_ONLY",
+      label: `AUTO58_DATE_EXPIRY_ONLY_${suffix}`,
       params: {
         ...base,
         date_expiry: plan.next_expiry_epoch_sec,
       },
       timing: {
         ...plan,
-        variant: "date_expiry_only",
-        fallback_from: "date_start_plus_date_expiry",
-        message: "AUTO pre-56/post-58: Deriv no aceptó inicio programado; se usa proposal prearmada con cierre fijo al segundo 60.",
+        variant: plan.visual_candle_sync ? "date_expiry_only_visual58" : "date_expiry_only",
+        fallback_from: plan.visual_candle_sync ? "date_start_plus_date_expiry_visual58" : "date_start_plus_date_expiry",
+        message: `AUTO pre-56/post-58: Deriv no aceptó inicio programado; se usa proposal prearmada con ${closeMsg}.`,
       },
     },
   ];
@@ -2906,6 +2925,9 @@ function getRiseFallTimingExtra(timing = null) {
     planned_next_start_time: Number(timing.next_start_epoch_sec || 0) || null,
     planned_expiry_time: Number(timing.next_expiry_epoch_sec || 0) || null,
     planned_duration_sec: Number(timing.planned_duration_sec || 0) || null,
+    visual_candle_sync: !!timing.visual_candle_sync,
+    visual_candle_expiry_second: Number(timing.visual_candle_expiry_second || 0) || null,
+    expected_contract_duration_if_bought_at_58: Number(timing.expected_contract_duration_if_bought_at_58 || 0) || null,
     entry_timing_message: String(timing.message || ""),
     entry_timing: { ...timing },
   };
@@ -2959,7 +2981,7 @@ async function requestRiseFallProposalWithTiming(side, symbol, stake, item = nul
       errors.push(`${variant.label}: ${e?.message || e}`);
     }
   }
-  throw new Error(`Deriv rechazó el timing de próxima vela (${errors.join(" | ")}). Cambiá a AUTO 58 normal si querés usar duration 1m.`);
+  throw new Error(`Deriv rechazó el timing de próxima vela (${errors.join(" | ")}). Probá desactivar Cierre visual (vela) o revisar el timing.`);
 }
 async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, timeoutMs = 20000) {
   const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
@@ -2973,7 +2995,7 @@ async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, tim
       errors.push(`${variant.label}: ${e?.message || e}`);
     }
   }
-  throw new Error(`Deriv rechazó la compra con timing de próxima vela (${errors.join(" | ")}). Cambiá a AUTO 58 normal si querés usar duration 1m.`);
+  throw new Error(`Deriv rechazó la compra con timing de próxima vela (${errors.join(" | ")}). Probá desactivar Cierre visual (vela) o revisar el timing.`);
 }
 
 function getAutoPreProposalKey(item, side, symbol, stake) {
@@ -3094,7 +3116,7 @@ function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUT
     sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
     reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
     at: Date.now(),
-    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o cambiá a AUTO 58 normal.",
+    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o desactivá Cierre visual (vela) para probar cierre 60s.",
     post58_readiness: { ...(readiness || {}) },
     preproposal: item?.signalAutoPreProposal || null,
   };
@@ -3159,12 +3181,12 @@ async function prepareLiveAutoPreProposalIfNeeded(reason = "live_preproposal") {
 function applyEntryTimingModeUI() {
   const btn = pickEl("entryTimingModeBtn");
   if (!btn) return;
-  const storedNext = isEntryTimingStoredNextCandle();
+  const visualOn = isEntryTimingVisual58();
   btn.textContent = getEntryTimingModeLabel();
-  btn.classList.toggle("active", storedNext && !shouldUseAutoHighLowExecution());
-  btn.title = storedNext
-    ? "Prepara proposal desde 56s; espera el tick real >=58s y ahí solo compra con proposal lista. Intenta inicio programado y fija cierre al segundo 60; si Deriv no acepta date_start usa date_expiry fijo. Solo aplica a Rise/Fall."
-    : "Modo anterior: AUTO 58 con duración 1 minuto desde la entrada real del contrato.";
+  btn.classList.toggle("active", visualOn && !shouldUseAutoHighLowExecution());
+  btn.title = visualOn
+    ? "Cierre visual (vela) ON: compra post-58 como ahora, entrada en la próxima vela y vencimiento next_start+58 para probar acople con el gráfico de velas visual de Deriv. Solo aplica a Rise/Fall."
+    : "Cierre visual (vela) OFF: compra post-58 como ahora, entrada en la próxima vela y vencimiento next_start+60. Solo aplica a Rise/Fall.";
 }
 function ensureEntryTimingModeButton() {
   let btn = pickEl("entryTimingModeBtn");
@@ -3184,11 +3206,13 @@ function ensureEntryTimingModeButton() {
     else host.appendChild(btn);
   }
   btn.onclick = () => {
-    entryTimingMode = isEntryTimingStoredNextCandle() ? ENTRY_TIMING_AUTO58_DURATION_1M : ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
+    entryTimingMode = isEntryTimingVisual58()
+      ? ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY
+      : ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
     saveEntryTimingMode();
     applyEntryTimingModeUI();
     updateModalCandleStatusUI();
-    toast(entryTimingMode === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY ? "⏱️ AUTO pre-56/post-58 → cierre 60 ON" : "⏱️ AUTO 58 normal ON", 1700);
+    toast(isEntryTimingVisual58() ? "⏱️ Cierre visual (vela) ON" : "⏱️ Cierre visual (vela) OFF", 1900);
   };
   applyEntryTimingModeUI();
   return btn;
@@ -18261,11 +18285,11 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const low = Math.min(...quotes);
   const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
   const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
-  const greenTol = Math.max(localRange * 0.016, tol * 1.45);
+  const greenTol = Math.max(localRange * 0.014, tol * 1.35);
 
-  // V91: el patrón buscado no es "cualquier irregularidad". Es:
-  // comprador con avance visible, pero estructura insana + vendedor presionando,
-  // confirmado solo entre 20-25s. Puede ponerse roja antes, pero debe retomar verde.
+  // V95: calibrado con ejemplos marcados como "movimiento irregular claro".
+  // El foco ya no es vendedor obligatorio, sino irregularidad real del comprador entre 0-25s:
+  // grande-mediano-pequeño, empujes que reducen, cambios de tamaño, devoluciones y estructura insana.
   if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
   const greenAtConfirm = current > open + greenTol;
   if (!greenAtConfirm) return null;
@@ -18298,12 +18322,19 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const totalUp = upMoves.reduce((a, b) => a + b, 0);
   const totalDown = downMoves.reduce((a, b) => a + b, 0);
   const maxUpRun = upMoves.length ? Math.max(...upMoves) : 0;
+  const minUpRun = upMoves.length ? Math.min(...upMoves) : 0;
   const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const minDownRun = downMoves.length ? Math.min(...downMoves) : 0;
   const avgUp = upMoves.length ? totalUp / upMoves.length : 0;
   const upVar = upMoves.length >= 2
     ? upMoves.reduce((a, b) => a + Math.pow(b - avgUp, 2), 0) / upMoves.length
     : 0;
   const upCv = avgUp > 0 ? Math.sqrt(upVar) / avgUp : 0;
+  const avgDown = downMoves.length ? totalDown / downMoves.length : 0;
+  const downVar = downMoves.length >= 2
+    ? downMoves.reduce((a, b) => a + Math.pow(b - avgDown, 2), 0) / downMoves.length
+    : 0;
+  const downCv = avgDown > 0 ? Math.sqrt(downVar) / avgDown : 0;
 
   const net = current - open;
   const highFromOpen = high - open;
@@ -18313,14 +18344,15 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
   const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
   const firstUp = upMoves[0] || 0;
+  const secondUp = upMoves[1] || 0;
+  const thirdUp = upMoves[2] || 0;
   const lastUp = upMoves[upMoves.length - 1] || 0;
-  const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
 
-  // El comprador tiene que haber avanzado de verdad, no ser solo ruido verde.
+  // Debe haber avance comprador real, porque el patrón buscado es comprador dominante pero irregular.
   const buyerAdvanceVisible =
-    highFromOpen >= Math.max(localRange * 0.32, tol * 4.0) &&
-    totalUp >= Math.max(localRange * 0.50, tol * 5.0) &&
-    net >= Math.max(localRange * 0.045, tol * 1.55);
+    highFromOpen >= Math.max(localRange * 0.30, tol * 3.8) &&
+    totalUp >= Math.max(localRange * 0.48, tol * 4.8) &&
+    net >= Math.max(localRange * 0.035, tol * 1.35);
   if (!buyerAdvanceVisible) return null;
 
   const wasRedEarly = low < open - Math.max(localRange * 0.045, tol * 2.0);
@@ -18331,84 +18363,122 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     !strongRetakeGreen;
   if (tooMuchTimeBelowWithoutControl) return null;
 
-  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.10, tol * 2.0);
+  // Comprador irregular: preferencia clara por reducción, pero también acepta cambios fuertes de tamaño.
+  const threeStepReduction = upMoves.length >= 3 && firstUp > secondUp * 1.08 && secondUp > thirdUp * 1.08;
+  const broadReduction = upMoves.length >= 2 && lastUp <= firstUp * 0.88;
+  const decreasingPushes = threeStepReduction || broadReduction;
+  const sizeRatioUp = minUpRun > 0 ? maxUpRun / minUpRun : 0;
+  const mixedSizes = upMoves.length >= 3 && (sizeRatioUp >= 1.55 || upCv >= 0.30);
+  const veryMixedSizes = upMoves.length >= 3 && (sizeRatioUp >= 2.05 || upCv >= 0.44);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.24 || sizeRatioUp >= 1.45);
+  const givesBackMuch = pullbackRatio >= 0.18 || maxPullbackRatio >= 0.12;
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.24 && stats.turns >= 2);
+
+  // Irregularidad que va en aumento es más peligrosa: solo pasa si además hay mucha suciedad o presión.
+  const increasingOnly = upMoves.length >= 2 && lastUp >= firstUp * 1.30 && !decreasingPushes && upCv <= 0.38;
+
+  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.09, tol * 1.9);
   const strongContrary = maxDownRun >= Math.max(localRange * 0.20, maxUpRun * 0.42, tol * 2.6);
   const sellerPressureCore =
     strongContrary ||
     anySellerEntry ||
-    pullbackRatio >= 0.20 ||
+    pullbackRatio >= 0.19 ||
     maxPullbackRatio >= 0.13 ||
-    totalDown >= Math.max(totalUp * 0.18, tol * 3.0);
+    totalDown >= Math.max(totalUp * 0.17, tol * 2.8);
 
-  const decreasingPushes = upMoves.length >= 2 && lastUp <= firstUp * (sellerPressureCore ? 1.02 : 0.90);
-  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.25 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.68);
-  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.22 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.24));
-  const givesBackMuch = pullbackRatio >= 0.20 || maxPullbackRatio >= 0.13;
-  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.28 && stats.turns >= 2);
+  const firstDown = downMoves[0] || 0;
+  const lastDown = downMoves[downMoves.length - 1] || 0;
+  const sellerReducing = downMoves.length >= 2 && lastDown <= firstDown * 0.72 && downCv <= 0.38;
+  const sellerNotReducing = !sellerReducing && (strongContrary || (downMoves.length >= 2 && lastDown >= firstDown * 0.72) || downMoves.length === 1);
+
   const colorFlipAndRetake = retookGreen && (stats.turns >= 2 || givesBackMuch || sellerPressureCore);
-  const badBullishStructure = upRuns.length >= 2 && downRuns.length >= 1 && (differentSizedBreaks || givesBackMuch || zigzagDirty || decreasingPushes);
-
-  const highIdx = quotes.indexOf(high);
+  const highIdx = clean.findIndex((p) => Number(p.quote) === high);
   const highMs = Number(clean[highIdx]?.ms || evalMs);
-  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.075, tol * 1.35);
-  const buyerDominantButUnhealthy = greenAtConfirm && buyerAdvanceVisible && (badBullishStructure || colorFlipAndRetake || zigzagDirty || givesBackMuch || unevenPushes || decreasingPushes);
+  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.070, tol * 1.25);
 
-  // Bloqueo más duro de continuaciones sanas: si sube limpio y el vendedor no presiona, no es este modo.
+  const buyerDominantButIrregular = greenAtConfirm && buyerAdvanceVisible && (
+    decreasingPushes ||
+    mixedSizes ||
+    givesBackMuch ||
+    zigzagDirty ||
+    colorFlipAndRetake ||
+    stalledAfterHigh
+  );
+  if (!buyerDominantButIrregular) return null;
+
+  // Bloqueo de simetría/fuerza: entradas parecidas + avance eficiente = fuerza, no irregularidad.
+  const symmetricStrength =
+    upMoves.length >= 3 &&
+    upCv <= 0.18 &&
+    sizeRatioUp > 0 && sizeRatioUp <= 1.35 &&
+    efficiency >= 0.62 &&
+    pullbackRatio <= 0.18 &&
+    stats.turns <= 2 &&
+    !decreasingPushes &&
+    !veryMixedSizes &&
+    !colorFlipAndRetake;
+  if (symmetricStrength) return null;
+
   const cleanBullishContinuation =
     efficiency >= 0.72 &&
     pullbackRatio <= 0.16 &&
     maxPullbackRatio <= 0.11 &&
     stats.turns <= 1 &&
     !sellerPressureCore &&
-    !unevenPushes &&
     !decreasingPushes &&
-    !differentSizedBreaks &&
+    !mixedSizes &&
     !colorFlipAndRetake;
   if (cleanBullishContinuation) return null;
 
-  const hasIrregularCore = decreasingPushes || unevenPushes || differentSizedBreaks || givesBackMuch || zigzagDirty || colorFlipAndRetake || badBullishStructure || stalledAfterHigh;
-  if (!hasIrregularCore) return null;
+  // Si lo único que hay es vendedor que se va apagando, no lo usamos como confirmación.
+  // La presión contraria ayuda, pero no reemplaza la irregularidad del comprador.
+  const irregularCore = decreasingPushes || mixedSizes || veryMixedSizes || givesBackMuch || zigzagDirty || colorFlipAndRetake || stalledAfterHigh;
+  if (!irregularCore) return null;
 
-  // V91: en los ejemplos buenos el vendedor siempre deja alguna presión. Si no hay presión,
-  // solo aceptamos irregularidad extrema, para no confundir una continuación alcista sana.
-  const extremeIrregularWithoutSeller = !sellerPressureCore && stats.turns >= 4 && upCv >= 0.35 && efficiency <= 0.55;
-  if (!sellerPressureCore && !extremeIrregularWithoutSeller) return null;
+  if (increasingOnly && !veryMixedSizes && !colorFlipAndRetake && !strongContrary && !givesBackMuch) return null;
+  if (sellerReducing && !decreasingPushes && !veryMixedSizes && !colorFlipAndRetake && !givesBackMuch) return null;
 
   let points = 0;
   const reasons = [];
   points += 2;
   reasons.push("vela verde al confirmar 20-25s");
   points += 2;
-  reasons.push("comprador avanza, pero con estructura insana");
-  if (buyerDominantButUnhealthy) { points += 2; reasons.push("comprador dominante pero desordenado"); }
-  if (decreasingPushes) { points += 2; reasons.push("empujes compradores se reducen"); }
-  if (unevenPushes || differentSizedBreaks) { points += 2; reasons.push("impulsos de distintos tamaños"); }
+  reasons.push("comprador avanza, pero irregular");
+  if (decreasingPushes) { points += 4; reasons.push(threeStepReduction ? "irregularidad que reduce: grande-mediano-pequeño" : "empujes compradores se reducen"); }
+  if (veryMixedSizes) { points += 3; reasons.push("cambios de tamaño muy claros"); }
+  else if (mixedSizes || differentSizedBreaks) { points += 2; reasons.push("impulsos compradores de distintos tamaños"); }
   if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
   if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / estructura insana"); }
-  if (colorFlipAndRetake) { points += 2; reasons.push("vendedor la pone roja/casi roja y el comprador retoma verde"); }
-  if (badBullishStructure) { points += 1; reasons.push("comprador sostiene verde con mala calidad"); }
+  if (colorFlipAndRetake) { points += 2; reasons.push("vendedor la pone roja/casi roja y comprador retoma verde"); }
   if (stalledAfterHigh) { points += 1; reasons.push("se frena después de avanzar"); }
-  if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
-  else if (sellerPressureCore) { points += 2; reasons.push("vendedor presiona dentro de 0-25s"); }
+  if (strongContrary && sellerNotReducing) { points += 2; reasons.push("entrada fuerte del vendedor sin reducir"); }
+  else if (sellerPressureCore && sellerNotReducing) { points += 1; reasons.push("vendedor presiona sin reducir"); }
+  else if (sellerReducing) { points -= 1; reasons.push("vendedor reduce: no se usa como confirmación principal"); }
+  if (increasingOnly) { points -= 2; reasons.push("irregularidad en aumento: más peligrosa"); }
 
   if (points < 7) return null;
 
   const priorityBonus =
-    (strongContrary ? 38 : sellerPressureCore ? 16 : 0) +
-    (colorFlipAndRetake ? 16 : 0) +
-    (buyerDominantButUnhealthy ? 12 : 0) +
-    (givesBackMuch ? 8 : 0) +
-    (evalMs <= 22000 ? 6 : 0);
+    (decreasingPushes ? 30 : 0) +
+    (threeStepReduction ? 12 : 0) +
+    (veryMixedSizes ? 16 : mixedSizes ? 8 : 0) +
+    (colorFlipAndRetake ? 12 : 0) +
+    (strongContrary && sellerNotReducing ? 12 : sellerPressureCore && sellerNotReducing ? 6 : 0) +
+    (evalMs <= 22000 ? 6 : 0) -
+    (increasingOnly ? 14 : 0) -
+    (sellerReducing ? 8 : 0);
+
   const quality =
     points * 14 +
     priorityBonus +
-    Math.min(22, stats.turns * 4) +
+    Math.min(20, stats.turns * 4) +
     Math.min(20, Math.max(0, stats.irregularity - 1) * 12) +
-    Math.min(18, upCv * 12) +
+    Math.min(20, upCv * 12) +
     Math.min(16, pullbackRatio * 18) -
     Math.max(0, evalMs - 20000) / 2200;
 
-  const logicText = `Vela alcista irregular V91 confirmada 20-25s: ${reasons.join(", ")}. Regla V91: comprador verde/dominante pero insano + vendedor presiona; puede ponerse roja, pero debe retomar verde y no permanecer demasiado tiempo abajo.`;
+  const priority = decreasingPushes || veryMixedSizes || colorFlipAndRetake ? "ALTA" : "NORMAL";
+  const logicText = `Vela alcista irregular V95 confirmada 20-25s: ${reasons.join(", ")}. Regla V95: la irregularidad del comprador debe verse dentro de 0-25s; se prioriza la irregularidad que reduce o cambia mucho de tamaño; el vendedor puede presionar, pero no debe ser una presión que reduce usada como confirmación principal.`;
 
   return {
     direction: "PUT",
@@ -18417,14 +18487,14 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     meta: {
       level: high,
       levelMode: "alcista_irregular_25s",
-      levelType: "buyer_dominant_unhealthy_seller_pressure_25s",
+      levelType: "clear_buyer_irregularity_0_25",
       direction: "PUT",
       tolerance: tol,
       zone: Math.max(tol * 4, localRange * 0.10),
       zoneLow: high - Math.max(tol * 2, localRange * 0.045),
       zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
       points,
-      maxPoints: 18,
+      maxPoints: 20,
       reasons,
       p0: open,
       pE: current,
@@ -18433,15 +18503,27 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       range: localRange,
       evalSec: Math.round(evalMs / 1000),
       analysisWindowMs: evalMs,
+      irregularityWindow: "0-25s",
       confirmationWindow: "20-25s",
       maxAnalysisSec: 25,
       signalFromSec: 20,
       bullishCandleOnly: true,
       greenAtConfirm,
       buyerAdvanceVisible,
-      buyerDominantButUnhealthy,
+      buyerDominantButIrregular,
+      irregularCore,
+      decreasingPushes,
+      threeStepReduction,
+      mixedSizes,
+      veryMixedSizes,
+      differentSizedBreaks,
+      increasingOnly,
+      symmetricStrength,
+      cleanBullishContinuation,
       sellerPressureCore,
-      canFlipRedButMustRetakeGreen: true,
+      sellerReducing,
+      sellerNotReducing,
+      canHaveSellerButSellerMustNotReduce: true,
       belowMs,
       maxBelowRunMs,
       wasRedEarly,
@@ -18453,7 +18535,9 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       totalUp,
       totalDown,
       maxUpRun,
+      minUpRun,
       maxDownRun,
+      minDownRun,
       pullbackRatio,
       maxPullback,
       maxPullbackRatio,
@@ -18462,20 +18546,17 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       upRuns: upMoves,
       downRuns: downMoves,
       upCv,
-      decreasingPushes,
-      unevenPushes,
-      differentSizedBreaks,
+      downCv,
       zigzagDirty,
       givesBackMuch,
       colorFlipAndRetake,
-      badBullishStructure,
       stalledAfterHigh,
       highMs,
-      stage: "alcista_irregular_25s_v91_comprador_insano_vendedor_presiona",
-      movementFilter: "verde_20_25s_comprador_insano_vendedor_presiona",
-      priority: strongContrary || colorFlipAndRetake ? "ALTA" : "NORMAL",
+      stage: "alcista_irregular_25s_v95_irregularidad_clara_0_25",
+      movementFilter: "irregularidad_comprador_clara_0_25_reduce_o_tamanos",
+      priority,
       logic: logicText,
-      status: `🟢 Alcista irregular 25s V91: comprador verde con estructura insana${strongContrary ? " + vendedor fuerte" : " + vendedor presiona"}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🟢 Alcista irregular 25s V95: irregularidad clara del comprador 0-25s${decreasingPushes ? " + reduce" : veryMixedSizes ? " + tamaños distintos" : ""}${sellerPressureCore && sellerNotReducing ? " + vendedor presiona" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
