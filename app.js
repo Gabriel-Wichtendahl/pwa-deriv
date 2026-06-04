@@ -1,4 +1,5 @@
-// v106.1 DEBUG: diagnostica authorize/proposal/buy y motivo exacto de propuesta no prearmada.
+// v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
+// v106.1: diagnóstico proposal/auth.
 // v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
 // v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
@@ -66,309 +67,9 @@
 
 "use strict";
 
-
-/* =========================
-   Debug Deriv / Proposal / AUTO58
-   - Diagnostica: authorize -> proposal -> buy
-   - No muestra el token.
-   - Se activa con botón flotante DEBUG.
-========================= */
-(function initDerivProposalDebug() {
-  if (window.DerivDebug) return;
-
-  const STORAGE_KEY = "derivProposalDebugEnabled_v1";
-  const MAX_EVENTS = 25;
-
-  const state = {
-    enabled: localStorage.getItem(STORAGE_KEY) === "1",
-    wsOpen: false,
-    authorized: false,
-    authorizeOkAt: "",
-    authorizeError: null,
-    loginid: "",
-    currency: "",
-    scopes: [],
-    lastSend: null,
-    lastResponse: null,
-    lastError: null,
-    lastTimeout: null,
-    lastProposal: null,
-    lastBuy: null,
-    lastPreProposal: null,
-    lastAuto58Cancel: null,
-    events: [],
-  };
-
-  function timeText() {
-    try { return new Date().toLocaleTimeString(); } catch { return ""; }
-  }
-
-  function secText() {
-    try { return new Date().getSeconds(); } catch { return 0; }
-  }
-
-  function mask(obj) {
-    try {
-      const copy = JSON.parse(JSON.stringify(obj || {}));
-      const hide = (o) => {
-        if (!o || typeof o !== "object") return;
-        for (const k of Object.keys(o)) {
-          const lk = String(k).toLowerCase();
-          if (lk.includes("token") || lk === "authorize") o[k] = "[TOKEN_OCULTO]";
-          else if (o[k] && typeof o[k] === "object") hide(o[k]);
-        }
-      };
-      hide(copy);
-      return copy;
-    } catch {
-      return obj;
-    }
-  }
-
-  function summarizePayload(payload = {}) {
-    const p = payload || {};
-    if (p.authorize) return "AUTHORIZE";
-    if (p.proposal) return `PROPOSAL ${p.contract_type || p.parameters?.contract_type || ""} ${p.symbol || p.parameters?.symbol || ""}`.trim();
-    if (p.buy) return `BUY ${p.buy === 1 ? "DIRECT" : String(p.buy).slice(0, 8)}`;
-    if (p.balance) return "BALANCE";
-    if (p.ticks) return `TICKS ${p.ticks}`;
-    if (p.proposal_open_contract) return `POC ${p.contract_id || ""}`;
-    return p.msg_type || "REQUEST";
-  }
-
-  function push(stage, data = {}) {
-    const row = { stage, time: timeText(), sec: secText(), ...data };
-    state.events.unshift(row);
-    if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
-    if (state.enabled) console.log(`[DERIV_DEBUG][${stage}]`, row);
-    render(row);
-    return row;
-  }
-
-  function btn() {
-    let b = document.getElementById("derivDebugBtn");
-    if (!b) {
-      b = document.createElement("button");
-      b.id = "derivDebugBtn";
-      b.type = "button";
-      b.style.position = "fixed";
-      b.style.right = "10px";
-      b.style.bottom = "10px";
-      b.style.zIndex = "2147483647";
-      b.style.border = "1px solid rgba(34,211,238,.75)";
-      b.style.borderRadius = "999px";
-      b.style.padding = "8px 10px";
-      b.style.background = "rgba(2,6,23,.92)";
-      b.style.color = "#67e8f9";
-      b.style.font = "900 11px system-ui, sans-serif";
-      b.style.boxShadow = "0 0 18px rgba(34,211,238,.35)";
-      b.addEventListener("click", () => {
-        state.enabled = !state.enabled;
-        try { localStorage.setItem(STORAGE_KEY, state.enabled ? "1" : "0"); } catch {}
-        render({ stage: "TOGGLE", enabled: state.enabled });
-      });
-      document.body.appendChild(b);
-    }
-    b.textContent = state.enabled ? "DEBUG ON" : "DEBUG OFF";
-    return b;
-  }
-
-  function panel() {
-    let el = document.getElementById("derivDebugPanel");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "derivDebugPanel";
-      el.style.position = "fixed";
-      el.style.left = "8px";
-      el.style.right = "8px";
-      el.style.bottom = "54px";
-      el.style.zIndex = "2147483646";
-      el.style.maxHeight = "45dvh";
-      el.style.overflow = "auto";
-      el.style.whiteSpace = "pre-wrap";
-      el.style.border = "1px solid rgba(34,211,238,.55)";
-      el.style.borderRadius = "14px";
-      el.style.padding = "10px";
-      el.style.background = "rgba(2,6,23,.95)";
-      el.style.color = "#d9f99d";
-      el.style.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-      el.style.boxShadow = "0 20px 60px rgba(0,0,0,.55), 0 0 24px rgba(34,211,238,.18)";
-      document.body.appendChild(el);
-    }
-    return el;
-  }
-
-  function render(last = null) {
-    try { btn(); } catch {}
-    let el = document.getElementById("derivDebugPanel");
-    if (!state.enabled) {
-      if (el) el.style.display = "none";
-      return;
-    }
-    el = panel();
-    el.style.display = "block";
-    const pre = state.lastPreProposal || {};
-    const cancel = state.lastAuto58Cancel || {};
-    const err = state.lastError || state.authorizeError || state.lastTimeout || null;
-    el.textContent =
-`DERIV DEBUG v106.1
-WS: ${state.wsOpen ? "OPEN" : "CLOSED"}
-AUTH: ${state.authorized ? "OK" : "NO"}${state.loginid ? " · " + state.loginid : ""}${state.currency ? " · " + state.currency : ""}
-SCOPES: ${(state.scopes || []).join(",") || "-"}
-AUTH ERROR: ${state.authorizeError ? JSON.stringify(state.authorizeError) : "-"}
-
-LAST SEND: ${state.lastSend ? JSON.stringify(state.lastSend) : "-"}
-LAST RESPONSE: ${state.lastResponse ? JSON.stringify(state.lastResponse) : "-"}
-LAST ERROR: ${err ? JSON.stringify(err) : "-"}
-
-LAST PROPOSAL: ${state.lastProposal ? JSON.stringify(state.lastProposal) : "-"}
-LAST BUY: ${state.lastBuy ? JSON.stringify(state.lastBuy) : "-"}
-
-PREPROPOSAL: ${Object.keys(pre).length ? JSON.stringify(pre, null, 2) : "-"}
-AUTO58 CANCEL: ${Object.keys(cancel).length ? JSON.stringify(cancel, null, 2) : "-"}
-
-LAST EVENT: ${last ? JSON.stringify(last, null, 2) : "-"}
-
-EVENTS:
-${state.events.slice(0, 10).map((e) => `${e.time} s${String(e.sec).padStart(2,"0")} · ${e.stage} · ${e.summary || e.code || e.message || ""}`).join("\n")}`;
-  }
-
-  function trackSend(payload = {}, label = "SEND") {
-    const safe = mask(payload);
-    state.lastSend = { at: timeText(), summary: summarizePayload(payload), payload: safe };
-    push(label, { summary: state.lastSend.summary, payload: safe });
-  }
-
-  function trackTimeout(payload = {}) {
-    const safe = mask(payload);
-    state.lastTimeout = { at: timeText(), summary: summarizePayload(payload), payload: safe };
-    push("TIMEOUT", { summary: state.lastTimeout.summary, payload: safe });
-  }
-
-  function trackMessage(msg = {}) {
-    const type = msg?.msg_type || (msg?.tick ? "tick" : "message");
-
-    if (type === "tick") return;
-
-    if (msg?.error) {
-      const error = {
-        at: timeText(),
-        msg_type: type,
-        code: msg.error.code || "",
-        message: msg.error.message || "",
-        details: msg.error.details || null,
-        echo_req: mask(msg.echo_req || {}),
-      };
-      state.lastError = error;
-      if (type === "authorize") state.authorizeError = error;
-      if (type === "proposal") state.lastProposal = { status: "error", ...error };
-      if (type === "buy") state.lastBuy = { status: "error", ...error };
-      push("RAW_ERROR", { code: error.code, message: error.message, msg_type: type, echo_req: error.echo_req });
-      return;
-    }
-
-    if (type === "authorize") {
-      const a = msg.authorize || {};
-      state.authorized = true;
-      state.authorizeOkAt = timeText();
-      state.authorizeError = null;
-      state.loginid = String(a.loginid || "");
-      state.currency = String(a.currency || "");
-      state.scopes = Array.isArray(a.scopes) ? a.scopes : [];
-      state.lastResponse = { at: timeText(), msg_type: type, loginid: state.loginid, currency: state.currency, scopes: state.scopes };
-      push("AUTHORIZE_OK", state.lastResponse);
-      return;
-    }
-
-    if (type === "proposal") {
-      const p = msg.proposal || {};
-      state.lastProposal = {
-        at: timeText(),
-        status: "ok",
-        id: p.id ? String(p.id) : "",
-        ask_price: Number(p.ask_price),
-        payout: Number(p.payout),
-        echo_req: mask(msg.echo_req || {}),
-      };
-      state.lastResponse = { at: timeText(), msg_type: type, id: state.lastProposal.id };
-      push("PROPOSAL_OK", { summary: state.lastProposal.id, proposal: state.lastProposal });
-      return;
-    }
-
-    if (type === "buy") {
-      const b = msg.buy || {};
-      state.lastBuy = {
-        at: timeText(),
-        status: "ok",
-        contract_id: b.contract_id ? String(b.contract_id) : "",
-        buy_price: Number(b.buy_price),
-        payout: Number(b.payout),
-        start_time: Number(b.start_time || 0),
-        purchase_time: Number(b.purchase_time || 0),
-      };
-      state.lastResponse = { at: timeText(), msg_type: type, contract_id: state.lastBuy.contract_id };
-      push("BUY_OK", { summary: state.lastBuy.contract_id, buy: state.lastBuy });
-      return;
-    }
-
-    if (type === "balance") {
-      state.lastResponse = { at: timeText(), msg_type: type, balance: msg.balance };
-      push("BALANCE_OK", { summary: "balance" });
-      return;
-    }
-
-    state.lastResponse = { at: timeText(), msg_type: type };
-    push("MESSAGE", { summary: type });
-  }
-
-  function wsOpen() { state.wsOpen = true; push("WS_OPEN"); }
-  function wsClose(ev = {}) { state.wsOpen = false; state.authorized = false; push("WS_CLOSE", { code: ev?.code || 0, reason: ev?.reason || "" }); }
-  function wsError(err = {}) { push("WS_ERROR", { message: String(err?.message || err || "error") }); }
-
-  function trackPreProposal(item, payload = {}) {
-    const pp = payload && typeof payload === "object" ? payload : {};
-    state.lastPreProposal = {
-      at: timeText(),
-      item_id: String(item?.id || ""),
-      symbol: String(item?.symbol || pp.symbol || ""),
-      direction: String(item?.direction || pp.side || ""),
-      status: String(pp.status || "cleared"),
-      side: String(pp.side || ""),
-      stake: Number(pp.stake || 0),
-      proposal_id: pp.proposal_id ? String(pp.proposal_id) : "",
-      prepared_ms: Number(pp.prepared_ms || pp.prepared_start_ms || pp.error_ms || 0),
-      error: pp.error ? String(pp.error) : "",
-      timing: pp.timing ? mask(pp.timing) : null,
-    };
-    push("PREPROPOSAL_" + (state.lastPreProposal.status || "UPDATE").toUpperCase(), { summary: state.lastPreProposal.status, preproposal: state.lastPreProposal });
-  }
-
-  function trackAuto58Cancel(detail = {}) {
-    state.lastAuto58Cancel = { at: timeText(), ...mask(detail) };
-    push("AUTO58_CANCEL", { code: detail.code || "", message: detail.message || "", detail: state.lastAuto58Cancel });
-  }
-
-  window.DerivDebug = {
-    state,
-    log: push,
-    render,
-    trackSend,
-    trackTimeout,
-    trackMessage,
-    wsOpen,
-    wsClose,
-    wsError,
-    trackPreProposal,
-    trackAuto58Cancel,
-    mask,
-  };
-
-  setTimeout(() => render(), 800);
-})();
-
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_1_DEBUG_PROPOSAL_20260604";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_2_API_NUEVA_PAT_OTP_20260604";
 
 /*
   Mapa rápido de módulos:
@@ -427,6 +128,19 @@ const ACCOUNT_MODE_REAL = "real";
 const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
 const DERIV_TOKEN_REAL_KEY = "derivRealToken_v1";
 const TRADE_STAKE_KEY = "tradeStake_v1";
+
+// V106.2: Deriv migró parte de cuentas a la API nueva.
+// LEGACY usa: wss://ws.derivws.com/websockets/v3 + { authorize: token }.
+// API NUEVA usa: PAT + App ID + Account ID -> REST OTP -> WebSocket autenticado.
+const DERIV_API_MODE_KEY = "derivApiMode_v1";
+const DERIV_API_MODE_LEGACY = "legacy";
+const DERIV_API_MODE_NEW_PAT = "new_pat_otp";
+const DERIV_NEW_PAT_KEY = "derivNewPatToken_v1";
+const DERIV_NEW_APP_ID_KEY = "derivNewApiAppId_v1";
+const DERIV_NEW_ACCOUNT_DEMO_KEY = "derivNewApiAccountId_demo_v1";
+const DERIV_NEW_ACCOUNT_REAL_KEY = "derivNewApiAccountId_real_v1";
+const DERIV_NEW_ACCOUNTS_CACHE_KEY = "derivNewApiAccountsCache_v1";
+const DERIV_NEW_API_BASE = "https://api.derivws.com";
 
 const DEFAULT_STAKE = 1; // USD
 const DEFAULT_DURATION = 1; // 1 minuto
@@ -2244,6 +1958,8 @@ function ensureResetCacheButton() {
    State
 ========================= */
 let ws;
+let tradeWs = null;
+let tradeWsConnectPromise = null;
 
 let soundEnabled = false;
 let vibrateEnabled = true;
@@ -2413,11 +2129,16 @@ function getStakeLabelEl() {
 function syncTokenInputWithCurrentAccount() {
   const tokenInput = getTokenInputEl();
   const tokenLabel = getTokenLabelEl();
-  if (tokenLabel) tokenLabel.textContent = `Token ${getTradingAccountLabel()} Deriv`;
+  const apiLabel = isNewPatApiMode() ? "PAT API nueva" : `Token ${getTradingAccountLabel()} Deriv`;
+  if (tokenLabel) tokenLabel.textContent = apiLabel;
   if (!tokenInput) return;
   tokenInput.value = getDerivToken() || "";
-  tokenInput.placeholder = `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
-  tokenInput.title = `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
+  tokenInput.placeholder = isNewPatApiMode()
+    ? "Pegá tu PAT de developers.deriv.com (scope trade)"
+    : `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
+  tokenInput.title = isNewPatApiMode()
+    ? "PAT de la API nueva. Se usa con App ID y Account ID para pedir OTP."
+    : `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
 }
 function syncStakeInputWithCurrentAccount() {
   const stakeInput = getStakeInputEl();
@@ -2457,7 +2178,9 @@ function ensureTradingAccountButton() {
     updateMentalCooldownUI();
     applyLiveAnalysisPauseUI();
     resetAuthState();
+    resetNewApiTradingSocket();
     syncAccountScopedSettingsUI();
+    syncNewApiSettingsInputs();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
     try {
@@ -2529,6 +2252,155 @@ function applyTradingAccountBannerUI() {
   el.style.background = "rgba(127,29,29,.85)";
   el.style.borderColor = "rgba(248,113,113,.45)";
   el.style.boxShadow = "0 8px 24px rgba(127,29,29,.22)";
+}
+
+/* =========================
+   V106.2 Panel API nueva PAT/OTP
+========================= */
+function ensureDerivApiModePanel() {
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+  if (!host) return null;
+
+  let panel = document.getElementById("derivApiModePanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "derivApiModePanel";
+    panel.style.gridColumn = "1 / -1";
+    panel.style.padding = "10px";
+    panel.style.borderRadius = "16px";
+    panel.style.border = "1px solid rgba(168,85,247,.38)";
+    panel.style.background = "linear-gradient(180deg, rgba(168,85,247,.12), rgba(255,255,255,.025))";
+    panel.style.boxShadow = "0 0 22px rgba(168,85,247,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <div style="font-weight:950;font-size:15px;letter-spacing:.2px;">API Deriv</div>
+        <div id="derivApiModeBadge" style="font-weight:950;font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.16);">—</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+        <button id="derivApiModeBtn" class="btn btnGhost" type="button">Cambiar API</button>
+        <label class="fieldLabel" for="derivNewAppIdInput">App ID API nueva</label>
+        <input id="derivNewAppIdInput" class="fieldInput" type="text" inputmode="numeric" placeholder="App ID de developers.deriv.com" autocomplete="off" />
+        <label class="fieldLabel" for="derivNewDemoAccountInput">Account ID DEMO API nueva</label>
+        <input id="derivNewDemoAccountInput" class="fieldInput" type="text" placeholder="Ej: DOT... / cuenta demo" autocomplete="off" />
+        <label class="fieldLabel" for="derivNewRealAccountInput">Account ID REAL API nueva</label>
+        <input id="derivNewRealAccountInput" class="fieldInput" type="text" placeholder="Ej: DOT... / cuenta real" autocomplete="off" />
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button id="derivNewSaveApiBtn" class="btn btnGhost" type="button">💾 Guardar API</button>
+          <button id="derivNewDiscoverAccountsBtn" class="btn btnGhost" type="button">🔎 Cuentas</button>
+        </div>
+        <button id="derivNewTestConnectionBtn" class="btn btnGhost" type="button">🧪 Probar API nueva / OTP</button>
+        <div id="derivNewApiStatus" style="font-size:12px;line-height:1.35;color:var(--muted,#94a3b8);">Legacy: usa token viejo. API nueva: PAT + App ID + Account ID.</div>
+      </div>
+    `;
+
+    const tokenWrap = getTokenInputEl()?.closest?.(".fieldWrap");
+    if (tokenWrap && tokenWrap.parentElement === host) tokenWrap.insertAdjacentElement("beforebegin", panel);
+    else host.prepend(panel);
+  }
+
+  const modeBtn = panel.querySelector("#derivApiModeBtn");
+  const saveBtn = panel.querySelector("#derivNewSaveApiBtn");
+  const discoverBtn = panel.querySelector("#derivNewDiscoverAccountsBtn");
+  const testBtn = panel.querySelector("#derivNewTestConnectionBtn");
+
+  if (modeBtn) {
+    modeBtn.onclick = () => {
+      setDerivApiMode(isNewPatApiMode() ? DERIV_API_MODE_LEGACY : DERIV_API_MODE_NEW_PAT);
+      resetAuthState();
+      resetNewApiTradingSocket();
+      syncAccountScopedSettingsUI();
+      syncNewApiSettingsInputs();
+      updateModalCandleStatusUI();
+      toast(`API: ${getDerivApiModeLabel()}`, 1700);
+    };
+  }
+  if (saveBtn) {
+    saveBtn.onclick = () => {
+      saveNewApiSettingsFromInputs();
+      resetAuthState();
+      resetNewApiTradingSocket();
+      toast("💾 Config API guardada", 1400);
+    };
+  }
+  if (discoverBtn) {
+    discoverBtn.onclick = async () => {
+      saveNewApiSettingsFromInputs();
+      try {
+        setNewApiStatus("Buscando cuentas…");
+        const accounts = await discoverNewApiAccounts({ save: true });
+        syncNewApiSettingsInputs();
+        const txt = accounts.length ? accounts.map((a) => `${a.isDemo ? "DEMO" : "REAL"}: ${a.id}`).join(" · ") : "Sin cuentas";
+        setNewApiStatus(`Cuentas OK: ${txt}`);
+        toast("🔎 Cuentas API nueva detectadas", 1800);
+      } catch (e) {
+        setNewApiStatus(`Error cuentas: ${e?.message || e}`);
+        alert(`Error buscando cuentas: ${e?.message || e}`);
+      }
+    };
+  }
+  if (testBtn) {
+    testBtn.onclick = async () => {
+      saveNewApiSettingsFromInputs();
+      try {
+        setDerivApiMode(DERIV_API_MODE_NEW_PAT);
+        resetAuthState();
+        resetNewApiTradingSocket();
+        syncAccountScopedSettingsUI();
+        syncNewApiSettingsInputs();
+        setNewApiStatus("Pidiendo OTP y conectando WS nuevo…");
+        await ensureNewApiTradingWs({ force: true });
+        setNewApiStatus(`✅ API nueva OK · ${getTradingAccountLabel()} · ${getDerivNewAccountId()}`);
+        toast("✅ API nueva / OTP OK", 1800);
+      } catch (e) {
+        setNewApiStatus(`❌ API nueva: ${e?.message || e}`);
+        alert(`Error API nueva: ${e?.message || e}`);
+      }
+    };
+  }
+
+  syncNewApiSettingsInputs();
+  return panel;
+}
+function setNewApiStatus(msg) {
+  const el = document.getElementById("derivNewApiStatus");
+  if (el) el.textContent = String(msg || "");
+}
+function saveNewApiSettingsFromInputs() {
+  const app = document.getElementById("derivNewAppIdInput");
+  const demo = document.getElementById("derivNewDemoAccountInput");
+  const real = document.getElementById("derivNewRealAccountInput");
+  if (app) setDerivNewAppId(app.value);
+  if (demo) setDerivNewAccountId(ACCOUNT_MODE_DEMO, demo.value);
+  if (real) setDerivNewAccountId(ACCOUNT_MODE_REAL, real.value);
+}
+function syncNewApiSettingsInputs() {
+  const panel = document.getElementById("derivApiModePanel");
+  if (!panel) return;
+  const badge = panel.querySelector("#derivApiModeBadge");
+  const modeBtn = panel.querySelector("#derivApiModeBtn");
+  const app = panel.querySelector("#derivNewAppIdInput");
+  const demo = panel.querySelector("#derivNewDemoAccountInput");
+  const real = panel.querySelector("#derivNewRealAccountInput");
+  const isNew = isNewPatApiMode();
+  if (badge) {
+    badge.textContent = isNew ? "NUEVA" : "LEGACY";
+    badge.style.color = isNew ? "#e9d5ff" : "#cffafe";
+    badge.style.borderColor = isNew ? "rgba(168,85,247,.55)" : "rgba(34,211,238,.48)";
+  }
+  if (modeBtn) {
+    modeBtn.textContent = isNew ? "🟣 Usando API nueva PAT/OTP" : "🔵 Usando API legacy";
+    modeBtn.classList.toggle("active", isNew);
+  }
+  if (app && document.activeElement !== app) app.value = getDerivNewAppId();
+  if (demo && document.activeElement !== demo) demo.value = getDerivNewAccountId(ACCOUNT_MODE_DEMO);
+  if (real && document.activeElement !== real) real.value = getDerivNewAccountId(ACCOUNT_MODE_REAL);
+  const status = isNew
+    ? `API nueva activa · cuenta actual ${getTradingAccountLabel()} · Account ID: ${getDerivNewAccountId() || "faltante"}`
+    : "API legacy activa · usa token viejo de Deriv App.";
+  setNewApiStatus(status);
 }
 
 /* =========================
@@ -3369,78 +3241,9 @@ function getValidAutoPreProposal(item, side, symbol, stake) {
   if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
   return pp;
 }
-function getAutoPreProposalDebugReason(item, side, symbol, stake) {
-  const safeSide = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
-  const sym = String(symbol || item?.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
-  const st = Number(stake);
-  const pp = item?.signalAutoPreProposal || null;
-  const ms = Math.round(Number(getSignalConfirmationMs(item) || 0));
-  const out = (code, message, extra = {}) => ({
-    code,
-    message,
-    item_id: String(item?.id || ""),
-    symbol: sym,
-    side: safeSide || "",
-    stake: Number.isFinite(st) ? Number(st.toFixed(2)) : null,
-    ms,
-    wsOpen: !!(ws && ws.readyState === 1),
-    isAuthorized: !!isAuthorized,
-    authorizeInFlight: !!authorizeInFlight,
-    hasToken: !!getDerivToken(),
-    preproposal: pp ? { ...pp } : null,
-    ...extra,
-  });
-
-  if (!item) return out("SIN_ITEM", "No hay señal/item para validar proposal.");
-  if (!getDerivToken()) return out("SIN_TOKEN", `No hay token ${getTradingAccountLabel()} guardado.`);
-  if (!ws || ws.readyState !== 1) return out("WS_CERRADO", "WebSocket cerrado: no se pudo pedir/usar proposal.");
-  if (authorizeInFlight && !isAuthorized) return out("AUTHORIZE_EN_CURSO", "Deriv todavía está autorizando el token.");
-  if (!isAuthorized) return out("NO_AUTORIZADO", "El token todavía no quedó autorizado dentro de la PWA.");
-  if (!isNextCandleExpiryTiming()) return out("TIMING_SIN_PREPROP", "Este timing no requiere proposal prearmada.");
-  if (shouldUseAutoHighLowExecution()) return out("HIGHLOW_ACTIVO", "High/Low usa otro flujo de proposal; no es Rise/Fall prearmado.");
-  if (!safeSide) return out("SIN_DIRECCION", "No hay dirección CALL/PUT válida.");
-  if (!Number.isFinite(st) || st <= 0) return out("STAKE_INVALIDO", "Stake inválido para armar proposal.");
-  if (!isAutoPreProposalWindow(item)) {
-    return out("FUERA_VENTANA_PREPROP", `La proposal se arma entre ${Math.round(SIGNAL_AUTO_PREPROPOSAL_START_MS / 1000)}-${Math.round(SIGNAL_AUTO_PREPROPOSAL_END_MS / 1000)}s; ahora va en ${Math.round(ms / 1000)}s.`, {
-      expected_window_ms: [SIGNAL_AUTO_PREPROPOSAL_START_MS, SIGNAL_AUTO_PREPROPOSAL_END_MS],
-    });
-  }
-  if (!pp) return out("FALTA_PREPROPOSAL", "No existe signalAutoPreProposal en la señal.");
-
-  const status = String(pp.status || "");
-  if (status === "preparing") return out("PROPOSAL_PENDIENTE", "La proposal fue pedida pero Deriv todavía no respondió.");
-  if (status === "error") return out("PROPOSAL_ERROR", `Deriv rechazó la proposal: ${String(pp.error || "sin detalle")}.`);
-  if (status !== "ready") return out("PROPOSAL_STATUS_INVALIDO", `Estado de proposal inválido: ${status || "vacío"}.`);
-  if (String(pp.side || "") !== safeSide) return out("PROP_OTRA_DIRECCION", `La proposal es ${pp.side || "?"}, pero la señal final es ${safeSide}.`);
-  if (String(pp.symbol || "") !== sym) return out("PROP_OTRO_SIMBOLO", `La proposal es de ${pp.symbol || "?"}, pero el símbolo actual es ${sym}.`);
-  const ppStake = Number(pp.stake);
-  if (!Number.isFinite(ppStake) || Math.abs(ppStake - st) > 0.005) return out("PROP_OTRO_STAKE", `La proposal es stake ${ppStake}, pero el stake actual es ${st}.`);
-  if (!pp.proposal_id) return out("FALTA_PROPOSAL_ID", "Deriv respondió pero no hay proposal_id guardado.");
-  if (!Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return out("ASK_PRICE_INVALIDO", "La proposal guardada tiene ask_price inválido.");
-
-  try {
-    const plan = buildNextCandleTimingPlan(item);
-    if (Number(pp?.timing?.next_expiry_epoch_sec || 0) !== Number(plan.next_expiry_epoch_sec)) {
-      return out("PROP_EXPIRY_NO_COINCIDE", "La proposal fue armada para otro vencimiento/minuto.", {
-        expected_expiry: Number(plan.next_expiry_epoch_sec),
-        proposal_expiry: Number(pp?.timing?.next_expiry_epoch_sec || 0),
-      });
-    }
-  } catch {}
-
-  const age = Date.now() - Number(pp.prepared_at || 0);
-  if (!Number.isFinite(age) || age > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return out("PROP_VIEJA", `La proposal venció localmente: edad ${Math.round(age / 1000)}s.`);
-
-  return out("OK", "Proposal prearmada válida.");
-}
-function formatAutoPreProposalDebugMessage(item, side, symbol, stake) {
-  const d = getAutoPreProposalDebugReason(item, side, symbol, stake);
-  return `${d.code}: ${d.message}`;
-}
 function markAutoPreProposalOnItem(item, payload) {
   if (!item) return;
   item.signalAutoPreProposal = payload && typeof payload === "object" ? { ...payload } : null;
-  try { window.DerivDebug?.trackPreProposal?.(item, item.signalAutoPreProposal || {}); } catch {}
   try { saveHistory(history); } catch {}
   try { if (modalCurrentItem && item.id && modalCurrentItem.id === item.id) updateSignalConfirmationUI(); } catch {}
 }
@@ -3522,29 +3325,23 @@ async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preprop
 }
 function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUTO_PREPROPOSAL_MISSING") {
   if (!item || item?.signalAutoEntry?.attempted) return false;
-  const safeSide = normalizeSignalConfirmationSide(side) || "";
-  const label = safeSide === "CALL" ? "COMPRA" : "VENTA";
-  const symbol = String(item?.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
-  const stake = Number(getEffectiveTradeStake().toFixed(2));
-  const detail = getAutoPreProposalDebugReason(item, safeSide, symbol, stake);
-  try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
   item.signalAutoEntry = {
     type: "AUTO_58_REAL",
     attempted: true,
     status: "cancelled",
-    side: safeSide,
+    side: normalizeSignalConfirmationSide(side) || "",
     ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
     sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
-    reason: `${String(reason || "AUTO_PREPROPOSAL_MISSING")}:${detail.code}`,
+    reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
     at: Date.now(),
-    error: `Cancelada: ${detail.message}`,
+    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o desactivá Cierre visual (vela) para probar cierre 60s.",
     post58_readiness: { ...(readiness || {}) },
     preproposal: item?.signalAutoPreProposal || null,
-    preproposal_debug: detail,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-  toast(`⛔ AUTO ${label} cancelada: ${detail.code}`, 3200);
+  toast(`⛔ AUTO ${label} cancelada: proposal no prearmada`, 2400);
   return true;
 }
 function scanSignalAutoPreProposals() {
@@ -4978,6 +4775,156 @@ function getTradeExecutionTitle() {
   return `Operar ${getTradingAccountLabel()} 1m`;
 }
 
+/* =========================
+   V106.2 API Deriv: Legacy vs Nueva PAT/OTP
+========================= */
+function normalizeDerivApiMode(v) {
+  const s = String(v || "").toLowerCase().trim();
+  return s === DERIV_API_MODE_NEW_PAT || s === "new" || s === "pat" || s === "otp"
+    ? DERIV_API_MODE_NEW_PAT
+    : DERIV_API_MODE_LEGACY;
+}
+function getDerivApiMode() {
+  try { return normalizeDerivApiMode(localStorage.getItem(DERIV_API_MODE_KEY) || DERIV_API_MODE_LEGACY); }
+  catch { return DERIV_API_MODE_LEGACY; }
+}
+function isNewPatApiMode() {
+  return getDerivApiMode() === DERIV_API_MODE_NEW_PAT;
+}
+function setDerivApiMode(mode) {
+  try { localStorage.setItem(DERIV_API_MODE_KEY, normalizeDerivApiMode(mode)); } catch {}
+}
+function getDerivApiModeLabel() {
+  return isNewPatApiMode() ? "API nueva PAT/OTP" : "API legacy";
+}
+function getDerivNewPatToken() {
+  try { return localStorage.getItem(DERIV_NEW_PAT_KEY) || ""; } catch { return ""; }
+}
+function setDerivNewPatToken(v) {
+  try { localStorage.setItem(DERIV_NEW_PAT_KEY, String(v || "").trim()); } catch {}
+}
+function clearDerivNewPatToken() {
+  try { localStorage.removeItem(DERIV_NEW_PAT_KEY); } catch {}
+}
+function getDerivNewAppId() {
+  try { return localStorage.getItem(DERIV_NEW_APP_ID_KEY) || ""; } catch { return ""; }
+}
+function setDerivNewAppId(v) {
+  try { localStorage.setItem(DERIV_NEW_APP_ID_KEY, String(v || "").trim()); } catch {}
+}
+function getDerivNewAccountKey(scope = getCurrentAccountScope()) {
+  return scope === ACCOUNT_MODE_REAL ? DERIV_NEW_ACCOUNT_REAL_KEY : DERIV_NEW_ACCOUNT_DEMO_KEY;
+}
+function getDerivNewAccountId(scope = getCurrentAccountScope()) {
+  try { return localStorage.getItem(getDerivNewAccountKey(scope)) || ""; } catch { return ""; }
+}
+function setDerivNewAccountId(scope, accountId) {
+  try { localStorage.setItem(getDerivNewAccountKey(scope), String(accountId || "").trim()); } catch {}
+}
+function getDerivNewApiHeaders() {
+  const token = getDerivNewPatToken();
+  const appId = getDerivNewAppId();
+  if (!token) throw new Error("Falta PAT de API nueva");
+  if (!appId) throw new Error("Falta App ID de API nueva");
+  return {
+    "Authorization": `Bearer ${token}`,
+    "Deriv-App-ID": appId,
+    "Content-Type": "application/json"
+  };
+}
+function getDerivNewApiErrorMessage(data, fallback = "Error API nueva") {
+  try {
+    const first = Array.isArray(data?.errors) ? data.errors[0] : null;
+    return first?.message || first?.code || data?.error?.message || data?.message || fallback;
+  } catch { return fallback; }
+}
+async function derivNewApiFetchJson(path, options = {}) {
+  const url = `${DERIV_NEW_API_BASE}${path}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      ...getDerivNewApiHeaders(),
+      ...(options.headers || {})
+    }
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) {
+    throw new Error(`${res.status}: ${getDerivNewApiErrorMessage(data, res.statusText || "HTTP error")}`);
+  }
+  return data;
+}
+function findNewApiAccountsArray(obj, depth = 0) {
+  if (!obj || depth > 5) return [];
+  if (Array.isArray(obj)) {
+    const looksLikeAccounts = obj.some((x) => x && typeof x === "object" && (
+      x.id || x.account_id || x.accountId || x.loginid || x.login_id || x.account_type || x.is_virtual !== undefined || x.is_demo !== undefined
+    ));
+    if (looksLikeAccounts) return obj;
+    for (const x of obj) {
+      const found = findNewApiAccountsArray(x, depth + 1);
+      if (found.length) return found;
+    }
+    return [];
+  }
+  if (typeof obj === "object") {
+    const preferred = [obj.data?.accounts, obj.accounts, obj.data, obj.result, obj.items].filter(Boolean);
+    for (const v of preferred) {
+      const found = findNewApiAccountsArray(v, depth + 1);
+      if (found.length) return found;
+    }
+    for (const v of Object.values(obj)) {
+      const found = findNewApiAccountsArray(v, depth + 1);
+      if (found.length) return found;
+    }
+  }
+  return [];
+}
+function normalizeNewApiAccount(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const id = String(r.id || r.account_id || r.accountId || r.loginid || r.login_id || r.uuid || "").trim();
+  const typeText = String(r.account_type || r.accountType || r.type || r.group || r.name || r.display_name || r.loginid || r.login_id || id || "").toLowerCase();
+  const isDemo = r.is_demo === true || r.is_virtual === true || r.demo === true || typeText.includes("demo") || typeText.includes("virtual") || id.toUpperCase().startsWith("VRTC");
+  const isReal = r.is_real === true || r.real === true || (!isDemo && (typeText.includes("real") || id));
+  return {
+    id,
+    isDemo,
+    isReal,
+    currency: String(r.currency || r.currency_code || ""),
+    raw: r
+  };
+}
+async function discoverNewApiAccounts({ save = true } = {}) {
+  const data = await derivNewApiFetchJson("/trading/v1/options/accounts", { method: "GET" });
+  const raw = findNewApiAccountsArray(data);
+  const accounts = raw.map(normalizeNewApiAccount).filter((x) => x.id);
+  if (save) {
+    try { localStorage.setItem(DERIV_NEW_ACCOUNTS_CACHE_KEY, JSON.stringify({ at: Date.now(), accounts })); } catch {}
+    const demo = accounts.find((x) => x.isDemo) || null;
+    const real = accounts.find((x) => x.isReal && !x.isDemo) || null;
+    if (demo?.id && !getDerivNewAccountId(ACCOUNT_MODE_DEMO)) setDerivNewAccountId(ACCOUNT_MODE_DEMO, demo.id);
+    if (real?.id && !getDerivNewAccountId(ACCOUNT_MODE_REAL)) setDerivNewAccountId(ACCOUNT_MODE_REAL, real.id);
+  }
+  return accounts;
+}
+async function resolveNewApiAccountId(scope = getCurrentAccountScope()) {
+  const stored = getDerivNewAccountId(scope);
+  if (stored) return stored;
+  const accounts = await discoverNewApiAccounts({ save: true });
+  const wantDemo = scope !== ACCOUNT_MODE_REAL;
+  const picked = accounts.find((x) => wantDemo ? x.isDemo : (x.isReal && !x.isDemo)) || accounts[0] || null;
+  if (!picked?.id) throw new Error(`No encontré Account ID ${wantDemo ? "DEMO" : "REAL"} en API nueva`);
+  setDerivNewAccountId(scope, picked.id);
+  try { syncNewApiSettingsInputs(); } catch {}
+  return picked.id;
+}
+async function getNewApiOtpWebSocketUrl(scope = getCurrentAccountScope()) {
+  const accountId = await resolveNewApiAccountId(scope);
+  const data = await derivNewApiFetchJson(`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`, { method: "POST" });
+  const url = data?.data?.url || data?.url || data?.result?.url;
+  if (!url || !String(url).startsWith("wss://")) throw new Error("OTP no devolvió URL WebSocket válida");
+  return String(url);
+}
 
 function loadKeepClosedAwaySignals() {
   try {
@@ -5801,11 +5748,8 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
     if (pp) item.signalAutoPreProposal = { ...pp };
   } catch {}
   if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && !item.signalAutoPreProposal) {
-    const stake = Number(getEffectiveTradeStake().toFixed(2));
-    const detail = getAutoPreProposalDebugReason(item, safeSide, sym, stake);
-    try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
-    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: `Cancelada: ${detail.message}`, debug: detail };
-    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: ${detail.code}`, "error");
+    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: "Cancelada: proposal no prearmada antes del post-58." };
+    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: proposal no prearmada`, "error");
     return false;
   }
   item.signalAutoEntry = {
@@ -8168,6 +8112,7 @@ function ensureSplitClearButtons() {
 
 function repairSettingsMenuBindings() {
   try { ensureTradingAccountButton(); } catch {}
+  try { ensureDerivApiModePanel(); } catch {}
   try { ensureExecutionModeButton(); applyExecutionModeUI(); } catch {}
   try { ensureEntryTimingModeButton(); applyEntryTimingModeUI(); } catch {}
   try { ensureAutoOpenChartButton(); applyAutoOpenChartUI(); } catch {}
@@ -8187,6 +8132,7 @@ function getSettingsMenuSelfCheckItems() {
     ["Botón engranaje", !!configBtn && typeof configBtn.onclick === "function"],
     ["Cerrar configuración", (!!settingsCloseBtn && typeof settingsCloseBtn.onclick === "function") || (!!settingsCloseBtn2 && typeof settingsCloseBtn2.onclick === "function")],
     ["Cuenta DEMO/REAL", !!pickEl("tradingAccountBtn") && typeof pickEl("tradingAccountBtn").onclick === "function"],
+    ["API Deriv", !!pickEl("derivApiModeBtn") && typeof pickEl("derivApiModeBtn").onclick === "function"],
     ["Modo ejecución", !!pickEl("executionModeBtn") && typeof pickEl("executionModeBtn").onclick === "function"],
     ["Timing entrada", !!pickEl("entryTimingModeBtn") && typeof pickEl("entryTimingModeBtn").onclick === "function"],
     ["IC2 activar", !!pickEl("c100ToggleBtn") && typeof pickEl("c100ToggleBtn").onclick === "function"],
@@ -12950,36 +12896,123 @@ function updateCountdownUI() {
 let reqSeq = 1;
 const pending = new Map();
 
+function payloadNeedsAuthenticatedTradingWs(payload = {}) {
+  if (!isNewPatApiMode()) return false;
+  return !!(
+    payload.balance ||
+    payload.proposal ||
+    payload.buy ||
+    payload.proposal_open_contract ||
+    payload.portfolio ||
+    payload.profit_table ||
+    payload.statement ||
+    payload.sell ||
+    payload.forget
+  );
+}
+function getActiveTradingSocketSync() {
+  if (isNewPatApiMode()) return tradeWs && tradeWs.readyState === 1 ? tradeWs : null;
+  return ws && ws.readyState === 1 ? ws : null;
+}
+function resetNewApiTradingSocket() {
+  try { if (tradeWs) tradeWs.close(); } catch {}
+  tradeWs = null;
+  tradeWsConnectPromise = null;
+  if (isNewPatApiMode()) isAuthorized = false;
+}
+async function ensureNewApiTradingWs({ force = false } = {}) {
+  if (!isNewPatApiMode()) return ws;
+  if (!force && tradeWs && tradeWs.readyState === 1) {
+    isAuthorized = true;
+    return tradeWs;
+  }
+  if (!force && tradeWsConnectPromise) return tradeWsConnectPromise;
+  try { if (force && tradeWs) tradeWs.close(); } catch {}
+  tradeWs = null;
+
+  tradeWsConnectPromise = (async () => {
+    const token = getDerivNewPatToken();
+    const appId = getDerivNewAppId();
+    if (!token) throw new Error("Falta PAT API nueva");
+    if (!appId) throw new Error("Falta App ID API nueva");
+    const wsUrl = await getNewApiOtpWebSocketUrl(getCurrentAccountScope());
+    setNewApiStatus(`OTP OK · conectando WS ${getTradingAccountLabel()}…`);
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const socket = new WebSocket(wsUrl);
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { socket.close(); } catch {}
+        reject(new Error("timeout WS API nueva"));
+      }, 12000);
+
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        tradeWs = socket;
+        isAuthorized = true;
+        setNewApiStatus(`✅ WS API nueva conectado · ${getTradingAccountLabel()} · ${getDerivNewAccountId()}`);
+        resolve(socket);
+      };
+      socket.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleDerivWsMessage(data, "trade");
+        } catch (err) {
+          setStatus(`❌ Parse WS trading: ${err?.message || err}`);
+        }
+      };
+      socket.onerror = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error("Error WS API nueva"));
+        }
+      };
+      socket.onclose = () => {
+        if (tradeWs === socket) {
+          tradeWs = null;
+          tradeWsConnectPromise = null;
+          if (isNewPatApiMode()) isAuthorized = false;
+          setNewApiStatus("WS API nueva cerrado. Se reabrirá al operar.");
+        }
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error("WS API nueva cerrado antes de conectar"));
+        }
+      };
+    });
+  })().finally(() => {
+    tradeWsConnectPromise = null;
+  });
+
+  return tradeWsConnectPromise;
+}
+async function getWsForRequestPayload(payload = {}) {
+  if (payloadNeedsAuthenticatedTradingWs(payload)) return ensureNewApiTradingWs();
+  if (!ws || ws.readyState !== 1) throw new Error("WS not open");
+  return ws;
+}
+
 function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== 1) {
-      try { window.DerivDebug?.log?.("WS_REQUEST_BLOCKED", { reason: "WS_NOT_OPEN", payload: window.DerivDebug?.mask?.(payload) || payload }); } catch {}
-      return reject(new Error("WS not open"));
-    }
+  return (async () => {
+    const socket = await getWsForRequestPayload(payload);
+    if (!socket || socket.readyState !== 1) throw new Error("WS not open");
 
     const req_id = reqSeq++;
-    const fullPayload = { ...payload, req_id };
+    return await new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        pending.delete(req_id);
+        reject(new Error("timeout"));
+      }, timeoutMs);
 
-    try { window.DerivDebug?.trackSend?.(fullPayload, "WS_REQUEST"); } catch {}
-
-    const t = setTimeout(() => {
-      pending.delete(req_id);
-      try { window.DerivDebug?.trackTimeout?.(fullPayload); } catch {}
-      reject(new Error("timeout"));
-    }, timeoutMs);
-
-    pending.set(req_id, {
-      resolve: (data) => {
-        try { window.DerivDebug?.trackMessage?.(data); } catch {}
-        resolve(data);
-      },
-      reject,
-      t,
-      payload: fullPayload,
+      pending.set(req_id, { resolve, reject, t, via: socket === tradeWs ? "trade" : "public" });
+      socket.send(JSON.stringify({ ...payload, req_id }));
     });
-
-    ws.send(JSON.stringify(fullPayload));
-  });
+  })();
 }
 
 /* =========================
@@ -12987,6 +13020,7 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
 ========================= */
 function getDerivToken() {
   try {
+    if (isNewPatApiMode()) return getDerivNewPatToken() || localStorage.getItem(getTradingAccountTokenKey()) || "";
     return localStorage.getItem(getTradingAccountTokenKey()) || "";
   } catch {
     return "";
@@ -12994,11 +13028,19 @@ function getDerivToken() {
 }
 function setDerivToken(t) {
   try {
+    if (isNewPatApiMode()) {
+      setDerivNewPatToken(t || "");
+      return;
+    }
     localStorage.setItem(getTradingAccountTokenKey(), t || "");
   } catch {}
 }
 function clearDerivToken() {
   try {
+    if (isNewPatApiMode()) {
+      clearDerivNewPatToken();
+      return;
+    }
     localStorage.removeItem(getTradingAccountTokenKey());
   } catch {}
 }
@@ -13067,23 +13109,25 @@ function isPendingContractPOCCooldownActive() {
 
 function subscribeContractOutcome(contractId, silent = false) {
   try {
-    if (!ws || ws.readyState !== 1) return;
+    const socket = getActiveTradingSocketSync();
+    if (!socket || socket.readyState !== 1) return;
     if (!contractId) return;
     const cid = String(contractId);
 
     addPendingContract(cid);
     if (contractSubs.has(cid)) return;
 
-    ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
+    socket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
     contractSubs.set(cid, "__pending__");
     if (!silent) toast(`📡 Subscript contrato ${cid}`, 900);
   } catch {}
 }
 function forgetSubscription(subId) {
   try {
-    if (!ws || ws.readyState !== 1) return;
+    const socket = getActiveTradingSocketSync();
+    if (!socket || socket.readyState !== 1) return;
     if (!subId || subId === "__pending__") return;
-    ws.send(JSON.stringify({ forget: subId }));
+    socket.send(JSON.stringify({ forget: subId }));
   } catch {}
 }
 
@@ -13267,7 +13311,16 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
 async function ensureAuthorized() {
   const token = getDerivToken();
-  if (!token) throw new Error(`Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
+  if (!token) throw new Error(isNewPatApiMode()
+    ? "Sin PAT API nueva (pegalo en Configuración)"
+    : `Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
+
+  if (isNewPatApiMode()) {
+    if (isAuthorized && tradeWs && tradeWs.readyState === 1) return true;
+    await ensureNewApiTradingWs();
+    isAuthorized = true;
+    return true;
+  }
 
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
@@ -13410,9 +13463,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         usedPreProposal = true;
       } else {
         if (isStrictAutoPrearmedEntry) {
-          const detail = getAutoPreProposalDebugReason(itemCtx, side, symbol, stake);
-          try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
-          throw new Error("AUTO post-58 cancelado: " + detail.message + " [" + detail.code + "]");
+          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
         }
         const proposalPack = await requestRiseFallProposalWithTiming(side, symbol, stake, itemCtx, 12000);
         const proposal = proposalPack?.res?.proposal;
@@ -13466,9 +13517,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         };
       } else {
         if (isStrictAutoPrearmedEntry) {
-          const detail = getAutoPreProposalDebugReason(itemCtx, side, symbol, stake);
-          try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
-          throw new Error("AUTO post-58 cancelado: " + detail.message + " [" + detail.code + "]");
+          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
         }
         const buyPack = await buyRiseFallDirectWithTiming(side, symbol, stake, itemCtx, 20000);
         res = buyPack.res;
@@ -13578,6 +13627,7 @@ function initTokenAndStakeUI() {
   ensureTradingAccountButton();
   applyTradingAccountUI();
   applyTradingAccountBannerUI();
+  ensureDerivApiModePanel();
   ensureC100Panel();
   updateC100PanelUI();
   const tokenInput = pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
@@ -13589,13 +13639,16 @@ function initTokenAndStakeUI() {
   if (tokenSaveBtn && tokenInput) {
     tokenSaveBtn.onclick = () => {
       const v = String(tokenInput.value || "").trim();
-      if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
+      if (!v) return alert(isNewPatApiMode() ? "Pegá el PAT de API nueva primero." : `Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
+      saveNewApiSettingsFromInputs();
       resetAuthState();
+      resetNewApiTradingSocket();
       void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
       syncAccountScopedSettingsUI();
-      toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
-      alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
+      syncNewApiSettingsInputs();
+      toast(`💾 ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado ✓`, 1600);
+      alert(`✅ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado.`);
     };
   }
 
@@ -13603,9 +13656,11 @@ function initTokenAndStakeUI() {
     tokenClearBtn.onclick = () => {
       clearDerivToken();
       resetAuthState();
+      resetNewApiTradingSocket();
       syncAccountScopedSettingsUI();
-      toast(`🗑️ Token ${getTradingAccountLabel()} borrado ✓`, 1600);
-      alert(`🗑️ Token ${getTradingAccountLabel()} borrado.`);
+      syncNewApiSettingsInputs();
+      toast(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado ✓`, 1600);
+      alert(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado.`);
     };
   }
 
@@ -19425,6 +19480,43 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 /* =========================
    WebSocket Deriv
 ========================= */
+function handleDerivWsMessage(data, source = "public") {
+  if (data && data.req_id && pending.has(data.req_id)) {
+    const p = pending.get(data.req_id);
+    clearTimeout(p.t);
+    pending.delete(data.req_id);
+    p.resolve(data);
+    return;
+  }
+
+  if (data?.proposal_open_contract) {
+    const poc = data.proposal_open_contract;
+    const cid = String(poc?.contract_id || "");
+    const subId = data?.subscription?.id;
+
+    if (cid) {
+      if (subId) contractSubs.set(cid, subId);
+
+      if (poc?.is_sold) {
+        applyClosedContractOutcomeFromPOC(poc, source === "trade" ? "stream-api-nueva" : "stream");
+      }
+    }
+    return;
+  }
+
+  if (data?.error) {
+    const emsg = data.error.message || "unknown";
+    if (isPendingContractPOCRateLimitMessage(emsg)) {
+      setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
+      setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
+    } else {
+      setStatus(`⚠️ WS ${source === "trade" ? "trading" : "public"}: ${emsg}`);
+    }
+  }
+
+  if (data.tick) onTick(data.tick);
+}
+
 function connect() {
   try {
     setStatus("Conectando…");
@@ -19435,9 +19527,9 @@ function connect() {
   }
 
   ws.onopen = async () => {
-    try { window.DerivDebug?.wsOpen?.(); } catch {}
     try {
       resetAuthState();
+      if (isNewPatApiMode()) resetNewApiTradingSocket();
     } catch {}
 
     setStatus("Conectado – Suscribiendo…");
@@ -19450,66 +19542,33 @@ function connect() {
     }, 350);
 
     updateDisciplineLockUI(false);
-    void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
+    try {
+      await ensureAuthorized();
+      await refreshAccountBalance({ force: true });
+      updateC100PanelUI();
+    } catch (e) {
+      if (isNewPatApiMode()) setNewApiStatus(`API nueva pendiente: ${e?.message || e}`);
+    }
     await resubscribePendingContracts();
   };
 
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-
-      if (!(data && data.req_id && pending.has(data.req_id))) {
-        try { window.DerivDebug?.trackMessage?.(data); } catch {}
-      }
-
-      if (data && data.req_id && pending.has(data.req_id)) {
-        const p = pending.get(data.req_id);
-        clearTimeout(p.t);
-        pending.delete(data.req_id);
-        p.resolve(data);
-        return;
-      }
-
-      if (data?.proposal_open_contract) {
-        const poc = data.proposal_open_contract;
-        const cid = String(poc?.contract_id || "");
-        const subId = data?.subscription?.id;
-
-        if (cid) {
-          if (subId) contractSubs.set(cid, subId);
-
-          if (poc?.is_sold) {
-            applyClosedContractOutcomeFromPOC(poc, "stream");
-          }
-        }
-        return;
-      }
-
-      if (data?.error) {
-        const emsg = data.error.message || "unknown";
-        if (isPendingContractPOCRateLimitMessage(emsg)) {
-          setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
-          setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
-        } else {
-          setStatus(`⚠️ WS error: ${emsg}`);
-        }
-      }
-
-      if (data.tick) onTick(data.tick);
+      handleDerivWsMessage(data, "public");
     } catch (err) {
       setStatus(`❌ Parse WS: ${err?.message || err}`);
     }
   };
 
-  ws.onerror = (err) => {
-    try { window.DerivDebug?.wsError?.(err); } catch {}
+  ws.onerror = () => {
     setStatus("Error WS – reconectando…");
   };
 
   ws.onclose = (ev) => {
-    try { window.DerivDebug?.wsClose?.(ev); } catch {}
     try {
       resetAuthState();
+      resetNewApiTradingSocket();
     } catch {}
 
     for (const [id, p] of pending.entries()) {
@@ -19680,6 +19739,7 @@ applyEntryTimingModeUI();
 ensureTradingAccountButton();
 applyTradingAccountUI();
 applyTradingAccountBannerUI();
+ensureDerivApiModePanel();
 ensureC100Panel();
 updateC100PanelUI();
 initWakeButton();
