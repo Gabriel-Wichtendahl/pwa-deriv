@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v106-2-api-nueva-pat-otp";
+const CACHE = "deriv-assets-v106-3-proposal-payload-fix";
 
 const ASSETS = [
   "./",

@@ -1,3 +1,4 @@
+// v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
 // v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
 // v106.1: diagnóstico proposal/auth.
 // v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
@@ -69,7 +70,7 @@
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_2_API_NUEVA_PAT_OTP_20260604";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_3_API_NUEVA_PROPOSAL_COMPAT_20260604";
 
 /*
   Mapa rápido de módulos:
@@ -3053,6 +3054,13 @@ function buildNextCandleTimingPlan(item = null) {
 const RISE_FALL_ALLOW_EQUALS_ENABLED = true;
 function getRiseFallDerivContractType(side) {
   const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+
+  // V106.3:
+  // - API legacy: mantenemos CALLE/PUTE como veníamos usando.
+  // - API nueva PAT/OTP: empezamos con CALL/PUT porque los endpoints nuevos pueden
+  //   rechazar CALLE/PUTE. En la función de proposals agregamos fallbacks.
+  if (isNewPatApiMode()) return s || String(side || "").toUpperCase();
+
   if (!RISE_FALL_ALLOW_EQUALS_ENABLED) return s || String(side || "").toUpperCase();
   if (s === "CALL") return "CALLE";
   if (s === "PUT") return "PUTE";
@@ -3082,6 +3090,126 @@ function buildRiseFallBaseParams(side, symbol, stake) {
     currency: DEFAULT_CURRENCY,
     symbol,
   };
+}
+
+// V106.3: compatibilidad con la API nueva de Options.
+// En la API nueva la documentación muestra proposals con `underlying_symbol`,
+// mientras la API legacy usaba `symbol`. Además algunos símbolos sintéticos
+// aparecen con código nuevo tipo 1HZ100V. Probamos variantes secuenciales
+// para no romper la base que ya generaba señales con R_10/R_25/R_50/R_75/R_100.
+const DERIV_NEW_SYMBOL_FALLBACKS = {
+  R_10: ["R_10", "1HZ10V"],
+  R_25: ["R_25", "1HZ25V"],
+  R_50: ["R_50", "1HZ50V"],
+  R_75: ["R_75", "1HZ75V"],
+  R_100: ["R_100", "1HZ100V"],
+  R_1000: ["R_1000", "1HZ1000V"],
+};
+function uniqList(arr) {
+  return Array.from(new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean)));
+}
+function getNewApiUnderlyingSymbolCandidates(symbol) {
+  const raw = String(symbol || "").trim();
+  return uniqList([raw, ...(DERIV_NEW_SYMBOL_FALLBACKS[raw] || [])]);
+}
+function getRiseFallContractTypeCandidates(side) {
+  const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  if (s === "CALL") return isNewPatApiMode() ? ["CALL", "CALLE"] : [getRiseFallDerivContractType(side), "CALL"];
+  if (s === "PUT") return isNewPatApiMode() ? ["PUT", "PUTE"] : [getRiseFallDerivContractType(side), "PUT"];
+  return [getRiseFallDerivContractType(side)];
+}
+function normalizeProposalParamsForNewApi(params = {}, symbol = "") {
+  if (!isNewPatApiMode()) return { ...params };
+  const p = { ...params };
+  delete p.symbol;
+  p.underlying_symbol = String(p.underlying_symbol || symbol || "");
+  return p;
+}
+function buildNewApiRiseFallProposalAttempts(variants, side, symbol, stake, item = null) {
+  if (!isNewPatApiMode()) return variants;
+
+  const out = [];
+  const contractTypes = getRiseFallContractTypeCandidates(side);
+  const symbols = getNewApiUnderlyingSymbolCandidates(symbol);
+  const seen = new Set();
+
+  function pushAttempt(label, params, timing) {
+    const key = JSON.stringify(params);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ label, params, timing });
+  }
+
+  // 1) Primero intentamos el timing original pero con payload nuevo.
+  for (const v of variants || []) {
+    for (const ct of contractTypes) {
+      for (const sym of symbols) {
+        pushAttempt(
+          `${v.label}_NEW_UNDERLYING_${ct}_${sym}`,
+          normalizeProposalParamsForNewApi({ ...v.params, contract_type: ct, underlying_symbol: sym }, sym),
+          { ...(v.timing || {}), api_new_payload: true, underlying_symbol: sym, contract_type_attempt: ct }
+        );
+      }
+    }
+  }
+
+  // 2) Fallback seguro para post-58: duration 2s.
+  // La proposal se prearma 56-58s, pero se compra después del tick >=58s.
+  // Con duración 2s el cierre queda pegado al segundo 60 aprox.
+  for (const ct of contractTypes) {
+    for (const sym of symbols) {
+      pushAttempt(
+        `AUTO58_NEW_DURATION_2S_${ct}_${sym}`,
+        {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: ct,
+          currency: DEFAULT_CURRENCY,
+          duration: 2,
+          duration_unit: "s",
+          underlying_symbol: sym,
+        },
+        {
+          mode: "AUTO58_NEW_API_DURATION_2S",
+          variant: "new_api_duration_2s",
+          duration: 2,
+          duration_unit: "s",
+          underlying_symbol: sym,
+          contract_type_attempt: ct,
+          message: "Fallback API nueva: compra post-58 con duración 2s para cierre cercano al segundo 60.",
+        }
+      );
+    }
+  }
+
+  // 3) Fallback final: duración 1m con underlying_symbol, por si la cuenta no acepta 2s.
+  for (const ct of contractTypes) {
+    for (const sym of symbols) {
+      pushAttempt(
+        `AUTO58_NEW_DURATION_1M_${ct}_${sym}`,
+        {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: ct,
+          currency: DEFAULT_CURRENCY,
+          duration: 1,
+          duration_unit: "m",
+          underlying_symbol: sym,
+        },
+        {
+          mode: "AUTO58_NEW_API_DURATION_1M",
+          variant: "new_api_duration_1m",
+          duration: 1,
+          duration_unit: "m",
+          underlying_symbol: sym,
+          contract_type_attempt: ct,
+          message: "Fallback API nueva: duración 1m si Deriv rechaza date_expiry/date_start y 2s.",
+        }
+      );
+    }
+  }
+
+  return out;
 }
 function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
   const base = buildRiseFallBaseParams(side, symbol, stake);
@@ -3189,18 +3317,28 @@ function compactAuditFields(obj = {}) {
   return out;
 }
 async function requestRiseFallProposalWithTiming(side, symbol, stake, item = null, timeoutMs = 12000) {
-  const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const baseVariants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const variants = buildNewApiRiseFallProposalAttempts(baseVariants, side, symbol, stake, item);
   const errors = [];
+
   for (const variant of variants) {
     try {
-      const res = await wsRequest({ proposal: 1, ...variant.params }, timeoutMs);
+      const payload = { proposal: 1, ...variant.params };
+      if (isNewPatApiMode()) DerivDebug?.log?.("PROPOSAL_NEW_ATTEMPT", { label: variant.label, payload });
+      const res = await wsRequest(payload, timeoutMs);
       if (res?.error) throw new Error(res.error.message || res.error.code || "proposal error");
+      if (isNewPatApiMode()) DerivDebug?.log?.("PROPOSAL_NEW_OK", { label: variant.label, proposal_id: res?.proposal?.id || "" });
       return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
     } catch (e) {
-      errors.push(`${variant.label}: ${e?.message || e}`);
+      const errText = `${variant.label}: ${e?.message || e}`;
+      errors.push(errText);
+      if (isNewPatApiMode()) DerivDebug?.log?.("PROPOSAL_NEW_REJECTED", { error: errText });
     }
   }
-  throw new Error(`Deriv rechazó el timing de próxima vela (${errors.join(" | ")}). Probá desactivar Cierre visual (vela) o revisar el timing.`);
+
+  const shortErrors = errors.slice(0, 8).join(" | ");
+  const extra = errors.length > 8 ? ` | +${errors.length - 8} intentos más` : "";
+  throw new Error(`Deriv rechazó proposal API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
 }
 async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, timeoutMs = 20000) {
   const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
