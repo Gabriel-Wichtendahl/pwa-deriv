@@ -1,3 +1,4 @@
+// v106.5: agrega dos modos Alcista 30s: Quiebres visuales estrictos y Reducción flexible.
 // v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
 // v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
 // v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
@@ -862,7 +863,8 @@ const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
-const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR 30S";
+const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR QUIEBRES 30S";
+const MODE_ALCISTA_REDUCCION_30S = "ALCISTA REDUCCIÓN 30S";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -876,7 +878,8 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_EVITA_LATERALIZACION_COLOR_V106_20260604";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_VISUAL_V106_5_20260604";
+const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_5_20260604";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -886,7 +889,8 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
-  if ((raw.includes("ALCISTA") && raw.includes("IRREGULAR")) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
+  if ((raw.includes("ALCISTA") && (raw.includes("REDUCCION") || raw.includes("REDUCCIÓN"))) || raw.includes("ALCISTA_REDUCCION") || raw.includes("ALCISTA REDUCCION")) return MODE_ALCISTA_REDUCCION_30S;
+  if ((raw.includes("ALCISTA") && (raw.includes("QUIEBRE") || raw.includes("IRREGULAR"))) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
@@ -902,7 +906,14 @@ function isRupturaDebilGiroMode(mode) {
   return normalizeSignalMode(mode) === MODE_RUPTURA_DEBIL_GIRO;
 }
 function isAlcistaIrregular25sMode(mode) {
+  const m = normalizeSignalMode(mode);
+  return m === MODE_ALCISTA_IRREGULAR_25S || m === MODE_ALCISTA_REDUCCION_30S;
+}
+function isAlcistaQuiebres30sMode(mode) {
   return normalizeSignalMode(mode) === MODE_ALCISTA_IRREGULAR_25S;
+}
+function isAlcistaReduccion30sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_ALCISTA_REDUCCION_30S;
 }
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
@@ -913,6 +924,7 @@ function getModeVersion(mode) {
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
   if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
   if (m === MODE_ALCISTA_IRREGULAR_25S) return ALCISTA_IRREGULAR_25S_LOGIC_VERSION;
+  if (m === MODE_ALCISTA_REDUCCION_30S) return ALCISTA_REDUCCION_30S_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
@@ -936,7 +948,8 @@ function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
-  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🟢 Alcista irregular 30s";
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
+  if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -945,7 +958,8 @@ function nextSignalMode(mode) {
   if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
   if (m === MODE_SNR_POLARIDAD) return MODE_RUPTURA_DEBIL_GIRO;
   if (m === MODE_RUPTURA_DEBIL_GIRO) return MODE_ALCISTA_IRREGULAR_25S;
-  if (m === MODE_ALCISTA_IRREGULAR_25S) return MODE_LINEA_DINAMICA;
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return MODE_ALCISTA_REDUCCION_30S;
+  if (m === MODE_ALCISTA_REDUCCION_30S) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
@@ -18980,6 +18994,350 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
 }
 
 
+
+function classifyAlcista30sLegs(upLegs) {
+  const moves = (Array.isArray(upLegs) ? upLegs : []).map((x) => Number(x.move || 0)).filter(Number.isFinite);
+  const maxUp = moves.length ? Math.max(...moves) : 0;
+  if (!maxUp) return { labels: [], pattern: "", maxUp: 0, minUp: 0, sizeRatio: 0 };
+  const minUp = moves.length ? Math.min(...moves.filter((v) => v > 0)) : 0;
+  const labels = moves.map((v) => {
+    if (v >= maxUp * 0.72) return "G";
+    if (v >= maxUp * 0.38) return "M";
+    return "P";
+  });
+  return {
+    labels,
+    pattern: labels.join("-"),
+    maxUp,
+    minUp,
+    sizeRatio: minUp > 0 ? maxUp / minUp : 0,
+  };
+}
+
+function analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange) {
+  const swingTol = Math.max(localRange * 0.010, tol * 0.75, 1e-9);
+  const visibleUpMin = Math.max(localRange * 0.052, tol * 1.85, 1e-9);
+  const visibleBreakMin = Math.max(localRange * 0.038, tol * 1.45, 1e-9);
+  const pausePriceTol = Math.max(localRange * 0.017, tol * 1.05, 1e-9);
+  const pauseMinMs = 700; // permite pausa visual de 1 tick / 1-2 segundos, sin exigir 5s.
+
+  const rawRuns = getRupturaDebilGiroRuns(clean, swingTol);
+  const upLegs = [];
+  const downLegs = [];
+  rawRuns.forEach((r, idx) => {
+    const item = { ...r, idx, move: Number(r.move || 0), startMs: Number(r.startMs || 0), endMs: Number(r.endMs || 0) };
+    if (item.sign > 0 && item.move >= visibleUpMin) upLegs.push(item);
+    if (item.sign < 0 && item.move >= visibleBreakMin) downLegs.push(item);
+  });
+
+  const breakDetails = [];
+  const countedDownRunIdx = new Set();
+  for (let i = 0; i < upLegs.length - 1; i++) {
+    const prevUp = upLegs[i];
+    const nextUp = upLegs[i + 1];
+    const betweenRuns = rawRuns
+      .map((r, idx) => ({ ...r, idx }))
+      .filter((r) => Number(r.idx) > Number(prevUp.idx) && Number(r.idx) < Number(nextUp.idx));
+    const downBetween = betweenRuns
+      .filter((r) => r.sign < 0)
+      .sort((a, b) => Number(b.move || 0) - Number(a.move || 0))[0] || null;
+    if (downBetween && Number(downBetween.move || 0) >= visibleBreakMin * 0.72) {
+      countedDownRunIdx.add(Number(downBetween.idx));
+      breakDetails.push({
+        type: "retroceso",
+        ms: Number(downBetween.startMs || prevUp.endMs),
+        move: Number(downBetween.move || 0),
+        fromUp: i,
+        visible: true,
+      });
+      continue;
+    }
+
+    const gapMs = Math.max(0, Number(nextUp.startMs || 0) - Number(prevUp.endMs || 0));
+    if (gapMs >= pauseMinMs) {
+      const betweenPts = clean.filter((p) => Number(p.ms) >= Number(prevUp.endMs || 0) && Number(p.ms) <= Number(nextUp.startMs || 0));
+      const maxQ = betweenPts.length ? Math.max(...betweenPts.map((p) => Number(p.quote))) : Number(prevUp.to || 0);
+      const minQ = betweenPts.length ? Math.min(...betweenPts.map((p) => Number(p.quote))) : Number(prevUp.to || 0);
+      const noProgress = maxQ <= Number(prevUp.to || 0) + pausePriceTol;
+      const gaveSomething = (Number(prevUp.to || 0) - minQ) >= pausePriceTol * 0.45;
+      if (noProgress || gaveSomething) {
+        breakDetails.push({
+          type: "pausa",
+          ms: Number(prevUp.endMs || 0),
+          durationMs: gapMs,
+          move: Math.max(0, Number(prevUp.to || 0) - minQ),
+          fromUp: i,
+          visible: true,
+        });
+      }
+    }
+  }
+
+  for (const d of downLegs) {
+    if (countedDownRunIdx.has(Number(d.idx))) continue;
+    // Retrocesos adicionales también cuentan si están dentro de 0-30s y no son micro ruido.
+    breakDetails.push({ type: "retroceso_extra", ms: Number(d.startMs || 0), move: Number(d.move || 0), visible: true });
+  }
+
+  breakDetails.sort((a, b) => Number(a.ms || 0) - Number(b.ms || 0));
+  const legInfo = classifyAlcista30sLegs(upLegs);
+  const upMoves = upLegs.map((r) => Number(r.move || 0));
+  const downMoves = downLegs.map((r) => Number(r.move || 0));
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxDown = downMoves.length ? Math.max(...downMoves) : 0;
+  const firstUp = upMoves[0] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+  let reductionPairs = 0;
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    if (upMoves[i] >= upMoves[i + 1] * 1.25 && upMoves[i] >= visibleUpMin) reductionPairs++;
+  }
+  const maxIdx = upMoves.indexOf(legInfo.maxUp);
+  const afterMax = maxIdx >= 0 ? upMoves.slice(maxIdx + 1) : [];
+  const postMaxWeakening = afterMax.some((v) => v <= legInfo.maxUp * 0.68);
+  const threeStepReduction = upMoves.length >= 3 && upMoves[0] >= upMoves[1] * 1.14 && upMoves[1] >= upMoves[2] * 1.12;
+  const clearSizeContrast = legInfo.sizeRatio >= 1.35 || new Set(legInfo.labels).size >= 2;
+  const pureIncreasing = upMoves.length >= 3 && upMoves.every((v, i) => i === 0 || v >= upMoves[i - 1] * 0.96) && !postMaxWeakening;
+  const allSimilar = legInfo.sizeRatio > 0 && legInfo.sizeRatio <= 1.28 && upMoves.length >= 3;
+  const visualBreakCount = breakDetails.length;
+
+  return {
+    rawRuns,
+    upLegs,
+    downLegs,
+    upMoves,
+    downMoves,
+    totalUp,
+    totalDown,
+    maxDown,
+    firstUp,
+    lastUp,
+    visibleBreakCount,
+    breakDetails: breakDetails.slice(0, 8),
+    pauseBreaks: breakDetails.filter((b) => b.type === "pausa").length,
+    retroBreaks: breakDetails.filter((b) => String(b.type || "").includes("retroceso")).length,
+    reductionPairs,
+    threeStepReduction,
+    clearSizeContrast,
+    postMaxWeakening,
+    pureIncreasing,
+    allSimilar,
+    pattern: legInfo.pattern,
+    legLabels: legInfo.labels,
+    sizeRatio: legInfo.sizeRatio,
+    visibleUpMin,
+    visibleBreakMin,
+    pausePriceTol,
+    pauseMinMs,
+  };
+}
+
+function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+  const greenTol = Math.max(localRange * 0.014, tol * 1.35);
+  if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
+  if (!(current > open + greenTol)) return null;
+
+  // Máximo dos cambios reales de color antes de 30s: permitimos que se ponga roja 1-2 veces,
+  // pero no lateralización cruzando el open todo el tiempo.
+  const significantColorTol = Math.max(localRange * 0.10, tol * 3.0);
+  const colorStates = [];
+  let activeColorState = "";
+  for (const p of clean) {
+    if (Number(p.ms) > evalMs) break;
+    const d = Number(p.quote) - open;
+    const st = d > significantColorTol ? "GREEN" : d < -significantColorTol ? "RED" : "";
+    if (!st) continue;
+    if (st !== activeColorState) {
+      colorStates.push({ state: st, ms: Number(p.ms), delta: d });
+      activeColorState = st;
+    }
+  }
+  const significantColorFlips = Math.max(0, colorStates.length - 1);
+  const firstColorState = colorStates[0]?.state || "";
+  if (significantColorFlips > 2 || (firstColorState === "RED" && significantColorFlips >= 2)) return null;
+
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const net = current - open;
+  const highFromOpen = high - open;
+  const path = Math.max(stats.path, 1e-9);
+  const efficiency = net / path;
+  const structure = analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange);
+  const upLegs = structure.upLegs || [];
+  const downLegs = structure.downLegs || [];
+  const upMoves = structure.upMoves || [];
+  const downMoves = structure.downMoves || [];
+  const totalUp = Number(structure.totalUp || 0);
+  const totalDown = Number(structure.totalDown || 0);
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
+
+  const buyerAdvanceVisible =
+    highFromOpen >= Math.max(localRange * 0.30, tol * 3.8) &&
+    totalUp >= Math.max(localRange * 0.46, tol * 4.6) &&
+    net >= Math.max(localRange * 0.035, tol * 1.25);
+  if (!buyerAdvanceVisible) return null;
+
+  // Requisito nuevo: irregularidad visual con quiebres claros. Una pausa de 1 tick / 1-2s cuenta
+  // si realmente corta el avance y después vuelve otro movimiento alcista visible.
+  if (upLegs.length < 3) return null;
+  if (structure.visibleBreakCount < 2) return null;
+  if (!structure.clearSizeContrast) return null;
+
+  const hasVisualWeakening =
+    structure.threeStepReduction ||
+    structure.reductionPairs >= 1 ||
+    structure.postMaxWeakening ||
+    (!structure.pureIncreasing && structure.legLabels.length >= 4 && new Set(structure.legLabels).size >= 2);
+  if (!hasVisualWeakening) return null;
+
+  const closeNearHigh = (high - current) <= Math.max(localRange * 0.080, tol * 2.0);
+  const cleanBullishContinuation =
+    efficiency >= 0.68 &&
+    pullbackRatio <= 0.15 &&
+    maxPullbackRatio <= 0.11 &&
+    closeNearHigh &&
+    structure.visibleBreakCount < 3 &&
+    !structure.threeStepReduction &&
+    !structure.postMaxWeakening;
+  if (cleanBullishContinuation) return null;
+
+  const allSimilarClean =
+    structure.allSimilar &&
+    efficiency >= 0.56 &&
+    pullbackRatio <= 0.18 &&
+    !structure.postMaxWeakening;
+  if (allSimilarClean) return null;
+
+  const pureIncreasingDanger =
+    structure.pureIncreasing &&
+    !structure.postMaxWeakening &&
+    pullbackRatio <= 0.24;
+  if (pureIncreasingDanger) return null;
+
+  const maxUpRun = structure.sizeRatio ? structure.maxUp : (upMoves.length ? Math.max(...upMoves) : 0);
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const anySellerEntry = maxDownRun >= Math.max(localRange * 0.08, tol * 1.8);
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.18, maxUpRun * 0.38, tol * 2.4);
+  const sellerMomentumIncreasing = downMoves.length >= 2 && downMoves[downMoves.length - 1] >= downMoves[0] * 1.14;
+
+  let points = 0;
+  const reasons = [];
+  points += 2; reasons.push("vela alcista a 20-30s");
+  points += 4; reasons.push(`${structure.visibleBreakCount} quiebres visibles 0-30s`);
+  points += 3; reasons.push(`patrón ${structure.pattern || "irregular"}`);
+  if (structure.threeStepReduction) { points += 4; reasons.push("secuencia grande-mediano-pequeño"); }
+  else if (structure.reductionPairs >= 2) { points += 4; reasons.push("doble reducción compradora"); }
+  else if (structure.reductionPairs >= 1) { points += 3; reasons.push("reducción compradora visible"); }
+  if (structure.postMaxWeakening) { points += 2; reasons.push("después del grande vuelve mediano/chico"); }
+  if (structure.pauseBreaks > 0) { points += 1; reasons.push("pausa corta visible entre impulsos"); }
+  if (pullbackRatio >= 0.18 || maxPullbackRatio >= 0.12) { points += 2; reasons.push("devuelve parte del avance"); }
+  if (stats.turns >= 3) { points += 1; reasons.push("zigzag claro"); }
+  if (strongContrary) { points += 2; reasons.push("entrada vendedora fuerte"); }
+  else if (anySellerEntry) { points += 1; reasons.push("entrada vendedora ayuda"); }
+  if (sellerMomentumIncreasing) { points += 1; reasons.push("vendedor aumenta presión"); }
+  if (efficiency >= 0.62 && closeNearHigh && !structure.postMaxWeakening) { points -= 2; reasons.push("riesgo de continuidad limpia"); }
+
+  if (points < 10) return null;
+
+  const quality =
+    points * 14 +
+    Math.min(22, structure.visibleBreakCount * 7) +
+    Math.min(18, structure.sizeRatio * 5) +
+    Math.min(16, pullbackRatio * 18) +
+    (structure.threeStepReduction ? 18 : 0) +
+    (structure.postMaxWeakening ? 12 : 0) +
+    (strongContrary ? 14 : anySellerEntry ? 6 : 0) -
+    Math.max(0, evalMs - 22000) / 2600;
+
+  const logicText = `Alcista irregular con QUIEBRES V106.5: ${reasons.join(", ")}. Regla: no alcanza con reducir; exige 3+ impulsos alcistas visibles, 2+ quiebres/pausas visibles de 1-2s o retrocesos, contraste G/M/P y rechazo de continuidad limpia.`;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "alcista_irregular_quiebres_30s",
+      levelType: "visual_buyer_breaks_0_30",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 22,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "20-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: 20,
+      bullishCandleOnly: true,
+      greenAtConfirm: true,
+      buyerAdvanceVisible,
+      visualBreaksRequired: true,
+      visualBreakCount: structure.visibleBreakCount,
+      visualBreakDetails: structure.breakDetails,
+      pauseBreaks: structure.pauseBreaks,
+      retroBreaks: structure.retroBreaks,
+      upLegsCount: upLegs.length,
+      downLegsCount: downLegs.length,
+      upLegPattern: structure.pattern,
+      upLegLabels: structure.legLabels,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      sizeRatio: structure.sizeRatio,
+      reductionPairs: structure.reductionPairs,
+      threeStepReduction: structure.threeStepReduction,
+      postMaxWeakening: structure.postMaxWeakening,
+      pureIncreasing: structure.pureIncreasing,
+      cleanBullishContinuation,
+      efficiency,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      strongContrary,
+      anySellerEntry,
+      sellerMomentumIncreasing,
+      significantColorFlips,
+      colorStates,
+      movementFilter: "v106_5_quiebres_visuales_estricto_0_30",
+      priority: structure.visibleBreakCount >= 3 || structure.threeStepReduction || strongContrary ? "ALTA" : "NORMAL",
+      stage: "alcista_irregular_quiebres_30s_visual_v106_5",
+      logic: logicText,
+      status: `🧩 Alcista quiebres 30s: patrón ${structure.pattern || "irregular"}, ${structure.visibleBreakCount} quiebres visibles${strongContrary ? " + vendedor fuerte" : anySellerEntry ? " + vendedor ayuda" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
+}
+
 function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
   if (ticks.length < 6) return null;
@@ -19501,10 +19859,14 @@ function evaluateMinute(minute, opts = {}) {
     if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
-    } else if (isAlcistaIrregular25sMode(activeMode)) {
+    } else if (isAlcistaQuiebres30sMode(activeMode)) {
       match = analyzeAlcistaIrregular25sCandidate(c, minute, evalOptions);
       if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
-      matchSource = "ALCISTA_IRREGULAR_30S";
+      matchSource = "ALCISTA_QUIEBRES_30S";
+    } else if (isAlcistaReduccion30sMode(activeMode)) {
+      match = analyzeAlcistaReduccion30sCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
+      matchSource = "ALCISTA_REDUCCION_30S";
     } else if (isRupturaDebilGiroMode(activeMode)) {
       // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
       // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
@@ -19544,8 +19906,8 @@ function evaluateMinute(minute, opts = {}) {
   if (!matches.length) return false;
   matches.sort((a, b) => {
     if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode)) {
-      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake ? 1 : 0;
-      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake ? 1 : 0;
+      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake || Number(a.giroPolaridadMeta?.visualBreakCount || 0) >= 3 ? 1 : 0;
+      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake || Number(b.giroPolaridadMeta?.visualBreakCount || 0) >= 3 ? 1 : 0;
       if (bp !== ap) return bp - ap;
     }
     return (
