@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals v106.5 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v106-5-alcista-quiebres-visual";
+const CACHE = "deriv-assets-v106-6-alcista-quiebres-calibrado";
 
 const ASSETS = [
   "./",

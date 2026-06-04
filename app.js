@@ -3,6 +3,7 @@
 // v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
 // v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
 // v106.1: diagnóstico proposal/auth.
+// v106.6: calibra Alcista quiebres 30s: bloquea doble suelo/simetría/comprador recargado; mantiene v106.4 API nueva.
 // v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
 // v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
@@ -878,8 +879,8 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_VISUAL_V106_5_20260604";
-const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_5_20260604";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
+const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -19132,7 +19133,218 @@ function analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange) {
   };
 }
 
-function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
+
+// V106.6: calibración del modo Alcista quiebres 30s con tus correcciones.
+// La clave nueva es distinguir quiebre de debilidad vs quiebre que arma piso/doble suelo y recarga comprador.
+function getAlcista30sLocalExtrema(clean, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 30000))
+    .sort((a, b) => a.ms - b.ms);
+  const extrema = { lows: [], highs: [] };
+  if (pts.length < 5) return extrema;
+
+  const depthMin = Math.max(localRange * 0.055, tol * 2.6, 1e-9);
+  const look = 3;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const q = Number(pts[i].quote);
+    const left = pts.slice(Math.max(0, i - look), i);
+    const right = pts.slice(i + 1, Math.min(pts.length, i + 1 + look));
+    if (!left.length || !right.length) continue;
+    const leftMax = Math.max(...left.map((p) => Number(p.quote)));
+    const rightMax = Math.max(...right.map((p) => Number(p.quote)));
+    const leftMin = Math.min(...left.map((p) => Number(p.quote)));
+    const rightMin = Math.min(...right.map((p) => Number(p.quote)));
+    const isLow = q <= leftMin + tol * 0.9 && q <= rightMin + tol * 0.9;
+    const isHigh = q >= leftMax - tol * 0.9 && q >= rightMax - tol * 0.9;
+    const lowDepth = Math.max(leftMax - q, rightMax - q);
+    const highDepth = Math.max(q - leftMin, q - rightMin);
+    if (isLow && lowDepth >= depthMin) extrema.lows.push({ ms: pts[i].ms, quote: q, depth: lowDepth, idx: i });
+    if (isHigh && highDepth >= depthMin) extrema.highs.push({ ms: pts[i].ms, quote: q, depth: highDepth, idx: i });
+  }
+  return extrema;
+}
+
+function detectAlcista30sDoubleBottomRetake(clean, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 30000))
+    .sort((a, b) => a.ms - b.ms);
+  const result = {
+    detected: false,
+    block: false,
+    pairCount: 0,
+    clusterCount: 0,
+    strongRetake: false,
+    buyerImpulseAfterFloor: 0,
+    pairs: [],
+    reason: "",
+  };
+  if (pts.length < 6) return result;
+  const extrema = getAlcista30sLocalExtrema(pts, evalMs, tol, localRange);
+  const lows = extrema.lows || [];
+  if (lows.length < 2) return result;
+
+  const lowPriceTol = Math.max(localRange * 0.105, tol * 4.2, 1e-9);
+  const minGapMs = 3000;
+  const maxGapMs = 18000;
+  const retakeMin = Math.max(localRange * 0.20, tol * 5.2, 1e-9);
+  const pairs = [];
+
+  for (let i = 0; i < lows.length - 1; i++) {
+    for (let j = i + 1; j < lows.length; j++) {
+      const a = lows[i];
+      const b = lows[j];
+      const gap = Number(b.ms) - Number(a.ms);
+      if (gap < minGapMs || gap > maxGapMs) continue;
+      const priceDiff = Math.abs(Number(a.quote) - Number(b.quote));
+      if (priceDiff > lowPriceTol) continue;
+      const after = pts.filter((p) => Number(p.ms) >= Number(b.ms));
+      const maxAfter = after.length ? Math.max(...after.map((p) => Number(p.quote))) : Number(b.quote);
+      const retake = maxAfter - Number(b.quote);
+      const strongRetake = retake >= retakeMin;
+      pairs.push({
+        firstMs: Number(a.ms),
+        secondMs: Number(b.ms),
+        firstLow: Number(a.quote),
+        secondLow: Number(b.quote),
+        priceDiff,
+        gapMs: gap,
+        retake,
+        strongRetake,
+      });
+    }
+  }
+
+  if (!pairs.length) return result;
+  // Agrupamos pares para saber si hay más de un doble suelo visible dentro de 0-30.
+  const used = [];
+  for (const pair of pairs) {
+    const overlaps = used.some((u) => Math.abs(u.secondMs - pair.firstMs) < 2500 || Math.abs(u.secondMs - pair.secondMs) < 2500);
+    if (!overlaps) used.push(pair);
+  }
+
+  const strongest = pairs.slice().sort((a, b) => Number(b.retake || 0) - Number(a.retake || 0))[0] || null;
+  result.detected = true;
+  result.pairCount = pairs.length;
+  result.clusterCount = used.length;
+  result.strongRetake = pairs.some((p) => p.strongRetake);
+  result.buyerImpulseAfterFloor = Number(strongest?.retake || 0);
+  result.pairs = pairs.slice(0, 4);
+  result.reason = result.strongRetake
+    ? "doble suelo con comprador retomando fuerte"
+    : "doble suelo/retest de piso dentro de 0-30s";
+  // Bloqueo principal pedido por vos: doble suelo + recuperación compradora o dos pisos repetidos visibles.
+  result.block = result.strongRetake || result.clusterCount >= 2;
+  return result;
+}
+
+function detectAlcista30sSymmetricCycles(structure, efficiency = 0, pullbackRatio = 0) {
+  const rawRuns = Array.isArray(structure?.rawRuns) ? structure.rawRuns : [];
+  const visibleUpMin = Number(structure?.visibleUpMin || 0);
+  const visibleBreakMin = Number(structure?.visibleBreakMin || 0);
+  const sig = rawRuns
+    .filter((r) => r && ((r.sign > 0 && Number(r.move || 0) >= visibleUpMin * 0.85) || (r.sign < 0 && Number(r.move || 0) >= visibleBreakMin * 0.85)))
+    .map((r) => ({ sign: Number(r.sign), move: Number(r.move || 0), startMs: Number(r.startMs || 0), endMs: Number(r.endMs || 0) }));
+
+  let pairSimilar = 0;
+  for (let i = 0; i < sig.length - 1; i++) {
+    const a = sig[i];
+    const b = sig[i + 1];
+    if (!a.sign || !b.sign || a.sign === b.sign) continue;
+    const ratio = Math.max(a.move, b.move) / Math.max(Math.min(a.move, b.move), 1e-9);
+    if (ratio <= 1.45) pairSimilar++;
+  }
+
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  const downMoves = Array.isArray(structure?.downMoves) ? structure.downMoves.map(Number).filter(Number.isFinite) : [];
+  const upSizeRatio = Number(structure?.sizeRatio || 0);
+  const downMax = downMoves.length ? Math.max(...downMoves) : 0;
+  const downMin = downMoves.length ? Math.min(...downMoves.filter((v) => v > 0)) : 0;
+  const downSizeRatio = downMin > 0 ? downMax / downMin : 0;
+
+  const upAlmostSame = upMoves.length >= 3 && upSizeRatio > 0 && upSizeRatio <= 1.55;
+  const downAlmostSame = downMoves.length >= 2 && downSizeRatio > 0 && downSizeRatio <= 1.75;
+  const alternatingEnough = pairSimilar >= 2;
+  const detected =
+    (alternatingEnough && Number(efficiency) >= 0.34 && Number(pullbackRatio) >= 0.12) ||
+    (upAlmostSame && Number(structure?.visibleBreakCount || 0) >= 2 && !structure?.threeStepReduction && !structure?.postMaxWeakening && Number(efficiency) >= 0.42);
+
+  return {
+    detected,
+    block: detected && !structure?.threeStepReduction && !structure?.postMaxWeakening,
+    pairSimilar,
+    upAlmostSame,
+    downAlmostSame,
+    upSizeRatio,
+    downSizeRatio,
+    reason: detected ? "movimientos casi simétricos / ordenados" : "",
+  };
+}
+
+function detectBuyerIncreasingAfterBreak30s(structure) {
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  if (upMoves.length < 3) return { detected: false, block: false, reason: "" };
+  const firstBreak = Array.isArray(structure?.breakDetails) ? structure.breakDetails.find((b) => Number.isFinite(Number(b.fromUp))) : null;
+  const startIdx = Math.max(1, Number(firstBreak?.fromUp || 0) + 1);
+  const after = upMoves.slice(startIdx);
+  const before = upMoves.slice(0, startIdx);
+  const beforeMax = before.length ? Math.max(...before) : upMoves[0];
+  const afterMax = after.length ? Math.max(...after) : 0;
+  const last = after.length ? after[after.length - 1] : 0;
+  const firstAfter = after.length ? after[0] : 0;
+  const monotonicRise = after.length >= 2 && last >= firstAfter * 1.22;
+  const dominantAfterBreak = afterMax >= beforeMax * 1.16;
+  const smallToBig = upMoves.length >= 3 && upMoves[1] >= upMoves[0] * 1.22 && upMoves[2] >= upMoves[1] * 0.90 && !structure?.postMaxWeakening;
+  const detected = (monotonicRise || dominantAfterBreak || smallToBig) && !structure?.threeStepReduction && !structure?.postMaxWeakening;
+  return {
+    detected,
+    block: detected,
+    monotonicRise,
+    dominantAfterBreak,
+    smallToBig,
+    beforeMax,
+    afterMax,
+    reason: detected ? "comprador se recarga / aumenta después del quiebre" : "",
+  };
+}
+
+function detectBuyerReductionAfterBreak30s(structure) {
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  if (upMoves.length < 2) return { detected: false, strength: 0, reason: "" };
+  let reductions = 0;
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    if (upMoves[i] >= upMoves[i + 1] * 1.16) reductions++;
+  }
+  const detected = !!structure?.threeStepReduction || !!structure?.postMaxWeakening || reductions >= 1;
+  return {
+    detected,
+    strength: (structure?.threeStepReduction ? 2 : 0) + (structure?.postMaxWeakening ? 2 : 0) + reductions,
+    reductions,
+    reason: detected ? "comprador reduce después del quiebre" : "",
+  };
+}
+
+function detectSellerIncreasingPressure30s(structure, localRange, tol) {
+  const downMoves = Array.isArray(structure?.downMoves) ? structure.downMoves.map(Number).filter(Number.isFinite) : [];
+  if (!downMoves.length) return { detected: false, strong: false, reason: "" };
+  const first = downMoves[0];
+  const last = downMoves[downMoves.length - 1];
+  const maxDown = Math.max(...downMoves);
+  const minStrong = Math.max(Number(localRange || 0) * 0.12, Number(tol || 0) * 2.2, 1e-9);
+  const detected = downMoves.length >= 2 && (last >= first * 1.12 || maxDown >= first * 1.35);
+  const strong = detected && maxDown >= minStrong;
+  return {
+    detected,
+    strong,
+    first,
+    last,
+    maxDown,
+    reason: strong ? "vendedor aumenta presión claramente" : detected ? "vendedor aumenta presión" : "",
+  };
+}
+
+function analyzeAlcistaQuiebres30sCandidate(candidate, minute, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
   if (ticks.length < 6) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
@@ -19241,6 +19453,18 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   const strongContrary = maxDownRun >= Math.max(localRange * 0.18, maxUpRun * 0.38, tol * 2.4);
   const sellerMomentumIncreasing = downMoves.length >= 2 && downMoves[downMoves.length - 1] >= downMoves[0] * 1.14;
 
+  const doubleBottomRetake = detectAlcista30sDoubleBottomRetake(clean, evalMs, tol, localRange);
+  const symmetricCycles = detectAlcista30sSymmetricCycles(structure, efficiency, pullbackRatio);
+  const buyerIncreasingAfterBreak = detectBuyerIncreasingAfterBreak30s(structure);
+  const buyerReductionAfterBreak = detectBuyerReductionAfterBreak30s(structure);
+  const sellerPressure = detectSellerIncreasingPressure30s(structure, localRange, tol);
+
+  // Bloqueos pedidos: quiebres que forman doble suelo/piso defendido, simetría fuerte o comprador recargado
+  // no son la irregularidad buscada aunque tengan zigzag.
+  if (doubleBottomRetake.block) return null;
+  if (symmetricCycles.block) return null;
+  if (buyerIncreasingAfterBreak.block && !sellerPressure.strong && !buyerReductionAfterBreak.detected) return null;
+
   let points = 0;
   const reasons = [];
   points += 2; reasons.push("vela alcista a 20-30s");
@@ -19250,15 +19474,20 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
   else if (structure.reductionPairs >= 2) { points += 4; reasons.push("doble reducción compradora"); }
   else if (structure.reductionPairs >= 1) { points += 3; reasons.push("reducción compradora visible"); }
   if (structure.postMaxWeakening) { points += 2; reasons.push("después del grande vuelve mediano/chico"); }
+  if (buyerReductionAfterBreak.detected) { points += Math.min(3, buyerReductionAfterBreak.strength); reasons.push("comprador reduce después del quiebre"); }
   if (structure.pauseBreaks > 0) { points += 1; reasons.push("pausa corta visible entre impulsos"); }
   if (pullbackRatio >= 0.18 || maxPullbackRatio >= 0.12) { points += 2; reasons.push("devuelve parte del avance"); }
   if (stats.turns >= 3) { points += 1; reasons.push("zigzag claro"); }
   if (strongContrary) { points += 2; reasons.push("entrada vendedora fuerte"); }
   else if (anySellerEntry) { points += 1; reasons.push("entrada vendedora ayuda"); }
-  if (sellerMomentumIncreasing) { points += 1; reasons.push("vendedor aumenta presión"); }
+  if (sellerPressure.strong) { points += 2; reasons.push("vendedor aumenta presión claramente"); }
+  else if (sellerMomentumIncreasing || sellerPressure.detected) { points += 1; reasons.push("vendedor aumenta presión"); }
+  if (doubleBottomRetake.detected) { points -= doubleBottomRetake.strongRetake ? 6 : 4; reasons.push("castigo: doble suelo / piso defendido"); }
+  if (symmetricCycles.detected) { points -= 5; reasons.push("castigo: simetría de movimientos"); }
+  if (buyerIncreasingAfterBreak.detected) { points -= 4; reasons.push("castigo: comprador aumenta después del quiebre"); }
   if (efficiency >= 0.62 && closeNearHigh && !structure.postMaxWeakening) { points -= 2; reasons.push("riesgo de continuidad limpia"); }
 
-  if (points < 10) return null;
+  if (points < 11) return null;
 
   const quality =
     points * 14 +
@@ -19267,10 +19496,14 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     Math.min(16, pullbackRatio * 18) +
     (structure.threeStepReduction ? 18 : 0) +
     (structure.postMaxWeakening ? 12 : 0) +
-    (strongContrary ? 14 : anySellerEntry ? 6 : 0) -
+    (buyerReductionAfterBreak.detected ? 10 : 0) +
+    (sellerPressure.strong ? 12 : strongContrary ? 14 : anySellerEntry ? 6 : 0) -
+    (doubleBottomRetake.detected ? 18 : 0) -
+    (symmetricCycles.detected ? 14 : 0) -
+    (buyerIncreasingAfterBreak.detected ? 12 : 0) -
     Math.max(0, evalMs - 22000) / 2600;
 
-  const logicText = `Alcista irregular con QUIEBRES V106.5: ${reasons.join(", ")}. Regla: no alcanza con reducir; exige 3+ impulsos alcistas visibles, 2+ quiebres/pausas visibles de 1-2s o retrocesos, contraste G/M/P y rechazo de continuidad limpia.`;
+  const logicText = `Alcista irregular con QUIEBRES V106.6 calibrado: ${reasons.join(", ")}. Regla: exige quiebres que muestren pérdida de calidad compradora; bloquea doble suelo/piso defendido, simetría marcada y comprador que se recarga después del quiebre.`;
 
   return {
     direction: "PUT",
@@ -19327,18 +19560,29 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       strongContrary,
       anySellerEntry,
       sellerMomentumIncreasing,
+      sellerPressure,
+      doubleBottomRetake,
+      symmetricCycles,
+      buyerIncreasingAfterBreak,
+      buyerReductionAfterBreak,
+      antiRules: {
+        blockDoubleBottomRetake: !!doubleBottomRetake.block,
+        blockSymmetry: !!symmetricCycles.block,
+        blockBuyerRecharge: !!buyerIncreasingAfterBreak.block,
+      },
       significantColorFlips,
       colorStates,
-      movementFilter: "v106_5_quiebres_visuales_estricto_0_30",
+      movementFilter: "v106_6_quiebres_visuales_calibrado_anti_doble_suelo_simetria_0_30",
       priority: structure.visibleBreakCount >= 3 || structure.threeStepReduction || strongContrary ? "ALTA" : "NORMAL",
-      stage: "alcista_irregular_quiebres_30s_visual_v106_5",
+      stage: "alcista_irregular_quiebres_30s_calibrado_v106_6",
       logic: logicText,
-      status: `🧩 Alcista quiebres 30s: patrón ${structure.pattern || "irregular"}, ${structure.visibleBreakCount} quiebres visibles${strongContrary ? " + vendedor fuerte" : anySellerEntry ? " + vendedor ayuda" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🧩 Alcista quiebres 30s V106.6: ${structure.pattern || "irregular"}, ${structure.visibleBreakCount} quiebres, comprador ${buyerReductionAfterBreak.detected ? "reduce" : "irregular"}${sellerPressure.strong ? " + vendedor aumenta" : strongContrary ? " + vendedor fuerte" : anySellerEntry ? " + vendedor ayuda" : ""}. Sin doble suelo/simetría fuerte. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
 
-function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
+
+function analyzeAlcistaReduccion30sCandidate(candidate, minute, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
   if (ticks.length < 6) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
@@ -19860,7 +20104,7 @@ function evaluateMinute(minute, opts = {}) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
     } else if (isAlcistaQuiebres30sMode(activeMode)) {
-      match = analyzeAlcistaIrregular25sCandidate(c, minute, evalOptions);
+      match = analyzeAlcistaQuiebres30sCandidate(c, minute, evalOptions);
       if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
       matchSource = "ALCISTA_QUIEBRES_30S";
     } else if (isAlcistaReduccion30sMode(activeMode)) {
