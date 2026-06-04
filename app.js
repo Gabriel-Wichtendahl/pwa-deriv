@@ -4,6 +4,7 @@
 // v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
 // v106.1: diagnóstico proposal/auth.
 // v106.6: calibra Alcista quiebres 30s: bloquea doble suelo/simetría/comprador recargado; mantiene v106.4 API nueva.
+// v106.6.1: fix Parse WS visibleBreakCount no definido.
 // v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
 // v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
@@ -19100,7 +19101,7 @@ function analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange) {
   const clearSizeContrast = legInfo.sizeRatio >= 1.35 || new Set(legInfo.labels).size >= 2;
   const pureIncreasing = upMoves.length >= 3 && upMoves.every((v, i) => i === 0 || v >= upMoves[i - 1] * 0.96) && !postMaxWeakening;
   const allSimilar = legInfo.sizeRatio > 0 && legInfo.sizeRatio <= 1.28 && upMoves.length >= 3;
-  const visualBreakCount = breakDetails.length;
+  const visibleBreakCount = breakDetails.length;
 
   return {
     rawRuns,
