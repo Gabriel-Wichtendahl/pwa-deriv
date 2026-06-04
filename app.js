@@ -1,3 +1,4 @@
+// v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
 // v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
 // Se vuelve a la base v99 porque los soportes horizontales/dinámicos aplanaban el gráfico modal.
@@ -858,7 +859,7 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_PRIORIDAD_REDUCCIONES_CLARAS_V105_20260603";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_EVITA_LATERALIZACION_COLOR_V106_20260604";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -18447,6 +18448,30 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     !strongRetakeGreen;
   if (tooMuchTimeBelowWithoutControl) return null;
 
+  // V106: filtros tomados de tus comentarios de "qué evitar":
+  // 1) Evitar velas que van y vienen muchas veces entre rojo/verde antes de 30s.
+  // 2) Evitar lateralización/rango: comprador fuerte y vendedor parecido, mucho recorrido
+  //    pero poco avance sostenido hacia arriba.
+  const significantColorTol = Math.max(localRange * 0.10, tol * 3.0);
+  const colorStates = [];
+  let activeColorState = "";
+  for (const p of clean) {
+    if (Number(p.ms) > evalMs) break;
+    const d = Number(p.quote) - open;
+    const st = d > significantColorTol ? "GREEN" : d < -significantColorTol ? "RED" : "";
+    if (!st) continue;
+    if (st !== activeColorState) {
+      colorStates.push({ state: st, ms: Number(p.ms), delta: d });
+      activeColorState = st;
+    }
+  }
+  const significantColorFlips = Math.max(0, colorStates.length - 1);
+  const firstColorState = colorStates[0]?.state || "";
+  const thirdColorTurnBefore30 =
+    significantColorFlips > 2 ||
+    (firstColorState === "RED" && significantColorFlips >= 2);
+  if (thirdColorTurnBefore30) return null;
+
   // V105: prioridad fuerte al tipo exacto que buscás:
   // - reducción clara del comprador dentro de 0-30s
   // - grande → mediano → chico
@@ -18519,6 +18544,26 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     maxDownRun >= firstDown * 1.32
   );
   const sellerWeakVsBuyer = maxDownRun < maxUpRun * 0.58 || totalDown < totalUp * 0.55;
+  const directionalProgress = Math.abs(net) / Math.max(path, 1e-9);
+  const rangeBattleBalance =
+    totalUp >= Math.max(localRange * 0.86, tol * 5.0) &&
+    totalDown >= Math.max(localRange * 0.46, tol * 3.5) &&
+    totalDown / Math.max(totalUp, 1e-9) >= 0.34 &&
+    stats.turns >= 3;
+  const buyerSellerSimilarStrong =
+    maxUpRun >= Math.max(localRange * 0.20, tol * 3.2) &&
+    maxDownRun >= Math.max(localRange * 0.18, tol * 3.0) &&
+    maxDownRun >= maxUpRun * 0.62 &&
+    maxDownRun <= maxUpRun * 1.38 &&
+    stats.turns >= 3;
+  const noSustainedAdvance =
+    net <= localRange * 0.44 ||
+    (high - current) >= Math.max(localRange * 0.16, tol * 2.4);
+  const lateralizedFirst30 =
+    (rangeBattleBalance && directionalProgress <= 0.34 && noSustainedAdvance) ||
+    (buyerSellerSimilarStrong && directionalProgress <= 0.42 && noSustainedAdvance) ||
+    (significantColorFlips >= 2 && rangeBattleBalance && directionalProgress <= 0.45);
+  if (lateralizedFirst30) return null;
   const buyerStraightForce = maxUpRun >= Math.max(localRange * 0.42, tol * 5.0) && efficiency >= 0.44 && stats.turns <= 4 && !threeStepReduction;
   const clearReductionAfterExpansion = (() => {
     if (!buyerEarlyExpansion || upMoves.length < 3) return false;
@@ -18650,7 +18695,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     Math.max(0, evalMs - 20000) / 2200;
 
   const priority = doubleClearBuyerReduction || threeStepReduction || clearBigSmallReduction || decreasingPushes || clearReductionAfterExpansion || sellerStrengthCore || colorFlipAndRetake ? "ALTA" : "NORMAL";
-  const logicText = `Vela alcista irregular V105 confirmada 20-30s: ${reasons.join(", ")}. Regla V105: máxima prioridad a reducciones claras del comprador dentro de 0-30s: grande-mediano-chico, grande-chico o doble reducción visible. Se descarta comprador fuerte con vendedor débil/reduciendo salvo que exista reducción compradora clara.`;
+  const logicText = `Vela alcista irregular V106 confirmada 20-30s: ${reasons.join(", ")}. Regla V106: prioridad a reducciones claras del comprador dentro de 0-30s, pero se descartan lateralización/rango grande, comprador-vendedor muy parecidos y más de dos cambios reales de color antes de 30s.`;
 
   return {
     direction: "PUT",
@@ -18728,7 +18773,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       colorFlipAndRetake,
       stalledAfterHigh,
       highMs,
-      stage: "alcista_irregular_30s_v105_prioridad_reducciones_claras",
+      stage: "alcista_irregular_30s_v106_evita_lateralizacion_color",
       buyerWeaknessCore,
       sellerStrengthCore,
       buyerEarlyExpansion,
@@ -18737,14 +18782,22 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
       buyerStrongResponseAfterSeller,
       buyerStraightForce,
       sellerWeakVsBuyer,
+      significantColorFlips,
+      colorStates,
+      thirdColorTurnBefore30,
+      lateralizedFirst30,
+      rangeBattleBalance,
+      buyerSellerSimilarStrong,
+      directionalProgress,
+      noSustainedAdvance,
       sellerMomentumIncreasing,
       clearReductionAfterExpansion,
       dangerousBuyerIncreasing,
       oppositeSetupBuyerStrongSellerWeak,
-      movementFilter: "prioridad_reducciones_claras_v105_grande_mediano_chico_grande_chico",
+      movementFilter: "v106_reducciones_claras_sin_lateralizacion_ni_tercer_cambio_color",
       priority,
       logic: logicText,
-      status: `🟢 Alcista irregular 30s V105: ${doubleClearBuyerReduction ? "doble reducción compradora" : threeStepReduction ? "grande-mediano-chico" : clearBigSmallReduction ? "grande-chico" : decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+      status: `🟢 Alcista irregular 30s V106: ${doubleClearBuyerReduction ? "doble reducción compradora" : threeStepReduction ? "grande-mediano-chico" : clearBigSmallReduction ? "grande-chico" : decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
     },
   };
 }
