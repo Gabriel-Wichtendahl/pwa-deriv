@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v106-evitar-lateralizacion-cambios-color";
+const CACHE = "deriv-assets-v106-1-proposal-debug";
 
 const ASSETS = [
   "./",

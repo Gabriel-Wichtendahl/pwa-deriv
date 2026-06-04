@@ -1,3 +1,4 @@
+// v106.1 DEBUG: diagnostica authorize/proposal/buy y motivo exacto de propuesta no prearmada.
 // v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
 // v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
@@ -65,9 +66,309 @@
 
 "use strict";
 
+
+/* =========================
+   Debug Deriv / Proposal / AUTO58
+   - Diagnostica: authorize -> proposal -> buy
+   - No muestra el token.
+   - Se activa con botón flotante DEBUG.
+========================= */
+(function initDerivProposalDebug() {
+  if (window.DerivDebug) return;
+
+  const STORAGE_KEY = "derivProposalDebugEnabled_v1";
+  const MAX_EVENTS = 25;
+
+  const state = {
+    enabled: localStorage.getItem(STORAGE_KEY) === "1",
+    wsOpen: false,
+    authorized: false,
+    authorizeOkAt: "",
+    authorizeError: null,
+    loginid: "",
+    currency: "",
+    scopes: [],
+    lastSend: null,
+    lastResponse: null,
+    lastError: null,
+    lastTimeout: null,
+    lastProposal: null,
+    lastBuy: null,
+    lastPreProposal: null,
+    lastAuto58Cancel: null,
+    events: [],
+  };
+
+  function timeText() {
+    try { return new Date().toLocaleTimeString(); } catch { return ""; }
+  }
+
+  function secText() {
+    try { return new Date().getSeconds(); } catch { return 0; }
+  }
+
+  function mask(obj) {
+    try {
+      const copy = JSON.parse(JSON.stringify(obj || {}));
+      const hide = (o) => {
+        if (!o || typeof o !== "object") return;
+        for (const k of Object.keys(o)) {
+          const lk = String(k).toLowerCase();
+          if (lk.includes("token") || lk === "authorize") o[k] = "[TOKEN_OCULTO]";
+          else if (o[k] && typeof o[k] === "object") hide(o[k]);
+        }
+      };
+      hide(copy);
+      return copy;
+    } catch {
+      return obj;
+    }
+  }
+
+  function summarizePayload(payload = {}) {
+    const p = payload || {};
+    if (p.authorize) return "AUTHORIZE";
+    if (p.proposal) return `PROPOSAL ${p.contract_type || p.parameters?.contract_type || ""} ${p.symbol || p.parameters?.symbol || ""}`.trim();
+    if (p.buy) return `BUY ${p.buy === 1 ? "DIRECT" : String(p.buy).slice(0, 8)}`;
+    if (p.balance) return "BALANCE";
+    if (p.ticks) return `TICKS ${p.ticks}`;
+    if (p.proposal_open_contract) return `POC ${p.contract_id || ""}`;
+    return p.msg_type || "REQUEST";
+  }
+
+  function push(stage, data = {}) {
+    const row = { stage, time: timeText(), sec: secText(), ...data };
+    state.events.unshift(row);
+    if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
+    if (state.enabled) console.log(`[DERIV_DEBUG][${stage}]`, row);
+    render(row);
+    return row;
+  }
+
+  function btn() {
+    let b = document.getElementById("derivDebugBtn");
+    if (!b) {
+      b = document.createElement("button");
+      b.id = "derivDebugBtn";
+      b.type = "button";
+      b.style.position = "fixed";
+      b.style.right = "10px";
+      b.style.bottom = "10px";
+      b.style.zIndex = "2147483647";
+      b.style.border = "1px solid rgba(34,211,238,.75)";
+      b.style.borderRadius = "999px";
+      b.style.padding = "8px 10px";
+      b.style.background = "rgba(2,6,23,.92)";
+      b.style.color = "#67e8f9";
+      b.style.font = "900 11px system-ui, sans-serif";
+      b.style.boxShadow = "0 0 18px rgba(34,211,238,.35)";
+      b.addEventListener("click", () => {
+        state.enabled = !state.enabled;
+        try { localStorage.setItem(STORAGE_KEY, state.enabled ? "1" : "0"); } catch {}
+        render({ stage: "TOGGLE", enabled: state.enabled });
+      });
+      document.body.appendChild(b);
+    }
+    b.textContent = state.enabled ? "DEBUG ON" : "DEBUG OFF";
+    return b;
+  }
+
+  function panel() {
+    let el = document.getElementById("derivDebugPanel");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "derivDebugPanel";
+      el.style.position = "fixed";
+      el.style.left = "8px";
+      el.style.right = "8px";
+      el.style.bottom = "54px";
+      el.style.zIndex = "2147483646";
+      el.style.maxHeight = "45dvh";
+      el.style.overflow = "auto";
+      el.style.whiteSpace = "pre-wrap";
+      el.style.border = "1px solid rgba(34,211,238,.55)";
+      el.style.borderRadius = "14px";
+      el.style.padding = "10px";
+      el.style.background = "rgba(2,6,23,.95)";
+      el.style.color = "#d9f99d";
+      el.style.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+      el.style.boxShadow = "0 20px 60px rgba(0,0,0,.55), 0 0 24px rgba(34,211,238,.18)";
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function render(last = null) {
+    try { btn(); } catch {}
+    let el = document.getElementById("derivDebugPanel");
+    if (!state.enabled) {
+      if (el) el.style.display = "none";
+      return;
+    }
+    el = panel();
+    el.style.display = "block";
+    const pre = state.lastPreProposal || {};
+    const cancel = state.lastAuto58Cancel || {};
+    const err = state.lastError || state.authorizeError || state.lastTimeout || null;
+    el.textContent =
+`DERIV DEBUG v106.1
+WS: ${state.wsOpen ? "OPEN" : "CLOSED"}
+AUTH: ${state.authorized ? "OK" : "NO"}${state.loginid ? " · " + state.loginid : ""}${state.currency ? " · " + state.currency : ""}
+SCOPES: ${(state.scopes || []).join(",") || "-"}
+AUTH ERROR: ${state.authorizeError ? JSON.stringify(state.authorizeError) : "-"}
+
+LAST SEND: ${state.lastSend ? JSON.stringify(state.lastSend) : "-"}
+LAST RESPONSE: ${state.lastResponse ? JSON.stringify(state.lastResponse) : "-"}
+LAST ERROR: ${err ? JSON.stringify(err) : "-"}
+
+LAST PROPOSAL: ${state.lastProposal ? JSON.stringify(state.lastProposal) : "-"}
+LAST BUY: ${state.lastBuy ? JSON.stringify(state.lastBuy) : "-"}
+
+PREPROPOSAL: ${Object.keys(pre).length ? JSON.stringify(pre, null, 2) : "-"}
+AUTO58 CANCEL: ${Object.keys(cancel).length ? JSON.stringify(cancel, null, 2) : "-"}
+
+LAST EVENT: ${last ? JSON.stringify(last, null, 2) : "-"}
+
+EVENTS:
+${state.events.slice(0, 10).map((e) => `${e.time} s${String(e.sec).padStart(2,"0")} · ${e.stage} · ${e.summary || e.code || e.message || ""}`).join("\n")}`;
+  }
+
+  function trackSend(payload = {}, label = "SEND") {
+    const safe = mask(payload);
+    state.lastSend = { at: timeText(), summary: summarizePayload(payload), payload: safe };
+    push(label, { summary: state.lastSend.summary, payload: safe });
+  }
+
+  function trackTimeout(payload = {}) {
+    const safe = mask(payload);
+    state.lastTimeout = { at: timeText(), summary: summarizePayload(payload), payload: safe };
+    push("TIMEOUT", { summary: state.lastTimeout.summary, payload: safe });
+  }
+
+  function trackMessage(msg = {}) {
+    const type = msg?.msg_type || (msg?.tick ? "tick" : "message");
+
+    if (type === "tick") return;
+
+    if (msg?.error) {
+      const error = {
+        at: timeText(),
+        msg_type: type,
+        code: msg.error.code || "",
+        message: msg.error.message || "",
+        details: msg.error.details || null,
+        echo_req: mask(msg.echo_req || {}),
+      };
+      state.lastError = error;
+      if (type === "authorize") state.authorizeError = error;
+      if (type === "proposal") state.lastProposal = { status: "error", ...error };
+      if (type === "buy") state.lastBuy = { status: "error", ...error };
+      push("RAW_ERROR", { code: error.code, message: error.message, msg_type: type, echo_req: error.echo_req });
+      return;
+    }
+
+    if (type === "authorize") {
+      const a = msg.authorize || {};
+      state.authorized = true;
+      state.authorizeOkAt = timeText();
+      state.authorizeError = null;
+      state.loginid = String(a.loginid || "");
+      state.currency = String(a.currency || "");
+      state.scopes = Array.isArray(a.scopes) ? a.scopes : [];
+      state.lastResponse = { at: timeText(), msg_type: type, loginid: state.loginid, currency: state.currency, scopes: state.scopes };
+      push("AUTHORIZE_OK", state.lastResponse);
+      return;
+    }
+
+    if (type === "proposal") {
+      const p = msg.proposal || {};
+      state.lastProposal = {
+        at: timeText(),
+        status: "ok",
+        id: p.id ? String(p.id) : "",
+        ask_price: Number(p.ask_price),
+        payout: Number(p.payout),
+        echo_req: mask(msg.echo_req || {}),
+      };
+      state.lastResponse = { at: timeText(), msg_type: type, id: state.lastProposal.id };
+      push("PROPOSAL_OK", { summary: state.lastProposal.id, proposal: state.lastProposal });
+      return;
+    }
+
+    if (type === "buy") {
+      const b = msg.buy || {};
+      state.lastBuy = {
+        at: timeText(),
+        status: "ok",
+        contract_id: b.contract_id ? String(b.contract_id) : "",
+        buy_price: Number(b.buy_price),
+        payout: Number(b.payout),
+        start_time: Number(b.start_time || 0),
+        purchase_time: Number(b.purchase_time || 0),
+      };
+      state.lastResponse = { at: timeText(), msg_type: type, contract_id: state.lastBuy.contract_id };
+      push("BUY_OK", { summary: state.lastBuy.contract_id, buy: state.lastBuy });
+      return;
+    }
+
+    if (type === "balance") {
+      state.lastResponse = { at: timeText(), msg_type: type, balance: msg.balance };
+      push("BALANCE_OK", { summary: "balance" });
+      return;
+    }
+
+    state.lastResponse = { at: timeText(), msg_type: type };
+    push("MESSAGE", { summary: type });
+  }
+
+  function wsOpen() { state.wsOpen = true; push("WS_OPEN"); }
+  function wsClose(ev = {}) { state.wsOpen = false; state.authorized = false; push("WS_CLOSE", { code: ev?.code || 0, reason: ev?.reason || "" }); }
+  function wsError(err = {}) { push("WS_ERROR", { message: String(err?.message || err || "error") }); }
+
+  function trackPreProposal(item, payload = {}) {
+    const pp = payload && typeof payload === "object" ? payload : {};
+    state.lastPreProposal = {
+      at: timeText(),
+      item_id: String(item?.id || ""),
+      symbol: String(item?.symbol || pp.symbol || ""),
+      direction: String(item?.direction || pp.side || ""),
+      status: String(pp.status || "cleared"),
+      side: String(pp.side || ""),
+      stake: Number(pp.stake || 0),
+      proposal_id: pp.proposal_id ? String(pp.proposal_id) : "",
+      prepared_ms: Number(pp.prepared_ms || pp.prepared_start_ms || pp.error_ms || 0),
+      error: pp.error ? String(pp.error) : "",
+      timing: pp.timing ? mask(pp.timing) : null,
+    };
+    push("PREPROPOSAL_" + (state.lastPreProposal.status || "UPDATE").toUpperCase(), { summary: state.lastPreProposal.status, preproposal: state.lastPreProposal });
+  }
+
+  function trackAuto58Cancel(detail = {}) {
+    state.lastAuto58Cancel = { at: timeText(), ...mask(detail) };
+    push("AUTO58_CANCEL", { code: detail.code || "", message: detail.message || "", detail: state.lastAuto58Cancel });
+  }
+
+  window.DerivDebug = {
+    state,
+    log: push,
+    render,
+    trackSend,
+    trackTimeout,
+    trackMessage,
+    wsOpen,
+    wsClose,
+    wsError,
+    trackPreProposal,
+    trackAuto58Cancel,
+    mask,
+  };
+
+  setTimeout(() => render(), 800);
+})();
+
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V84_PAUSA_VISUAL_IMAGEN_20260530";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_1_DEBUG_PROPOSAL_20260604";
 
 /*
   Mapa rápido de módulos:
@@ -3068,9 +3369,78 @@ function getValidAutoPreProposal(item, side, symbol, stake) {
   if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
   return pp;
 }
+function getAutoPreProposalDebugReason(item, side, symbol, stake) {
+  const safeSide = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  const sym = String(symbol || item?.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
+  const st = Number(stake);
+  const pp = item?.signalAutoPreProposal || null;
+  const ms = Math.round(Number(getSignalConfirmationMs(item) || 0));
+  const out = (code, message, extra = {}) => ({
+    code,
+    message,
+    item_id: String(item?.id || ""),
+    symbol: sym,
+    side: safeSide || "",
+    stake: Number.isFinite(st) ? Number(st.toFixed(2)) : null,
+    ms,
+    wsOpen: !!(ws && ws.readyState === 1),
+    isAuthorized: !!isAuthorized,
+    authorizeInFlight: !!authorizeInFlight,
+    hasToken: !!getDerivToken(),
+    preproposal: pp ? { ...pp } : null,
+    ...extra,
+  });
+
+  if (!item) return out("SIN_ITEM", "No hay señal/item para validar proposal.");
+  if (!getDerivToken()) return out("SIN_TOKEN", `No hay token ${getTradingAccountLabel()} guardado.`);
+  if (!ws || ws.readyState !== 1) return out("WS_CERRADO", "WebSocket cerrado: no se pudo pedir/usar proposal.");
+  if (authorizeInFlight && !isAuthorized) return out("AUTHORIZE_EN_CURSO", "Deriv todavía está autorizando el token.");
+  if (!isAuthorized) return out("NO_AUTORIZADO", "El token todavía no quedó autorizado dentro de la PWA.");
+  if (!isNextCandleExpiryTiming()) return out("TIMING_SIN_PREPROP", "Este timing no requiere proposal prearmada.");
+  if (shouldUseAutoHighLowExecution()) return out("HIGHLOW_ACTIVO", "High/Low usa otro flujo de proposal; no es Rise/Fall prearmado.");
+  if (!safeSide) return out("SIN_DIRECCION", "No hay dirección CALL/PUT válida.");
+  if (!Number.isFinite(st) || st <= 0) return out("STAKE_INVALIDO", "Stake inválido para armar proposal.");
+  if (!isAutoPreProposalWindow(item)) {
+    return out("FUERA_VENTANA_PREPROP", `La proposal se arma entre ${Math.round(SIGNAL_AUTO_PREPROPOSAL_START_MS / 1000)}-${Math.round(SIGNAL_AUTO_PREPROPOSAL_END_MS / 1000)}s; ahora va en ${Math.round(ms / 1000)}s.`, {
+      expected_window_ms: [SIGNAL_AUTO_PREPROPOSAL_START_MS, SIGNAL_AUTO_PREPROPOSAL_END_MS],
+    });
+  }
+  if (!pp) return out("FALTA_PREPROPOSAL", "No existe signalAutoPreProposal en la señal.");
+
+  const status = String(pp.status || "");
+  if (status === "preparing") return out("PROPOSAL_PENDIENTE", "La proposal fue pedida pero Deriv todavía no respondió.");
+  if (status === "error") return out("PROPOSAL_ERROR", `Deriv rechazó la proposal: ${String(pp.error || "sin detalle")}.`);
+  if (status !== "ready") return out("PROPOSAL_STATUS_INVALIDO", `Estado de proposal inválido: ${status || "vacío"}.`);
+  if (String(pp.side || "") !== safeSide) return out("PROP_OTRA_DIRECCION", `La proposal es ${pp.side || "?"}, pero la señal final es ${safeSide}.`);
+  if (String(pp.symbol || "") !== sym) return out("PROP_OTRO_SIMBOLO", `La proposal es de ${pp.symbol || "?"}, pero el símbolo actual es ${sym}.`);
+  const ppStake = Number(pp.stake);
+  if (!Number.isFinite(ppStake) || Math.abs(ppStake - st) > 0.005) return out("PROP_OTRO_STAKE", `La proposal es stake ${ppStake}, pero el stake actual es ${st}.`);
+  if (!pp.proposal_id) return out("FALTA_PROPOSAL_ID", "Deriv respondió pero no hay proposal_id guardado.");
+  if (!Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return out("ASK_PRICE_INVALIDO", "La proposal guardada tiene ask_price inválido.");
+
+  try {
+    const plan = buildNextCandleTimingPlan(item);
+    if (Number(pp?.timing?.next_expiry_epoch_sec || 0) !== Number(plan.next_expiry_epoch_sec)) {
+      return out("PROP_EXPIRY_NO_COINCIDE", "La proposal fue armada para otro vencimiento/minuto.", {
+        expected_expiry: Number(plan.next_expiry_epoch_sec),
+        proposal_expiry: Number(pp?.timing?.next_expiry_epoch_sec || 0),
+      });
+    }
+  } catch {}
+
+  const age = Date.now() - Number(pp.prepared_at || 0);
+  if (!Number.isFinite(age) || age > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return out("PROP_VIEJA", `La proposal venció localmente: edad ${Math.round(age / 1000)}s.`);
+
+  return out("OK", "Proposal prearmada válida.");
+}
+function formatAutoPreProposalDebugMessage(item, side, symbol, stake) {
+  const d = getAutoPreProposalDebugReason(item, side, symbol, stake);
+  return `${d.code}: ${d.message}`;
+}
 function markAutoPreProposalOnItem(item, payload) {
   if (!item) return;
   item.signalAutoPreProposal = payload && typeof payload === "object" ? { ...payload } : null;
+  try { window.DerivDebug?.trackPreProposal?.(item, item.signalAutoPreProposal || {}); } catch {}
   try { saveHistory(history); } catch {}
   try { if (modalCurrentItem && item.id && modalCurrentItem.id === item.id) updateSignalConfirmationUI(); } catch {}
 }
@@ -3152,23 +3522,29 @@ async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preprop
 }
 function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUTO_PREPROPOSAL_MISSING") {
   if (!item || item?.signalAutoEntry?.attempted) return false;
-  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  const safeSide = normalizeSignalConfirmationSide(side) || "";
+  const label = safeSide === "CALL" ? "COMPRA" : "VENTA";
+  const symbol = String(item?.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
+  const stake = Number(getEffectiveTradeStake().toFixed(2));
+  const detail = getAutoPreProposalDebugReason(item, safeSide, symbol, stake);
+  try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
   item.signalAutoEntry = {
     type: "AUTO_58_REAL",
     attempted: true,
     status: "cancelled",
-    side: normalizeSignalConfirmationSide(side) || "",
+    side: safeSide,
     ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
     sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
-    reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
+    reason: `${String(reason || "AUTO_PREPROPOSAL_MISSING")}:${detail.code}`,
     at: Date.now(),
-    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o desactivá Cierre visual (vela) para probar cierre 60s.",
+    error: `Cancelada: ${detail.message}`,
     post58_readiness: { ...(readiness || {}) },
     preproposal: item?.signalAutoPreProposal || null,
+    preproposal_debug: detail,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
-  toast(`⛔ AUTO ${label} cancelada: proposal no prearmada`, 2400);
+  toast(`⛔ AUTO ${label} cancelada: ${detail.code}`, 3200);
   return true;
 }
 function scanSignalAutoPreProposals() {
@@ -5425,8 +5801,11 @@ async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
     if (pp) item.signalAutoPreProposal = { ...pp };
   } catch {}
   if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && !item.signalAutoPreProposal) {
-    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: "Cancelada: proposal no prearmada antes del post-58." };
-    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: proposal no prearmada`, "error");
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    const detail = getAutoPreProposalDebugReason(item, safeSide, sym, stake);
+    try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
+    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: `Cancelada: ${detail.message}`, debug: detail };
+    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: ${detail.code}`, "error");
     return false;
   }
   item.signalAutoEntry = {
@@ -12573,16 +12952,33 @@ const pending = new Map();
 
 function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
+    if (!ws || ws.readyState !== 1) {
+      try { window.DerivDebug?.log?.("WS_REQUEST_BLOCKED", { reason: "WS_NOT_OPEN", payload: window.DerivDebug?.mask?.(payload) || payload }); } catch {}
+      return reject(new Error("WS not open"));
+    }
 
     const req_id = reqSeq++;
+    const fullPayload = { ...payload, req_id };
+
+    try { window.DerivDebug?.trackSend?.(fullPayload, "WS_REQUEST"); } catch {}
+
     const t = setTimeout(() => {
       pending.delete(req_id);
+      try { window.DerivDebug?.trackTimeout?.(fullPayload); } catch {}
       reject(new Error("timeout"));
     }, timeoutMs);
 
-    pending.set(req_id, { resolve, reject, t });
-    ws.send(JSON.stringify({ ...payload, req_id }));
+    pending.set(req_id, {
+      resolve: (data) => {
+        try { window.DerivDebug?.trackMessage?.(data); } catch {}
+        resolve(data);
+      },
+      reject,
+      t,
+      payload: fullPayload,
+    });
+
+    ws.send(JSON.stringify(fullPayload));
   });
 }
 
@@ -13014,7 +13410,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         usedPreProposal = true;
       } else {
         if (isStrictAutoPrearmedEntry) {
-          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
+          const detail = getAutoPreProposalDebugReason(itemCtx, side, symbol, stake);
+          try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
+          throw new Error("AUTO post-58 cancelado: " + detail.message + " [" + detail.code + "]");
         }
         const proposalPack = await requestRiseFallProposalWithTiming(side, symbol, stake, itemCtx, 12000);
         const proposal = proposalPack?.res?.proposal;
@@ -13068,7 +13466,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         };
       } else {
         if (isStrictAutoPrearmedEntry) {
-          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
+          const detail = getAutoPreProposalDebugReason(itemCtx, side, symbol, stake);
+          try { window.DerivDebug?.trackAuto58Cancel?.(detail); } catch {}
+          throw new Error("AUTO post-58 cancelado: " + detail.message + " [" + detail.code + "]");
         }
         const buyPack = await buyRiseFallDirectWithTiming(side, symbol, stake, itemCtx, 20000);
         res = buyPack.res;
@@ -19035,6 +19435,7 @@ function connect() {
   }
 
   ws.onopen = async () => {
+    try { window.DerivDebug?.wsOpen?.(); } catch {}
     try {
       resetAuthState();
     } catch {}
@@ -19056,6 +19457,10 @@ function connect() {
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+
+      if (!(data && data.req_id && pending.has(data.req_id))) {
+        try { window.DerivDebug?.trackMessage?.(data); } catch {}
+      }
 
       if (data && data.req_id && pending.has(data.req_id)) {
         const p = pending.get(data.req_id);
@@ -19096,11 +19501,13 @@ function connect() {
     }
   };
 
-  ws.onerror = () => {
+  ws.onerror = (err) => {
+    try { window.DerivDebug?.wsError?.(err); } catch {}
     setStatus("Error WS – reconectando…");
   };
 
   ws.onclose = (ev) => {
+    try { window.DerivDebug?.wsClose?.(ev); } catch {}
     try {
       resetAuthState();
     } catch {}
