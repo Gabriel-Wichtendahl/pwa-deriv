@@ -1,3 +1,4 @@
+// v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
 // v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
 // v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
 // v106.1: diagnóstico proposal/auth.
@@ -1771,9 +1772,12 @@ const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 const SIGNAL_AUTO_POST58_MAX_MS = 59200;
 const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 // V66: preparar proposal ANTES del post-58 para que en 58 solo se compre.
-const SIGNAL_AUTO_PREPROPOSAL_START_MS = 56000;
-const SIGNAL_AUTO_PREPROPOSAL_END_MS = 58000;
+const SIGNAL_AUTO_PREPROPOSAL_START_MS = 52000;
+const SIGNAL_AUTO_PREPROPOSAL_END_MS = 59000;
 const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 10000;
+// V106.4: con API nueva PAT/OTP no bloqueamos la operación si la proposal no quedó prearmada.
+// Si no está lista, la PWA intenta pedir proposal rápida/direct buy en el post-58.
+const SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT = false;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
@@ -3324,15 +3328,15 @@ async function requestRiseFallProposalWithTiming(side, symbol, stake, item = nul
   for (const variant of variants) {
     try {
       const payload = { proposal: 1, ...variant.params };
-      if (isNewPatApiMode()) DerivDebug?.log?.("PROPOSAL_NEW_ATTEMPT", { label: variant.label, payload });
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_ATTEMPT", { label: variant.label, payload });
       const res = await wsRequest(payload, timeoutMs);
       if (res?.error) throw new Error(res.error.message || res.error.code || "proposal error");
-      if (isNewPatApiMode()) DerivDebug?.log?.("PROPOSAL_NEW_OK", { label: variant.label, proposal_id: res?.proposal?.id || "" });
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_OK", { label: variant.label, proposal_id: res?.proposal?.id || "" });
       return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
     } catch (e) {
       const errText = `${variant.label}: ${e?.message || e}`;
       errors.push(errText);
-      if (isNewPatApiMode()) DerivDebug?.log?.("PROPOSAL_NEW_REJECTED", { error: errText });
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_REJECTED", { error: errText });
     }
   }
 
@@ -3341,18 +3345,28 @@ async function requestRiseFallProposalWithTiming(side, symbol, stake, item = nul
   throw new Error(`Deriv rechazó proposal API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
 }
 async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, timeoutMs = 20000) {
-  const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const baseVariants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const variants = isNewPatApiMode()
+    ? buildNewApiRiseFallProposalAttempts(baseVariants, side, symbol, stake, item)
+    : baseVariants;
   const errors = [];
   for (const variant of variants) {
     try {
-      const res = await wsRequest({ buy: 1, price: stake, parameters: variant.params }, timeoutMs);
+      const payload = { buy: 1, price: Number(stake), parameters: variant.params };
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_ATTEMPT", { label: variant.label, payload });
+      const res = await wsRequest(payload, timeoutMs);
       if (res?.error) throw new Error(res.error.message || res.error.code || "buy error");
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_OK", { label: variant.label, contract_id: res?.buy?.contract_id || "" });
       return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
     } catch (e) {
-      errors.push(`${variant.label}: ${e?.message || e}`);
+      const errText = `${variant.label}: ${e?.message || e}`;
+      errors.push(errText);
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_REJECTED", { error: errText });
     }
   }
-  throw new Error(`Deriv rechazó la compra con timing de próxima vela (${errors.join(" | ")}). Probá desactivar Cierre visual (vela) o revisar el timing.`);
+  const shortErrors = errors.slice(0, 8).join(" | ");
+  const extra = errors.length > 8 ? ` | +${errors.length - 8} intentos más` : "";
+  throw new Error(`Deriv rechazó la compra API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
 }
 
 function getAutoPreProposalKey(item, side, symbol, stake) {
@@ -3375,7 +3389,18 @@ function getValidAutoPreProposal(item, side, symbol, stake) {
   if (!Number.isFinite(expectedStake) || !Number.isFinite(ppStake) || Math.abs(expectedStake - ppStake) > 0.005) return null;
   if (!pp.proposal_id || !Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return null;
   const plan = buildNextCandleTimingPlan(item);
-  if (Number(pp?.timing?.next_expiry_epoch_sec || 0) !== Number(plan.next_expiry_epoch_sec)) return null;
+  const ppExpiry = Number(pp?.timing?.next_expiry_epoch_sec || 0);
+  const planExpiry = Number(plan.next_expiry_epoch_sec || 0);
+  const ppVariant = String(pp?.timing?.variant || pp?.timing?.mode || "");
+  // V106.4:
+  // En API nueva podemos terminar usando fallback duration_2s / duration_1m.
+  // Esos fallbacks no traen next_expiry_epoch_sec, pero la proposal sí es válida.
+  // Antes se rechazaba como "no prearmada" aunque Deriv ya la hubiera devuelto OK.
+  const isDurationFallback =
+    ppVariant.includes("new_api_duration_2s") ||
+    ppVariant.includes("new_api_duration_1m") ||
+    ppVariant.includes("AUTO58_NEW_API_DURATION");
+  if (!isDurationFallback && ppExpiry && planExpiry && ppExpiry !== planExpiry) return null;
   if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
   return pp;
 }
@@ -3473,7 +3498,7 @@ function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUT
     sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
     reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
     at: Date.now(),
-    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o desactivá Cierre visual (vela) para probar cierre 60s.",
+    error: "Cancelada: la proposal no estaba prearmada. En v106.4 esto solo debe ocurrir si el modo estricto de prearmado está activado.",
     post58_readiness: { ...(readiness || {}) },
     preproposal: item?.signalAutoPreProposal || null,
   };
@@ -9869,9 +9894,23 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     const symbol = String(item.symbol || SYMBOLS[0] || "R_25");
     const stake = Number(getEffectiveTradeStake().toFixed(2));
     const pp = getValidAutoPreProposal(item, side, symbol, stake);
-    if (!pp) {
+    if (!pp && SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT) {
       cancelSignalAutoEntryNoPreProposal(item, side, post58, "AUTO_PREPROPOSAL_MISSING");
       return false;
+    }
+    if (!pp) {
+      // V106.4: no cancelamos por "no prearmada".
+      // Permitimos que buyOneClick pida proposal rápida / direct buy en el post-58.
+      item.signalAutoPreProposal ||= {};
+      item.signalAutoPreProposal.status = "fallback_post58";
+      item.signalAutoPreProposal.side = side;
+      item.signalAutoPreProposal.symbol = symbol;
+      item.signalAutoPreProposal.stake = stake;
+      item.signalAutoPreProposal.reason = "NO_PREARMADA_USA_FALLBACK_POST58";
+      item.signalAutoPreProposal.fallback_at = Date.now();
+      item.signalAutoPreProposal.fallback_ms = Math.round(Number(post58?.ms || getSignalConfirmationMs(item)));
+      try { saveHistory(history); } catch {}
+      try { window.DerivDebug?.log?.("AUTO58_NO_PREARM_FALLBACK", { item_id: item.id, symbol, side, stake, ms: item.signalAutoPreProposal.fallback_ms }); } catch {}
     }
   }
 
@@ -9901,7 +9940,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO prearmado: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO 58: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -13539,7 +13578,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
       ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
       : null;
-    const isStrictAutoPrearmedEntry = !!(isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
+    const isStrictAutoPrearmedEntry = !!(SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT && isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
     if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
     if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
     else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
