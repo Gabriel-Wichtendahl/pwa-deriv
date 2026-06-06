@@ -164,11 +164,11 @@
 
       <div class="minuteCanvasWrap">
         <canvas id="minuteCanvas"></canvas>
-        <div class="minuteCanvasToolbar hidden" aria-label="Controles de vista del gráfico">
+        <div class="minuteCanvasToolbar" aria-label="Controles de vista del gráfico">
           <button id="modalReplayBtn" class="modalReplayBtn hidden" type="button" title="Reproducir tick por tick la vela de la señal">🔎 Replay</button>
           <button id="modalCandle1mBtn" class="modalChartViewBtn" type="button" aria-pressed="false" title="Ver mini gráfico de velas de 1 minuto">🕯️ Velas 1m</button>
         </div>
-        <div id="modalNavVoteBar" class="modalNavVoteBar hidden" aria-label="Navegación y feedback del modal">
+        <div id="modalNavVoteBar" class="modalNavVoteBar" aria-label="Navegación y feedback del modal">
           <button id="modalPrevItemBtn" class="modalQuickBtn modalNavBtn" type="button" aria-label="Anterior">←</button>
           <div class="modalVoteGroup" aria-label="Feedback">
             <button id="modalLikeBtn" class="modalQuickBtn modalVoteBtn" type="button" data-v="like" aria-label="Me gusta">👍</button>
@@ -179,26 +179,27 @@
       </div>
 
       <div class="modalFooter">
-        <div id="modalCandleStatus" class="candleStatusBar" role="status">
-          <button id="modalPrevStatusBtn" class="modalQuickBtn modalNavBtn modalStatusNavBtn" type="button" aria-label="Anterior">←</button>
-          <div id="modalCandleStatusText" class="candleStatusText">—</div>
-          <button id="modalNextStatusBtn" class="modalQuickBtn modalNavBtn modalStatusNavBtn" type="button" aria-label="Siguiente">→</button>
+        <div class="modalStatusNavRow">
+          <div id="modalFooterPrevSlot" class="modalStatusNavSlot"></div>
+          <div id="modalCandleStatus" class="candleStatusBar" role="status">—</div>
+          <div id="modalFooterNextSlot" class="modalStatusNavSlot"></div>
         </div>
 
-        <div id="modalAnalysisRow" class="tradeRow modalAnalysisRow">
-          <div id="modalAnalysisSummaryCard" class="modalInfoCard modalSummaryCard">
-            <div class="modalInfoCardTitle">Lectura visual</div>
-            <div id="modalSequenceText" class="modalSequenceText">—</div>
-          </div>
-          <div id="modalAnalysisActionsCard" class="modalInfoCard modalActionsCard">
-            <div class="modalInfoCardTitle">Acciones</div>
-            <div id="modalActionButtons" class="modalActionButtons"></div>
-          </div>
-        </div>
-
-        <div class="tradeRow modalTradeRow">
+        <div class="tradeRow">
           <button id="modalBuyCallBtn" class="btn" type="button">🟢 AUTO 58 COMPRA</button>
           <button id="modalBuyPutBtn" class="btn" type="button">🔴 AUTO 58 VENTA</button>
+        </div>
+
+        <div id="modalReadingInfoRow" class="modalReadingInfoRow">
+          <div class="modalReadingCard modalReadingSequenceCard">
+            <div class="modalReadingCardLabel">Lectura visual</div>
+            <div id="modalSequenceText" class="modalSequenceText">—</div>
+          </div>
+          <div class="modalReadingCard modalReadingActionsCard">
+            <div class="modalReadingCardLabel">Acciones</div>
+            <div id="modalFooterVoteSlot" class="modalFooterVoteSlot"></div>
+            <div id="modalFooterChartTools" class="modalFooterChartTools"></div>
+          </div>
         </div>
 
         <button id="modalOpenDerivBtn" class="btn btnPrimary openDerivBtn" type="button">Abrir Deriv</button>
@@ -227,12 +228,6 @@
           <button id="wakeBtn" class="btn" type="button">🔓 Pantalla activa</button>
           <button id="themeBtn" class="btn" type="button">🌙 Oscuro</button>
 
-          <div class="btnGroup" aria-label="Segundo de evaluación">
-            <button class="btn evalBtn" type="button" data-sec="35">⏱️ 35s</button>
-            <button class="btn evalBtn" type="button" data-sec="40">⏱️ 40s</button>
-            <button class="btn evalBtn" type="button" data-sec="45">⏱️ 45s</button>
-          </div>
-          <button id="modeBtn" class="btn btnGhost" type="button">🎯 SNR interacción</button>
           <button id="executionModeBtn" class="btn btnGhost" type="button">↕️ Rise/Fall 1m</button>
           <button id="autoOpenChartBtn" class="btn btnGhost" type="button">📈 Auto-abrir gráfico OFF</button>
           <button id="autoReplayX2Btn" class="btn btnGhost" type="button">🎬 Auto Replay X2 ON</button>

@@ -1,3 +1,15 @@
+// v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
+// v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
+// v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
+// v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-25 y no dispara temprano.
+// v106.8: agrega modo Reducción visual 25s con motor de silueta G-P/P-G independiente.
+// v106.7: agrega modo Reducción visual 25s independiente.
+// v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
+// v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
+// v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
+// v106.1: diagnóstico proposal/auth.
+// v106.6: calibra Alcista quiebres 30s: bloquea doble suelo/simetría/comprador recargado; mantiene v106.4 API nueva.
+// v106.6.1: fix Parse WS visibleBreakCount no definido.
 // v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
 // v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
 // v104: rollback soportes modal
@@ -67,7 +79,7 @@
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V84_PAUSA_VISUAL_IMAGEN_20260530";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_3_API_NUEVA_PROPOSAL_COMPAT_20260604";
 
 /*
   Mapa rápido de módulos:
@@ -127,6 +139,19 @@ const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
 const DERIV_TOKEN_REAL_KEY = "derivRealToken_v1";
 const TRADE_STAKE_KEY = "tradeStake_v1";
 
+// V106.2: Deriv migró parte de cuentas a la API nueva.
+// LEGACY usa: wss://ws.derivws.com/websockets/v3 + { authorize: token }.
+// API NUEVA usa: PAT + App ID + Account ID -> REST OTP -> WebSocket autenticado.
+const DERIV_API_MODE_KEY = "derivApiMode_v1";
+const DERIV_API_MODE_LEGACY = "legacy";
+const DERIV_API_MODE_NEW_PAT = "new_pat_otp";
+const DERIV_NEW_PAT_KEY = "derivNewPatToken_v1";
+const DERIV_NEW_APP_ID_KEY = "derivNewApiAppId_v1";
+const DERIV_NEW_ACCOUNT_DEMO_KEY = "derivNewApiAccountId_demo_v1";
+const DERIV_NEW_ACCOUNT_REAL_KEY = "derivNewApiAccountId_real_v1";
+const DERIV_NEW_ACCOUNTS_CACHE_KEY = "derivNewApiAccountsCache_v1";
+const DERIV_NEW_API_BASE = "https://api.derivws.com";
+
 const DEFAULT_STAKE = 1; // USD
 const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
@@ -153,7 +178,7 @@ const C100_LEVELS = [
 // V68: stake base IC2 por escalones de saldo.
 // Menos de 210 => base 100 => stake 5.
 // 210/310/410/510/610... => base 200/300/400/500/600...
-// Tope final: al llegar a 2000 exactos o más => base 2000 / stake 100.
+// Tope final: al llegar a 2000 visuals o más => base 2000 / stake 100.
 const C100_BALANCE_STEP_ENABLED = true;
 const C100_BALANCE_STEP_PERCENT = 0.05;
 const C100_BALANCE_STEP_MIN_BASE = 100;
@@ -553,7 +578,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     const resultX = cx1 - 58;
     const closeY = Number.isFinite(closeQuote) ? yOf(closeQuote) : ey;
 
-    // Punto de entrada exacto
+    // Punto de entrada visual
     ctx.shadowColor = tradeGlow;
     ctx.shadowBlur = 8;
     ctx.strokeStyle = tradeColor;
@@ -845,7 +870,9 @@ const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
-const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR 30S";
+const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR QUIEBRES 30S";
+const MODE_ALCISTA_REDUCCION_30S = "ALCISTA REDUCCIÓN 30S";
+const MODE_REDUCCION_VISUAL_25S = "REDUCCIÓN VISUAL 25S";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -859,7 +886,9 @@ const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_K
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
-const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_30S_EVITA_LATERALIZACION_COLOR_V106_20260604";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
+const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_MACRO_IMPULSOS_V106_9_3_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -869,11 +898,14 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
-  if ((raw.includes("ALCISTA") && raw.includes("IRREGULAR")) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
+  if ((raw.includes("REDUCCION") || raw.includes("REDUCCIÓN")) && (raw.includes("VISUAL") || raw.includes("VISUAL") || raw.includes("25S") || raw.includes("25 S") || raw.includes("GMP") || raw.includes("G-M-P") || raw.includes("G-P") || raw.includes("P-G"))) return MODE_REDUCCION_VISUAL_25S;
+  if (raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL") || raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL")) return MODE_REDUCCION_VISUAL_25S;
+  if ((raw.includes("ALCISTA") && (raw.includes("REDUCCION") || raw.includes("REDUCCIÓN"))) || raw.includes("ALCISTA_REDUCCION") || raw.includes("ALCISTA REDUCCION")) return MODE_ALCISTA_REDUCCION_30S;
+  if ((raw.includes("ALCISTA") && (raw.includes("QUIEBRE") || raw.includes("IRREGULAR"))) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
-  return MODE_SNR_SEGUNDO_TOQUE;
+  return MODE_REDUCCION_VISUAL_25S;
 }
 function isDynamicLineMode(mode) {
   return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
@@ -885,7 +917,17 @@ function isRupturaDebilGiroMode(mode) {
   return normalizeSignalMode(mode) === MODE_RUPTURA_DEBIL_GIRO;
 }
 function isAlcistaIrregular25sMode(mode) {
+  const m = normalizeSignalMode(mode);
+  return m === MODE_ALCISTA_IRREGULAR_25S || m === MODE_ALCISTA_REDUCCION_30S;
+}
+function isAlcistaQuiebres30sMode(mode) {
   return normalizeSignalMode(mode) === MODE_ALCISTA_IRREGULAR_25S;
+}
+function isAlcistaReduccion30sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_ALCISTA_REDUCCION_30S;
+}
+function isReduccionExacta25sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_REDUCCION_VISUAL_25S;
 }
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
@@ -896,21 +938,24 @@ function getModeVersion(mode) {
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
   if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
   if (m === MODE_ALCISTA_IRREGULAR_25S) return ALCISTA_IRREGULAR_25S_LOGIC_VERSION;
+  if (m === MODE_ALCISTA_REDUCCION_30S) return ALCISTA_REDUCCION_30S_LOGIC_VERSION;
+  if (m === MODE_REDUCCION_VISUAL_25S) return REDUCCION_VISUAL_25S_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
+  // V106.9.2 CLEAN: modo único. Siempre Reducción visual 25s.
   try {
-    const stored = localStorage.getItem(ANALYSIS_MODE_KEY);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_VISUAL_25S);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
-    return normalizeSignalMode(stored || MODE_SNR_SEGUNDO_TOQUE);
   } catch {}
-  return MODE_SNR_SEGUNDO_TOQUE;
+  return MODE_REDUCCION_VISUAL_25S;
 }
 function saveAnalysisMode(mode) {
+  // V106.9.2 CLEAN: ignoramos cambios de modo; queda fijo en Reducción visual 25s.
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, normalizeSignalMode(mode));
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_VISUAL_25S);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
@@ -919,17 +964,15 @@ function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
-  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🟢 Alcista irregular 30s";
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
+  if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 Reducción visual 25s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
-  const m = normalizeSignalMode(mode);
-  if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
-  if (m === MODE_SNR_POLARIDAD) return MODE_RUPTURA_DEBIL_GIRO;
-  if (m === MODE_RUPTURA_DEBIL_GIRO) return MODE_ALCISTA_IRREGULAR_25S;
-  if (m === MODE_ALCISTA_IRREGULAR_25S) return MODE_LINEA_DINAMICA;
-  return MODE_SNR_SEGUNDO_TOQUE;
+  // V106.9.2 CLEAN: modo único.
+  return MODE_REDUCCION_VISUAL_25S;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -1731,14 +1774,13 @@ const modalPrevItemBtn = $("modalPrevItemBtn");
 const modalNextItemBtn = $("modalNextItemBtn");
 const modalLikeBtn = $("modalLikeBtn");
 const modalDislikeBtn = $("modalDislikeBtn");
-const modalPrevStatusBtn = $("modalPrevStatusBtn");
-const modalNextStatusBtn = $("modalNextStatusBtn");
-const modalCandleStatusText = $("modalCandleStatusText");
-const modalAnalysisRow = $("modalAnalysisRow");
-const modalAnalysisSummaryCard = $("modalAnalysisSummaryCard");
-const modalAnalysisActionsCard = $("modalAnalysisActionsCard");
-const modalActionButtons = $("modalActionButtons");
+const modalFooterPrevSlot = $("modalFooterPrevSlot");
+const modalFooterNextSlot = $("modalFooterNextSlot");
+const modalFooterVoteSlot = $("modalFooterVoteSlot");
+const modalFooterChartTools = $("modalFooterChartTools");
+const modalReadingInfoRow = $("modalReadingInfoRow");
 const modalSequenceText = $("modalSequenceText");
+let modalFooterControlsRelocated = false;
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
 let signalConfirmCountEl = null;
@@ -1763,9 +1805,12 @@ const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 const SIGNAL_AUTO_POST58_MAX_MS = 59200;
 const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 // V66: preparar proposal ANTES del post-58 para que en 58 solo se compre.
-const SIGNAL_AUTO_PREPROPOSAL_START_MS = 56000;
-const SIGNAL_AUTO_PREPROPOSAL_END_MS = 58000;
+const SIGNAL_AUTO_PREPROPOSAL_START_MS = 52000;
+const SIGNAL_AUTO_PREPROPOSAL_END_MS = 59000;
 const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 10000;
+// V106.4: con API nueva PAT/OTP no bloqueamos la operación si la proposal no quedó prearmada.
+// Si no está lista, la PWA intenta pedir proposal rápida/direct buy en el post-58.
+const SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT = false;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
@@ -1951,6 +1996,8 @@ function ensureResetCacheButton() {
    State
 ========================= */
 let ws;
+let tradeWs = null;
+let tradeWsConnectPromise = null;
 
 let soundEnabled = false;
 let vibrateEnabled = true;
@@ -2120,11 +2167,16 @@ function getStakeLabelEl() {
 function syncTokenInputWithCurrentAccount() {
   const tokenInput = getTokenInputEl();
   const tokenLabel = getTokenLabelEl();
-  if (tokenLabel) tokenLabel.textContent = `Token ${getTradingAccountLabel()} Deriv`;
+  const apiLabel = isNewPatApiMode() ? "PAT API nueva" : `Token ${getTradingAccountLabel()} Deriv`;
+  if (tokenLabel) tokenLabel.textContent = apiLabel;
   if (!tokenInput) return;
   tokenInput.value = getDerivToken() || "";
-  tokenInput.placeholder = `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
-  tokenInput.title = `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
+  tokenInput.placeholder = isNewPatApiMode()
+    ? "Pegá tu PAT de developers.deriv.com (scope trade)"
+    : `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
+  tokenInput.title = isNewPatApiMode()
+    ? "PAT de la API nueva. Se usa con App ID y Account ID para pedir OTP."
+    : `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
 }
 function syncStakeInputWithCurrentAccount() {
   const stakeInput = getStakeInputEl();
@@ -2164,7 +2216,9 @@ function ensureTradingAccountButton() {
     updateMentalCooldownUI();
     applyLiveAnalysisPauseUI();
     resetAuthState();
+    resetNewApiTradingSocket();
     syncAccountScopedSettingsUI();
+    syncNewApiSettingsInputs();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
     try {
@@ -2236,6 +2290,155 @@ function applyTradingAccountBannerUI() {
   el.style.background = "rgba(127,29,29,.85)";
   el.style.borderColor = "rgba(248,113,113,.45)";
   el.style.boxShadow = "0 8px 24px rgba(127,29,29,.22)";
+}
+
+/* =========================
+   V106.2 Panel API nueva PAT/OTP
+========================= */
+function ensureDerivApiModePanel() {
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+  if (!host) return null;
+
+  let panel = document.getElementById("derivApiModePanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "derivApiModePanel";
+    panel.style.gridColumn = "1 / -1";
+    panel.style.padding = "10px";
+    panel.style.borderRadius = "16px";
+    panel.style.border = "1px solid rgba(168,85,247,.38)";
+    panel.style.background = "linear-gradient(180deg, rgba(168,85,247,.12), rgba(255,255,255,.025))";
+    panel.style.boxShadow = "0 0 22px rgba(168,85,247,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <div style="font-weight:950;font-size:15px;letter-spacing:.2px;">API Deriv</div>
+        <div id="derivApiModeBadge" style="font-weight:950;font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.16);">—</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+        <button id="derivApiModeBtn" class="btn btnGhost" type="button">Cambiar API</button>
+        <label class="fieldLabel" for="derivNewAppIdInput">App ID API nueva</label>
+        <input id="derivNewAppIdInput" class="fieldInput" type="text" inputmode="numeric" placeholder="App ID de developers.deriv.com" autocomplete="off" />
+        <label class="fieldLabel" for="derivNewDemoAccountInput">Account ID DEMO API nueva</label>
+        <input id="derivNewDemoAccountInput" class="fieldInput" type="text" placeholder="Ej: DOT... / cuenta demo" autocomplete="off" />
+        <label class="fieldLabel" for="derivNewRealAccountInput">Account ID REAL API nueva</label>
+        <input id="derivNewRealAccountInput" class="fieldInput" type="text" placeholder="Ej: DOT... / cuenta real" autocomplete="off" />
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button id="derivNewSaveApiBtn" class="btn btnGhost" type="button">💾 Guardar API</button>
+          <button id="derivNewDiscoverAccountsBtn" class="btn btnGhost" type="button">🔎 Cuentas</button>
+        </div>
+        <button id="derivNewTestConnectionBtn" class="btn btnGhost" type="button">🧪 Probar API nueva / OTP</button>
+        <div id="derivNewApiStatus" style="font-size:12px;line-height:1.35;color:var(--muted,#94a3b8);">Legacy: usa token viejo. API nueva: PAT + App ID + Account ID.</div>
+      </div>
+    `;
+
+    const tokenWrap = getTokenInputEl()?.closest?.(".fieldWrap");
+    if (tokenWrap && tokenWrap.parentElement === host) tokenWrap.insertAdjacentElement("beforebegin", panel);
+    else host.prepend(panel);
+  }
+
+  const modeBtn = panel.querySelector("#derivApiModeBtn");
+  const saveBtn = panel.querySelector("#derivNewSaveApiBtn");
+  const discoverBtn = panel.querySelector("#derivNewDiscoverAccountsBtn");
+  const testBtn = panel.querySelector("#derivNewTestConnectionBtn");
+
+  if (modeBtn) {
+    modeBtn.onclick = () => {
+      setDerivApiMode(isNewPatApiMode() ? DERIV_API_MODE_LEGACY : DERIV_API_MODE_NEW_PAT);
+      resetAuthState();
+      resetNewApiTradingSocket();
+      syncAccountScopedSettingsUI();
+      syncNewApiSettingsInputs();
+      updateModalCandleStatusUI();
+      toast(`API: ${getDerivApiModeLabel()}`, 1700);
+    };
+  }
+  if (saveBtn) {
+    saveBtn.onclick = () => {
+      saveNewApiSettingsFromInputs();
+      resetAuthState();
+      resetNewApiTradingSocket();
+      toast("💾 Config API guardada", 1400);
+    };
+  }
+  if (discoverBtn) {
+    discoverBtn.onclick = async () => {
+      saveNewApiSettingsFromInputs();
+      try {
+        setNewApiStatus("Buscando cuentas…");
+        const accounts = await discoverNewApiAccounts({ save: true });
+        syncNewApiSettingsInputs();
+        const txt = accounts.length ? accounts.map((a) => `${a.isDemo ? "DEMO" : "REAL"}: ${a.id}`).join(" · ") : "Sin cuentas";
+        setNewApiStatus(`Cuentas OK: ${txt}`);
+        toast("🔎 Cuentas API nueva detectadas", 1800);
+      } catch (e) {
+        setNewApiStatus(`Error cuentas: ${e?.message || e}`);
+        alert(`Error buscando cuentas: ${e?.message || e}`);
+      }
+    };
+  }
+  if (testBtn) {
+    testBtn.onclick = async () => {
+      saveNewApiSettingsFromInputs();
+      try {
+        setDerivApiMode(DERIV_API_MODE_NEW_PAT);
+        resetAuthState();
+        resetNewApiTradingSocket();
+        syncAccountScopedSettingsUI();
+        syncNewApiSettingsInputs();
+        setNewApiStatus("Pidiendo OTP y conectando WS nuevo…");
+        await ensureNewApiTradingWs({ force: true });
+        setNewApiStatus(`✅ API nueva OK · ${getTradingAccountLabel()} · ${getDerivNewAccountId()}`);
+        toast("✅ API nueva / OTP OK", 1800);
+      } catch (e) {
+        setNewApiStatus(`❌ API nueva: ${e?.message || e}`);
+        alert(`Error API nueva: ${e?.message || e}`);
+      }
+    };
+  }
+
+  syncNewApiSettingsInputs();
+  return panel;
+}
+function setNewApiStatus(msg) {
+  const el = document.getElementById("derivNewApiStatus");
+  if (el) el.textContent = String(msg || "");
+}
+function saveNewApiSettingsFromInputs() {
+  const app = document.getElementById("derivNewAppIdInput");
+  const demo = document.getElementById("derivNewDemoAccountInput");
+  const real = document.getElementById("derivNewRealAccountInput");
+  if (app) setDerivNewAppId(app.value);
+  if (demo) setDerivNewAccountId(ACCOUNT_MODE_DEMO, demo.value);
+  if (real) setDerivNewAccountId(ACCOUNT_MODE_REAL, real.value);
+}
+function syncNewApiSettingsInputs() {
+  const panel = document.getElementById("derivApiModePanel");
+  if (!panel) return;
+  const badge = panel.querySelector("#derivApiModeBadge");
+  const modeBtn = panel.querySelector("#derivApiModeBtn");
+  const app = panel.querySelector("#derivNewAppIdInput");
+  const demo = panel.querySelector("#derivNewDemoAccountInput");
+  const real = panel.querySelector("#derivNewRealAccountInput");
+  const isNew = isNewPatApiMode();
+  if (badge) {
+    badge.textContent = isNew ? "NUEVA" : "LEGACY";
+    badge.style.color = isNew ? "#e9d5ff" : "#cffafe";
+    badge.style.borderColor = isNew ? "rgba(168,85,247,.55)" : "rgba(34,211,238,.48)";
+  }
+  if (modeBtn) {
+    modeBtn.textContent = isNew ? "🟣 Usando API nueva PAT/OTP" : "🔵 Usando API legacy";
+    modeBtn.classList.toggle("active", isNew);
+  }
+  if (app && document.activeElement !== app) app.value = getDerivNewAppId();
+  if (demo && document.activeElement !== demo) demo.value = getDerivNewAccountId(ACCOUNT_MODE_DEMO);
+  if (real && document.activeElement !== real) real.value = getDerivNewAccountId(ACCOUNT_MODE_REAL);
+  const status = isNew
+    ? `API nueva activa · cuenta actual ${getTradingAccountLabel()} · Account ID: ${getDerivNewAccountId() || "faltante"}`
+    : "API legacy activa · usa token viejo de Deriv App.";
+  setNewApiStatus(status);
 }
 
 /* =========================
@@ -2338,7 +2541,7 @@ function getC100StepInfo(balanceRaw = null) {
 
   let base = C100_BALANCE_STEP_MIN_BASE;
   if (balance >= C100_BALANCE_STEP_MAX_BASE) {
-    // Opción B: el último escalón se activa al llegar a 2000 exactos, no en 2010.
+    // Opción B: el último escalón se activa al llegar a 2000 visuals, no en 2010.
     base = C100_BALANCE_STEP_MAX_BASE;
   } else if (balance >= C100_BALANCE_STEP_FIRST_THRESHOLD) {
     // Escalones: 210=>200, 310=>300, 410=>400, 510=>500, 610=>600...
@@ -2888,6 +3091,13 @@ function buildNextCandleTimingPlan(item = null) {
 const RISE_FALL_ALLOW_EQUALS_ENABLED = true;
 function getRiseFallDerivContractType(side) {
   const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+
+  // V106.3:
+  // - API legacy: mantenemos CALLE/PUTE como veníamos usando.
+  // - API nueva PAT/OTP: empezamos con CALL/PUT porque los endpoints nuevos pueden
+  //   rechazar CALLE/PUTE. En la función de proposals agregamos fallbacks.
+  if (isNewPatApiMode()) return s || String(side || "").toUpperCase();
+
   if (!RISE_FALL_ALLOW_EQUALS_ENABLED) return s || String(side || "").toUpperCase();
   if (s === "CALL") return "CALLE";
   if (s === "PUT") return "PUTE";
@@ -2917,6 +3127,126 @@ function buildRiseFallBaseParams(side, symbol, stake) {
     currency: DEFAULT_CURRENCY,
     symbol,
   };
+}
+
+// V106.3: compatibilidad con la API nueva de Options.
+// En la API nueva la documentación muestra proposals con `underlying_symbol`,
+// mientras la API legacy usaba `symbol`. Además algunos símbolos sintéticos
+// aparecen con código nuevo tipo 1HZ100V. Probamos variantes secuenciales
+// para no romper la base que ya generaba señales con R_10/R_25/R_50/R_75/R_100.
+const DERIV_NEW_SYMBOL_FALLBACKS = {
+  R_10: ["R_10", "1HZ10V"],
+  R_25: ["R_25", "1HZ25V"],
+  R_50: ["R_50", "1HZ50V"],
+  R_75: ["R_75", "1HZ75V"],
+  R_100: ["R_100", "1HZ100V"],
+  R_1000: ["R_1000", "1HZ1000V"],
+};
+function uniqList(arr) {
+  return Array.from(new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean)));
+}
+function getNewApiUnderlyingSymbolCandidates(symbol) {
+  const raw = String(symbol || "").trim();
+  return uniqList([raw, ...(DERIV_NEW_SYMBOL_FALLBACKS[raw] || [])]);
+}
+function getRiseFallContractTypeCandidates(side) {
+  const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  if (s === "CALL") return isNewPatApiMode() ? ["CALL", "CALLE"] : [getRiseFallDerivContractType(side), "CALL"];
+  if (s === "PUT") return isNewPatApiMode() ? ["PUT", "PUTE"] : [getRiseFallDerivContractType(side), "PUT"];
+  return [getRiseFallDerivContractType(side)];
+}
+function normalizeProposalParamsForNewApi(params = {}, symbol = "") {
+  if (!isNewPatApiMode()) return { ...params };
+  const p = { ...params };
+  delete p.symbol;
+  p.underlying_symbol = String(p.underlying_symbol || symbol || "");
+  return p;
+}
+function buildNewApiRiseFallProposalAttempts(variants, side, symbol, stake, item = null) {
+  if (!isNewPatApiMode()) return variants;
+
+  const out = [];
+  const contractTypes = getRiseFallContractTypeCandidates(side);
+  const symbols = getNewApiUnderlyingSymbolCandidates(symbol);
+  const seen = new Set();
+
+  function pushAttempt(label, params, timing) {
+    const key = JSON.stringify(params);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ label, params, timing });
+  }
+
+  // 1) Primero intentamos el timing original pero con payload nuevo.
+  for (const v of variants || []) {
+    for (const ct of contractTypes) {
+      for (const sym of symbols) {
+        pushAttempt(
+          `${v.label}_NEW_UNDERLYING_${ct}_${sym}`,
+          normalizeProposalParamsForNewApi({ ...v.params, contract_type: ct, underlying_symbol: sym }, sym),
+          { ...(v.timing || {}), api_new_payload: true, underlying_symbol: sym, contract_type_attempt: ct }
+        );
+      }
+    }
+  }
+
+  // 2) Fallback seguro para post-58: duration 2s.
+  // La proposal se prearma 56-58s, pero se compra después del tick >=58s.
+  // Con duración 2s el cierre queda pegado al segundo 60 aprox.
+  for (const ct of contractTypes) {
+    for (const sym of symbols) {
+      pushAttempt(
+        `AUTO58_NEW_DURATION_2S_${ct}_${sym}`,
+        {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: ct,
+          currency: DEFAULT_CURRENCY,
+          duration: 2,
+          duration_unit: "s",
+          underlying_symbol: sym,
+        },
+        {
+          mode: "AUTO58_NEW_API_DURATION_2S",
+          variant: "new_api_duration_2s",
+          duration: 2,
+          duration_unit: "s",
+          underlying_symbol: sym,
+          contract_type_attempt: ct,
+          message: "Fallback API nueva: compra post-58 con duración 2s para cierre cercano al segundo 60.",
+        }
+      );
+    }
+  }
+
+  // 3) Fallback final: duración 1m con underlying_symbol, por si la cuenta no acepta 2s.
+  for (const ct of contractTypes) {
+    for (const sym of symbols) {
+      pushAttempt(
+        `AUTO58_NEW_DURATION_1M_${ct}_${sym}`,
+        {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: ct,
+          currency: DEFAULT_CURRENCY,
+          duration: 1,
+          duration_unit: "m",
+          underlying_symbol: sym,
+        },
+        {
+          mode: "AUTO58_NEW_API_DURATION_1M",
+          variant: "new_api_duration_1m",
+          duration: 1,
+          duration_unit: "m",
+          underlying_symbol: sym,
+          contract_type_attempt: ct,
+          message: "Fallback API nueva: duración 1m si Deriv rechaza date_expiry/date_start y 2s.",
+        }
+      );
+    }
+  }
+
+  return out;
 }
 function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
   const base = buildRiseFallBaseParams(side, symbol, stake);
@@ -3024,32 +3354,52 @@ function compactAuditFields(obj = {}) {
   return out;
 }
 async function requestRiseFallProposalWithTiming(side, symbol, stake, item = null, timeoutMs = 12000) {
-  const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const baseVariants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const variants = buildNewApiRiseFallProposalAttempts(baseVariants, side, symbol, stake, item);
   const errors = [];
+
   for (const variant of variants) {
     try {
-      const res = await wsRequest({ proposal: 1, ...variant.params }, timeoutMs);
+      const payload = { proposal: 1, ...variant.params };
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_ATTEMPT", { label: variant.label, payload });
+      const res = await wsRequest(payload, timeoutMs);
       if (res?.error) throw new Error(res.error.message || res.error.code || "proposal error");
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_OK", { label: variant.label, proposal_id: res?.proposal?.id || "" });
       return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
     } catch (e) {
-      errors.push(`${variant.label}: ${e?.message || e}`);
+      const errText = `${variant.label}: ${e?.message || e}`;
+      errors.push(errText);
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_REJECTED", { error: errText });
     }
   }
-  throw new Error(`Deriv rechazó el timing de próxima vela (${errors.join(" | ")}). Probá desactivar Cierre visual (vela) o revisar el timing.`);
+
+  const shortErrors = errors.slice(0, 8).join(" | ");
+  const extra = errors.length > 8 ? ` | +${errors.length - 8} intentos más` : "";
+  throw new Error(`Deriv rechazó proposal API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
 }
 async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, timeoutMs = 20000) {
-  const variants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const baseVariants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const variants = isNewPatApiMode()
+    ? buildNewApiRiseFallProposalAttempts(baseVariants, side, symbol, stake, item)
+    : baseVariants;
   const errors = [];
   for (const variant of variants) {
     try {
-      const res = await wsRequest({ buy: 1, price: stake, parameters: variant.params }, timeoutMs);
+      const payload = { buy: 1, price: Number(stake), parameters: variant.params };
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_ATTEMPT", { label: variant.label, payload });
+      const res = await wsRequest(payload, timeoutMs);
       if (res?.error) throw new Error(res.error.message || res.error.code || "buy error");
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_OK", { label: variant.label, contract_id: res?.buy?.contract_id || "" });
       return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
     } catch (e) {
-      errors.push(`${variant.label}: ${e?.message || e}`);
+      const errText = `${variant.label}: ${e?.message || e}`;
+      errors.push(errText);
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_REJECTED", { error: errText });
     }
   }
-  throw new Error(`Deriv rechazó la compra con timing de próxima vela (${errors.join(" | ")}). Probá desactivar Cierre visual (vela) o revisar el timing.`);
+  const shortErrors = errors.slice(0, 8).join(" | ");
+  const extra = errors.length > 8 ? ` | +${errors.length - 8} intentos más` : "";
+  throw new Error(`Deriv rechazó la compra API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
 }
 
 function getAutoPreProposalKey(item, side, symbol, stake) {
@@ -3072,7 +3422,18 @@ function getValidAutoPreProposal(item, side, symbol, stake) {
   if (!Number.isFinite(expectedStake) || !Number.isFinite(ppStake) || Math.abs(expectedStake - ppStake) > 0.005) return null;
   if (!pp.proposal_id || !Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return null;
   const plan = buildNextCandleTimingPlan(item);
-  if (Number(pp?.timing?.next_expiry_epoch_sec || 0) !== Number(plan.next_expiry_epoch_sec)) return null;
+  const ppExpiry = Number(pp?.timing?.next_expiry_epoch_sec || 0);
+  const planExpiry = Number(plan.next_expiry_epoch_sec || 0);
+  const ppVariant = String(pp?.timing?.variant || pp?.timing?.mode || "");
+  // V106.4:
+  // En API nueva podemos terminar usando fallback duration_2s / duration_1m.
+  // Esos fallbacks no traen next_expiry_epoch_sec, pero la proposal sí es válida.
+  // Antes se rechazaba como "no prearmada" aunque Deriv ya la hubiera devuelto OK.
+  const isDurationFallback =
+    ppVariant.includes("new_api_duration_2s") ||
+    ppVariant.includes("new_api_duration_1m") ||
+    ppVariant.includes("AUTO58_NEW_API_DURATION");
+  if (!isDurationFallback && ppExpiry && planExpiry && ppExpiry !== planExpiry) return null;
   if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
   return pp;
 }
@@ -3170,7 +3531,7 @@ function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUT
     sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
     reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
     at: Date.now(),
-    error: "Cancelada: la proposal no estaba prearmada antes del post-58. Marcá 4 puntos antes de 56-58s o desactivá Cierre visual (vela) para probar cierre 60s.",
+    error: "Cancelada: la proposal no estaba prearmada. En v106.4 esto solo debe ocurrir si el modo estricto de prearmado está activado.",
     post58_readiness: { ...(readiness || {}) },
     preproposal: item?.signalAutoPreProposal || null,
   };
@@ -4548,6 +4909,14 @@ function ensureLiveAnalysisPauseButton() {
   applyLiveAnalysisPauseUI();
   return btn;
 }
+
+function isCleanVisualModeItem(it) {
+  return normalizeSignalMode(it?.mode || MODE_REDUCCION_VISUAL_25S) === MODE_REDUCCION_VISUAL_25S;
+}
+function getCleanVisualHistory() {
+  return (history || []).filter(isCleanVisualModeItem);
+}
+
 function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
   if (!counterEl) return;
@@ -4563,7 +4932,7 @@ function updateCounter(viewName = null) {
     counterEl.textContent = `En vivo: ${liveReplaySymbol || SYMBOLS[0] || "—"}`;
     return;
   }
-  counterEl.textContent = `Señales: ${history.length}`;
+  counterEl.textContent = `Señales: ${getCleanVisualHistory().length}`;
 }
 
 function escapeHtml(str) {
@@ -4610,6 +4979,156 @@ function getTradeExecutionTitle() {
   return `Operar ${getTradingAccountLabel()} 1m`;
 }
 
+/* =========================
+   V106.2 API Deriv: Legacy vs Nueva PAT/OTP
+========================= */
+function normalizeDerivApiMode(v) {
+  const s = String(v || "").toLowerCase().trim();
+  return s === DERIV_API_MODE_NEW_PAT || s === "new" || s === "pat" || s === "otp"
+    ? DERIV_API_MODE_NEW_PAT
+    : DERIV_API_MODE_LEGACY;
+}
+function getDerivApiMode() {
+  try { return normalizeDerivApiMode(localStorage.getItem(DERIV_API_MODE_KEY) || DERIV_API_MODE_LEGACY); }
+  catch { return DERIV_API_MODE_LEGACY; }
+}
+function isNewPatApiMode() {
+  return getDerivApiMode() === DERIV_API_MODE_NEW_PAT;
+}
+function setDerivApiMode(mode) {
+  try { localStorage.setItem(DERIV_API_MODE_KEY, normalizeDerivApiMode(mode)); } catch {}
+}
+function getDerivApiModeLabel() {
+  return isNewPatApiMode() ? "API nueva PAT/OTP" : "API legacy";
+}
+function getDerivNewPatToken() {
+  try { return localStorage.getItem(DERIV_NEW_PAT_KEY) || ""; } catch { return ""; }
+}
+function setDerivNewPatToken(v) {
+  try { localStorage.setItem(DERIV_NEW_PAT_KEY, String(v || "").trim()); } catch {}
+}
+function clearDerivNewPatToken() {
+  try { localStorage.removeItem(DERIV_NEW_PAT_KEY); } catch {}
+}
+function getDerivNewAppId() {
+  try { return localStorage.getItem(DERIV_NEW_APP_ID_KEY) || ""; } catch { return ""; }
+}
+function setDerivNewAppId(v) {
+  try { localStorage.setItem(DERIV_NEW_APP_ID_KEY, String(v || "").trim()); } catch {}
+}
+function getDerivNewAccountKey(scope = getCurrentAccountScope()) {
+  return scope === ACCOUNT_MODE_REAL ? DERIV_NEW_ACCOUNT_REAL_KEY : DERIV_NEW_ACCOUNT_DEMO_KEY;
+}
+function getDerivNewAccountId(scope = getCurrentAccountScope()) {
+  try { return localStorage.getItem(getDerivNewAccountKey(scope)) || ""; } catch { return ""; }
+}
+function setDerivNewAccountId(scope, accountId) {
+  try { localStorage.setItem(getDerivNewAccountKey(scope), String(accountId || "").trim()); } catch {}
+}
+function getDerivNewApiHeaders() {
+  const token = getDerivNewPatToken();
+  const appId = getDerivNewAppId();
+  if (!token) throw new Error("Falta PAT de API nueva");
+  if (!appId) throw new Error("Falta App ID de API nueva");
+  return {
+    "Authorization": `Bearer ${token}`,
+    "Deriv-App-ID": appId,
+    "Content-Type": "application/json"
+  };
+}
+function getDerivNewApiErrorMessage(data, fallback = "Error API nueva") {
+  try {
+    const first = Array.isArray(data?.errors) ? data.errors[0] : null;
+    return first?.message || first?.code || data?.error?.message || data?.message || fallback;
+  } catch { return fallback; }
+}
+async function derivNewApiFetchJson(path, options = {}) {
+  const url = `${DERIV_NEW_API_BASE}${path}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      ...getDerivNewApiHeaders(),
+      ...(options.headers || {})
+    }
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) {
+    throw new Error(`${res.status}: ${getDerivNewApiErrorMessage(data, res.statusText || "HTTP error")}`);
+  }
+  return data;
+}
+function findNewApiAccountsArray(obj, depth = 0) {
+  if (!obj || depth > 5) return [];
+  if (Array.isArray(obj)) {
+    const looksLikeAccounts = obj.some((x) => x && typeof x === "object" && (
+      x.id || x.account_id || x.accountId || x.loginid || x.login_id || x.account_type || x.is_virtual !== undefined || x.is_demo !== undefined
+    ));
+    if (looksLikeAccounts) return obj;
+    for (const x of obj) {
+      const found = findNewApiAccountsArray(x, depth + 1);
+      if (found.length) return found;
+    }
+    return [];
+  }
+  if (typeof obj === "object") {
+    const preferred = [obj.data?.accounts, obj.accounts, obj.data, obj.result, obj.items].filter(Boolean);
+    for (const v of preferred) {
+      const found = findNewApiAccountsArray(v, depth + 1);
+      if (found.length) return found;
+    }
+    for (const v of Object.values(obj)) {
+      const found = findNewApiAccountsArray(v, depth + 1);
+      if (found.length) return found;
+    }
+  }
+  return [];
+}
+function normalizeNewApiAccount(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const id = String(r.id || r.account_id || r.accountId || r.loginid || r.login_id || r.uuid || "").trim();
+  const typeText = String(r.account_type || r.accountType || r.type || r.group || r.name || r.display_name || r.loginid || r.login_id || id || "").toLowerCase();
+  const isDemo = r.is_demo === true || r.is_virtual === true || r.demo === true || typeText.includes("demo") || typeText.includes("virtual") || id.toUpperCase().startsWith("VRTC");
+  const isReal = r.is_real === true || r.real === true || (!isDemo && (typeText.includes("real") || id));
+  return {
+    id,
+    isDemo,
+    isReal,
+    currency: String(r.currency || r.currency_code || ""),
+    raw: r
+  };
+}
+async function discoverNewApiAccounts({ save = true } = {}) {
+  const data = await derivNewApiFetchJson("/trading/v1/options/accounts", { method: "GET" });
+  const raw = findNewApiAccountsArray(data);
+  const accounts = raw.map(normalizeNewApiAccount).filter((x) => x.id);
+  if (save) {
+    try { localStorage.setItem(DERIV_NEW_ACCOUNTS_CACHE_KEY, JSON.stringify({ at: Date.now(), accounts })); } catch {}
+    const demo = accounts.find((x) => x.isDemo) || null;
+    const real = accounts.find((x) => x.isReal && !x.isDemo) || null;
+    if (demo?.id && !getDerivNewAccountId(ACCOUNT_MODE_DEMO)) setDerivNewAccountId(ACCOUNT_MODE_DEMO, demo.id);
+    if (real?.id && !getDerivNewAccountId(ACCOUNT_MODE_REAL)) setDerivNewAccountId(ACCOUNT_MODE_REAL, real.id);
+  }
+  return accounts;
+}
+async function resolveNewApiAccountId(scope = getCurrentAccountScope()) {
+  const stored = getDerivNewAccountId(scope);
+  if (stored) return stored;
+  const accounts = await discoverNewApiAccounts({ save: true });
+  const wantDemo = scope !== ACCOUNT_MODE_REAL;
+  const picked = accounts.find((x) => wantDemo ? x.isDemo : (x.isReal && !x.isDemo)) || accounts[0] || null;
+  if (!picked?.id) throw new Error(`No encontré Account ID ${wantDemo ? "DEMO" : "REAL"} en API nueva`);
+  setDerivNewAccountId(scope, picked.id);
+  try { syncNewApiSettingsInputs(); } catch {}
+  return picked.id;
+}
+async function getNewApiOtpWebSocketUrl(scope = getCurrentAccountScope()) {
+  const accountId = await resolveNewApiAccountId(scope);
+  const data = await derivNewApiFetchJson(`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`, { method: "POST" });
+  const url = data?.data?.url || data?.url || data?.result?.url;
+  if (!url || !String(url).startsWith("wss://")) throw new Error("OTP no devolvió URL WebSocket válida");
+  return String(url);
+}
 
 function loadKeepClosedAwaySignals() {
   try {
@@ -4653,14 +5172,12 @@ function toggleKeepClosedAwaySignals() {
   }
 }
 function ensureKeepClosedAwaySignalsToggle() {
-  const btn = ensureViewActionButton("signals", {
-    id: "keepClosedAwaySignalsBtn",
-    text: keepClosedAwaySignals ? "🧪 Guardar fuera SNR: SÍ" : "🧪 Guardar fuera SNR: NO",
-    title: "Conserva o elimina señales sin trade que cierran fuera de zona azul/amarilla",
-    onClick: toggleKeepClosedAwaySignals,
-  });
-  updateKeepClosedAwaySignalsButton();
-  return btn;
+  // V106.9.2 CLEAN: se elimina el control “Guardar fuera SNR” porque este modo no usa SNR.
+  const wrap = document.getElementById("keepClosedAwaySignalsBtnWrap");
+  if (wrap) wrap.remove();
+  const btn = document.getElementById("keepClosedAwaySignalsBtn");
+  if (btn) btn.remove();
+  return null;
 }
 
 function getSignalEvalButtons() {
@@ -5578,7 +6095,7 @@ function updatePerViewClearButtonsVisibility(activeView) {
   const wKeepOutside = document.getElementById("keepClosedAwaySignalsBtnWrap");
 
   if (wSignals) wSignals.style.display = activeView === "signals" ? "flex" : "none";
-  if (wKeepOutside) wKeepOutside.style.display = activeView === "signals" ? "flex" : "none";
+  if (wKeepOutside) wKeepOutside.style.display = "none";
   if (wTrades) wTrades.style.display = "none";
 }
 
@@ -5642,7 +6159,14 @@ function initTabs() {
   ensureTradesTab();
   ensureTradesView();
 
-  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
+  // V106.9.2 CLEAN: se mantienen las pestañas En vivo y Práctica.
+  qsAll('.tab[data-view="live"], .tab[data-view="practice"]').forEach((el) => { el.style.display = ""; });
+  if (liveView) liveView.style.display = "";
+  if (practiceView) practiceView.style.display = "";
+
+  qsAll(".tab[data-view]").forEach((t) => {
+    t.onclick = () => setActiveView(t.dataset.view);
+  });
 
   const saved = localStorage.getItem("activeView") || "signals";
   const initial = ["signals", "live", "trades", "practice"].includes(saved) ? saved : "signals";
@@ -7797,6 +8321,7 @@ function ensureSplitClearButtons() {
 
 function repairSettingsMenuBindings() {
   try { ensureTradingAccountButton(); } catch {}
+  try { ensureDerivApiModePanel(); } catch {}
   try { ensureExecutionModeButton(); applyExecutionModeUI(); } catch {}
   try { ensureEntryTimingModeButton(); applyEntryTimingModeUI(); } catch {}
   try { ensureAutoOpenChartButton(); applyAutoOpenChartUI(); } catch {}
@@ -7816,6 +8341,7 @@ function getSettingsMenuSelfCheckItems() {
     ["Botón engranaje", !!configBtn && typeof configBtn.onclick === "function"],
     ["Cerrar configuración", (!!settingsCloseBtn && typeof settingsCloseBtn.onclick === "function") || (!!settingsCloseBtn2 && typeof settingsCloseBtn2.onclick === "function")],
     ["Cuenta DEMO/REAL", !!pickEl("tradingAccountBtn") && typeof pickEl("tradingAccountBtn").onclick === "function"],
+    ["API Deriv", !!pickEl("derivApiModeBtn") && typeof pickEl("derivApiModeBtn").onclick === "function"],
     ["Modo ejecución", !!pickEl("executionModeBtn") && typeof pickEl("executionModeBtn").onclick === "function"],
     ["Timing entrada", !!pickEl("entryTimingModeBtn") && typeof pickEl("entryTimingModeBtn").onclick === "function"],
     ["IC2 activar", !!pickEl("c100ToggleBtn") && typeof pickEl("c100ToggleBtn").onclick === "function"],
@@ -7930,24 +8456,16 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = isDynamicLineMode(signalMode)
-      ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 58s con 4 puntos."
-      : isRupturaDebilGiroMode(signalMode)
-        ? "Modo Ruptura Débil Giro: observa 0-15s y confirma señal solo entre 20-30s; auto solo con 4 puntos."
-        : isAlcistaIrregular25sMode(signalMode)
-          ? "Modo Alcista irregular 30s: vela verde con estructura insana/irregularidad confirmada entre 20-30s. Solo señal a VENTA con 4 puntos manuales."
-          : isSNRPolaridadMode(signalMode)
-            ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
-            : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
+    modeBtn.title = "Modo único: Reducción visual 25s. Analiza 0-25s, marca G/M/P y permite corrección visual.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = nextSignalMode(signalMode);
+      signalMode = MODE_REDUCCION_VISUAL_25S;
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isAlcistaIrregular25sMode(signalMode) ? "🟢 Modo Alcista irregular 30s" : isRupturaDebilGiroMode(signalMode) ? "🔁 Modo Ruptura Débil Giro" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
+      toast("🎯 Modo único: Reducción visual 25s", 1400);
     };
 })();
 
@@ -8328,6 +8846,342 @@ function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
   ctx.restore();
 }
 
+
+
+/* =========================
+   V106.8.3 Reducción visual — lectura editable en modal
+   - Dibuja la lectura G/M/P que vio el motor sobre el gráfico.
+   - Permite feedback rápido específico para calibrar el motor.
+========================= */
+const VISUAL_READ_OVERLAY_KEY = "visualReadOverlayEnabled_v1";
+const VISUAL_READ_FEEDBACK_REASONS = [
+  { key: "sizes_wrong", label: "G/M/P mal" },
+  { key: "break_wrong", label: "Quiebre mal" },
+  { key: "missing_contrary", label: "Faltó contrario" },
+  { key: "symmetry", label: "Era simetría" },
+  { key: "continuity", label: "Era continuidad" },
+  { key: "double_floor_roof", label: "Doble suelo/techo" },
+  { key: "direction_wrong", label: "Dirección mal" },
+];
+let visualReadOverlayEnabled = (() => {
+  try { return localStorage.getItem(VISUAL_READ_OVERLAY_KEY) !== "0"; }
+  catch { return true; }
+})();
+let visualReadPanelEl = null;
+let visualReadReasonWrapEl = null;
+
+function isVisualReductionItem(item) {
+  const mode = normalizeSignalMode(item?.mode || item?.giroPolaridad?.levelMode || item?.snrLevel?.levelMode || "");
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  return mode === MODE_REDUCCION_VISUAL_25S || !!meta.visualReductionMode || String(meta.levelMode || "") === "reduccion_visual_25s";
+}
+function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
+  if (!run || typeof run !== "object") return null;
+  const startMs = Number(run.startMs);
+  const endMs = Number(run.endMs);
+  const startQuote = Number(run.startQuote);
+  const endQuote = Number(run.endQuote);
+  if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return null;
+  return {
+    startMs,
+    endMs,
+    startQuote,
+    endQuote,
+    move: Number(run.move || Math.abs(endQuote - startQuote)) || 0,
+    sign: Number(run.sign || 0),
+    side: fallbackSide,
+    label: label || "",
+    idx: Number(run.idx || 0),
+  };
+}
+function getVisualReadPatternText(labels) {
+  const arr = Array.isArray(labels) ? labels.filter(Boolean) : [];
+  return arr.length ? arr.join("→") : "—";
+}
+function splitPatternText(pattern) {
+  const txt = String(pattern || "").replace(/-/g, "→");
+  return txt.split("→").map((x) => x.trim()).filter(Boolean);
+}
+function buildVisualReadFromItem(item) {
+  if (!item || !isVisualReductionItem(item)) return null;
+  const meta = item.giroPolaridad || item.snrLevel || {};
+  const direction = normalizeSignalConfirmationSide(meta.direction || item.direction) || "";
+  const dominant = String(meta.visualReductionGroup || "").toLowerCase().includes("vendedor") ? "vendedor" : "comprador";
+  const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
+  const primaryLabels = Array.isArray(meta.visualReductionLabels)
+    ? meta.visualReductionLabels.filter(Boolean)
+    : splitPatternText(meta.visualReductionPattern);
+  const contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
+  const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
+  const contraryRunsRaw = Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : [];
+  const primaryRuns = primaryRunsRaw
+    .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
+    .filter(Boolean);
+  const contraryRuns = contraryRunsRaw
+    .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
+    .filter(Boolean);
+  const cuts = Array.isArray(meta.visualReductionBreakDetails)
+    ? meta.visualReductionBreakDetails.map((b) => ({
+        startMs: Number(b.startMs),
+        endMs: Number(b.endMs),
+        type: String(b.type || "quiebre"),
+      })).filter((b) => Number.isFinite(b.startMs) || Number.isFinite(b.endMs))
+    : [];
+  const subtype = String(meta.visualReductionSubtype || "reducción visual");
+  const quality = String(meta.visualReductionQuality || "").toUpperCase() || "—";
+  const primaryPattern = getVisualReadPatternText(primaryLabels);
+  const contraryPattern = getVisualReadPatternText(contraryLabels);
+  return {
+    mode: MODE_REDUCCION_VISUAL_25S,
+    direction,
+    dominant,
+    contrary,
+    quality,
+    subtype,
+    primaryPattern,
+    contraryPattern,
+    reasons: Array.isArray(meta.reasons) ? meta.reasons : [],
+    rejectHints: Array.isArray(meta.rejectHints) ? meta.rejectHints : [],
+    evalMs: Number(meta.analysisWindowMs || 25000),
+    points: Number(meta.points || meta.visualReductionScore || 0),
+    primaryRuns,
+    contraryRuns,
+    cuts,
+    status: String(meta.status || ""),
+    feedback: item.visualReadFeedback || null,
+  };
+}
+function getVisualReadText(read) {
+  if (!read) return "Sin lectura visual";
+  const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+  const parts = [
+    `Calidad ${read.quality}`,
+    `${read.dominant}: ${read.primaryPattern}`,
+  ];
+  if (read.contraryPattern && read.contraryPattern !== "—") parts.push(`${read.contrary}: ${read.contraryPattern}`);
+  parts.push(`→ ${dir}`);
+  return parts.join(" · ");
+}
+function ensureVisualReadPanel() {
+  if (visualReadPanelEl && visualReadPanelEl.isConnected) return visualReadPanelEl;
+  const footer = document.querySelector("#chartModal .modalFooter") || (chartModal ? chartModal.querySelector(".modalFooter") : null);
+  if (!footer) return null;
+  const panel = document.createElement("div");
+  panel.id = "visualReadPanel";
+  panel.style.width = "100%";
+  panel.style.boxSizing = "border-box";
+  panel.style.border = "1px solid rgba(34,211,238,.28)";
+  panel.style.borderRadius = "14px";
+  panel.style.padding = "8px";
+  panel.style.background = "rgba(15,23,42,.62)";
+  panel.style.display = "none";
+  panel.style.gap = "6px";
+  panel.style.flexDirection = "column";
+  panel.style.fontSize = "11.5px";
+  panel.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;justify-content:space-between;">
+      <button id="visualReadToggleBtn" class="btn btnGhost" type="button" style="flex:0 0 auto;min-height:32px;padding:6px 9px;font-size:12px;">👁️ Lectura ON</button>
+      <div id="visualReadSummary" style="flex:1;min-width:0;font-weight:900;line-height:1.25;color:#e0f2fe;">—</div>
+    </div>
+    <div id="visualReadDetail" style="color:rgba(226,232,240,.82);line-height:1.25;">—</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+      <button id="visualReadGoodBtn" class="btn btnGhost" type="button" style="min-height:34px;font-size:12px;">✅ Leyó bien</button>
+      <button id="visualReadBadBtn" class="btn btnGhost" type="button" style="min-height:34px;font-size:12px;">❌ Leyó mal</button>
+    </div>
+    <div id="visualReadReasonWrap" style="display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;"></div>
+  `;
+  const openBtn = modalOpenDerivBtn || footer.lastElementChild;
+  if (openBtn && openBtn.parentElement === footer) footer.insertBefore(panel, openBtn);
+  else footer.appendChild(panel);
+  visualReadPanelEl = panel;
+  visualReadReasonWrapEl = panel.querySelector("#visualReadReasonWrap");
+  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  if (toggleBtn) toggleBtn.onclick = () => {
+    visualReadOverlayEnabled = !visualReadOverlayEnabled;
+    try { localStorage.setItem(VISUAL_READ_OVERLAY_KEY, visualReadOverlayEnabled ? "1" : "0"); } catch {}
+    updateVisualReadPanelUI();
+    requestModalDraw(true);
+  };
+  const goodBtn = panel.querySelector("#visualReadGoodBtn");
+  const badBtn = panel.querySelector("#visualReadBadBtn");
+  if (goodBtn) goodBtn.onclick = () => saveVisualReadFeedback("ok", "");
+  if (badBtn) badBtn.onclick = () => {
+    if (visualReadReasonWrapEl) {
+      visualReadReasonWrapEl.style.display = visualReadReasonWrapEl.style.display === "grid" ? "none" : "grid";
+    }
+    saveVisualReadFeedback("bad", "general");
+  };
+  if (visualReadReasonWrapEl && !visualReadReasonWrapEl.dataset.ready) {
+    visualReadReasonWrapEl.dataset.ready = "1";
+    visualReadReasonWrapEl.innerHTML = VISUAL_READ_FEEDBACK_REASONS.map((r) => `<button class="btn btnGhost visualReadReasonBtn" data-reason="${r.key}" type="button" style="min-height:30px;padding:5px 6px;font-size:11px;">${r.label}</button>`).join("");
+    visualReadReasonWrapEl.querySelectorAll(".visualReadReasonBtn").forEach((btn) => {
+      btn.onclick = () => saveVisualReadFeedback("bad", btn.dataset.reason || "general");
+    });
+  }
+  return panel;
+}
+function persistModalVisualReadFeedback() {
+  try {
+    if (!modalCurrentItem?.id) return;
+    const idx = (history || []).findIndex((x) => x && x.id === modalCurrentItem.id);
+    if (idx >= 0) {
+      history[idx].visualReadFeedback = modalCurrentItem.visualReadFeedback;
+      saveHistory(history);
+    }
+    const jid = modalCurrentItem.journal_id || modalOpenContext?.journalId || makeJournalIdFromSignal(modalCurrentItem);
+    const jidx = (tradesJournal || []).findIndex((x) => x && (x.journal_id === jid || x.id === modalCurrentItem.id));
+    if (jidx >= 0) {
+      tradesJournal[jidx].visualReadFeedback = modalCurrentItem.visualReadFeedback;
+      saveTradesJournal(tradesJournal);
+    }
+  } catch {}
+}
+function saveVisualReadFeedback(verdict, reason = "") {
+  if (!modalCurrentItem || !isVisualReductionItem(modalCurrentItem)) return;
+  const read = buildVisualReadFromItem(modalCurrentItem);
+  modalCurrentItem.visualReadFeedback = {
+    verdict: String(verdict || ""),
+    reason: String(reason || ""),
+    at: Date.now(),
+    mode: MODE_REDUCCION_VISUAL_25S,
+    direction: read?.direction || modalCurrentItem.direction || "",
+    quality: read?.quality || "",
+    dominant: read?.dominant || "",
+    primaryPattern: read?.primaryPattern || "",
+    contrary: read?.contrary || "",
+    contraryPattern: read?.contraryPattern || "",
+  };
+  persistModalVisualReadFeedback();
+  updateVisualReadPanelUI();
+  toast(verdict === "ok" ? "✅ Lectura visual marcada correcta" : "❌ Corrección visual guardada", 1300);
+}
+function updateVisualReadPanelUI() {
+  const panel = ensureVisualReadPanel();
+  if (!panel) return;
+  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem || !isVisualReductionItem(modalCurrentItem)) {
+    panel.style.display = "none";
+    return;
+  }
+  const read = buildVisualReadFromItem(modalCurrentItem);
+  panel.style.display = "flex";
+  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  const summary = panel.querySelector("#visualReadSummary");
+  const detail = panel.querySelector("#visualReadDetail");
+  if (toggleBtn) {
+    toggleBtn.textContent = visualReadOverlayEnabled ? "👁️ Lectura ON" : "👁️ Lectura OFF";
+    toggleBtn.classList.toggle("active", !!visualReadOverlayEnabled);
+  }
+  if (summary) summary.textContent = getVisualReadText(read);
+  if (detail) {
+    const fb = modalCurrentItem.visualReadFeedback;
+    const fbText = fb?.verdict ? ` · Feedback: ${fb.verdict === "ok" ? "correcta" : "corregir"}${fb.reason ? ` (${fb.reason})` : ""}` : "";
+    const reasons = read?.reasons?.length ? ` · ${read.reasons.slice(0, 3).join(" · ")}` : "";
+    detail.textContent = `Ventana 0-${Math.round(Number(read?.evalMs || 25000) / 1000)}s · puntos ${read?.points || 0}${reasons}${fbText}`;
+  }
+}
+function drawRoundedLabel(ctx, x, y, text, fill, stroke = "rgba(255,255,255,.22)") {
+  const padX = 6, h = 20;
+  ctx.save();
+  ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+  const w = Math.max(28, ctx.measureText(String(text)).width + padX * 2);
+  const xx = Math.max(8, Math.min(x - w / 2, (ctx.canvas.clientWidth || ctx.canvas.width) - w - 8));
+  const yy = Math.max(8, y - h - 8);
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1;
+  if (typeof drawRoundedRect === "function") {
+    drawRoundedRect(ctx, xx, yy, w, h, 9); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillRect(xx, yy, w, h); ctx.strokeRect(xx, yy, w, h);
+  }
+  ctx.fillStyle = "rgba(255,255,255,.96)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(text), xx + w / 2, yy + h / 2 + 0.5);
+  ctx.restore();
+}
+function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
+  if (!ctx || !item || !visualReadOverlayEnabled || !isVisualReductionItem(item)) return;
+  const read = buildVisualReadFromItem(item);
+  if (!read) return;
+  const evalMs = Math.max(1000, Math.min(60000, Number(read.evalMs || 25000)));
+  const x0 = xOf(0), xEval = xOf(evalMs);
+  ctx.save();
+  ctx.fillStyle = "rgba(250,204,21,.075)";
+  ctx.fillRect(x0, 8, Math.max(0, xEval - x0), h - 30);
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = "rgba(250,204,21,.72)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(xEval, 8); ctx.lineTo(xEval, h - 22); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillStyle = "rgba(254,240,138,.95)";
+  ctx.fillText("25s lectura", Math.min(w - 82, xEval + 4), 19);
+
+  const buyCol = "rgba(34,197,94,.96)";
+  const sellCol = "rgba(248,113,113,.96)";
+  const buyFill = "rgba(22,163,74,.78)";
+  const sellFill = "rgba(185,28,28,.78)";
+  const drawRun = (r, prefix, idx) => {
+    const isBuyer = String(r.side || "") === "comprador";
+    const col = isBuyer ? buyCol : sellCol;
+    const fill = isBuyer ? buyFill : sellFill;
+    const x1 = xOf(r.startMs), y1 = yOf(r.startQuote);
+    const x2 = xOf(r.endMs), y2 = yOf(r.endQuote);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return;
+    ctx.save();
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 10;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 4.4;
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2, y2, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    const mx = (x1 + x2) / 2;
+    const my = Math.min(y1, y2);
+    const sideLetter = isBuyer ? "C" : "V";
+    drawRoundedLabel(ctx, mx, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+  };
+  (read.primaryRuns || []).forEach((r, i) => drawRun(r, "", i));
+  (read.contraryRuns || []).forEach((r, i) => drawRun(r, "", i));
+
+  for (const c of read.cuts || []) {
+    const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
+    if (!Number.isFinite(ms)) continue;
+    const x = xOf(ms);
+    ctx.save();
+    ctx.setLineDash([2, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
+    ctx.restore();
+  }
+
+  const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+  const title = `👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
+  ctx.save();
+  ctx.font = "900 12px system-ui, -apple-system, Segoe UI, sans-serif";
+  const tw = Math.min(w - 28, ctx.measureText(title).width + 18);
+  ctx.fillStyle = "rgba(2,6,23,.72)";
+  ctx.strokeStyle = "rgba(34,211,238,.38)";
+  ctx.lineWidth = 1;
+  if (typeof drawRoundedRect === "function") {
+    drawRoundedRect(ctx, 12, 30, tw, 25, 11); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillRect(12, 30, tw, 25); ctx.strokeRect(12, 30, tw, 25);
+  }
+  ctx.fillStyle = "rgba(224,242,254,.96)";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(title, 21, 43);
+  ctx.restore();
+  ctx.restore();
+}
+
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
 
@@ -8473,7 +9327,7 @@ function drawDerivLikeChart(canvas, ticks) {
       const zoneLow = Number(modalSNRNearArea.zoneLow);
       const zoneHigh = Number(modalSNRNearArea.zoneHigh);
 
-      // V8: área amarilla = margen exacto que la PWA considera "cerca" del SNR
+      // V8: área amarilla = margen visual que la PWA considera "cerca" del SNR
       // para permitir AUTO 58s aunque el precio no esté dentro de la zona.
       if ([nearLow, nearHigh, zoneLow, zoneHigh].every(Number.isFinite)) {
         const yNearHigh = yOf(nearHigh);
@@ -8607,6 +9461,9 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
+  // Overlay de lectura visual del motor Reducción visual 25s (G/M/P + ventana 0-25s)
+  drawVisualReductionReadingOverlay(ctx, modalCurrentItem, xOf, yOf, w, h);
+
   // precio actual / último punto: guía horizontal suave + punto más visible
   const lastPoint = pts[pts.length - 1];
   const lx = xOf(lastPoint.ms);
@@ -8693,34 +9550,61 @@ function ensureModalCandleStatusBar() {
   modalCandleStatusEl = el;
   return modalCandleStatusEl;
 }
-function ensureModalCompactControlsLayout() {
+
+function ensureModalFooterControlsLayout() {
+  if (modalFooterControlsRelocated) return;
+
   try {
-    if (modalActionButtons) {
-      const nodes = [modalLikeBtn, modalDislikeBtn, modalCandle1mBtn].filter(Boolean);
-      nodes.forEach((node) => { if (node.parentElement !== modalActionButtons) modalActionButtons.appendChild(node); });
+    if (modalPrevItemBtn && modalFooterPrevSlot && modalPrevItemBtn.parentElement !== modalFooterPrevSlot) {
+      modalFooterPrevSlot.appendChild(modalPrevItemBtn);
+    }
+    if (modalNextItemBtn && modalFooterNextSlot && modalNextItemBtn.parentElement !== modalFooterNextSlot) {
+      modalFooterNextSlot.appendChild(modalNextItemBtn);
+    }
+    if (modalLikeBtn && modalFooterVoteSlot && modalLikeBtn.parentElement !== modalFooterVoteSlot) {
+      modalFooterVoteSlot.appendChild(modalLikeBtn);
+    }
+    if (modalDislikeBtn && modalFooterVoteSlot && modalDislikeBtn.parentElement !== modalFooterVoteSlot) {
+      modalFooterVoteSlot.appendChild(modalDislikeBtn);
+    }
+    if (modalCandle1mBtn && modalFooterChartTools && modalCandle1mBtn.parentElement !== modalFooterChartTools) {
+      modalFooterChartTools.appendChild(modalCandle1mBtn);
+    }
+    if (modalReplayBtn && modalFooterChartTools && modalReplayBtn.parentElement !== modalFooterChartTools) {
+      modalFooterChartTools.appendChild(modalReplayBtn);
+    }
+
+    const toolbar = chartModal ? chartModal.querySelector('.minuteCanvasToolbar') : null;
+    if (toolbar) {
+      toolbar.style.display = 'none';
+      toolbar.setAttribute('aria-hidden', 'true');
     }
     if (modalNavVoteBar) {
-      modalNavVoteBar.classList.add("hidden");
-      modalNavVoteBar.style.display = "none";
-    }
-    const toolbar = document.querySelector("#chartModal .minuteCanvasToolbar");
-    if (toolbar) {
-      toolbar.classList.add("hidden");
-      toolbar.style.display = "none";
+      modalNavVoteBar.style.display = 'none';
+      modalNavVoteBar.setAttribute('aria-hidden', 'true');
     }
   } catch {}
+
+  modalFooterControlsRelocated = true;
 }
-function getModalVisualSequenceText(item = modalCurrentItem) {
-  if (!item) return "—";
-  const src = String(item?.giroPolaridad?.status || item?.snrLevel?.status || "").trim();
-  if (src) {
-    let txt = src.replace(/^🎯\s*/u, "").replace(/^Reducción visual\s*[A-Z]?\s*·\s*/i, "");
-    txt = txt.replace(/Señal a\s+(COMPRA|VENTA)\.?/i, "").trim();
-    txt = txt.replace(/\s+\.$/, ".");
-    return txt || src;
+function getModalVisualSequenceSummary(item = modalCurrentItem) {
+  const meta = item?.giroPolaridad || item?.snrLevel || null;
+  const raw = String(meta?.status || meta?.logic || '').trim();
+  if (!raw) return 'Sin lectura visual disponible.';
+  let txt = raw.replace(/^🎯\s*/,'').replace(/^🟢\s*/,'').trim();
+  txt = txt.replace(/^Reducción visual\s*[A-Z]?\s*·\s*/i, '');
+  txt = txt.replace(/^cambio de presión:\s*/i, '');
+  txt = txt.replace(/\.\s*Señal a\s*(COMPRA|VENTA)\.?/i, ' · Señal a $1');
+  return txt;
+}
+function updateModalFooterReadingUI() {
+  ensureModalFooterControlsLayout();
+  if (modalSequenceText) {
+    modalSequenceText.textContent = modalCurrentItem ? getModalVisualSequenceSummary(modalCurrentItem) : '—';
   }
-  const logic = String(item?.giroPolaridad?.logic || item?.snrLevel?.logic || "").trim();
-  return logic || "—";
+  if (modalReadingInfoRow) {
+    modalReadingInfoRow.style.display = (chartModal && !chartModal.classList.contains('hidden') && modalCurrentItem) ? 'grid' : 'none';
+  }
 }
 function normalizeSignalConfirmationSide(side) {
   const s = String(side || "").toUpperCase();
@@ -9443,9 +10327,23 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     const symbol = String(item.symbol || SYMBOLS[0] || "R_25");
     const stake = Number(getEffectiveTradeStake().toFixed(2));
     const pp = getValidAutoPreProposal(item, side, symbol, stake);
-    if (!pp) {
+    if (!pp && SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT) {
       cancelSignalAutoEntryNoPreProposal(item, side, post58, "AUTO_PREPROPOSAL_MISSING");
       return false;
+    }
+    if (!pp) {
+      // V106.4: no cancelamos por "no prearmada".
+      // Permitimos que buyOneClick pida proposal rápida / direct buy en el post-58.
+      item.signalAutoPreProposal ||= {};
+      item.signalAutoPreProposal.status = "fallback_post58";
+      item.signalAutoPreProposal.side = side;
+      item.signalAutoPreProposal.symbol = symbol;
+      item.signalAutoPreProposal.stake = stake;
+      item.signalAutoPreProposal.reason = "NO_PREARMADA_USA_FALLBACK_POST58";
+      item.signalAutoPreProposal.fallback_at = Date.now();
+      item.signalAutoPreProposal.fallback_ms = Math.round(Number(post58?.ms || getSignalConfirmationMs(item)));
+      try { saveHistory(history); } catch {}
+      try { window.DerivDebug?.log?.("AUTO58_NO_PREARM_FALLBACK", { item_id: item.id, symbol, side, stake, ms: item.signalAutoPreProposal.fallback_ms }); } catch {}
     }
   }
 
@@ -9475,7 +10373,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO prearmado: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO 58: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -9555,26 +10453,21 @@ function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false)
   btn.title = getTradeExecutionTitle();
 }
 function updateModalCandleStatusUI() {
+  ensureModalFooterControlsLayout();
   const bar = ensureModalCandleStatusBar();
   if (!bar) return;
 
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
+    if (modalReadingInfoRow) modalReadingInfoRow.style.display = 'none';
     if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
-    if (modalAnalysisRow) modalAnalysisRow.style.display = "none";
-    const tradeRow = document.querySelector("#chartModal .modalTradeRow");
-    if (tradeRow) tradeRow.style.display = "none";
     setSignalConfirmationControlsVisible(false);
     setGiroAprendizajeControlsVisible(false);
     return;
   }
 
-  bar.style.display = "grid";
-  ensureModalCompactControlsLayout();
-  if (modalAnalysisRow) modalAnalysisRow.style.display = "grid";
+  bar.style.display = "block";
 
-  const statusTextEl = modalCandleStatusText || bar;
-  const tradeRow = document.querySelector("#chartModal .modalTradeRow");
   const callPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "CALL") : null;
   const putPlan = modalCurrentItem ? getCachedExecutionPlan(modalCurrentItem, "PUT") : null;
   setTradeButtonBaseLabel(modalBuyCallBtn, buildTradeButtonLabel("CALL", callPlan));
@@ -9584,11 +10477,9 @@ function updateModalCandleStatusUI() {
   const locked = isTradeLockedNow();
   const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
   const candleClosed = !isOpen;
-  if (tradeRow) tradeRow.style.display = candleClosed ? "none" : "grid";
-  if (modalSequenceText) modalSequenceText.textContent = getModalVisualSequenceText(modalCurrentItem);
 
   if (locked) {
-    statusTextEl.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
+    bar.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     bar.style.color = "#fff";
     bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.78), rgba(69,10,10,.78))";
     bar.style.borderColor = "rgba(248,113,113,.50)";
@@ -9610,13 +10501,13 @@ function updateModalCandleStatusUI() {
     }
     const enabled = getSignalEnabledTradeSide(modalCurrentItem);
     const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
-    statusTextEl.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.14)";
     bar.style.borderColor = "rgba(34,197,94,.28)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.05) inset";
   } else {
-    statusTextEl.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
+    bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
     bar.style.color = "rgba(229,231,235,.92)";
     bar.style.background = "rgba(107,114,128,.16)";
     bar.style.borderColor = "rgba(156,163,175,.22)";
@@ -9631,11 +10522,13 @@ function updateModalCandleStatusUI() {
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
   updateModalNavVoteUI();
+  updateModalFooterReadingUI();
 
   applyModalExecutionButtonUI(locked, candleClosed);
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
+  updateVisualReadPanelUI();
 
   // Auto-entrada real: igual que práctica, al segundo 58 si ya hay 4 puntos netos.
   if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_58");
@@ -9938,7 +10831,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
   const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
 
-  // V33: la vista Velas 1m debe usar EXACTAMENTE la misma proyección
+  // V33: la vista Velas 1m debe usar VISUALMENTE la misma proyección
   // que el gráfico de línea intraminuto. Antes se reconstruía la pendiente
   // con touchDetails y eso podía desplazar el nivel: la línea de velas no
   // coincidía con la línea del gráfico normal. Ahora cada vela pregunta el
@@ -10609,107 +11502,14 @@ function setManualGiroControlsVisible(show) {
    Panel Giro + Aprendizaje en modal
 ========================= */
 function ensureGiroAprendizajeControls() {
-  if (giroAprendizajePanelEl && giroAprendizajePanelEl.isConnected) return giroAprendizajePanelEl;
-
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-  if (!footer) return null;
-
-  const panel = document.createElement("div");
-  panel.id = "giroAprendizajePanel";
-  panel.style.width = "100%";
-  panel.style.boxSizing = "border-box";
-  panel.style.margin = "0 0 8px 0";
-  panel.style.padding = "10px";
-  panel.style.borderRadius = "16px";
-  panel.style.border = "1px solid rgba(34,211,238,.24)";
-  panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.030))";
-  panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.16), inset 0 0 0 1px rgba(34,211,238,.035)";
-
-  const top = document.createElement("div");
-  top.style.display = "flex";
-  top.style.alignItems = "center";
-  top.style.justifyContent = "space-between";
-  top.style.gap = "8px";
-  top.style.marginBottom = "8px";
-
-  const count = document.createElement("div");
-  count.id = "giroAprendizajeCount";
-  count.style.fontWeight = "950";
-  count.style.letterSpacing = ".25px";
-  count.style.fontSize = "14px";
-  count.style.padding = "8px 11px";
-  count.style.borderRadius = "999px";
-  count.style.border = "1px solid rgba(34,211,238,.24)";
-  count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "normal";
-  count.style.lineHeight = "1.15";
-
-  const hint = document.createElement("div");
-  hint.id = "giroAprendizajeHint";
-  hint.style.flex = "1";
-  hint.style.textAlign = "right";
-  hint.style.fontSize = "11.5px";
-  hint.style.fontWeight = "850";
-  hint.style.opacity = ".88";
-  hint.style.lineHeight = "1.18";
-  hint.style.maxWidth = "150px";
-
-  top.appendChild(count);
-  top.appendChild(hint);
-
-  const row = document.createElement("div");
-  row.id = "giroAprendizajeButtons";
-  row.style.display = "grid";
-  row.style.gridTemplateColumns = "1fr 1fr";
-  row.style.gap = "8px";
-
-  const mk = (label, text, title) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn btnGhost giroLearnBtn";
-    btn.dataset.learnLabel = label;
-    btn.textContent = text;
-    btn.title = title;
-    btn.style.minHeight = "42px";
-    btn.style.borderRadius = "14px";
-    btn.style.fontWeight = "950";
-    btn.style.fontSize = "12px";
-    btn.style.padding = "9px 8px";
-    btn.style.touchAction = "manipulation";
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (!modalCurrentItem) return;
-      const current = getGiroAprendizajeExampleForItem(modalCurrentItem);
-      const currentLabel = current ? normalizeGiroAprendizajeLabel(current.label) : "";
-      // Si tocás de nuevo la misma etiqueta, se destilda.
-      upsertGiroAprendizajeExample(modalCurrentItem, currentLabel === normalizeGiroAprendizajeLabel(label) ? "remove" : label, "modal_signal");
-    };
-    row.appendChild(btn);
-    return btn;
-  };
-
-  mk("target", "✅ Es mi formación", "Guardar como ejemplo positivo normal para la IA local");
-  mk("avoid", "❌ No es", "Guardar como negativo fuerte: baja o bloquea parecidas");
-  mk("doubt", "⚠️ Dudosa", "Guardar como referencia débil; no empuja señales fuerte");
-  mk("clear", "⭐ Muy clara", "Guardar como positivo fuerte: pesa más que Es mi formación");
-  mk("remove", "🗑 Quitar marca", "Quitar esta vela del aprendizaje");
-
-  panel.appendChild(top);
-  panel.appendChild(row);
-
-  const signalPanel = ensureSignalConfirmationControls();
-  if (signalPanel && signalPanel.parentElement === footer) signalPanel.insertAdjacentElement("afterend", panel);
-  else footer.prepend(panel);
-
-  giroAprendizajePanelEl = panel;
-  giroAprendizajeCountEl = count;
-  giroAprendizajeHintEl = hint;
-  giroAprendizajeButtonsEl = row;
-
-  updateGiroAprendizajeControlsUI();
-  return panel;
+  // V106.9.2 CLEAN: IA local vieja eliminada para no mezclarla con Reducción visual 25s.
+  const panel = document.getElementById("giroAprendizajePanel");
+  if (panel) panel.remove();
+  giroAprendizajePanelEl = null;
+  giroAprendizajeCountEl = null;
+  giroAprendizajeHintEl = null;
+  giroAprendizajeButtonsEl = null;
+  return null;
 }
 function updateGiroAprendizajeControlsUI() {
   if (!giroAprendizajePanelEl || !giroAprendizajePanelEl.isConnected) return;
@@ -10739,14 +11539,13 @@ function updateGiroAprendizajeControlsUI() {
   }
 }
 function setGiroAprendizajeControlsVisible(show) {
-  ensureGiroAprendizajeControls();
-  if (giroAprendizajePanelEl) giroAprendizajePanelEl.style.display = show ? "block" : "none";
+  // V106.9.2 CLEAN: IA local vieja eliminada.
+  const panel = document.getElementById("giroAprendizajePanel");
+  if (panel) panel.remove();
+  giroAprendizajePanelEl = null;
 }
-
-/* =========================
-   Layout botones modal
-========================= */
 function applyModalTradeButtonsLayout() {
+  ensureModalFooterControlsLayout();
   const bCall = modalBuyCallBtn;
   const bPut = modalBuyPutBtn;
   if (!bCall || !bPut) return;
@@ -11654,6 +12453,7 @@ function syncVisibleVoteRows(vote = getModalCurrentVote()) {
   } catch {}
 }
 function updateModalNavVoteUI() {
+  ensureModalFooterControlsLayout();
   if (!modalCurrentItem || !chartModal || chartModal.classList.contains("hidden")) {
     if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
     return;
@@ -11668,9 +12468,9 @@ function updateModalNavVoteUI() {
   const canPrev = ready && idx > 0;
   const canNext = ready && idx >= 0 && idx < list.length - 1;
 
-  [modalPrevItemBtn, modalNextItemBtn, modalPrevStatusBtn, modalNextStatusBtn].forEach((btn) => {
+  [modalPrevItemBtn, modalNextItemBtn].forEach((btn) => {
     if (!btn) return;
-    btn.style.display = "inline-flex";
+    btn.style.display = ready ? "inline-flex" : "none";
     btn.setAttribute("aria-hidden", ready ? "false" : "true");
   });
 
@@ -11683,18 +12483,6 @@ function updateModalNavVoteUI() {
   if (modalNextItemBtn) {
     modalNextItemBtn.disabled = !canNext;
     modalNextItemBtn.title = ready
-      ? (canNext ? `Siguiente en ${source === "trades" ? "Trades" : "Señales"}` : "No hay siguiente")
-      : "Disponible cuando NEXT esté resuelto";
-  }
-  if (modalPrevStatusBtn) {
-    modalPrevStatusBtn.disabled = !canPrev;
-    modalPrevStatusBtn.title = ready
-      ? (canPrev ? `Anterior en ${source === "trades" ? "Trades" : "Señales"}` : "No hay anterior")
-      : "Disponible cuando NEXT esté resuelto";
-  }
-  if (modalNextStatusBtn) {
-    modalNextStatusBtn.disabled = !canNext;
-    modalNextStatusBtn.title = ready
       ? (canNext ? `Siguiente en ${source === "trades" ? "Trades" : "Señales"}` : "No hay siguiente")
       : "Disponible cuando NEXT esté resuelto";
   }
@@ -11799,6 +12587,8 @@ function openChartModal(item, opts = {}) {
 
   modalCurrentItem.signalConfirmations ||= [];
   applyModalTradeButtonsLayout();
+ensureModalFooterControlsLayout();
+updateModalFooterReadingUI();
   setSignalConfirmationControlsVisible(true);
   ensureGiroAprendizajeControls();
   setGiroAprendizajeControlsVisible(true);
@@ -11809,6 +12599,7 @@ function openChartModal(item, opts = {}) {
   updateModalCandleStatusUI();
   updateModalNavVoteUI();
   updateModalChartViewBtnUI();
+  updateVisualReadPanelUI();
 
   requestModalDraw(true);
   scheduleModalAutoReplayX2(modalCurrentItem, "open_modal");
@@ -11826,6 +12617,7 @@ function closeChartModal() {
   if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
   setGiroAprendizajeControlsVisible(false);
+  if (visualReadPanelEl) visualReadPanelEl.style.display = "none";
   updateDisciplineLockUI(false);
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
@@ -11867,8 +12659,6 @@ if (modalLiveBtn) {
 
 if (modalPrevItemBtn) modalPrevItemBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(-1); };
 if (modalNextItemBtn) modalNextItemBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(1); };
-if (modalPrevStatusBtn) modalPrevStatusBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(-1); };
-if (modalNextStatusBtn) modalNextStatusBtn.onclick = (e) => { e.stopPropagation(); navigateModalItem(1); };
 if (modalLikeBtn) modalLikeBtn.onclick = (e) => { e.stopPropagation(); setModalFeedbackVote("like"); };
 if (modalDislikeBtn) modalDislikeBtn.onclick = (e) => { e.stopPropagation(); setModalFeedbackVote("dislike"); };
 
@@ -12572,7 +13362,7 @@ function renderHistory() {
 
   updateCounter();
 
-  for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
+  for (const it of [...getCleanVisualHistory()].reverse()) signalsEl.appendChild(buildRow(it));
 }
 
 /* =========================
@@ -12630,19 +13420,123 @@ function updateCountdownUI() {
 let reqSeq = 1;
 const pending = new Map();
 
+function payloadNeedsAuthenticatedTradingWs(payload = {}) {
+  if (!isNewPatApiMode()) return false;
+  return !!(
+    payload.balance ||
+    payload.proposal ||
+    payload.buy ||
+    payload.proposal_open_contract ||
+    payload.portfolio ||
+    payload.profit_table ||
+    payload.statement ||
+    payload.sell ||
+    payload.forget
+  );
+}
+function getActiveTradingSocketSync() {
+  if (isNewPatApiMode()) return tradeWs && tradeWs.readyState === 1 ? tradeWs : null;
+  return ws && ws.readyState === 1 ? ws : null;
+}
+function resetNewApiTradingSocket() {
+  try { if (tradeWs) tradeWs.close(); } catch {}
+  tradeWs = null;
+  tradeWsConnectPromise = null;
+  if (isNewPatApiMode()) isAuthorized = false;
+}
+async function ensureNewApiTradingWs({ force = false } = {}) {
+  if (!isNewPatApiMode()) return ws;
+  if (!force && tradeWs && tradeWs.readyState === 1) {
+    isAuthorized = true;
+    return tradeWs;
+  }
+  if (!force && tradeWsConnectPromise) return tradeWsConnectPromise;
+  try { if (force && tradeWs) tradeWs.close(); } catch {}
+  tradeWs = null;
+
+  tradeWsConnectPromise = (async () => {
+    const token = getDerivNewPatToken();
+    const appId = getDerivNewAppId();
+    if (!token) throw new Error("Falta PAT API nueva");
+    if (!appId) throw new Error("Falta App ID API nueva");
+    const wsUrl = await getNewApiOtpWebSocketUrl(getCurrentAccountScope());
+    setNewApiStatus(`OTP OK · conectando WS ${getTradingAccountLabel()}…`);
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const socket = new WebSocket(wsUrl);
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { socket.close(); } catch {}
+        reject(new Error("timeout WS API nueva"));
+      }, 12000);
+
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        tradeWs = socket;
+        isAuthorized = true;
+        setNewApiStatus(`✅ WS API nueva conectado · ${getTradingAccountLabel()} · ${getDerivNewAccountId()}`);
+        resolve(socket);
+      };
+      socket.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleDerivWsMessage(data, "trade");
+        } catch (err) {
+          setStatus(`❌ Parse WS trading: ${err?.message || err}`);
+        }
+      };
+      socket.onerror = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error("Error WS API nueva"));
+        }
+      };
+      socket.onclose = () => {
+        if (tradeWs === socket) {
+          tradeWs = null;
+          tradeWsConnectPromise = null;
+          if (isNewPatApiMode()) isAuthorized = false;
+          setNewApiStatus("WS API nueva cerrado. Se reabrirá al operar.");
+        }
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error("WS API nueva cerrado antes de conectar"));
+        }
+      };
+    });
+  })().finally(() => {
+    tradeWsConnectPromise = null;
+  });
+
+  return tradeWsConnectPromise;
+}
+async function getWsForRequestPayload(payload = {}) {
+  if (payloadNeedsAuthenticatedTradingWs(payload)) return ensureNewApiTradingWs();
+  if (!ws || ws.readyState !== 1) throw new Error("WS not open");
+  return ws;
+}
+
 function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
+  return (async () => {
+    const socket = await getWsForRequestPayload(payload);
+    if (!socket || socket.readyState !== 1) throw new Error("WS not open");
 
     const req_id = reqSeq++;
-    const t = setTimeout(() => {
-      pending.delete(req_id);
-      reject(new Error("timeout"));
-    }, timeoutMs);
+    return await new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        pending.delete(req_id);
+        reject(new Error("timeout"));
+      }, timeoutMs);
 
-    pending.set(req_id, { resolve, reject, t });
-    ws.send(JSON.stringify({ ...payload, req_id }));
-  });
+      pending.set(req_id, { resolve, reject, t, via: socket === tradeWs ? "trade" : "public" });
+      socket.send(JSON.stringify({ ...payload, req_id }));
+    });
+  })();
 }
 
 /* =========================
@@ -12650,6 +13544,7 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
 ========================= */
 function getDerivToken() {
   try {
+    if (isNewPatApiMode()) return getDerivNewPatToken() || localStorage.getItem(getTradingAccountTokenKey()) || "";
     return localStorage.getItem(getTradingAccountTokenKey()) || "";
   } catch {
     return "";
@@ -12657,11 +13552,19 @@ function getDerivToken() {
 }
 function setDerivToken(t) {
   try {
+    if (isNewPatApiMode()) {
+      setDerivNewPatToken(t || "");
+      return;
+    }
     localStorage.setItem(getTradingAccountTokenKey(), t || "");
   } catch {}
 }
 function clearDerivToken() {
   try {
+    if (isNewPatApiMode()) {
+      clearDerivNewPatToken();
+      return;
+    }
     localStorage.removeItem(getTradingAccountTokenKey());
   } catch {}
 }
@@ -12730,23 +13633,25 @@ function isPendingContractPOCCooldownActive() {
 
 function subscribeContractOutcome(contractId, silent = false) {
   try {
-    if (!ws || ws.readyState !== 1) return;
+    const socket = getActiveTradingSocketSync();
+    if (!socket || socket.readyState !== 1) return;
     if (!contractId) return;
     const cid = String(contractId);
 
     addPendingContract(cid);
     if (contractSubs.has(cid)) return;
 
-    ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
+    socket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
     contractSubs.set(cid, "__pending__");
     if (!silent) toast(`📡 Subscript contrato ${cid}`, 900);
   } catch {}
 }
 function forgetSubscription(subId) {
   try {
-    if (!ws || ws.readyState !== 1) return;
+    const socket = getActiveTradingSocketSync();
+    if (!socket || socket.readyState !== 1) return;
     if (!subId || subId === "__pending__") return;
-    ws.send(JSON.stringify({ forget: subId }));
+    socket.send(JSON.stringify({ forget: subId }));
   } catch {}
 }
 
@@ -12930,7 +13835,16 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
 async function ensureAuthorized() {
   const token = getDerivToken();
-  if (!token) throw new Error(`Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
+  if (!token) throw new Error(isNewPatApiMode()
+    ? "Sin PAT API nueva (pegalo en Configuración)"
+    : `Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
+
+  if (isNewPatApiMode()) {
+    if (isAuthorized && tradeWs && tradeWs.readyState === 1) return true;
+    await ensureNewApiTradingWs();
+    isAuthorized = true;
+    return true;
+  }
 
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
@@ -13011,7 +13925,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
       ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
       : null;
-    const isStrictAutoPrearmedEntry = !!(isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
+    const isStrictAutoPrearmedEntry = !!(SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT && isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
     if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
     if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
     else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
@@ -13237,6 +14151,7 @@ function initTokenAndStakeUI() {
   ensureTradingAccountButton();
   applyTradingAccountUI();
   applyTradingAccountBannerUI();
+  ensureDerivApiModePanel();
   ensureC100Panel();
   updateC100PanelUI();
   const tokenInput = pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
@@ -13248,13 +14163,16 @@ function initTokenAndStakeUI() {
   if (tokenSaveBtn && tokenInput) {
     tokenSaveBtn.onclick = () => {
       const v = String(tokenInput.value || "").trim();
-      if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
+      if (!v) return alert(isNewPatApiMode() ? "Pegá el PAT de API nueva primero." : `Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
+      saveNewApiSettingsFromInputs();
       resetAuthState();
+      resetNewApiTradingSocket();
       void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
       syncAccountScopedSettingsUI();
-      toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
-      alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
+      syncNewApiSettingsInputs();
+      toast(`💾 ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado ✓`, 1600);
+      alert(`✅ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado.`);
     };
   }
 
@@ -13262,9 +14180,11 @@ function initTokenAndStakeUI() {
     tokenClearBtn.onclick = () => {
       clearDerivToken();
       resetAuthState();
+      resetNewApiTradingSocket();
       syncAccountScopedSettingsUI();
-      toast(`🗑️ Token ${getTradingAccountLabel()} borrado ✓`, 1600);
-      alert(`🗑️ Token ${getTradingAccountLabel()} borrado.`);
+      syncNewApiSettingsInputs();
+      toast(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado ✓`, 1600);
+      alert(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado.`);
     };
   }
 
@@ -13701,7 +14621,30 @@ function onTick(tick) {
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isAlcistaIrregular25sMode(activeModeForTick)) {
+    if (isReduccionExacta25sMode(activeModeForTick)) {
+      // V106.8.1 Reducción visual 25s:
+      // NO dispara temprano. Espera a tener la ventana completa 0-25s y recién ahí
+      // compara ambas direcciones para elegir la mejor lectura visual.
+      // Se permite evaluar en el primer tick posterior a 25s (normalmente 26s) usando
+      // una frontera/interpolación exacta en 25000ms.
+      const visualEvalSec = 25;
+      const visualEvalLateSec = 28;
+      if (sec >= visualEvalSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
+        evaluateMinute(minute, {
+          evalMs: visualEvalSec * 1000,
+          evalSec: visualEvalSec,
+          radar: true,
+          radarStartSec: 0,
+          radarEndSec: visualEvalSec,
+          forceFullWindow25s: true,
+        });
+        // En este modo se evalúa una sola vez por vela. Si no hay patrón válido a los 25s,
+        // la vela queda descartada aunque después haga algo parecido.
+        lastEvaluatedMinute = minute;
+      } else if (sec > visualEvalLateSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+      }
+    } else if (isAlcistaIrregular25sMode(activeModeForTick)) {
       // V98 Alcista irregular 30s:
       // Analiza hasta 30s. La señal visible puede salir entre 20-30s
       // si la vela está verde y muestra avance irregular / estructura insana.
@@ -13753,7 +14696,7 @@ function onTick(tick) {
       }
     } else {
       // V38 SNR RADAR:
-      // En SNR ya no evalúa solo en un segundo exacto.
+      // En SNR ya no evalúa solo en un segundo visual.
       // Desde 35s hasta el segundo elegido escanea en cada tick.
       // Si encuentra interacción válida con el SNR, crea la prealerta y deja de escanear esa vela.
       const radarStartSec = SNR_RADAR_START_SEC;
@@ -18407,7 +19350,1477 @@ function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
 }
 
 
-function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
+
+function classifyAlcista30sLegs(upLegs) {
+  const moves = (Array.isArray(upLegs) ? upLegs : []).map((x) => Number(x.move || 0)).filter(Number.isFinite);
+  const maxUp = moves.length ? Math.max(...moves) : 0;
+  if (!maxUp) return { labels: [], pattern: "", maxUp: 0, minUp: 0, sizeRatio: 0 };
+  const minUp = moves.length ? Math.min(...moves.filter((v) => v > 0)) : 0;
+  const labels = moves.map((v) => {
+    if (v >= maxUp * 0.72) return "G";
+    if (v >= maxUp * 0.38) return "M";
+    return "P";
+  });
+  return {
+    labels,
+    pattern: labels.join("-"),
+    maxUp,
+    minUp,
+    sizeRatio: minUp > 0 ? maxUp / minUp : 0,
+  };
+}
+
+function analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange) {
+  const swingTol = Math.max(localRange * 0.010, tol * 0.75, 1e-9);
+  const visibleUpMin = Math.max(localRange * 0.052, tol * 1.85, 1e-9);
+  const visibleBreakMin = Math.max(localRange * 0.038, tol * 1.45, 1e-9);
+  const pausePriceTol = Math.max(localRange * 0.017, tol * 1.05, 1e-9);
+  const pauseMinMs = 700; // permite pausa visual de 1 tick / 1-2 segundos, sin exigir 5s.
+
+  const rawRuns = getRupturaDebilGiroRuns(clean, swingTol);
+  const upLegs = [];
+  const downLegs = [];
+  rawRuns.forEach((r, idx) => {
+    const item = { ...r, idx, move: Number(r.move || 0), startMs: Number(r.startMs || 0), endMs: Number(r.endMs || 0) };
+    if (item.sign > 0 && item.move >= visibleUpMin) upLegs.push(item);
+    if (item.sign < 0 && item.move >= visibleBreakMin) downLegs.push(item);
+  });
+
+  const breakDetails = [];
+  const countedDownRunIdx = new Set();
+  for (let i = 0; i < upLegs.length - 1; i++) {
+    const prevUp = upLegs[i];
+    const nextUp = upLegs[i + 1];
+    const betweenRuns = rawRuns
+      .map((r, idx) => ({ ...r, idx }))
+      .filter((r) => Number(r.idx) > Number(prevUp.idx) && Number(r.idx) < Number(nextUp.idx));
+    const downBetween = betweenRuns
+      .filter((r) => r.sign < 0)
+      .sort((a, b) => Number(b.move || 0) - Number(a.move || 0))[0] || null;
+    if (downBetween && Number(downBetween.move || 0) >= visibleBreakMin * 0.72) {
+      countedDownRunIdx.add(Number(downBetween.idx));
+      breakDetails.push({
+        type: "retroceso",
+        ms: Number(downBetween.startMs || prevUp.endMs),
+        move: Number(downBetween.move || 0),
+        fromUp: i,
+        visible: true,
+      });
+      continue;
+    }
+
+    const gapMs = Math.max(0, Number(nextUp.startMs || 0) - Number(prevUp.endMs || 0));
+    if (gapMs >= pauseMinMs) {
+      const betweenPts = clean.filter((p) => Number(p.ms) >= Number(prevUp.endMs || 0) && Number(p.ms) <= Number(nextUp.startMs || 0));
+      const maxQ = betweenPts.length ? Math.max(...betweenPts.map((p) => Number(p.quote))) : Number(prevUp.to || 0);
+      const minQ = betweenPts.length ? Math.min(...betweenPts.map((p) => Number(p.quote))) : Number(prevUp.to || 0);
+      const noProgress = maxQ <= Number(prevUp.to || 0) + pausePriceTol;
+      const gaveSomething = (Number(prevUp.to || 0) - minQ) >= pausePriceTol * 0.45;
+      if (noProgress || gaveSomething) {
+        breakDetails.push({
+          type: "pausa",
+          ms: Number(prevUp.endMs || 0),
+          durationMs: gapMs,
+          move: Math.max(0, Number(prevUp.to || 0) - minQ),
+          fromUp: i,
+          visible: true,
+        });
+      }
+    }
+  }
+
+  for (const d of downLegs) {
+    if (countedDownRunIdx.has(Number(d.idx))) continue;
+    // Retrocesos adicionales también cuentan si están dentro de 0-30s y no son micro ruido.
+    breakDetails.push({ type: "retroceso_extra", ms: Number(d.startMs || 0), move: Number(d.move || 0), visible: true });
+  }
+
+  breakDetails.sort((a, b) => Number(a.ms || 0) - Number(b.ms || 0));
+  const legInfo = classifyAlcista30sLegs(upLegs);
+  const upMoves = upLegs.map((r) => Number(r.move || 0));
+  const downMoves = downLegs.map((r) => Number(r.move || 0));
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxDown = downMoves.length ? Math.max(...downMoves) : 0;
+  const firstUp = upMoves[0] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+  let reductionPairs = 0;
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    if (upMoves[i] >= upMoves[i + 1] * 1.25 && upMoves[i] >= visibleUpMin) reductionPairs++;
+  }
+  const maxIdx = upMoves.indexOf(legInfo.maxUp);
+  const afterMax = maxIdx >= 0 ? upMoves.slice(maxIdx + 1) : [];
+  const postMaxWeakening = afterMax.some((v) => v <= legInfo.maxUp * 0.68);
+  const threeStepReduction = upMoves.length >= 3 && upMoves[0] >= upMoves[1] * 1.14 && upMoves[1] >= upMoves[2] * 1.12;
+  const clearSizeContrast = legInfo.sizeRatio >= 1.35 || new Set(legInfo.labels).size >= 2;
+  const pureIncreasing = upMoves.length >= 3 && upMoves.every((v, i) => i === 0 || v >= upMoves[i - 1] * 0.96) && !postMaxWeakening;
+  const allSimilar = legInfo.sizeRatio > 0 && legInfo.sizeRatio <= 1.28 && upMoves.length >= 3;
+  const visibleBreakCount = breakDetails.length;
+
+  return {
+    rawRuns,
+    upLegs,
+    downLegs,
+    upMoves,
+    downMoves,
+    totalUp,
+    totalDown,
+    maxDown,
+    firstUp,
+    lastUp,
+    visibleBreakCount,
+    breakDetails: breakDetails.slice(0, 8),
+    pauseBreaks: breakDetails.filter((b) => b.type === "pausa").length,
+    retroBreaks: breakDetails.filter((b) => String(b.type || "").includes("retroceso")).length,
+    reductionPairs,
+    threeStepReduction,
+    clearSizeContrast,
+    postMaxWeakening,
+    pureIncreasing,
+    allSimilar,
+    pattern: legInfo.pattern,
+    legLabels: legInfo.labels,
+    sizeRatio: legInfo.sizeRatio,
+    visibleUpMin,
+    visibleBreakMin,
+    pausePriceTol,
+    pauseMinMs,
+  };
+}
+
+
+// V106.6: calibración del modo Alcista quiebres 30s con tus correcciones.
+// La clave nueva es distinguir quiebre de debilidad vs quiebre que arma piso/doble suelo y recarga comprador.
+function getAlcista30sLocalExtrema(clean, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 30000))
+    .sort((a, b) => a.ms - b.ms);
+  const extrema = { lows: [], highs: [] };
+  if (pts.length < 5) return extrema;
+
+  const depthMin = Math.max(localRange * 0.055, tol * 2.6, 1e-9);
+  const look = 3;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const q = Number(pts[i].quote);
+    const left = pts.slice(Math.max(0, i - look), i);
+    const right = pts.slice(i + 1, Math.min(pts.length, i + 1 + look));
+    if (!left.length || !right.length) continue;
+    const leftMax = Math.max(...left.map((p) => Number(p.quote)));
+    const rightMax = Math.max(...right.map((p) => Number(p.quote)));
+    const leftMin = Math.min(...left.map((p) => Number(p.quote)));
+    const rightMin = Math.min(...right.map((p) => Number(p.quote)));
+    const isLow = q <= leftMin + tol * 0.9 && q <= rightMin + tol * 0.9;
+    const isHigh = q >= leftMax - tol * 0.9 && q >= rightMax - tol * 0.9;
+    const lowDepth = Math.max(leftMax - q, rightMax - q);
+    const highDepth = Math.max(q - leftMin, q - rightMin);
+    if (isLow && lowDepth >= depthMin) extrema.lows.push({ ms: pts[i].ms, quote: q, depth: lowDepth, idx: i });
+    if (isHigh && highDepth >= depthMin) extrema.highs.push({ ms: pts[i].ms, quote: q, depth: highDepth, idx: i });
+  }
+  return extrema;
+}
+
+function detectAlcista30sDoubleBottomRetake(clean, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 30000))
+    .sort((a, b) => a.ms - b.ms);
+  const result = {
+    detected: false,
+    block: false,
+    pairCount: 0,
+    clusterCount: 0,
+    strongRetake: false,
+    buyerImpulseAfterFloor: 0,
+    pairs: [],
+    reason: "",
+  };
+  if (pts.length < 6) return result;
+  const extrema = getAlcista30sLocalExtrema(pts, evalMs, tol, localRange);
+  const lows = extrema.lows || [];
+  if (lows.length < 2) return result;
+
+  const lowPriceTol = Math.max(localRange * 0.105, tol * 4.2, 1e-9);
+  const minGapMs = 3000;
+  const maxGapMs = 18000;
+  const retakeMin = Math.max(localRange * 0.20, tol * 5.2, 1e-9);
+  const pairs = [];
+
+  for (let i = 0; i < lows.length - 1; i++) {
+    for (let j = i + 1; j < lows.length; j++) {
+      const a = lows[i];
+      const b = lows[j];
+      const gap = Number(b.ms) - Number(a.ms);
+      if (gap < minGapMs || gap > maxGapMs) continue;
+      const priceDiff = Math.abs(Number(a.quote) - Number(b.quote));
+      if (priceDiff > lowPriceTol) continue;
+      const after = pts.filter((p) => Number(p.ms) >= Number(b.ms));
+      const maxAfter = after.length ? Math.max(...after.map((p) => Number(p.quote))) : Number(b.quote);
+      const retake = maxAfter - Number(b.quote);
+      const strongRetake = retake >= retakeMin;
+      pairs.push({
+        firstMs: Number(a.ms),
+        secondMs: Number(b.ms),
+        firstLow: Number(a.quote),
+        secondLow: Number(b.quote),
+        priceDiff,
+        gapMs: gap,
+        retake,
+        strongRetake,
+      });
+    }
+  }
+
+  if (!pairs.length) return result;
+  // Agrupamos pares para saber si hay más de un doble suelo visible dentro de 0-30.
+  const used = [];
+  for (const pair of pairs) {
+    const overlaps = used.some((u) => Math.abs(u.secondMs - pair.firstMs) < 2500 || Math.abs(u.secondMs - pair.secondMs) < 2500);
+    if (!overlaps) used.push(pair);
+  }
+
+  const strongest = pairs.slice().sort((a, b) => Number(b.retake || 0) - Number(a.retake || 0))[0] || null;
+  result.detected = true;
+  result.pairCount = pairs.length;
+  result.clusterCount = used.length;
+  result.strongRetake = pairs.some((p) => p.strongRetake);
+  result.buyerImpulseAfterFloor = Number(strongest?.retake || 0);
+  result.pairs = pairs.slice(0, 4);
+  result.reason = result.strongRetake
+    ? "doble suelo con comprador retomando fuerte"
+    : "doble suelo/retest de piso dentro de 0-30s";
+  // Bloqueo principal pedido por vos: doble suelo + recuperación compradora o dos pisos repetidos visibles.
+  result.block = result.strongRetake || result.clusterCount >= 2;
+  return result;
+}
+
+function detectAlcista30sSymmetricCycles(structure, efficiency = 0, pullbackRatio = 0) {
+  const rawRuns = Array.isArray(structure?.rawRuns) ? structure.rawRuns : [];
+  const visibleUpMin = Number(structure?.visibleUpMin || 0);
+  const visibleBreakMin = Number(structure?.visibleBreakMin || 0);
+  const sig = rawRuns
+    .filter((r) => r && ((r.sign > 0 && Number(r.move || 0) >= visibleUpMin * 0.85) || (r.sign < 0 && Number(r.move || 0) >= visibleBreakMin * 0.85)))
+    .map((r) => ({ sign: Number(r.sign), move: Number(r.move || 0), startMs: Number(r.startMs || 0), endMs: Number(r.endMs || 0) }));
+
+  let pairSimilar = 0;
+  for (let i = 0; i < sig.length - 1; i++) {
+    const a = sig[i];
+    const b = sig[i + 1];
+    if (!a.sign || !b.sign || a.sign === b.sign) continue;
+    const ratio = Math.max(a.move, b.move) / Math.max(Math.min(a.move, b.move), 1e-9);
+    if (ratio <= 1.45) pairSimilar++;
+  }
+
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  const downMoves = Array.isArray(structure?.downMoves) ? structure.downMoves.map(Number).filter(Number.isFinite) : [];
+  const upSizeRatio = Number(structure?.sizeRatio || 0);
+  const downMax = downMoves.length ? Math.max(...downMoves) : 0;
+  const downMin = downMoves.length ? Math.min(...downMoves.filter((v) => v > 0)) : 0;
+  const downSizeRatio = downMin > 0 ? downMax / downMin : 0;
+
+  const upAlmostSame = upMoves.length >= 3 && upSizeRatio > 0 && upSizeRatio <= 1.55;
+  const downAlmostSame = downMoves.length >= 2 && downSizeRatio > 0 && downSizeRatio <= 1.75;
+  const alternatingEnough = pairSimilar >= 2;
+  const detected =
+    (alternatingEnough && Number(efficiency) >= 0.34 && Number(pullbackRatio) >= 0.12) ||
+    (upAlmostSame && Number(structure?.visibleBreakCount || 0) >= 2 && !structure?.threeStepReduction && !structure?.postMaxWeakening && Number(efficiency) >= 0.42);
+
+  return {
+    detected,
+    block: detected && !structure?.threeStepReduction && !structure?.postMaxWeakening,
+    pairSimilar,
+    upAlmostSame,
+    downAlmostSame,
+    upSizeRatio,
+    downSizeRatio,
+    reason: detected ? "movimientos casi simétricos / ordenados" : "",
+  };
+}
+
+function detectBuyerIncreasingAfterBreak30s(structure) {
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  if (upMoves.length < 3) return { detected: false, block: false, reason: "" };
+  const firstBreak = Array.isArray(structure?.breakDetails) ? structure.breakDetails.find((b) => Number.isFinite(Number(b.fromUp))) : null;
+  const startIdx = Math.max(1, Number(firstBreak?.fromUp || 0) + 1);
+  const after = upMoves.slice(startIdx);
+  const before = upMoves.slice(0, startIdx);
+  const beforeMax = before.length ? Math.max(...before) : upMoves[0];
+  const afterMax = after.length ? Math.max(...after) : 0;
+  const last = after.length ? after[after.length - 1] : 0;
+  const firstAfter = after.length ? after[0] : 0;
+  const monotonicRise = after.length >= 2 && last >= firstAfter * 1.22;
+  const dominantAfterBreak = afterMax >= beforeMax * 1.16;
+  const smallToBig = upMoves.length >= 3 && upMoves[1] >= upMoves[0] * 1.22 && upMoves[2] >= upMoves[1] * 0.90 && !structure?.postMaxWeakening;
+  const detected = (monotonicRise || dominantAfterBreak || smallToBig) && !structure?.threeStepReduction && !structure?.postMaxWeakening;
+  return {
+    detected,
+    block: detected,
+    monotonicRise,
+    dominantAfterBreak,
+    smallToBig,
+    beforeMax,
+    afterMax,
+    reason: detected ? "comprador se recarga / aumenta después del quiebre" : "",
+  };
+}
+
+function detectBuyerReductionAfterBreak30s(structure) {
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  if (upMoves.length < 2) return { detected: false, strength: 0, reason: "" };
+  let reductions = 0;
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    if (upMoves[i] >= upMoves[i + 1] * 1.16) reductions++;
+  }
+  const detected = !!structure?.threeStepReduction || !!structure?.postMaxWeakening || reductions >= 1;
+  return {
+    detected,
+    strength: (structure?.threeStepReduction ? 2 : 0) + (structure?.postMaxWeakening ? 2 : 0) + reductions,
+    reductions,
+    reason: detected ? "comprador reduce después del quiebre" : "",
+  };
+}
+
+function detectSellerIncreasingPressure30s(structure, localRange, tol) {
+  const downMoves = Array.isArray(structure?.downMoves) ? structure.downMoves.map(Number).filter(Number.isFinite) : [];
+  if (!downMoves.length) return { detected: false, strong: false, reason: "" };
+  const first = downMoves[0];
+  const last = downMoves[downMoves.length - 1];
+  const maxDown = Math.max(...downMoves);
+  const minStrong = Math.max(Number(localRange || 0) * 0.12, Number(tol || 0) * 2.2, 1e-9);
+  const detected = downMoves.length >= 2 && (last >= first * 1.12 || maxDown >= first * 1.35);
+  const strong = detected && maxDown >= minStrong;
+  return {
+    detected,
+    strong,
+    first,
+    last,
+    maxDown,
+    reason: strong ? "vendedor aumenta presión claramente" : detected ? "vendedor aumenta presión" : "",
+  };
+}
+
+
+// V106.7: nuevo modo independiente "Reducción visual 25s".
+// No usa el motor viejo de alcista quiebres/reducción. Busca únicamente estructuras visuales
+// como las capturas: impulsos del grupo dominante que se achican con quiebres/pausas entre medio.
+// Funciona en los dos sentidos:
+// - comprador reduce en 0-25s => señal PUT
+// - vendedor reduce en 0-25s => señal CALL
+function classifyVisualReductionSizeLabels(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  const labels = arr.map((v) => {
+    const r = v / Math.max(max, 1e-9);
+    if (r >= 0.72) return "G";
+    if (r >= 0.42) return "M";
+    return "P";
+  });
+  return { labels, pattern: labels.join("-"), max, min, ratio: max / Math.max(min, 1e-9) };
+}
+
+function buildVisualReduction25sRuns(clean, side, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.y))
+    .sort((a, b) => a.ms - b.ms);
+  const runs = [];
+  if (pts.length < 3) return runs;
+
+  const segMin = Math.max(Number(localRange || 0) * 0.018, Number(tol || 0) * 0.75, 1e-9);
+  let cur = null;
+  const finish = () => {
+    if (!cur) return;
+    cur.durationMs = Math.max(0, Number(cur.endMs || 0) - Number(cur.startMs || 0));
+    cur.move = Math.abs(Number(cur.endY || 0) - Number(cur.startY || 0));
+    cur.delta = Number(cur.endY || 0) - Number(cur.startY || 0);
+    runs.push(cur);
+    cur = null;
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = b.y - a.y;
+    const ady = Math.abs(dy);
+    const segSign = ady >= segMin ? (dy > 0 ? 1 : -1) : 0;
+    if (!cur) {
+      cur = { sign: segSign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+      continue;
+    }
+    // Pausas de 1 tick / 1-2s se conservan como quiebres si cortan dos impulsos.
+    if (cur.sign === segSign) {
+      cur.endMs = b.ms;
+      cur.endY = b.y;
+      cur.endQuote = b.quote;
+      cur.points.push(b);
+    } else {
+      finish();
+      cur = { sign: segSign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+    }
+  }
+  finish();
+
+  // Limpieza mínima: fusionar pausas microscópicas con el quiebre vecino, pero sin perder la marca de pausa.
+  const out = [];
+  for (const r of runs) {
+    if (!out.length) { out.push({ ...r }); continue; }
+    const last = out[out.length - 1];
+    if (r.sign === last.sign && r.sign !== 0) {
+      last.endMs = r.endMs;
+      last.endY = r.endY;
+      last.endQuote = r.endQuote;
+      last.move = Math.abs(last.endY - last.startY);
+      last.delta = last.endY - last.startY;
+      last.durationMs = Math.max(0, last.endMs - last.startMs);
+      last.points = (last.points || []).concat((r.points || []).slice(1));
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
+function scoreVisualReduction25sSide(clean, side, evalMs, tol, localRange) {
+  const sideLabel = side > 0 ? "BUYER" : "SELLER";
+  const signalDirection = side > 0 ? "PUT" : "CALL";
+  const groupText = side > 0 ? "comprador" : "vendedor";
+  const contraryText = side > 0 ? "vendedor" : "comprador";
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * side }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 6) return null;
+
+  const y0 = Number(pts[0].y);
+  const yEnd = Number(pts[pts.length - 1].y);
+  const yMax = Math.max(...pts.map((p) => p.y));
+  const yMin = Math.min(...pts.map((p) => p.y));
+  const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
+  const visibleImpulseMin = Math.max(alignedRange * 0.105, Number(tol || 0) * 2.1, 1e-9);
+  const visibleBreakMin = Math.max(alignedRange * 0.040, Number(tol || 0) * 1.20, 1e-9);
+  const cleanProgressMin = Math.max(alignedRange * 0.20, Number(tol || 0) * 3.0, 1e-9);
+
+  const dominantAdvance = yMax - y0;
+  if (dominantAdvance < cleanProgressMin) return null;
+
+  const runs = buildVisualReduction25sRuns(pts.map((p) => ({ ms: p.ms, quote: p.quote / side })), side, tol, alignedRange);
+  const primaryRuns = [];
+  const breakRuns = [];
+  runs.forEach((r, idx) => {
+    const move = Number(r.move || 0);
+    if (r.sign > 0 && move >= visibleImpulseMin) primaryRuns.push({ ...r, idx, move });
+    if (r.sign <= 0 && (move >= visibleBreakMin || Number(r.durationMs || 0) <= 2600)) breakRuns.push({ ...r, idx, move });
+  });
+
+  if (primaryRuns.length < 2) return null;
+
+  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
+  const labelInfo = classifyVisualReductionSizeLabels(primaryMoves);
+
+  let breaksBetween = 0;
+  const breaksBetweenDetails = [];
+  for (let i = 0; i < primaryRuns.length - 1; i++) {
+    const a = primaryRuns[i];
+    const b = primaryRuns[i + 1];
+    const between = runs.filter((r, idx) => idx > a.idx && idx < b.idx);
+    const validBreak = between.find((r) => {
+      const mv = Number(r.move || 0);
+      return r.sign < 0
+        ? mv >= visibleBreakMin
+        : (r.sign === 0 && Number(r.durationMs || 0) <= 3000);
+    });
+    if (validBreak) {
+      breaksBetween++;
+      breaksBetweenDetails.push({
+        fromMove: i,
+        toMove: i + 1,
+        type: validBreak.sign < 0 ? "retroceso" : "pausa corta",
+        move: Number(validBreak.move || 0),
+        durationMs: Number(validBreak.durationMs || 0),
+        startMs: Number(validBreak.startMs || 0),
+        endMs: Number(validBreak.endMs || 0),
+      });
+    }
+  }
+
+  if (breaksBetween < Math.min(2, primaryRuns.length - 1)) return null;
+
+  const m0 = primaryMoves[0] || 0;
+  const m1 = primaryMoves[1] || 0;
+  const m2 = primaryMoves[2] || 0;
+  const m3 = primaryMoves[3] || 0;
+  const bigSmall = primaryMoves.length >= 2 && m0 >= m1 * 1.22;
+  const bigMediumSmall = primaryMoves.length >= 3 && m0 >= m1 * 1.10 && m1 >= m2 * 1.08;
+  const clearGMP = primaryMoves.length >= 3 && labelInfo.labels[0] === "G" && ["M", "P"].includes(labelInfo.labels[1]) && labelInfo.labels[2] === "P";
+  const bigSmallBigSmall = primaryMoves.length >= 4 && m0 >= m1 * 1.22 && m2 >= m3 * 1.14 && m2 <= m0 * 1.28;
+  const repeatedReductionPairs = primaryMoves.slice(0, -1).filter((v, i) => v >= primaryMoves[i + 1] * 1.14).length;
+  const cleanExactPattern = bigMediumSmall || clearGMP || bigSmallBigSmall || (bigSmall && repeatedReductionPairs >= 1);
+  if (!cleanExactPattern) return null;
+
+  // Bloqueos: esto no debe ser momentum sano ni secuencia en aumento.
+  const increasingAfterFirst = primaryMoves.length >= 3 && m1 >= m0 * 0.92 && m2 >= m1 * 0.96;
+  const lastDominates = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] >= m0 * 1.08;
+  if (increasingAfterFirst || lastDominates) return null;
+
+  const primaryStartMs = Number(primaryRuns[0]?.startMs || 0);
+  const lastPrimary = primaryRuns[primaryRuns.length - 1];
+  const afterLast = runs.filter((r, idx) => idx > Number(lastPrimary.idx));
+  const contraryRuns = afterLast.filter((r) => r.sign < 0 && Number(r.move || 0) >= Math.max(alignedRange * 0.075, Number(tol || 0) * 1.8));
+  const contraryEntry = contraryRuns.length ? contraryRuns.slice().sort((a, b) => Number(b.move || 0) - Number(a.move || 0))[0] : null;
+  const contraryEntryVisible = !!contraryEntry;
+  const contraryStrong = contraryEntryVisible && Number(contraryEntry.move || 0) >= Math.max(alignedRange * 0.15, Math.max(...primaryMoves) * 0.32, Number(tol || 0) * 2.6);
+
+  const pauseBreaks = breaksBetweenDetails.filter((b) => b.type === "pausa corta").length;
+  const retroBreaks = breaksBetweenDetails.filter((b) => b.type === "retroceso").length;
+  const totalPrimary = primaryMoves.reduce((a, b) => a + b, 0);
+  const totalCounter = runs.filter((r) => r.sign < 0).reduce((a, r) => a + Number(r.move || 0), 0);
+  const pullbackRatio = totalCounter / Math.max(totalPrimary, 1e-9);
+  const alignedNet = yEnd - y0;
+  const closeStillInDominantSide = alignedNet > Math.max(alignedRange * 0.02, Number(tol || 0));
+
+  let points = 0;
+  const reasons = [];
+  points += 3; reasons.push(`${groupText} domina 0-${Math.round(evalMs / 1000)}s`);
+  points += 3; reasons.push(`${primaryRuns.length} impulsos visibles del ${groupText}`);
+  points += 3; reasons.push(`${breaksBetween} quiebres/pausas entre impulsos`);
+  if (bigMediumSmall || clearGMP) { points += 5; reasons.push("patrón grande-mediano-pequeño"); }
+  else if (bigSmallBigSmall) { points += 5; reasons.push("patrón grande-pequeño-grande-pequeño"); }
+  else if (bigSmall) { points += 4; reasons.push("patrón grande-pequeño"); }
+  if (repeatedReductionPairs >= 2) { points += 2; reasons.push("reducción repetida"); }
+  if (pauseBreaks > 0) { points += 1; reasons.push("pausa corta de 1 tick/1-2s válida"); }
+  if (retroBreaks > 0) { points += 1; reasons.push("retrocesos visibles separan movimientos"); }
+  if (contraryStrong) { points += 3; reasons.push(`entrada fuerte del ${contraryText}`); }
+  else if (contraryEntryVisible) { points += 2; reasons.push(`entrada del ${contraryText} ayuda`); }
+  if (pullbackRatio >= 0.20) { points += 1; reasons.push("devuelve parte del avance"); }
+  if (!closeStillInDominantSide && contraryEntryVisible) { points += 1; reasons.push(`${contraryText} empieza a tomar control`); }
+
+  if (points < 12) return null;
+
+  const quality =
+    points * 14 +
+    Math.min(20, primaryRuns.length * 5) +
+    Math.min(18, breaksBetween * 6) +
+    (bigMediumSmall || clearGMP ? 18 : 0) +
+    (bigSmallBigSmall ? 18 : 0) +
+    (contraryStrong ? 16 : contraryEntryVisible ? 8 : 0) +
+    Math.min(12, labelInfo.ratio * 2) -
+    Math.max(0, Number(evalMs || 25000) - 20000) / 1800;
+
+  return {
+    side,
+    sideLabel,
+    signalDirection,
+    groupText,
+    contraryText,
+    quality,
+    points,
+    reasons,
+    evalMs,
+    alignedRange,
+    visibleImpulseMin,
+    visibleBreakMin,
+    primaryRuns: primaryRuns.slice(0, 6),
+    breakRuns: breakRuns.slice(0, 8),
+    runs: runs.slice(0, 12),
+    primaryMoves,
+    labels: labelInfo.labels,
+    pattern: labelInfo.pattern,
+    sizeRatio: labelInfo.ratio,
+    breaksBetween,
+    breaksBetweenDetails,
+    bigSmall,
+    bigMediumSmall,
+    clearGMP,
+    bigSmallBigSmall,
+    repeatedReductionPairs,
+    contraryEntryVisible,
+    contraryStrong,
+    contraryEntry,
+    pullbackRatio,
+    dominantAdvance,
+    alignedNet,
+  };
+}
+
+function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(10000, Math.min(25000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 10000 || evalMs > 25000) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.010, Math.abs(open) * 0.00000005, 1e-9);
+
+  const bullish = scoreVisualReduction25sSide(clean, 1, evalMs, tol, localRange);
+  const bearish = scoreVisualReduction25sSide(clean, -1, evalMs, tol, localRange);
+  const best = [bullish, bearish]
+    .filter(Boolean)
+    .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0))[0] || null;
+  if (!best) return null;
+
+  const signalIsPut = best.signalDirection === "PUT";
+  const level = signalIsPut ? high : low;
+  const zone = Math.max(tol * 4, localRange * 0.10);
+  const logicText = `Reducción visual 25s V106.8.1: ${best.reasons.join(", ")}. Motor independiente: solo acepta reducciones visuales tipo G-M-P / G-P / G-P-G-P hasta el segundo 25; la entrada del grupo contrario suma pero no es obligatoria.`;
+
+  return {
+    direction: best.signalDirection,
+    quality: best.quality,
+    points: best.points,
+    meta: {
+      level,
+      levelMode: "reduccion_visual_25s",
+      levelType: signalIsPut ? "buyer_exact_reduction_0_25" : "seller_exact_reduction_0_25",
+      direction: best.signalDirection,
+      tolerance: tol,
+      zone,
+      zoneLow: level - zone * 0.45,
+      zoneHigh: level + zone * 0.45,
+      points: best.points,
+      maxPoints: 24,
+      reasons: best.reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-25s",
+      confirmationWindow: "10-25s",
+      maxAnalysisSec: 25,
+      signalFromSec: 10,
+      motorIndependiente: true,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionSide: best.sideLabel,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionSizeRatio: best.sizeRatio,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionBreaks: best.breaksBetween,
+      visualReductionBreakDetails: best.breaksBetweenDetails,
+      bigSmall: best.bigSmall,
+      bigMediumSmall: best.bigMediumSmall,
+      clearGMP: best.clearGMP,
+      bigSmallBigSmall: best.bigSmallBigSmall,
+      repeatedReductionPairs: best.repeatedReductionPairs,
+      contraryEntryVisible: best.contraryEntryVisible,
+      contraryStrong: best.contraryStrong,
+      contraryEntry: best.contraryEntry || null,
+      pullbackRatio: best.pullbackRatio,
+      dominantAdvance: best.dominantAdvance,
+      alignedNet: best.alignedNet,
+      movementFilter: "v106_7_reduccion_visual_25s_motor_aparte_gmp_gp_gpgp_bidireccional",
+      priority: best.bigMediumSmall || best.clearGMP || best.bigSmallBigSmall || best.contraryStrong ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_25s_independiente_v106_7",
+      logic: logicText,
+      status: `${signalIsPut ? "📈" : "📉"} Reducción visual 25s V106.8.1: ${best.groupText} reduce ${best.pattern || "visual"}${best.contraryEntryVisible ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}. Máximo ${Math.round(evalMs / 1000)}s.`,
+    },
+  };
+}
+
+
+// V106.9.4: Reducción visual 25s — macro impulsos con desplazamiento visual.
+// Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
+// Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
+// - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
+// - el grupo contrario, si aparece, idealmente entra P→G
+// - no busca "irregularidad" genérica; busca esta plantilla visual.
+function classifyVisualReductionLabel(value, reference) {
+  const v = Math.abs(Number(value || 0));
+  const ref = Math.max(Math.abs(Number(reference || 0)), 1e-9);
+  const r = v / ref;
+  if (r >= 0.72) return "G";
+  if (r >= 0.42) return "M";
+  return "P";
+}
+
+function summarizeVisualMoves(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  const labels = arr.map((v) => classifyVisualReductionLabel(v, max));
+  return { labels, pattern: labels.join("→"), max, min, ratio: max / Math.max(min, 1e-9) };
+}
+
+function getVisualRuns25s(clean, side, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 3) return [];
+
+  // Umbral visual más holgado que el motor viejo: el ojo separa tramos por forma,
+  // no por cada micro-tick. Pausas chicas también se conservan como cortes.
+  const visualStep = Math.max(Number(localRange || 0) * 0.020, Number(tol || 0) * 0.70, 1e-9);
+  const raw = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    cur.durationMs = Math.max(0, Number(cur.endMs || 0) - Number(cur.startMs || 0));
+    cur.delta = Number(cur.endY || 0) - Number(cur.startY || 0);
+    cur.move = Math.abs(cur.delta);
+    raw.push(cur);
+    cur = null;
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = b.y - a.y;
+    const ady = Math.abs(dy);
+    const sign = ady >= visualStep ? (dy > 0 ? 1 : -1) : 0;
+    if (!cur) {
+      cur = { sign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+      continue;
+    }
+    if (cur.sign === sign) {
+      cur.endMs = b.ms;
+      cur.endY = b.y;
+      cur.endQuote = b.quote;
+      cur.points.push(b);
+    } else {
+      flush();
+      cur = { sign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+    }
+  }
+  flush();
+
+  // Fusión simple de tramos iguales separados por pausa microscópica; si la pausa está entre
+  // dominante y contrario se mantiene porque visualmente es el quiebre/estancamiento que buscás.
+  const out = [];
+  for (const r of raw) {
+    const move = Number(r.move || 0);
+    const isTinyPause = r.sign === 0 && move < Math.max(Number(localRange || 0) * 0.015, Number(tol || 0) * 0.6) && Number(r.durationMs || 0) <= 2200;
+    if (isTinyPause && out.length && raw[raw.indexOf(r) + 1] && out[out.length - 1].sign === raw[raw.indexOf(r) + 1].sign) {
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (last && last.sign === r.sign && r.sign !== 0) {
+      last.endMs = r.endMs;
+      last.endY = r.endY;
+      last.endQuote = r.endQuote;
+      last.delta = last.endY - last.startY;
+      last.move = Math.abs(last.delta);
+      last.durationMs = Math.max(0, last.endMs - last.startMs);
+      last.points = (last.points || []).concat((r.points || []).slice(1));
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
+function hasVisualCutBetweenRuns(runs, aIdx, bIdx, cutMin) {
+  const between = (Array.isArray(runs) ? runs : []).filter((r, idx) => idx > aIdx && idx < bIdx);
+  return between.some((r) => {
+    const mv = Number(r.move || 0);
+    const dur = Number(r.durationMs || 0);
+    return r.sign < 0 ? mv >= cutMin : (r.sign === 0 && dur <= 3200);
+  });
+}
+
+
+// V106.9.4: Macro filtro visual con desplazamiento.
+// El ojo no interpreta cada rebote pequeño como entrada contraria. Si el movimiento dominante
+// baja/sube y aparece un rebote chico entre dos tramos del mismo lado, lo tratamos como pausa
+// interna. Solo marcamos grupo contrario cuando la respuesta tiene tamaño visual real o aparece
+// después de una reducción clara y luego aumenta.
+function isVisualReductionAlreadyFormed(primaryMoves) {
+  const arr = (Array.isArray(primaryMoves) ? primaryMoves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) return false;
+  if (arr[0] >= arr[1] * 1.16) return true;
+  if (arr.length >= 3 && arr[0] >= arr[1] * 1.04 && arr[1] >= arr[2] * 1.04) return true;
+  let reductions = 0;
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.10) reductions++;
+  }
+  return reductions >= 2;
+}
+
+function classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin) {
+  const all = Array.isArray(runs) ? runs : [];
+  const primaryRuns = [];
+  const contraryRaw = [];
+  const microInternalRuns = [];
+  const macroContraryMinBase = Math.max(Number(alignedRange || 0) * 0.105, Number(impulseMin || 0) * 1.55, Number(cutMin || 0) * 2.2, 1e-9);
+
+  all.forEach((r, idx) => {
+    const move = Number(r.move || 0);
+    if (r.sign > 0 && move >= Number(impulseMin || 0)) primaryRuns.push({ ...r, idx, move });
+    if (r.sign < 0 && move >= Number(cutMin || 0)) contraryRaw.push({ ...r, idx, move });
+  });
+
+  const primaryBefore = (idx) => primaryRuns.filter((p) => p.idx < idx);
+  const primaryAfter = (idx) => primaryRuns.filter((p) => p.idx > idx);
+  const contraryRuns = [];
+
+  contraryRaw.forEach((r, localIdx) => {
+    const before = primaryBefore(r.idx);
+    const after = primaryAfter(r.idx);
+    const prevP = before[before.length - 1] || null;
+    const nextP = after[0] || null;
+    const surroundingMax = Math.max(Number(prevP?.move || 0), Number(nextP?.move || 0), 1e-9);
+    const surroundedBySameSide = !!(prevP && nextP);
+    const smallInsideDominant = surroundedBySameSide && r.move < surroundingMax * 0.46 && r.move < macroContraryMinBase;
+    const formedReductionBefore = isVisualReductionAlreadyFormed(before.map((p) => Number(p.move || 0)));
+    const laterContrary = contraryRaw.slice(localIdx + 1).find((c) => Number(c.move || 0) >= Math.max(r.move * 1.28, macroContraryMinBase));
+    const isBigContrary = r.move >= macroContraryMinBase;
+    const isSmallThenBigContraryAfterReduction = formedReductionBefore && !!laterContrary && r.move >= Math.max(Number(cutMin || 0), Number(impulseMin || 0) * 0.42);
+
+    if (smallInsideDominant && !isSmallThenBigContraryAfterReduction) {
+      microInternalRuns.push({ ...r, macroRole: "internal_pause" });
+      return;
+    }
+
+    if (isBigContrary || isSmallThenBigContraryAfterReduction) {
+      contraryRuns.push({ ...r, macroRole: isBigContrary ? "real_contrary" : "small_then_big_contrary" });
+    } else {
+      microInternalRuns.push({ ...r, macroRole: "internal_pause" });
+    }
+  });
+
+  return { primaryRuns, contraryRuns, microInternalRuns, contraryRaw, macroContraryMin: macroContraryMinBase };
+}
+
+
+function getVisualReductionSimpleShape(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) {
+    return {
+      hasReduction: false,
+      hasIncrease: false,
+      repeatedReduction: 0,
+      repeatedIncrease: 0,
+      ratio: 0,
+      lastVsFirst: 0,
+      summary: summarizeVisualMoves(arr),
+    };
+  }
+  let repeatedReduction = 0;
+  let repeatedIncrease = 0;
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.10) repeatedReduction++;
+    if (arr[i + 1] >= arr[i] * 1.10) repeatedIncrease++;
+  }
+  const first = arr[0];
+  const last = arr[arr.length - 1];
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  return {
+    hasReduction: repeatedReduction >= 1 || first >= last * 1.16,
+    hasIncrease: repeatedIncrease >= 1 || last >= first * 1.16,
+    repeatedReduction,
+    repeatedIncrease,
+    ratio: max / Math.max(min, 1e-9),
+    lastVsFirst: last / Math.max(first, 1e-9),
+    summary: summarizeVisualMoves(arr),
+  };
+}
+
+function getReduccionVisualQualityLabel(score) {
+  const p = Number(score?.points || 0);
+  const hasContraryPG = !!score?.contraryPG;
+  const hasGmp = !!score?.gmp;
+  const hasRepeat = Number(score?.repeatedReduction || 0) >= 2;
+  const hasContradiction = !!score?.contradictionStrong;
+  if (p >= 17 && (hasContraryPG || hasGmp || hasRepeat) && !hasContradiction) return "A";
+  if (p >= 13 && !hasContradiction) return "B";
+  return "C";
+}
+
+function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
+  const groupText = side > 0 ? "comprador" : "vendedor";
+  const contraryText = side > 0 ? "vendedor" : "comprador";
+  const signalDirection = side > 0 ? "PUT" : "CALL";
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 5) return null;
+
+  const y0 = Number(pts[0].y);
+  const yEnd = Number(pts[pts.length - 1].y);
+  const yMax = Math.max(...pts.map((p) => p.y));
+  const yMin = Math.min(...pts.map((p) => p.y));
+  const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
+  const impulseMin = Math.max(alignedRange * 0.055, Number(tol || 0) * 1.35, 1e-9);
+  const firstBigMin = Math.max(alignedRange * 0.115, Number(tol || 0) * 2.2, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.030, Number(tol || 0) * 0.95, 1e-9);
+
+  // V106.9.4: desplazamiento visual obligatorio.
+  // La formación buscada no debe ser zigzag estacionado: el grupo que reduce tiene que
+  // desplazar la línea hacia su lado durante 0-25s, aunque internamente haga pausas/quiebres.
+  const totalPath = pts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(pts[i].y)), 0);
+  const alignedNet25 = yEnd - y0;
+  const dominantAdvance25 = yMax - y0;
+  const oppositeDip25 = Math.max(0, y0 - yMin);
+  const netDisplacementRatio = alignedNet25 / Math.max(alignedRange, 1e-9);
+  const dominantDisplacementRatio = dominantAdvance25 / Math.max(alignedRange, 1e-9);
+  const oppositeDipRatio = oppositeDip25 / Math.max(alignedRange, 1e-9);
+  const closePosition01 = (yEnd - yMin) / Math.max(alignedRange, 1e-9);
+  const directionalEfficiency = alignedNet25 / Math.max(totalPath, 1e-9);
+  const displacementOk = (
+    dominantAdvance25 >= Math.max(alignedRange * 0.46, Number(tol || 0) * 3.5) &&
+    dominantAdvance25 >= oppositeDip25 * 1.18 &&
+    alignedNet25 >= Math.max(alignedRange * 0.16, Number(tol || 0) * 1.3) &&
+    closePosition01 >= 0.50 &&
+    directionalEfficiency >= 0.14
+  ) || (
+    // Variante holgada: hubo avance direccional claro, aunque el cierre no quede exactamente en el extremo.
+    dominantAdvance25 >= Math.max(alignedRange * 0.62, Number(tol || 0) * 4.5) &&
+    oppositeDip25 <= alignedRange * 0.34 &&
+    alignedNet25 >= Math.max(alignedRange * 0.08, Number(tol || 0) * 0.8) &&
+    closePosition01 >= 0.45
+  );
+  if (!displacementOk) return null;
+
+  const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
+  if (runs.length < 3) return null;
+
+  const macroRuns = classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin);
+  const primaryRuns = macroRuns.primaryRuns;
+  const contraryRuns = macroRuns.contraryRuns;
+  const microInternalRuns = macroRuns.microInternalRuns;
+  const macroContraryMin = macroRuns.macroContraryMin;
+
+  if (primaryRuns.length < 2) return null;
+  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
+  const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
+  const firstMove = primaryMoves[0];
+  if (!Number.isFinite(firstMove) || firstMove < firstBigMin) return null;
+
+  let cutsBetween = 0;
+  for (let i = 0; i < primaryRuns.length - 1; i++) {
+    if (hasVisualCutBetweenRuns(runs, primaryRuns[i].idx, primaryRuns[i + 1].idx, cutMin)) cutsBetween++;
+  }
+
+  const summary = summarizeVisualMoves(primaryMoves);
+  const labels = summary.labels;
+  const primaryShape = getVisualReductionSimpleShape(primaryMoves);
+  const contraryShape = getVisualReductionSimpleShape(contraryMoves);
+  const m0 = primaryMoves[0] || 0;
+  const m1 = primaryMoves[1] || 0;
+  const m2 = primaryMoves[2] || 0;
+  const m3 = primaryMoves[3] || 0;
+
+  // Plantillas visuales buscadas: G→P, G→M→P, o reduce-aumenta-reduce.
+  const gToP = primaryMoves.length >= 2 && m0 >= m1 * 1.18;
+  const gmp = primaryMoves.length >= 3 && m0 >= m1 * 1.04 && m1 >= m2 * 1.04;
+  const reduceIncreaseReduce = primaryMoves.length >= 4 && m0 >= m1 * 1.12 && m2 >= m1 * 0.88 && m2 <= m0 * 1.45 && m2 >= m3 * 1.10;
+  const repeatedReduction = primaryShape.repeatedReduction;
+  const lateReduceAgain = primaryMoves.length >= 3 && primaryMoves.slice(1, -1).some((v, i) => v >= primaryMoves[i + 2] * 1.10);
+  const templateOk = gToP || gmp || reduceIncreaseReduce || (repeatedReduction >= 2 && (labels.includes("P") || lateReduceAgain));
+  if (!templateOk) return null;
+
+  // Contrario P→G: no obligatorio, pero sube mucho la calidad porque confirma cambio de presión.
+  let contraryPG = false;
+  let contraryStrong = false;
+  let contraryPattern = "";
+  if (contraryRuns.length >= 2) {
+    const firstC = contraryMoves[0] || 0;
+    const maxLater = Math.max(...contraryMoves.slice(1));
+    contraryPG = maxLater >= firstC * 1.18 || maxLater >= Math.max(alignedRange * 0.12, firstMove * 0.28);
+    contraryStrong = maxLater >= Math.max(alignedRange * 0.16, firstMove * 0.36);
+    contraryPattern = contraryShape.summary.pattern;
+  } else if (contraryRuns.length === 1) {
+    contraryStrong = Number(contraryRuns[0].move || 0) >= Math.max(alignedRange * 0.18, firstMove * 0.38);
+    contraryPattern = summarizeVisualMoves([contraryRuns[0].move]).pattern;
+  }
+
+  // Bloqueos para no volver a caer en continuidad/simetría.
+  const cleanMomentum = primaryMoves.length >= 3 && m1 >= m0 * 0.92 && m2 >= m1 * 0.92 && !lateReduceAgain;
+  const lastDominatesTooMuch = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] > m0 * 1.18;
+  const tooSymmetric = primaryMoves.length >= 3 && summary.ratio <= 1.28 && !contraryPG;
+  if (cleanMomentum || lastDominatesTooMuch || tooSymmetric) return null;
+
+  // Contradicciones dentro de 0-25s: si el mismo grupo que supuestamente reduce vuelve a tomar fuerza,
+  // o si el lado contrario también queda reduciendo sin P→G, baja la calidad o se descarta.
+  const primaryRecoversLate = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] >= firstMove * 0.92 && !lateReduceAgain;
+  const bothSidesReduceNoTakeover = contraryRuns.length >= 2 && contraryShape.hasReduction && !contraryPG && !contraryStrong;
+  const contraryDominatesAgainstReading = contraryRuns.length >= 2 && contraryShape.hasReduction && contraryShape.ratio >= primaryShape.ratio * 0.92 && !contraryPG;
+  const contradictionStrong = primaryRecoversLate || contraryDominatesAgainstReading;
+  const contradictionSoft = bothSidesReduceNoTakeover;
+  if (contradictionStrong) return null;
+
+  let points = 0;
+  const reasons = [];
+  const rejectHints = [];
+  points += 4; reasons.push(`${groupText} entra grande`);
+  points += 3; reasons.push("desplazamiento visual 0-25s");
+  if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
+  if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
+  if (gmp) { points += 6; reasons.push(`${groupText} reduce G→M→P`); }
+  else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
+  else if (gToP) { points += 5; reasons.push(`${groupText} reduce G→P`); }
+  if (repeatedReduction >= 2) { points += 2; reasons.push("reducción repetida"); }
+  if (contraryPG) { points += 6; reasons.push(`${contraryText} responde P→G`); }
+  else if (contraryStrong) { points += 3; reasons.push(`${contraryText} entra fuerte`); }
+  if (labels.includes("P")) { points += 1; reasons.push("movimiento pequeño visible"); }
+  if (cutsBetween >= 2) { points += 1; reasons.push("varios cortes visuales"); }
+  if (contradictionSoft) { points -= 3; rejectHints.push("ambos lados reducen sin toma de control clara"); }
+
+  if (points < 10) return null;
+
+  const quality =
+    points * 12 +
+    (gmp ? 18 : 0) +
+    (reduceIncreaseReduce ? 18 : 0) +
+    (contraryPG ? 30 : contraryStrong ? 12 : 0) +
+    Math.min(16, repeatedReduction * 6) +
+    Math.min(14, cutsBetween * 5) -
+    (contradictionSoft ? 18 : 0) -
+    Math.max(0, Number(evalMs || 25000) - 22000) / 1300;
+
+  const tmp = {
+    points,
+    gmp,
+    repeatedReduction,
+    contraryPG,
+    contradictionStrong,
+  };
+  const qualityLabel = getReduccionVisualQualityLabel(tmp);
+  if (qualityLabel === "C") return null;
+
+  return {
+    side,
+    signalDirection,
+    groupText,
+    contraryText,
+    points,
+    quality,
+    qualityLabel,
+    reasons,
+    rejectHints,
+    evalMs,
+    alignedRange,
+    impulseMin,
+    firstBigMin,
+    cutMin,
+    runs: runs.slice(0, 14),
+    primaryRuns: primaryRuns.slice(0, 8),
+    contraryRuns: contraryRuns.slice(0, 8),
+    microInternalRuns: microInternalRuns.slice(0, 10),
+    macroContraryMin,
+    primaryMoves,
+    contraryMoves,
+    labels,
+    pattern: summary.pattern,
+    sizeRatio: summary.ratio,
+    primaryShape,
+    contraryShape,
+    cutsBetween,
+    gToP,
+    gmp,
+    reduceIncreaseReduce,
+    repeatedReduction,
+    contraryPG,
+    contraryStrong,
+    contraryPattern,
+    cleanMomentum,
+    lastDominatesTooMuch,
+    tooSymmetric,
+    primaryRecoversLate,
+    bothSidesReduceNoTakeover,
+    contraryDominatesAgainstReading,
+    contradictionStrong,
+    contradictionSoft,
+    alignedNet: yEnd - y0,
+    dominantAdvance: yMax - y0,
+    visualDisplacementOk: displacementOk,
+    visualDisplacementNetRatio: netDisplacementRatio,
+    visualDisplacementDominantRatio: dominantDisplacementRatio,
+    visualDisplacementOppositeDipRatio: oppositeDipRatio,
+    visualDisplacementClosePosition: closePosition01,
+    visualDisplacementEfficiency: directionalEfficiency,
+    visualDisplacementTotalPath: totalPath,
+  };
+}
+
+function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 5) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  // V106.8.1: este modo solo decide con la ventana completa 0-25s.
+  // Si alguien lo llama antes, no devuelve señal para evitar alertas en 5s/10s.
+  const evalMs = 25000;
+  if (Number.isFinite(optEvalMs) && optEvalMs < 24500) return null;
+  if (lastMs < 23000 && !opts?.forceFullWindow25s) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 5) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.010, Math.abs(open) * 0.00000005, 1e-9);
+
+  const buyerWeak = scoreReduccionVisual25sSide(clean, 1, evalMs, tol, localRange);
+  const sellerWeak = scoreReduccionVisual25sSide(clean, -1, evalMs, tol, localRange);
+  const ordered = [buyerWeak, sellerWeak]
+    .filter(Boolean)
+    .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0));
+  const best = ordered[0] || null;
+  const second = ordered[1] || null;
+  if (!best) return null;
+
+  // V106.8.2: si comprador y vendedor dan lecturas demasiado cercanas, la vela queda ambigua.
+  // Esto evita señales contradictorias cuando a los 25s ambos lados muestran reducción.
+  const qualityGap = second ? Number(best.quality || 0) - Number(second.quality || 0) : Infinity;
+  const relativeGap = second ? qualityGap / Math.max(Number(best.quality || 0), 1e-9) : 1;
+  const sameQualityAmbiguous = second && qualityGap < 18 && relativeGap < 0.16 && !best.contraryPG;
+  if (sameQualityAmbiguous) return null;
+
+  const signalIsPut = best.signalDirection === "PUT";
+  const level = signalIsPut ? high : low;
+  const zone = Math.max(tol * 4, localRange * 0.10);
+  const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
+  const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
+  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción visual 25s V106.9.4: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
+
+  return {
+    direction: best.signalDirection,
+    quality: best.quality,
+    points: best.points,
+    meta: {
+      level,
+      levelMode: "reduccion_visual_25s",
+      levelType: signalIsPut ? "buyer_visual_reduction_0_25" : "seller_visual_reduction_0_25",
+      direction: best.signalDirection,
+      tolerance: tol,
+      zone,
+      zoneLow: level - zone * 0.45,
+      zoneHigh: level + zone * 0.45,
+      points: best.points,
+      maxPoints: 30,
+      reasons: best.reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-25s",
+      maxAnalysisSec: 25,
+      signalFromSec: 25,
+      motorIndependiente: true,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionQuality: best.qualityLabel,
+      visualReductionSubtype: subtype,
+      visualReductionQualityGap: Number.isFinite(qualityGap) ? qualityGap : null,
+      visualReductionRelativeGap: Number.isFinite(relativeGap) ? relativeGap : null,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionContraryMoves: best.contraryMoves,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionContraryRuns: best.contraryRuns,
+      visualReductionMicroInternalRuns: best.microInternalRuns,
+      visualReductionMacroContraryMin: best.macroContraryMin,
+      visualReductionContraryPattern: best.contraryPattern,
+      visualDisplacementOk: best.visualDisplacementOk,
+      visualDisplacementNetRatio: best.visualDisplacementNetRatio,
+      visualDisplacementDominantRatio: best.visualDisplacementDominantRatio,
+      visualDisplacementOppositeDipRatio: best.visualDisplacementOppositeDipRatio,
+      visualDisplacementClosePosition: best.visualDisplacementClosePosition,
+      visualDisplacementEfficiency: best.visualDisplacementEfficiency,
+      cutsBetween: best.cutsBetween,
+      gToP: best.gToP,
+      gmp: best.gmp,
+      reduceIncreaseReduce: best.reduceIncreaseReduce,
+      repeatedReduction: best.repeatedReduction,
+      primaryShape: best.primaryShape,
+      contraryShape: best.contraryShape,
+      contradictionStrong: best.contradictionStrong,
+      contradictionSoft: best.contradictionSoft,
+      rejectHints: best.rejectHints,
+      contraryPG: best.contraryPG,
+      contraryStrong: best.contraryStrong,
+      cleanMomentumBlocked: best.cleanMomentum,
+      lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
+      tooSymmetricBlocked: best.tooSymmetric,
+      movementFilter: "v106_9_4_macro_impulsos_con_desplazamiento",
+      priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_25s_desplazamiento_v106_9_4",
+      logic: logicText,
+      status,
+    },
+  };
+}
+
+function analyzeAlcistaQuiebres30sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+  const greenTol = Math.max(localRange * 0.014, tol * 1.35);
+  if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
+  if (!(current > open + greenTol)) return null;
+
+  // Máximo dos cambios reales de color antes de 30s: permitimos que se ponga roja 1-2 veces,
+  // pero no lateralización cruzando el open todo el tiempo.
+  const significantColorTol = Math.max(localRange * 0.10, tol * 3.0);
+  const colorStates = [];
+  let activeColorState = "";
+  for (const p of clean) {
+    if (Number(p.ms) > evalMs) break;
+    const d = Number(p.quote) - open;
+    const st = d > significantColorTol ? "GREEN" : d < -significantColorTol ? "RED" : "";
+    if (!st) continue;
+    if (st !== activeColorState) {
+      colorStates.push({ state: st, ms: Number(p.ms), delta: d });
+      activeColorState = st;
+    }
+  }
+  const significantColorFlips = Math.max(0, colorStates.length - 1);
+  const firstColorState = colorStates[0]?.state || "";
+  if (significantColorFlips > 2 || (firstColorState === "RED" && significantColorFlips >= 2)) return null;
+
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const net = current - open;
+  const highFromOpen = high - open;
+  const path = Math.max(stats.path, 1e-9);
+  const efficiency = net / path;
+  const structure = analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange);
+  const upLegs = structure.upLegs || [];
+  const downLegs = structure.downLegs || [];
+  const upMoves = structure.upMoves || [];
+  const downMoves = structure.downMoves || [];
+  const totalUp = Number(structure.totalUp || 0);
+  const totalDown = Number(structure.totalDown || 0);
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
+
+  const buyerAdvanceVisible =
+    highFromOpen >= Math.max(localRange * 0.30, tol * 3.8) &&
+    totalUp >= Math.max(localRange * 0.46, tol * 4.6) &&
+    net >= Math.max(localRange * 0.035, tol * 1.25);
+  if (!buyerAdvanceVisible) return null;
+
+  // Requisito nuevo: irregularidad visual con quiebres claros. Una pausa de 1 tick / 1-2s cuenta
+  // si realmente corta el avance y después vuelve otro movimiento alcista visible.
+  if (upLegs.length < 3) return null;
+  if (structure.visibleBreakCount < 2) return null;
+  if (!structure.clearSizeContrast) return null;
+
+  const hasVisualWeakening =
+    structure.threeStepReduction ||
+    structure.reductionPairs >= 1 ||
+    structure.postMaxWeakening ||
+    (!structure.pureIncreasing && structure.legLabels.length >= 4 && new Set(structure.legLabels).size >= 2);
+  if (!hasVisualWeakening) return null;
+
+  const closeNearHigh = (high - current) <= Math.max(localRange * 0.080, tol * 2.0);
+  const cleanBullishContinuation =
+    efficiency >= 0.68 &&
+    pullbackRatio <= 0.15 &&
+    maxPullbackRatio <= 0.11 &&
+    closeNearHigh &&
+    structure.visibleBreakCount < 3 &&
+    !structure.threeStepReduction &&
+    !structure.postMaxWeakening;
+  if (cleanBullishContinuation) return null;
+
+  const allSimilarClean =
+    structure.allSimilar &&
+    efficiency >= 0.56 &&
+    pullbackRatio <= 0.18 &&
+    !structure.postMaxWeakening;
+  if (allSimilarClean) return null;
+
+  const pureIncreasingDanger =
+    structure.pureIncreasing &&
+    !structure.postMaxWeakening &&
+    pullbackRatio <= 0.24;
+  if (pureIncreasingDanger) return null;
+
+  const maxUpRun = structure.sizeRatio ? structure.maxUp : (upMoves.length ? Math.max(...upMoves) : 0);
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const anySellerEntry = maxDownRun >= Math.max(localRange * 0.08, tol * 1.8);
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.18, maxUpRun * 0.38, tol * 2.4);
+  const sellerMomentumIncreasing = downMoves.length >= 2 && downMoves[downMoves.length - 1] >= downMoves[0] * 1.14;
+
+  const doubleBottomRetake = detectAlcista30sDoubleBottomRetake(clean, evalMs, tol, localRange);
+  const symmetricCycles = detectAlcista30sSymmetricCycles(structure, efficiency, pullbackRatio);
+  const buyerIncreasingAfterBreak = detectBuyerIncreasingAfterBreak30s(structure);
+  const buyerReductionAfterBreak = detectBuyerReductionAfterBreak30s(structure);
+  const sellerPressure = detectSellerIncreasingPressure30s(structure, localRange, tol);
+
+  // Bloqueos pedidos: quiebres que forman doble suelo/piso defendido, simetría fuerte o comprador recargado
+  // no son la irregularidad buscada aunque tengan zigzag.
+  if (doubleBottomRetake.block) return null;
+  if (symmetricCycles.block) return null;
+  if (buyerIncreasingAfterBreak.block && !sellerPressure.strong && !buyerReductionAfterBreak.detected) return null;
+
+  let points = 0;
+  const reasons = [];
+  points += 2; reasons.push("vela alcista a 20-30s");
+  points += 4; reasons.push(`${structure.visibleBreakCount} quiebres visibles 0-30s`);
+  points += 3; reasons.push(`patrón ${structure.pattern || "irregular"}`);
+  if (structure.threeStepReduction) { points += 4; reasons.push("secuencia grande-mediano-pequeño"); }
+  else if (structure.reductionPairs >= 2) { points += 4; reasons.push("doble reducción compradora"); }
+  else if (structure.reductionPairs >= 1) { points += 3; reasons.push("reducción compradora visible"); }
+  if (structure.postMaxWeakening) { points += 2; reasons.push("después del grande vuelve mediano/chico"); }
+  if (buyerReductionAfterBreak.detected) { points += Math.min(3, buyerReductionAfterBreak.strength); reasons.push("comprador reduce después del quiebre"); }
+  if (structure.pauseBreaks > 0) { points += 1; reasons.push("pausa corta visible entre impulsos"); }
+  if (pullbackRatio >= 0.18 || maxPullbackRatio >= 0.12) { points += 2; reasons.push("devuelve parte del avance"); }
+  if (stats.turns >= 3) { points += 1; reasons.push("zigzag claro"); }
+  if (strongContrary) { points += 2; reasons.push("entrada vendedora fuerte"); }
+  else if (anySellerEntry) { points += 1; reasons.push("entrada vendedora ayuda"); }
+  if (sellerPressure.strong) { points += 2; reasons.push("vendedor aumenta presión claramente"); }
+  else if (sellerMomentumIncreasing || sellerPressure.detected) { points += 1; reasons.push("vendedor aumenta presión"); }
+  if (doubleBottomRetake.detected) { points -= doubleBottomRetake.strongRetake ? 6 : 4; reasons.push("castigo: doble suelo / piso defendido"); }
+  if (symmetricCycles.detected) { points -= 5; reasons.push("castigo: simetría de movimientos"); }
+  if (buyerIncreasingAfterBreak.detected) { points -= 4; reasons.push("castigo: comprador aumenta después del quiebre"); }
+  if (efficiency >= 0.62 && closeNearHigh && !structure.postMaxWeakening) { points -= 2; reasons.push("riesgo de continuidad limpia"); }
+
+  if (points < 11) return null;
+
+  const quality =
+    points * 14 +
+    Math.min(22, structure.visibleBreakCount * 7) +
+    Math.min(18, structure.sizeRatio * 5) +
+    Math.min(16, pullbackRatio * 18) +
+    (structure.threeStepReduction ? 18 : 0) +
+    (structure.postMaxWeakening ? 12 : 0) +
+    (buyerReductionAfterBreak.detected ? 10 : 0) +
+    (sellerPressure.strong ? 12 : strongContrary ? 14 : anySellerEntry ? 6 : 0) -
+    (doubleBottomRetake.detected ? 18 : 0) -
+    (symmetricCycles.detected ? 14 : 0) -
+    (buyerIncreasingAfterBreak.detected ? 12 : 0) -
+    Math.max(0, evalMs - 22000) / 2600;
+
+  const logicText = `Alcista irregular con QUIEBRES V106.6 calibrado: ${reasons.join(", ")}. Regla: exige quiebres que muestren pérdida de calidad compradora; bloquea doble suelo/piso defendido, simetría marcada y comprador que se recarga después del quiebre.`;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "alcista_irregular_quiebres_30s",
+      levelType: "visual_buyer_breaks_0_30",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 22,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "20-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: 20,
+      bullishCandleOnly: true,
+      greenAtConfirm: true,
+      buyerAdvanceVisible,
+      visualBreaksRequired: true,
+      visualBreakCount: structure.visibleBreakCount,
+      visualBreakDetails: structure.breakDetails,
+      pauseBreaks: structure.pauseBreaks,
+      retroBreaks: structure.retroBreaks,
+      upLegsCount: upLegs.length,
+      downLegsCount: downLegs.length,
+      upLegPattern: structure.pattern,
+      upLegLabels: structure.legLabels,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      sizeRatio: structure.sizeRatio,
+      reductionPairs: structure.reductionPairs,
+      threeStepReduction: structure.threeStepReduction,
+      postMaxWeakening: structure.postMaxWeakening,
+      pureIncreasing: structure.pureIncreasing,
+      cleanBullishContinuation,
+      efficiency,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      strongContrary,
+      anySellerEntry,
+      sellerMomentumIncreasing,
+      sellerPressure,
+      doubleBottomRetake,
+      symmetricCycles,
+      buyerIncreasingAfterBreak,
+      buyerReductionAfterBreak,
+      antiRules: {
+        blockDoubleBottomRetake: !!doubleBottomRetake.block,
+        blockSymmetry: !!symmetricCycles.block,
+        blockBuyerRecharge: !!buyerIncreasingAfterBreak.block,
+      },
+      significantColorFlips,
+      colorStates,
+      movementFilter: "v106_6_quiebres_visuales_calibrado_anti_doble_suelo_simetria_0_30",
+      priority: structure.visibleBreakCount >= 3 || structure.threeStepReduction || strongContrary ? "ALTA" : "NORMAL",
+      stage: "alcista_irregular_quiebres_30s_calibrado_v106_6",
+      logic: logicText,
+      status: `🧩 Alcista quiebres 30s V106.6: ${structure.pattern || "irregular"}, ${structure.visibleBreakCount} quiebres, comprador ${buyerReductionAfterBreak.detected ? "reduce" : "irregular"}${sellerPressure.strong ? " + vendedor aumenta" : strongContrary ? " + vendedor fuerte" : anySellerEntry ? " + vendedor ayuda" : ""}. Sin doble suelo/simetría fuerte. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
+}
+
+
+function analyzeAlcistaReduccion30sCandidate(candidate, minute, opts = {}) {
   const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
   if (ticks.length < 6) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
@@ -18531,7 +20944,7 @@ function analyzeAlcistaIrregular25sCandidate(candidate, minute, opts = {}) {
     (firstColorState === "RED" && significantColorFlips >= 2);
   if (thirdColorTurnBefore30) return null;
 
-  // V105: prioridad fuerte al tipo exacto que buscás:
+  // V105: prioridad fuerte al tipo visual que buscás:
   // - reducción clara del comprador dentro de 0-30s
   // - grande → mediano → chico
   // - grande → chico
@@ -18928,10 +21341,17 @@ function evaluateMinute(minute, opts = {}) {
     if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
-    } else if (isAlcistaIrregular25sMode(activeMode)) {
-      match = analyzeAlcistaIrregular25sCandidate(c, minute, evalOptions);
+    } else if (isReduccionExacta25sMode(activeMode)) {
+      match = analyzeReduccionVisual25sCandidate(c, minute, evalOptions);
+      matchSource = "REDUCCION_VISUAL_25S";
+    } else if (isAlcistaQuiebres30sMode(activeMode)) {
+      match = analyzeAlcistaQuiebres30sCandidate(c, minute, evalOptions);
       if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
-      matchSource = "ALCISTA_IRREGULAR_30S";
+      matchSource = "ALCISTA_QUIEBRES_30S";
+    } else if (isAlcistaReduccion30sMode(activeMode)) {
+      match = analyzeAlcistaReduccion30sCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
+      matchSource = "ALCISTA_REDUCCION_30S";
     } else if (isRupturaDebilGiroMode(activeMode)) {
       // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
       // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
@@ -18970,9 +21390,9 @@ function evaluateMinute(minute, opts = {}) {
 
   if (!matches.length) return false;
   matches.sort((a, b) => {
-    if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode)) {
-      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake ? 1 : 0;
-      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake ? 1 : 0;
+    if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode) || isReduccionExacta25sMode(activeMode)) {
+      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake || Number(a.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(a.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
+      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake || Number(b.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(b.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
       if (bp !== ap) return bp - ap;
     }
     return (
@@ -19084,6 +21504,43 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 /* =========================
    WebSocket Deriv
 ========================= */
+function handleDerivWsMessage(data, source = "public") {
+  if (data && data.req_id && pending.has(data.req_id)) {
+    const p = pending.get(data.req_id);
+    clearTimeout(p.t);
+    pending.delete(data.req_id);
+    p.resolve(data);
+    return;
+  }
+
+  if (data?.proposal_open_contract) {
+    const poc = data.proposal_open_contract;
+    const cid = String(poc?.contract_id || "");
+    const subId = data?.subscription?.id;
+
+    if (cid) {
+      if (subId) contractSubs.set(cid, subId);
+
+      if (poc?.is_sold) {
+        applyClosedContractOutcomeFromPOC(poc, source === "trade" ? "stream-api-nueva" : "stream");
+      }
+    }
+    return;
+  }
+
+  if (data?.error) {
+    const emsg = data.error.message || "unknown";
+    if (isPendingContractPOCRateLimitMessage(emsg)) {
+      setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
+      setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
+    } else {
+      setStatus(`⚠️ WS ${source === "trade" ? "trading" : "public"}: ${emsg}`);
+    }
+  }
+
+  if (data.tick) onTick(data.tick);
+}
+
 function connect() {
   try {
     setStatus("Conectando…");
@@ -19096,6 +21553,7 @@ function connect() {
   ws.onopen = async () => {
     try {
       resetAuthState();
+      if (isNewPatApiMode()) resetNewApiTradingSocket();
     } catch {}
 
     setStatus("Conectado – Suscribiendo…");
@@ -19108,48 +21566,20 @@ function connect() {
     }, 350);
 
     updateDisciplineLockUI(false);
-    void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
+    try {
+      await ensureAuthorized();
+      await refreshAccountBalance({ force: true });
+      updateC100PanelUI();
+    } catch (e) {
+      if (isNewPatApiMode()) setNewApiStatus(`API nueva pendiente: ${e?.message || e}`);
+    }
     await resubscribePendingContracts();
   };
 
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-
-      if (data && data.req_id && pending.has(data.req_id)) {
-        const p = pending.get(data.req_id);
-        clearTimeout(p.t);
-        pending.delete(data.req_id);
-        p.resolve(data);
-        return;
-      }
-
-      if (data?.proposal_open_contract) {
-        const poc = data.proposal_open_contract;
-        const cid = String(poc?.contract_id || "");
-        const subId = data?.subscription?.id;
-
-        if (cid) {
-          if (subId) contractSubs.set(cid, subId);
-
-          if (poc?.is_sold) {
-            applyClosedContractOutcomeFromPOC(poc, "stream");
-          }
-        }
-        return;
-      }
-
-      if (data?.error) {
-        const emsg = data.error.message || "unknown";
-        if (isPendingContractPOCRateLimitMessage(emsg)) {
-          setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
-          setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
-        } else {
-          setStatus(`⚠️ WS error: ${emsg}`);
-        }
-      }
-
-      if (data.tick) onTick(data.tick);
+      handleDerivWsMessage(data, "public");
     } catch (err) {
       setStatus(`❌ Parse WS: ${err?.message || err}`);
     }
@@ -19162,6 +21592,7 @@ function connect() {
   ws.onclose = (ev) => {
     try {
       resetAuthState();
+      resetNewApiTradingSocket();
     } catch {}
 
     for (const [id, p] of pending.entries()) {
@@ -19199,7 +21630,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     if (!ws || ws.readyState === 3) {
       try {
-        connect();
+        
       } catch {}
     }
     startPendingContractWatchdog({ immediate: true });
@@ -19296,6 +21727,33 @@ if (practiceCanvas) {
   practiceCanvas.addEventListener("click", handlePracticeCanvasPick);
 }
 
+function applyCleanReduccionVisualUI() {
+  try {
+    signalMode = MODE_REDUCCION_VISUAL_25S;
+    saveAnalysisMode(MODE_REDUCCION_VISUAL_25S);
+
+    // Limpiar SOLO controles no funcionales para Reducción visual 25s.
+    // Se conservan En vivo y Práctica.
+    const hideSelectors = [
+      '.evalBtn',
+      '.btnGroup[aria-label="Segundo de evaluación"]',
+      '#modeBtn',
+      '#keepClosedAwaySignalsBtnWrap',
+      '#keepClosedAwaySignalsBtn',
+      '#giroAprendizajePanel'
+    ];
+    hideSelectors.forEach((sel) => document.querySelectorAll(sel).forEach((el) => {
+      el.style.display = 'none';
+    }));
+
+    qsAll('.tab[data-view="live"], .tab[data-view="practice"]').forEach((el) => { el.style.display = ''; });
+    if (liveView) liveView.style.display = '';
+    if (practiceView) practiceView.style.display = '';
+  } catch (e) {
+    console.warn('[CLEAN_UI]', e);
+  }
+}
+
 /* =========================
    Inicialización
 ========================= */
@@ -19332,6 +21790,7 @@ applyEntryTimingModeUI();
 ensureTradingAccountButton();
 applyTradingAccountUI();
 applyTradingAccountBannerUI();
+ensureDerivApiModePanel();
 ensureC100Panel();
 updateC100PanelUI();
 initWakeButton();
@@ -19349,6 +21808,7 @@ updateDisciplineLockUI(false);
 seedTradesJournalFromHistory();
 
 initTabs();
+applyCleanReduccionVisualUI();
 paintLiveSymbolButtons();
 ensureInlineClearButtons();
 ensureLiveAnalysisPauseButton();
