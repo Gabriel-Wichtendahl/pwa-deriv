@@ -1,3 +1,4 @@
+// v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
 // v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
 // v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-25 y no dispara temprano.
 // v106.8: agrega modo Reducción visual 25s con motor de silueta G-P/P-G independiente.
@@ -886,7 +887,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_CALIDAD_CONTRADICCION_V106_8_2_20260606";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_LECTURA_VISUAL_EDITABLE_V106_8_3_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -8837,6 +8838,342 @@ function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
   ctx.restore();
 }
 
+
+
+/* =========================
+   V106.8.3 Reducción visual — lectura editable en modal
+   - Dibuja la lectura G/M/P que vio el motor sobre el gráfico.
+   - Permite feedback rápido específico para calibrar el motor.
+========================= */
+const VISUAL_READ_OVERLAY_KEY = "visualReadOverlayEnabled_v1";
+const VISUAL_READ_FEEDBACK_REASONS = [
+  { key: "sizes_wrong", label: "G/M/P mal" },
+  { key: "break_wrong", label: "Quiebre mal" },
+  { key: "missing_contrary", label: "Faltó contrario" },
+  { key: "symmetry", label: "Era simetría" },
+  { key: "continuity", label: "Era continuidad" },
+  { key: "double_floor_roof", label: "Doble suelo/techo" },
+  { key: "direction_wrong", label: "Dirección mal" },
+];
+let visualReadOverlayEnabled = (() => {
+  try { return localStorage.getItem(VISUAL_READ_OVERLAY_KEY) !== "0"; }
+  catch { return true; }
+})();
+let visualReadPanelEl = null;
+let visualReadReasonWrapEl = null;
+
+function isVisualReductionItem(item) {
+  const mode = normalizeSignalMode(item?.mode || item?.giroPolaridad?.levelMode || item?.snrLevel?.levelMode || "");
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  return mode === MODE_REDUCCION_VISUAL_25S || !!meta.visualReductionMode || String(meta.levelMode || "") === "reduccion_visual_25s";
+}
+function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
+  if (!run || typeof run !== "object") return null;
+  const startMs = Number(run.startMs);
+  const endMs = Number(run.endMs);
+  const startQuote = Number(run.startQuote);
+  const endQuote = Number(run.endQuote);
+  if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return null;
+  return {
+    startMs,
+    endMs,
+    startQuote,
+    endQuote,
+    move: Number(run.move || Math.abs(endQuote - startQuote)) || 0,
+    sign: Number(run.sign || 0),
+    side: fallbackSide,
+    label: label || "",
+    idx: Number(run.idx || 0),
+  };
+}
+function getVisualReadPatternText(labels) {
+  const arr = Array.isArray(labels) ? labels.filter(Boolean) : [];
+  return arr.length ? arr.join("→") : "—";
+}
+function splitPatternText(pattern) {
+  const txt = String(pattern || "").replace(/-/g, "→");
+  return txt.split("→").map((x) => x.trim()).filter(Boolean);
+}
+function buildVisualReadFromItem(item) {
+  if (!item || !isVisualReductionItem(item)) return null;
+  const meta = item.giroPolaridad || item.snrLevel || {};
+  const direction = normalizeSignalConfirmationSide(meta.direction || item.direction) || "";
+  const dominant = String(meta.visualReductionGroup || "").toLowerCase().includes("vendedor") ? "vendedor" : "comprador";
+  const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
+  const primaryLabels = Array.isArray(meta.visualReductionLabels)
+    ? meta.visualReductionLabels.filter(Boolean)
+    : splitPatternText(meta.visualReductionPattern);
+  const contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
+  const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
+  const contraryRunsRaw = Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : [];
+  const primaryRuns = primaryRunsRaw
+    .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
+    .filter(Boolean);
+  const contraryRuns = contraryRunsRaw
+    .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
+    .filter(Boolean);
+  const cuts = Array.isArray(meta.visualReductionBreakDetails)
+    ? meta.visualReductionBreakDetails.map((b) => ({
+        startMs: Number(b.startMs),
+        endMs: Number(b.endMs),
+        type: String(b.type || "quiebre"),
+      })).filter((b) => Number.isFinite(b.startMs) || Number.isFinite(b.endMs))
+    : [];
+  const subtype = String(meta.visualReductionSubtype || "reducción visual");
+  const quality = String(meta.visualReductionQuality || "").toUpperCase() || "—";
+  const primaryPattern = getVisualReadPatternText(primaryLabels);
+  const contraryPattern = getVisualReadPatternText(contraryLabels);
+  return {
+    mode: MODE_REDUCCION_VISUAL_25S,
+    direction,
+    dominant,
+    contrary,
+    quality,
+    subtype,
+    primaryPattern,
+    contraryPattern,
+    reasons: Array.isArray(meta.reasons) ? meta.reasons : [],
+    rejectHints: Array.isArray(meta.rejectHints) ? meta.rejectHints : [],
+    evalMs: Number(meta.analysisWindowMs || 25000),
+    points: Number(meta.points || meta.visualReductionScore || 0),
+    primaryRuns,
+    contraryRuns,
+    cuts,
+    status: String(meta.status || ""),
+    feedback: item.visualReadFeedback || null,
+  };
+}
+function getVisualReadText(read) {
+  if (!read) return "Sin lectura visual";
+  const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+  const parts = [
+    `Calidad ${read.quality}`,
+    `${read.dominant}: ${read.primaryPattern}`,
+  ];
+  if (read.contraryPattern && read.contraryPattern !== "—") parts.push(`${read.contrary}: ${read.contraryPattern}`);
+  parts.push(`→ ${dir}`);
+  return parts.join(" · ");
+}
+function ensureVisualReadPanel() {
+  if (visualReadPanelEl && visualReadPanelEl.isConnected) return visualReadPanelEl;
+  const footer = document.querySelector("#chartModal .modalFooter") || (chartModal ? chartModal.querySelector(".modalFooter") : null);
+  if (!footer) return null;
+  const panel = document.createElement("div");
+  panel.id = "visualReadPanel";
+  panel.style.width = "100%";
+  panel.style.boxSizing = "border-box";
+  panel.style.border = "1px solid rgba(34,211,238,.28)";
+  panel.style.borderRadius = "14px";
+  panel.style.padding = "8px";
+  panel.style.background = "rgba(15,23,42,.62)";
+  panel.style.display = "none";
+  panel.style.gap = "6px";
+  panel.style.flexDirection = "column";
+  panel.style.fontSize = "11.5px";
+  panel.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;justify-content:space-between;">
+      <button id="visualReadToggleBtn" class="btn btnGhost" type="button" style="flex:0 0 auto;min-height:32px;padding:6px 9px;font-size:12px;">👁️ Lectura ON</button>
+      <div id="visualReadSummary" style="flex:1;min-width:0;font-weight:900;line-height:1.25;color:#e0f2fe;">—</div>
+    </div>
+    <div id="visualReadDetail" style="color:rgba(226,232,240,.82);line-height:1.25;">—</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+      <button id="visualReadGoodBtn" class="btn btnGhost" type="button" style="min-height:34px;font-size:12px;">✅ Leyó bien</button>
+      <button id="visualReadBadBtn" class="btn btnGhost" type="button" style="min-height:34px;font-size:12px;">❌ Leyó mal</button>
+    </div>
+    <div id="visualReadReasonWrap" style="display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;"></div>
+  `;
+  const openBtn = modalOpenDerivBtn || footer.lastElementChild;
+  if (openBtn && openBtn.parentElement === footer) footer.insertBefore(panel, openBtn);
+  else footer.appendChild(panel);
+  visualReadPanelEl = panel;
+  visualReadReasonWrapEl = panel.querySelector("#visualReadReasonWrap");
+  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  if (toggleBtn) toggleBtn.onclick = () => {
+    visualReadOverlayEnabled = !visualReadOverlayEnabled;
+    try { localStorage.setItem(VISUAL_READ_OVERLAY_KEY, visualReadOverlayEnabled ? "1" : "0"); } catch {}
+    updateVisualReadPanelUI();
+    requestModalDraw(true);
+  };
+  const goodBtn = panel.querySelector("#visualReadGoodBtn");
+  const badBtn = panel.querySelector("#visualReadBadBtn");
+  if (goodBtn) goodBtn.onclick = () => saveVisualReadFeedback("ok", "");
+  if (badBtn) badBtn.onclick = () => {
+    if (visualReadReasonWrapEl) {
+      visualReadReasonWrapEl.style.display = visualReadReasonWrapEl.style.display === "grid" ? "none" : "grid";
+    }
+    saveVisualReadFeedback("bad", "general");
+  };
+  if (visualReadReasonWrapEl && !visualReadReasonWrapEl.dataset.ready) {
+    visualReadReasonWrapEl.dataset.ready = "1";
+    visualReadReasonWrapEl.innerHTML = VISUAL_READ_FEEDBACK_REASONS.map((r) => `<button class="btn btnGhost visualReadReasonBtn" data-reason="${r.key}" type="button" style="min-height:30px;padding:5px 6px;font-size:11px;">${r.label}</button>`).join("");
+    visualReadReasonWrapEl.querySelectorAll(".visualReadReasonBtn").forEach((btn) => {
+      btn.onclick = () => saveVisualReadFeedback("bad", btn.dataset.reason || "general");
+    });
+  }
+  return panel;
+}
+function persistModalVisualReadFeedback() {
+  try {
+    if (!modalCurrentItem?.id) return;
+    const idx = (history || []).findIndex((x) => x && x.id === modalCurrentItem.id);
+    if (idx >= 0) {
+      history[idx].visualReadFeedback = modalCurrentItem.visualReadFeedback;
+      saveHistory(history);
+    }
+    const jid = modalCurrentItem.journal_id || modalOpenContext?.journalId || makeJournalIdFromSignal(modalCurrentItem);
+    const jidx = (tradesJournal || []).findIndex((x) => x && (x.journal_id === jid || x.id === modalCurrentItem.id));
+    if (jidx >= 0) {
+      tradesJournal[jidx].visualReadFeedback = modalCurrentItem.visualReadFeedback;
+      saveTradesJournal(tradesJournal);
+    }
+  } catch {}
+}
+function saveVisualReadFeedback(verdict, reason = "") {
+  if (!modalCurrentItem || !isVisualReductionItem(modalCurrentItem)) return;
+  const read = buildVisualReadFromItem(modalCurrentItem);
+  modalCurrentItem.visualReadFeedback = {
+    verdict: String(verdict || ""),
+    reason: String(reason || ""),
+    at: Date.now(),
+    mode: MODE_REDUCCION_VISUAL_25S,
+    direction: read?.direction || modalCurrentItem.direction || "",
+    quality: read?.quality || "",
+    dominant: read?.dominant || "",
+    primaryPattern: read?.primaryPattern || "",
+    contrary: read?.contrary || "",
+    contraryPattern: read?.contraryPattern || "",
+  };
+  persistModalVisualReadFeedback();
+  updateVisualReadPanelUI();
+  toast(verdict === "ok" ? "✅ Lectura visual marcada correcta" : "❌ Corrección visual guardada", 1300);
+}
+function updateVisualReadPanelUI() {
+  const panel = ensureVisualReadPanel();
+  if (!panel) return;
+  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem || !isVisualReductionItem(modalCurrentItem)) {
+    panel.style.display = "none";
+    return;
+  }
+  const read = buildVisualReadFromItem(modalCurrentItem);
+  panel.style.display = "flex";
+  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  const summary = panel.querySelector("#visualReadSummary");
+  const detail = panel.querySelector("#visualReadDetail");
+  if (toggleBtn) {
+    toggleBtn.textContent = visualReadOverlayEnabled ? "👁️ Lectura ON" : "👁️ Lectura OFF";
+    toggleBtn.classList.toggle("active", !!visualReadOverlayEnabled);
+  }
+  if (summary) summary.textContent = getVisualReadText(read);
+  if (detail) {
+    const fb = modalCurrentItem.visualReadFeedback;
+    const fbText = fb?.verdict ? ` · Feedback: ${fb.verdict === "ok" ? "correcta" : "corregir"}${fb.reason ? ` (${fb.reason})` : ""}` : "";
+    const reasons = read?.reasons?.length ? ` · ${read.reasons.slice(0, 3).join(" · ")}` : "";
+    detail.textContent = `Ventana 0-${Math.round(Number(read?.evalMs || 25000) / 1000)}s · puntos ${read?.points || 0}${reasons}${fbText}`;
+  }
+}
+function drawRoundedLabel(ctx, x, y, text, fill, stroke = "rgba(255,255,255,.22)") {
+  const padX = 6, h = 20;
+  ctx.save();
+  ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+  const w = Math.max(28, ctx.measureText(String(text)).width + padX * 2);
+  const xx = Math.max(8, Math.min(x - w / 2, (ctx.canvas.clientWidth || ctx.canvas.width) - w - 8));
+  const yy = Math.max(8, y - h - 8);
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1;
+  if (typeof drawRoundedRect === "function") {
+    drawRoundedRect(ctx, xx, yy, w, h, 9); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillRect(xx, yy, w, h); ctx.strokeRect(xx, yy, w, h);
+  }
+  ctx.fillStyle = "rgba(255,255,255,.96)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(text), xx + w / 2, yy + h / 2 + 0.5);
+  ctx.restore();
+}
+function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
+  if (!ctx || !item || !visualReadOverlayEnabled || !isVisualReductionItem(item)) return;
+  const read = buildVisualReadFromItem(item);
+  if (!read) return;
+  const evalMs = Math.max(1000, Math.min(60000, Number(read.evalMs || 25000)));
+  const x0 = xOf(0), xEval = xOf(evalMs);
+  ctx.save();
+  ctx.fillStyle = "rgba(250,204,21,.075)";
+  ctx.fillRect(x0, 8, Math.max(0, xEval - x0), h - 30);
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = "rgba(250,204,21,.72)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(xEval, 8); ctx.lineTo(xEval, h - 22); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillStyle = "rgba(254,240,138,.95)";
+  ctx.fillText("25s lectura", Math.min(w - 82, xEval + 4), 19);
+
+  const buyCol = "rgba(34,197,94,.96)";
+  const sellCol = "rgba(248,113,113,.96)";
+  const buyFill = "rgba(22,163,74,.78)";
+  const sellFill = "rgba(185,28,28,.78)";
+  const drawRun = (r, prefix, idx) => {
+    const isBuyer = String(r.side || "") === "comprador";
+    const col = isBuyer ? buyCol : sellCol;
+    const fill = isBuyer ? buyFill : sellFill;
+    const x1 = xOf(r.startMs), y1 = yOf(r.startQuote);
+    const x2 = xOf(r.endMs), y2 = yOf(r.endQuote);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return;
+    ctx.save();
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 10;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 4.4;
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2, y2, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    const mx = (x1 + x2) / 2;
+    const my = Math.min(y1, y2);
+    const sideLetter = isBuyer ? "C" : "V";
+    drawRoundedLabel(ctx, mx, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+  };
+  (read.primaryRuns || []).forEach((r, i) => drawRun(r, "", i));
+  (read.contraryRuns || []).forEach((r, i) => drawRun(r, "", i));
+
+  for (const c of read.cuts || []) {
+    const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
+    if (!Number.isFinite(ms)) continue;
+    const x = xOf(ms);
+    ctx.save();
+    ctx.setLineDash([2, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,.45)";
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
+    ctx.restore();
+  }
+
+  const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+  const title = `👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
+  ctx.save();
+  ctx.font = "900 12px system-ui, -apple-system, Segoe UI, sans-serif";
+  const tw = Math.min(w - 28, ctx.measureText(title).width + 18);
+  ctx.fillStyle = "rgba(2,6,23,.72)";
+  ctx.strokeStyle = "rgba(34,211,238,.38)";
+  ctx.lineWidth = 1;
+  if (typeof drawRoundedRect === "function") {
+    drawRoundedRect(ctx, 12, 30, tw, 25, 11); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillRect(12, 30, tw, 25); ctx.strokeRect(12, 30, tw, 25);
+  }
+  ctx.fillStyle = "rgba(224,242,254,.96)";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(title, 21, 43);
+  ctx.restore();
+  ctx.restore();
+}
+
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
 
@@ -9115,6 +9452,9 @@ function drawDerivLikeChart(canvas, ticks) {
     else ctx.lineTo(x, y);
   });
   ctx.stroke();
+
+  // Overlay de lectura visual del motor Reducción visual 25s (G/M/P + ventana 0-25s)
+  drawVisualReductionReadingOverlay(ctx, modalCurrentItem, xOf, yOf, w, h);
 
   // precio actual / último punto: guía horizontal suave + punto más visible
   const lastPoint = pts[pts.length - 1];
@@ -10121,6 +10461,7 @@ function updateModalCandleStatusUI() {
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
+  updateVisualReadPanelUI();
 
   // Auto-entrada real: igual que práctica, al segundo 58 si ya hay 4 puntos netos.
   if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_58");
@@ -12283,6 +12624,7 @@ function openChartModal(item, opts = {}) {
   updateModalCandleStatusUI();
   updateModalNavVoteUI();
   updateModalChartViewBtnUI();
+  updateVisualReadPanelUI();
 
   requestModalDraw(true);
   scheduleModalAutoReplayX2(modalCurrentItem, "open_modal");
@@ -12300,6 +12642,7 @@ function closeChartModal() {
   if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
   setGiroAprendizajeControlsVisible(false);
+  if (visualReadPanelEl) visualReadPanelEl.style.display = "none";
   updateDisciplineLockUI(false);
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
@@ -20086,7 +20429,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
   const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.8.2: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Motor independiente de silueta: evalúa solo en 25s, busca grupo dominante que entra grande y reduce visualmente (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma mucho y contradicciones/ambigüedad descartan.`;
+  const logicText = `Reducción visual 25s V106.8.3: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Motor independiente de silueta: evalúa solo en 25s, busca grupo dominante que entra grande y reduce visualmente (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma mucho y contradicciones/ambigüedad descartan.`;
 
   return {
     direction: best.signalDirection,
@@ -20146,9 +20489,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_8_2_reduccion_visual_25s_calidad_ab_contradiccion_comparacion_bidireccional",
+      movementFilter: "v106_8_3_reduccion_visual_25s_calidad_ab_lectura_visual_editable",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_calidad_v106_8_2",
+      stage: "reduccion_visual_25s_lectura_visual_v106_8_3",
       logic: logicText,
       status,
     },
