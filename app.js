@@ -1,3 +1,4 @@
+// v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-25 y no dispara temprano.
 // v106.8: agrega modo Reducción visual 25s con motor de silueta G-P/P-G independiente.
 // v106.7: agrega modo Reducción visual 25s independiente.
 // v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
@@ -884,7 +885,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_PLANTILLA_G_P_P_G_V106_8_20260606";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_PLANTILLA_G_P_P_G_V106_8_1_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -14302,21 +14303,26 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isReduccionExacta25sMode(activeModeForTick)) {
-      // V106.8 Reducción visual 25s:
-      // Motor independiente de silueta visual. Busca grupo dominante que reduce
-      // G→P / G→M→P / G→P→G→P y, si aparece, contrario P→G hasta el segundo 25.
-      const exactStartSec = 10;
-      const exactEndSec = 25;
-      if (sec >= exactStartSec && sec <= exactEndSec && lastEvaluatedMinute !== minute) {
-        const ok = evaluateMinute(minute, {
-          evalMs: Math.max(exactStartSec * 1000, Math.min(msInMinute, exactEndSec * 1000)),
-          evalSec: sec,
+      // V106.8.1 Reducción visual 25s:
+      // NO dispara temprano. Espera a tener la ventana completa 0-25s y recién ahí
+      // compara ambas direcciones para elegir la mejor lectura visual.
+      // Se permite evaluar en el primer tick posterior a 25s (normalmente 26s) usando
+      // una frontera/interpolación exacta en 25000ms.
+      const visualEvalSec = 25;
+      const visualEvalLateSec = 28;
+      if (sec >= visualEvalSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
+        evaluateMinute(minute, {
+          evalMs: visualEvalSec * 1000,
+          evalSec: visualEvalSec,
           radar: true,
-          radarStartSec: exactStartSec,
-          radarEndSec: exactEndSec,
+          radarStartSec: 0,
+          radarEndSec: visualEvalSec,
+          forceFullWindow25s: true,
         });
-        if (ok) lastEvaluatedMinute = minute;
-      } else if (sec > exactEndSec && lastEvaluatedMinute !== minute) {
+        // En este modo se evalúa una sola vez por vela. Si no hay patrón válido a los 25s,
+        // la vela queda descartada aunque después haga algo parecido.
+        lastEvaluatedMinute = minute;
+      } else if (sec > visualEvalLateSec && lastEvaluatedMinute !== minute) {
         lastEvaluatedMinute = minute;
       }
     } else if (isAlcistaIrregular25sMode(activeModeForTick)) {
@@ -19651,7 +19657,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const logicText = `Reducción visual 25s V106.8: ${best.reasons.join(", ")}. Motor independiente: solo acepta reducciones visuales tipo G-M-P / G-P / G-P-G-P hasta el segundo 25; la entrada del grupo contrario suma pero no es obligatoria.`;
+  const logicText = `Reducción visual 25s V106.8.1: ${best.reasons.join(", ")}. Motor independiente: solo acepta reducciones visuales tipo G-M-P / G-P / G-P-G-P hasta el segundo 25; la entrada del grupo contrario suma pero no es obligatoria.`;
 
   return {
     direction: best.signalDirection,
@@ -19709,7 +19715,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
       priority: best.bigMediumSmall || best.clearGMP || best.bigSmallBigSmall || best.contraryStrong ? "ALTA" : "NORMAL",
       stage: "reduccion_visual_25s_independiente_v106_7",
       logic: logicText,
-      status: `${signalIsPut ? "📈" : "📉"} Reducción visual 25s V106.8: ${best.groupText} reduce ${best.pattern || "visual"}${best.contraryEntryVisible ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}. Máximo ${Math.round(evalMs / 1000)}s.`,
+      status: `${signalIsPut ? "📈" : "📉"} Reducción visual 25s V106.8.1: ${best.groupText} reduce ${best.pattern || "visual"}${best.contraryEntryVisible ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}. Máximo ${Math.round(evalMs / 1000)}s.`,
     },
   };
 }
@@ -19958,8 +19964,11 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   if (ticks.length < 5) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(9000, Math.min(25000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
-  if (evalMs < 9000 || evalMs > 25000) return null;
+  // V106.8.1: este modo solo decide con la ventana completa 0-25s.
+  // Si alguien lo llama antes, no devuelve señal para evitar alertas en 5s/10s.
+  const evalMs = 25000;
+  if (Number.isFinite(optEvalMs) && optEvalMs < 24500) return null;
+  if (lastMs < 23000 && !opts?.forceFullWindow25s) return null;
 
   const clean = ensureTicksWithBoundary(ticks, evalMs)
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
@@ -19985,8 +19994,8 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const status = `🎯 Reducción visual 25s V106.8: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.8: ${best.reasons.join(", ")}. Motor independiente de silueta: busca grupo dominante que entra grande y reduce visualmente (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma mucho, pero no es obligatorio. Si no aparece antes del segundo 25, se descarta.`;
+  const status = `🎯 Reducción visual 25s V106.8.1: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción visual 25s V106.8.1: ${best.reasons.join(", ")}. Motor independiente de silueta: busca grupo dominante que entra grande y reduce visualmente (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma mucho, pero no es obligatorio. Si no aparece antes del segundo 25, se descarta.`;
 
   return {
     direction: best.signalDirection,
@@ -20013,7 +20022,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       analysisWindowMs: evalMs,
       irregularityWindow: "0-25s",
       maxAnalysisSec: 25,
-      signalFromSec: 9,
+      signalFromSec: 25,
       motorIndependiente: true,
       visualReductionMode: true,
       visualReductionScore: best.points,
@@ -20036,9 +20045,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_8_reduccion_visual_25s_plantilla_g_p_p_g_bidireccional",
+      movementFilter: "v106_8_1_reduccion_visual_25s_solo_eval_25s_plantilla_g_p_p_g_bidireccional",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_plantilla_v106_8",
+      stage: "reduccion_visual_25s_plantilla_v106_8_1",
       logic: logicText,
       status,
     },
