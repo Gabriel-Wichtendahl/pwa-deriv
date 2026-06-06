@@ -20048,7 +20048,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
 }
 
 
-// V106.9.4: Reducción visual 25s — macro impulsos con desplazamiento visual.
+// V106.9.4.3: Reducción visual 25s — detalle interno G/M/P en macro impulsos.
 // Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
 // Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
 // - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
@@ -20059,7 +20059,9 @@ function classifyVisualReductionLabel(value, reference) {
   const ref = Math.max(Math.abs(Number(reference || 0)), 1e-9);
   const r = v / ref;
   if (r >= 0.72) return "G";
-  if (r >= 0.42) return "M";
+  // V106.9.4.3: M más amplio. Visualmente muchos tramos que antes salían P
+  // son medianos si mantienen inclinación y se parecen al tramo previo.
+  if (r >= 0.30) return "M";
   return "P";
 }
 
@@ -20070,6 +20072,75 @@ function summarizeVisualMoves(moves) {
   const min = Math.min(...arr);
   const labels = arr.map((v) => classifyVisualReductionLabel(v, max));
   return { labels, pattern: labels.join("→"), max, min, ratio: max / Math.max(min, 1e-9) };
+}
+
+function makeVisualRunFromPoints(points, sign) {
+  const pts = (Array.isArray(points) ? points : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.y) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y));
+  if (pts.length < 2) return null;
+  const a = pts[0];
+  const b = pts[pts.length - 1];
+  const out = {
+    sign: Number(sign || 0),
+    startMs: a.ms,
+    endMs: b.ms,
+    startY: a.y,
+    endY: b.y,
+    startQuote: a.quote,
+    endQuote: b.quote,
+    points: pts,
+  };
+  out.durationMs = Math.max(0, out.endMs - out.startMs);
+  out.delta = out.endY - out.startY;
+  out.move = Math.abs(out.delta);
+  return out;
+}
+function expandDeceleratingVisualRun(run, localRange, tol) {
+  if (!run || !Number.isFinite(Number(run.sign)) || Number(run.sign) === 0) return [run].filter(Boolean);
+  const pts = Array.isArray(run.points) ? run.points : [];
+  if (pts.length < 4 || Number(run.durationMs || 0) < 5500) return [run];
+
+  const minStep = Math.max(Number(localRange || 0) * 0.018, Number(tol || 0) * 0.70, 1e-9);
+  const sign = Number(run.sign || 0);
+  const steps = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = Number(b.y) - Number(a.y);
+    const move = Math.abs(dy);
+    if (Math.sign(dy || 0) === sign && move >= minStep) {
+      steps.push({ from: i - 1, to: i, move });
+    }
+  }
+  if (steps.length < 3) return [run];
+
+  const pieces = [];
+  let i = 0;
+  // Cuando el primer empuje visible tiene una arrancada chica y enseguida acelera,
+  // el ojo lo lee como un solo primer impulso grande, no como P→G.
+  if (steps.length >= 3 && steps[0].move < steps[1].move * 0.72) {
+    const piece = makeVisualRunFromPoints(pts.slice(steps[0].from, steps[1].to + 1), sign);
+    if (piece) pieces.push(piece);
+    i = 2;
+  }
+  for (; i < steps.length; i++) {
+    const piece = makeVisualRunFromPoints(pts.slice(steps[i].from, steps[i].to + 1), sign);
+    if (piece) pieces.push(piece);
+  }
+
+  if (pieces.length < 3) return [run];
+  const moves = pieces.map((x) => Number(x.move || 0));
+  const clearDeceleration = moves[0] >= moves[1] * 1.04 && moves[1] >= moves[2] * 1.04;
+  const total = Number(run.move || 0);
+  const firstIsRelevant = moves[0] >= Math.max(total * 0.24, minStep * 2.2);
+  const lastReallySmaller = moves[2] <= moves[0] * 0.62;
+
+  // Solo dividimos el macro impulso cuando hay una reducción interna clara.
+  // Si dentro del tramo aparece una recuperación fuerte, lo dejamos como un único macro impulso.
+  if (!clearDeceleration || !firstIsRelevant || !lastReallySmaller) return [run];
+
+  return pieces.map((piece) => ({ ...piece, internalSplit: true, parentStartMs: run.startMs, parentEndMs: run.endMs }));
 }
 
 function getVisualRuns25s(clean, side, evalMs, tol, localRange) {
@@ -20115,17 +20186,19 @@ function getVisualRuns25s(clean, side, evalMs, tol, localRange) {
   }
   flush();
 
-  // Fusión simple de tramos iguales separados por pausa microscópica; si la pausa está entre
-  // dominante y contrario se mantiene porque visualmente es el quiebre/estancamiento que buscás.
-  const out = [];
+  // V106.9.4.3: ya no unimos automáticamente dos impulsos del mismo grupo
+  // separados por una pausa mínima. Esa pausa no cuenta como entrada contraria,
+  // pero sí sirve para partir el movimiento dominante en G/M/P cuando visualmente corresponde.
+  const expanded = [];
   for (const r of raw) {
-    const move = Number(r.move || 0);
-    const isTinyPause = r.sign === 0 && move < Math.max(Number(localRange || 0) * 0.015, Number(tol || 0) * 0.6) && Number(r.durationMs || 0) <= 2200;
-    if (isTinyPause && out.length && raw[raw.indexOf(r) + 1] && out[out.length - 1].sign === raw[raw.indexOf(r) + 1].sign) {
-      continue;
-    }
+    const parts = expandDeceleratingVisualRun(r, localRange, tol);
+    for (const p of parts) expanded.push({ ...p });
+  }
+
+  const out = [];
+  for (const r of expanded) {
     const last = out[out.length - 1];
-    if (last && last.sign === r.sign && r.sign !== 0) {
+    if (last && last.sign === r.sign && r.sign !== 0 && !last.internalSplit && !r.internalSplit) {
       last.endMs = r.endMs;
       last.endY = r.endY;
       last.endQuote = r.endQuote;
@@ -20513,7 +20586,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
   const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
   const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.9.4: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
+  const logicText = `Reducción visual 25s V106.9.4.3: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
 
   return {
     direction: best.signalDirection,
@@ -20581,9 +20654,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_9_4_macro_impulsos_con_desplazamiento",
+      movementFilter: "v106_9_4_3_macro_impulsos_detalle_interno",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_desplazamiento_v106_9_4",
+      stage: "reduccion_visual_25s_detalle_interno_v106_9_4_3",
       logic: logicText,
       status,
     },
