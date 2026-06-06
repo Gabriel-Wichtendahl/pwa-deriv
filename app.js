@@ -1,4 +1,4 @@
-// v106.9.2 CLEAN SAME-UI: app limpia SOLO Reducción visual 25s, manteniendo apariencia original.
+// v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
 // v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
 // v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
 // v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-25 y no dispara temprano.
@@ -888,7 +888,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_LECTURA_VISUAL_EDITABLE_V106_8_3_20260606";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_MACRO_IMPULSOS_V106_9_3_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -19971,7 +19971,8 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
 }
 
 
-// V106.8: Reducción visual 25s — motor de silueta separado.
+// V106.9.3: Reducción visual 25s — motor de silueta separado con macro impulsos.
+// Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
 // Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
 // - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
 // - el grupo contrario, si aparece, idealmente entra P→G
@@ -20072,6 +20073,69 @@ function hasVisualCutBetweenRuns(runs, aIdx, bIdx, cutMin) {
 }
 
 
+// V106.9.3: Macro filtro visual.
+// El ojo no interpreta cada rebote pequeño como entrada contraria. Si el movimiento dominante
+// baja/sube y aparece un rebote chico entre dos tramos del mismo lado, lo tratamos como pausa
+// interna. Solo marcamos grupo contrario cuando la respuesta tiene tamaño visual real o aparece
+// después de una reducción clara y luego aumenta.
+function isVisualReductionAlreadyFormed(primaryMoves) {
+  const arr = (Array.isArray(primaryMoves) ? primaryMoves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) return false;
+  if (arr[0] >= arr[1] * 1.16) return true;
+  if (arr.length >= 3 && arr[0] >= arr[1] * 1.04 && arr[1] >= arr[2] * 1.04) return true;
+  let reductions = 0;
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.10) reductions++;
+  }
+  return reductions >= 2;
+}
+
+function classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin) {
+  const all = Array.isArray(runs) ? runs : [];
+  const primaryRuns = [];
+  const contraryRaw = [];
+  const microInternalRuns = [];
+  const macroContraryMinBase = Math.max(Number(alignedRange || 0) * 0.105, Number(impulseMin || 0) * 1.55, Number(cutMin || 0) * 2.2, 1e-9);
+
+  all.forEach((r, idx) => {
+    const move = Number(r.move || 0);
+    if (r.sign > 0 && move >= Number(impulseMin || 0)) primaryRuns.push({ ...r, idx, move });
+    if (r.sign < 0 && move >= Number(cutMin || 0)) contraryRaw.push({ ...r, idx, move });
+  });
+
+  const primaryBefore = (idx) => primaryRuns.filter((p) => p.idx < idx);
+  const primaryAfter = (idx) => primaryRuns.filter((p) => p.idx > idx);
+  const contraryRuns = [];
+
+  contraryRaw.forEach((r, localIdx) => {
+    const before = primaryBefore(r.idx);
+    const after = primaryAfter(r.idx);
+    const prevP = before[before.length - 1] || null;
+    const nextP = after[0] || null;
+    const surroundingMax = Math.max(Number(prevP?.move || 0), Number(nextP?.move || 0), 1e-9);
+    const surroundedBySameSide = !!(prevP && nextP);
+    const smallInsideDominant = surroundedBySameSide && r.move < surroundingMax * 0.46 && r.move < macroContraryMinBase;
+    const formedReductionBefore = isVisualReductionAlreadyFormed(before.map((p) => Number(p.move || 0)));
+    const laterContrary = contraryRaw.slice(localIdx + 1).find((c) => Number(c.move || 0) >= Math.max(r.move * 1.28, macroContraryMinBase));
+    const isBigContrary = r.move >= macroContraryMinBase;
+    const isSmallThenBigContraryAfterReduction = formedReductionBefore && !!laterContrary && r.move >= Math.max(Number(cutMin || 0), Number(impulseMin || 0) * 0.42);
+
+    if (smallInsideDominant && !isSmallThenBigContraryAfterReduction) {
+      microInternalRuns.push({ ...r, macroRole: "internal_pause" });
+      return;
+    }
+
+    if (isBigContrary || isSmallThenBigContraryAfterReduction) {
+      contraryRuns.push({ ...r, macroRole: isBigContrary ? "real_contrary" : "small_then_big_contrary" });
+    } else {
+      microInternalRuns.push({ ...r, macroRole: "internal_pause" });
+    }
+  });
+
+  return { primaryRuns, contraryRuns, microInternalRuns, contraryRaw, macroContraryMin: macroContraryMinBase };
+}
+
+
 function getVisualReductionSimpleShape(moves) {
   const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
   if (arr.length < 2) {
@@ -20139,13 +20203,11 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
   if (runs.length < 3) return null;
 
-  const primaryRuns = [];
-  const contraryRuns = [];
-  runs.forEach((r, idx) => {
-    const move = Number(r.move || 0);
-    if (r.sign > 0 && move >= impulseMin) primaryRuns.push({ ...r, idx, move });
-    if (r.sign < 0 && move >= Math.max(cutMin, impulseMin * 0.55)) contraryRuns.push({ ...r, idx, move });
-  });
+  const macroRuns = classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin);
+  const primaryRuns = macroRuns.primaryRuns;
+  const contraryRuns = macroRuns.contraryRuns;
+  const microInternalRuns = macroRuns.microInternalRuns;
+  const macroContraryMin = macroRuns.macroContraryMin;
 
   if (primaryRuns.length < 2) return null;
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
@@ -20261,6 +20323,8 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     runs: runs.slice(0, 14),
     primaryRuns: primaryRuns.slice(0, 8),
     contraryRuns: contraryRuns.slice(0, 8),
+    microInternalRuns: microInternalRuns.slice(0, 10),
+    macroContraryMin,
     primaryMoves,
     contraryMoves,
     labels,
@@ -20335,7 +20399,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
   const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.8.3: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Motor independiente de silueta: evalúa solo en 25s, busca grupo dominante que entra grande y reduce visualmente (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma mucho y contradicciones/ambigüedad descartan.`;
+  const logicText = `Reducción visual 25s V106.9.3: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
 
   return {
     direction: best.signalDirection,
@@ -20379,6 +20443,8 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       visualReductionRuns: best.runs,
       visualReductionPrimaryRuns: best.primaryRuns,
       visualReductionContraryRuns: best.contraryRuns,
+      visualReductionMicroInternalRuns: best.microInternalRuns,
+      visualReductionMacroContraryMin: best.macroContraryMin,
       visualReductionContraryPattern: best.contraryPattern,
       cutsBetween: best.cutsBetween,
       gToP: best.gToP,
@@ -20395,9 +20461,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_8_3_reduccion_visual_25s_calidad_ab_lectura_visual_editable",
+      movementFilter: "v106_9_3_macro_impulsos_micro_retrocesos",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_lectura_visual_v106_8_3",
+      stage: "reduccion_visual_25s_macro_impulsos_v106_9_3",
       logic: logicText,
       status,
     },
