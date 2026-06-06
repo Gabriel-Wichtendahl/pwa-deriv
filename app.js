@@ -888,7 +888,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_PUNTO_MEDIO_V106_9_4_4_20260606";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_ANTI_ZIGZAG_V106_9_4_5_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -20048,7 +20048,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
 }
 
 
-// V106.9.4.4: Reducción visual 25s — detalle interno G/M/P equilibrado.
+// V106.9.4.5: Reducción visual 25s — punto medio + filtro anti-zigzag estacionado.
 // Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
 // Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
 // - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
@@ -20377,18 +20377,32 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const oppositeDipRatio = oppositeDip25 / Math.max(alignedRange, 1e-9);
   const closePosition01 = (yEnd - yMin) / Math.max(alignedRange, 1e-9);
   const directionalEfficiency = alignedNet25 / Math.max(totalPath, 1e-9);
+  const absoluteNet25 = Math.abs(alignedNet25);
+  const pathToNetRatio = totalPath / Math.max(absoluteNet25, 1e-9);
+
+  // V106.9.4.5: anti-zigzag estacionado.
+  // Buscamos un desplazamiento limpio con reducción/irregularidad, no una vela que va y viene
+  // completa dentro del mismo rango. Si la eficiencia direccional es baja, el ojo la ve trabada.
+  const zigzagEstancado = (
+    directionalEfficiency < 0.24 ||
+    (pathToNetRatio > 4.6 && oppositeDipRatio >= 0.22) ||
+    (dominantDisplacementRatio < 0.78 && directionalEfficiency < 0.30 && oppositeDipRatio >= 0.20)
+  );
+  if (zigzagEstancado) return null;
+
   const displacementOk = (
     dominantAdvance25 >= Math.max(alignedRange * 0.46, Number(tol || 0) * 3.5) &&
     dominantAdvance25 >= oppositeDip25 * 1.18 &&
     alignedNet25 >= Math.max(alignedRange * 0.16, Number(tol || 0) * 1.3) &&
     closePosition01 >= 0.50 &&
-    directionalEfficiency >= 0.14
+    directionalEfficiency >= 0.26
   ) || (
     // Variante holgada: hubo avance direccional claro, aunque el cierre no quede exactamente en el extremo.
     dominantAdvance25 >= Math.max(alignedRange * 0.62, Number(tol || 0) * 4.5) &&
     oppositeDip25 <= alignedRange * 0.34 &&
     alignedNet25 >= Math.max(alignedRange * 0.08, Number(tol || 0) * 0.8) &&
-    closePosition01 >= 0.45
+    closePosition01 >= 0.45 &&
+    directionalEfficiency >= 0.30
   );
   if (!displacementOk) return null;
 
@@ -20400,6 +20414,11 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const contraryRuns = macroRuns.contraryRuns;
   const microInternalRuns = macroRuns.microInternalRuns;
   const macroContraryMin = macroRuns.macroContraryMin;
+
+  // V106.9.4.5: si ambos grupos aparecen demasiadas veces dentro de 0-25s y la vela
+  // no avanza con eficiencia, es zigzag completo/trabado aunque alguna secuencia parezca G/M/P.
+  const tooManyAlternations = (primaryRuns.length + contraryRuns.length) >= 7 && contraryRuns.length >= 3;
+  if (tooManyAlternations && directionalEfficiency < 0.34) return null;
 
   if (primaryRuns.length < 2) return null;
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
@@ -20551,6 +20570,9 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     visualDisplacementClosePosition: closePosition01,
     visualDisplacementEfficiency: directionalEfficiency,
     visualDisplacementTotalPath: totalPath,
+    visualDisplacementPathToNetRatio: pathToNetRatio,
+    zigzagEstancadoBlocked: zigzagEstancado,
+    tooManyAlternationsBlocked: tooManyAlternations,
   };
 }
 
@@ -20601,7 +20623,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
   const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
   const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.9.4.4: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
+  const logicText = `Reducción visual 25s V106.9.4.5: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag: exige avance limpio, no ida y vuelta estacionada. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
 
   return {
     direction: best.signalDirection,
@@ -20669,9 +20691,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_9_4_4_macro_impulsos_punto_medio",
+      movementFilter: "v106_9_4_5_anti_zigzag_limpio",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_punto_medio_v106_9_4_4",
+      stage: "reduccion_visual_25s_anti_zigzag_v106_9_4_5",
       logic: logicText,
       status,
     },
