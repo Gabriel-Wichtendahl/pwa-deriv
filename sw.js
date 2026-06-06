@@ -1,17 +1,125 @@
-const CACHE_NAME = "reduccion-visual-clean-v106-9";
-const APP_SHELL = ["./", "./index.html", "./style.css", "./app.js", "./manifest.json"];
+/* sw.js — Deriv Signals v106.9.2 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+"use strict";
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+const CACHE = "deriv-assets-v106-9-2-limpia-misma-apariencia";
+
+const ASSETS = [
+  "./",
+  "./index.html",
+  "./style.css",
+  "./app.js",
+  "./manifest.json",
+  "./icon-192.png",
+  "./icon-512.png",
+  "./alert.mp3",
+  "./bg-neon.png",
+  "./despeje-mental-bg.png",
+  "./pausa-visual-bg.png",
+];
+
+self.addEventListener("install", (e) => {
+  e.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await cache.addAll(ASSETS);
+  })());
+  self.skipWaiting();
 });
 
-self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))).then(() => self.clients.claim())
+self.addEventListener("activate", (e) => {
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((k) => (k !== CACHE ? caches.delete(k) : null)));
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener("fetch", (e) => {
+  const url = new URL(e.request.url);
+
+  const isHTML =
+    e.request.mode === "navigate" ||
+    url.pathname.endsWith("/index.html") ||
+    url.pathname.endsWith("/");
+
+  const isCore =
+    url.pathname.endsWith("/app.js") ||
+    url.pathname.endsWith("/style.css") ||
+    url.pathname.endsWith("/manifest.json");
+
+  // ✅ Network-first core (HTML/CSS/JS) para NO quedar clavado
+  if (isHTML || isCore) {
+    e.respondWith((async () => {
+      try {
+        const fresh = await fetch(e.request, { cache: "no-store" });
+        const cache = await caches.open(CACHE);
+        cache.put(e.request, fresh.clone());
+        return fresh;
+      } catch {
+        const cached = await caches.match(e.request);
+        return cached || caches.match("./index.html");
+      }
+    })());
+    return;
+  }
+
+  // ✅ Cache-first para assets
+  e.respondWith(
+    caches.match(e.request).then((r) => r || fetch(e.request))
   );
 });
 
-self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") return;
-  event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+/* ✅ Click notificación:
+   - Si la PWA ya está abierta: enfoca y manda mensaje SIN recargar.
+   - Si no está abierta: abre una ventana nueva con ?openSignal=...&openChart=1.
+*/
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const data = event.notification?.data || {};
+  const signalId = data.signalId || "";
+
+  const targetUrl = new URL(data.url || self.registration.scope, self.location.origin).toString();
+  const target = new URL(targetUrl);
+
+  event.waitUntil((async () => {
+    const allClients = await clients.matchAll({
+      type: "window",
+      includeUncontrolled: true
+    });
+
+    for (const client of allClients) {
+      try {
+        const clientUrl = new URL(client.url);
+
+        const sameOrigin = clientUrl.origin === target.origin;
+
+        const normalizedClientPath = clientUrl.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
+        const normalizedTargetPath = target.pathname.replace(/\/index\.html$/, "").replace(/\/$/, "");
+
+        const samePwa =
+          sameOrigin &&
+          (
+            normalizedClientPath === normalizedTargetPath ||
+            clientUrl.pathname.endsWith("/index.html")
+          );
+
+        if (samePwa) {
+          // IMPORTANTE:
+          // No hacemos client.navigate(targetUrl) cuando la app ya está abierta,
+          // porque recarga la PWA y se pierden los ticks vivos del gráfico.
+          await client.focus();
+
+          client.postMessage({
+            type: "OPEN_SIGNAL_FROM_NOTIFICATION",
+            signalId,
+            url: targetUrl
+          });
+
+          return;
+        }
+      } catch {}
+    }
+
+    await clients.openWindow(targetUrl);
+  })());
 });
