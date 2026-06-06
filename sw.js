@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v106.9.3 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v106.9.4 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v106-9-3-macro-impulsos";
+const CACHE = "deriv-assets-v106-9-4-desplazamiento";
 
 const ASSETS = [
   "./",

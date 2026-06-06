@@ -19971,7 +19971,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
 }
 
 
-// V106.9.3: Reducción visual 25s — motor de silueta separado con macro impulsos.
+// V106.9.4: Reducción visual 25s — macro impulsos con desplazamiento visual.
 // Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
 // Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
 // - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
@@ -20073,7 +20073,7 @@ function hasVisualCutBetweenRuns(runs, aIdx, bIdx, cutMin) {
 }
 
 
-// V106.9.3: Macro filtro visual.
+// V106.9.4: Macro filtro visual con desplazamiento.
 // El ojo no interpreta cada rebote pequeño como entrada contraria. Si el movimiento dominante
 // baja/sube y aparece un rebote chico entre dos tramos del mismo lado, lo tratamos como pausa
 // interna. Solo marcamos grupo contrario cuando la respuesta tiene tamaño visual real o aparece
@@ -20200,6 +20200,33 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const firstBigMin = Math.max(alignedRange * 0.115, Number(tol || 0) * 2.2, 1e-9);
   const cutMin = Math.max(alignedRange * 0.030, Number(tol || 0) * 0.95, 1e-9);
 
+  // V106.9.4: desplazamiento visual obligatorio.
+  // La formación buscada no debe ser zigzag estacionado: el grupo que reduce tiene que
+  // desplazar la línea hacia su lado durante 0-25s, aunque internamente haga pausas/quiebres.
+  const totalPath = pts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(pts[i].y)), 0);
+  const alignedNet25 = yEnd - y0;
+  const dominantAdvance25 = yMax - y0;
+  const oppositeDip25 = Math.max(0, y0 - yMin);
+  const netDisplacementRatio = alignedNet25 / Math.max(alignedRange, 1e-9);
+  const dominantDisplacementRatio = dominantAdvance25 / Math.max(alignedRange, 1e-9);
+  const oppositeDipRatio = oppositeDip25 / Math.max(alignedRange, 1e-9);
+  const closePosition01 = (yEnd - yMin) / Math.max(alignedRange, 1e-9);
+  const directionalEfficiency = alignedNet25 / Math.max(totalPath, 1e-9);
+  const displacementOk = (
+    dominantAdvance25 >= Math.max(alignedRange * 0.46, Number(tol || 0) * 3.5) &&
+    dominantAdvance25 >= oppositeDip25 * 1.18 &&
+    alignedNet25 >= Math.max(alignedRange * 0.16, Number(tol || 0) * 1.3) &&
+    closePosition01 >= 0.50 &&
+    directionalEfficiency >= 0.14
+  ) || (
+    // Variante holgada: hubo avance direccional claro, aunque el cierre no quede exactamente en el extremo.
+    dominantAdvance25 >= Math.max(alignedRange * 0.62, Number(tol || 0) * 4.5) &&
+    oppositeDip25 <= alignedRange * 0.34 &&
+    alignedNet25 >= Math.max(alignedRange * 0.08, Number(tol || 0) * 0.8) &&
+    closePosition01 >= 0.45
+  );
+  if (!displacementOk) return null;
+
   const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
   if (runs.length < 3) return null;
 
@@ -20272,6 +20299,8 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const reasons = [];
   const rejectHints = [];
   points += 4; reasons.push(`${groupText} entra grande`);
+  points += 3; reasons.push("desplazamiento visual 0-25s");
+  if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
   if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
   if (gmp) { points += 6; reasons.push(`${groupText} reduce G→M→P`); }
   else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
@@ -20350,6 +20379,13 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     contradictionSoft,
     alignedNet: yEnd - y0,
     dominantAdvance: yMax - y0,
+    visualDisplacementOk: displacementOk,
+    visualDisplacementNetRatio: netDisplacementRatio,
+    visualDisplacementDominantRatio: dominantDisplacementRatio,
+    visualDisplacementOppositeDipRatio: oppositeDipRatio,
+    visualDisplacementClosePosition: closePosition01,
+    visualDisplacementEfficiency: directionalEfficiency,
+    visualDisplacementTotalPath: totalPath,
   };
 }
 
@@ -20398,8 +20434,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
   const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
-  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.9.3: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
+  const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
+  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción visual 25s V106.9.4: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
 
   return {
     direction: best.signalDirection,
@@ -20446,6 +20483,12 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       visualReductionMicroInternalRuns: best.microInternalRuns,
       visualReductionMacroContraryMin: best.macroContraryMin,
       visualReductionContraryPattern: best.contraryPattern,
+      visualDisplacementOk: best.visualDisplacementOk,
+      visualDisplacementNetRatio: best.visualDisplacementNetRatio,
+      visualDisplacementDominantRatio: best.visualDisplacementDominantRatio,
+      visualDisplacementOppositeDipRatio: best.visualDisplacementOppositeDipRatio,
+      visualDisplacementClosePosition: best.visualDisplacementClosePosition,
+      visualDisplacementEfficiency: best.visualDisplacementEfficiency,
       cutsBetween: best.cutsBetween,
       gToP: best.gToP,
       gmp: best.gmp,
@@ -20461,9 +20504,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_9_3_macro_impulsos_micro_retrocesos",
+      movementFilter: "v106_9_4_macro_impulsos_con_desplazamiento",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_macro_impulsos_v106_9_3",
+      stage: "reduccion_visual_25s_desplazamiento_v106_9_4",
       logic: logicText,
       status,
     },
