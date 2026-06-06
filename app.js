@@ -1780,6 +1780,7 @@ const modalFooterVoteSlot = $("modalFooterVoteSlot");
 const modalFooterChartTools = $("modalFooterChartTools");
 const modalReadingInfoRow = $("modalReadingInfoRow");
 const modalSequenceText = $("modalSequenceText");
+const modalSequenceDetail = $("modalSequenceDetail");
 let modalFooterControlsRelocated = false;
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
@@ -9063,7 +9064,7 @@ function updateVisualReadPanelUI() {
     return;
   }
   const read = buildVisualReadFromItem(modalCurrentItem);
-  panel.style.display = "flex";
+  panel.style.display = "none";
   const toggleBtn = panel.querySelector("#visualReadToggleBtn");
   const summary = panel.querySelector("#visualReadSummary");
   const detail = panel.querySelector("#visualReadDetail");
@@ -9161,24 +9162,7 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     ctx.restore();
   }
 
-  const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
-  const title = `👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
-  ctx.save();
-  ctx.font = "900 12px system-ui, -apple-system, Segoe UI, sans-serif";
-  const tw = Math.min(w - 28, ctx.measureText(title).width + 18);
-  ctx.fillStyle = "rgba(2,6,23,.72)";
-  ctx.strokeStyle = "rgba(34,211,238,.38)";
-  ctx.lineWidth = 1;
-  if (typeof drawRoundedRect === "function") {
-    drawRoundedRect(ctx, 12, 30, tw, 25, 11); ctx.fill(); ctx.stroke();
-  } else {
-    ctx.fillRect(12, 30, tw, 25); ctx.strokeRect(12, 30, tw, 25);
-  }
-  ctx.fillStyle = "rgba(224,242,254,.96)";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(title, 21, 43);
-  ctx.restore();
+  // Resumen textual movido abajo del gráfico para no tapar la lectura visual.
   ctx.restore();
 }
 
@@ -9599,8 +9583,31 @@ function getModalVisualSequenceSummary(item = modalCurrentItem) {
 }
 function updateModalFooterReadingUI() {
   ensureModalFooterControlsLayout();
-  if (modalSequenceText) {
-    modalSequenceText.textContent = modalCurrentItem ? getModalVisualSequenceSummary(modalCurrentItem) : '—';
+  const panel = ensureVisualReadPanel();
+  const toggleBtn = panel ? panel.querySelector("#visualReadToggleBtn") : null;
+  if (toggleBtn && modalFooterChartTools && toggleBtn.parentElement !== modalFooterChartTools) {
+    modalFooterChartTools.prepend(toggleBtn);
+  }
+  if (panel) panel.style.display = "none";
+  const tradeRow = document.querySelector("#chartModal .modalFooter .tradeRow");
+  if (tradeRow) tradeRow.style.display = "none";
+
+  if (modalCurrentItem) {
+    const read = buildVisualReadFromItem(modalCurrentItem);
+    if (modalSequenceText) {
+      if (read) {
+        const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+        modalSequenceText.textContent = `👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern && read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
+      } else {
+        modalSequenceText.textContent = getModalVisualSequenceSummary(modalCurrentItem);
+      }
+    }
+    if (modalSequenceDetail) {
+      modalSequenceDetail.textContent = getModalVisualSequenceSummary(modalCurrentItem);
+    }
+  } else {
+    if (modalSequenceText) modalSequenceText.textContent = '—';
+    if (modalSequenceDetail) modalSequenceDetail.textContent = '—';
   }
   if (modalReadingInfoRow) {
     modalReadingInfoRow.style.display = (chartModal && !chartModal.classList.contains('hidden') && modalCurrentItem) ? 'grid' : 'none';
@@ -10460,6 +10467,7 @@ function updateModalCandleStatusUI() {
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
     if (modalReadingInfoRow) modalReadingInfoRow.style.display = 'none';
+    const tradeRow = document.querySelector("#chartModal .modalFooter .tradeRow"); if (tradeRow) tradeRow.style.display = "none";
     if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
     setSignalConfirmationControlsVisible(false);
     setGiroAprendizajeControlsVisible(false);

@@ -720,6 +720,14 @@ body.light .settingsModalHeader{
   word-break:break-word;
 }
 
+.modalSequenceDetail{
+  margin-top:6px;
+  font-size:11px;
+  line-height:1.32;
+  color:rgba(226,232,240,.82);
+  word-break:break-word;
+}
+
 .modalFooterVoteSlot,
 .modalFooterChartTools{
   display:flex;
