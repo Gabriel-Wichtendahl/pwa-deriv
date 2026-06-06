@@ -1,4 +1,5 @@
-// v106.5: agrega dos modos Alcista 30s: Quiebres visuales estrictos y Reducción flexible.
+// v106.8: agrega modo Reducción visual 25s con motor de silueta G-P/P-G independiente.
+// v106.7: agrega modo Reducción visual 25s independiente.
 // v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
 // v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
 // v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
@@ -173,7 +174,7 @@ const C100_LEVELS = [
 // V68: stake base IC2 por escalones de saldo.
 // Menos de 210 => base 100 => stake 5.
 // 210/310/410/510/610... => base 200/300/400/500/600...
-// Tope final: al llegar a 2000 exactos o más => base 2000 / stake 100.
+// Tope final: al llegar a 2000 visuals o más => base 2000 / stake 100.
 const C100_BALANCE_STEP_ENABLED = true;
 const C100_BALANCE_STEP_PERCENT = 0.05;
 const C100_BALANCE_STEP_MIN_BASE = 100;
@@ -573,7 +574,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     const resultX = cx1 - 58;
     const closeY = Number.isFinite(closeQuote) ? yOf(closeQuote) : ey;
 
-    // Punto de entrada exacto
+    // Punto de entrada visual
     ctx.shadowColor = tradeGlow;
     ctx.shadowBlur = 8;
     ctx.strokeStyle = tradeColor;
@@ -867,7 +868,7 @@ const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
 const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
 const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR QUIEBRES 30S";
 const MODE_ALCISTA_REDUCCION_30S = "ALCISTA REDUCCIÓN 30S";
-const MODE_REDUCCION_EXACTA_25S = "REDUCCIÓN EXACTA 25S";
+const MODE_REDUCCION_VISUAL_25S = "REDUCCIÓN VISUAL 25S";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -883,7 +884,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_EXACTA_25S_LOGIC_VERSION = "REDUCCION_EXACTA_25S_INDEPENDIENTE_V106_7_20260605";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_PLANTILLA_G_P_P_G_V106_8_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -893,8 +894,8 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
-  if ((raw.includes("REDUCCION") || raw.includes("REDUCCIÓN")) && (raw.includes("EXACTA") || raw.includes("25S") || raw.includes("25 S") || raw.includes("GMP") || raw.includes("G-M-P"))) return MODE_REDUCCION_EXACTA_25S;
-  if (raw.includes("REDUCCION_EXACTA") || raw.includes("REDUCCION EXACTA") || raw.includes("REDUCCIÓN EXACTA")) return MODE_REDUCCION_EXACTA_25S;
+  if ((raw.includes("REDUCCION") || raw.includes("REDUCCIÓN")) && (raw.includes("VISUAL") || raw.includes("VISUAL") || raw.includes("25S") || raw.includes("25 S") || raw.includes("GMP") || raw.includes("G-M-P") || raw.includes("G-P") || raw.includes("P-G"))) return MODE_REDUCCION_VISUAL_25S;
+  if (raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL") || raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL")) return MODE_REDUCCION_VISUAL_25S;
   if ((raw.includes("ALCISTA") && (raw.includes("REDUCCION") || raw.includes("REDUCCIÓN"))) || raw.includes("ALCISTA_REDUCCION") || raw.includes("ALCISTA REDUCCION")) return MODE_ALCISTA_REDUCCION_30S;
   if ((raw.includes("ALCISTA") && (raw.includes("QUIEBRE") || raw.includes("IRREGULAR"))) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
@@ -922,7 +923,7 @@ function isAlcistaReduccion30sMode(mode) {
   return normalizeSignalMode(mode) === MODE_ALCISTA_REDUCCION_30S;
 }
 function isReduccionExacta25sMode(mode) {
-  return normalizeSignalMode(mode) === MODE_REDUCCION_EXACTA_25S;
+  return normalizeSignalMode(mode) === MODE_REDUCCION_VISUAL_25S;
 }
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
@@ -934,7 +935,7 @@ function getModeVersion(mode) {
   if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
   if (m === MODE_ALCISTA_IRREGULAR_25S) return ALCISTA_IRREGULAR_25S_LOGIC_VERSION;
   if (m === MODE_ALCISTA_REDUCCION_30S) return ALCISTA_REDUCCION_30S_LOGIC_VERSION;
-  if (m === MODE_REDUCCION_EXACTA_25S) return REDUCCION_EXACTA_25S_LOGIC_VERSION;
+  if (m === MODE_REDUCCION_VISUAL_25S) return REDUCCION_VISUAL_25S_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
@@ -960,7 +961,7 @@ function getModeBtnLabel(mode) {
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
   if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
   if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
-  if (m === MODE_REDUCCION_EXACTA_25S) return "📉📈 Reducción exacta 25s";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 Reducción visual 25s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -970,8 +971,8 @@ function nextSignalMode(mode) {
   if (m === MODE_SNR_POLARIDAD) return MODE_RUPTURA_DEBIL_GIRO;
   if (m === MODE_RUPTURA_DEBIL_GIRO) return MODE_ALCISTA_IRREGULAR_25S;
   if (m === MODE_ALCISTA_IRREGULAR_25S) return MODE_ALCISTA_REDUCCION_30S;
-  if (m === MODE_ALCISTA_REDUCCION_30S) return MODE_REDUCCION_EXACTA_25S;
-  if (m === MODE_REDUCCION_EXACTA_25S) return MODE_LINEA_DINAMICA;
+  if (m === MODE_ALCISTA_REDUCCION_30S) return MODE_REDUCCION_VISUAL_25S;
+  if (m === MODE_REDUCCION_VISUAL_25S) return MODE_LINEA_DINAMICA;
   return MODE_SNR_SEGUNDO_TOQUE;
 }
 
@@ -2534,7 +2535,7 @@ function getC100StepInfo(balanceRaw = null) {
 
   let base = C100_BALANCE_STEP_MIN_BASE;
   if (balance >= C100_BALANCE_STEP_MAX_BASE) {
-    // Opción B: el último escalón se activa al llegar a 2000 exactos, no en 2010.
+    // Opción B: el último escalón se activa al llegar a 2000 visuals, no en 2010.
     base = C100_BALANCE_STEP_MAX_BASE;
   } else if (balance >= C100_BALANCE_STEP_FIRST_THRESHOLD) {
     // Escalones: 210=>200, 310=>300, 410=>400, 510=>500, 610=>600...
@@ -8979,7 +8980,7 @@ function drawDerivLikeChart(canvas, ticks) {
       const zoneLow = Number(modalSNRNearArea.zoneLow);
       const zoneHigh = Number(modalSNRNearArea.zoneHigh);
 
-      // V8: área amarilla = margen exacto que la PWA considera "cerca" del SNR
+      // V8: área amarilla = margen visual que la PWA considera "cerca" del SNR
       // para permitir AUTO 58s aunque el precio no esté dentro de la zona.
       if ([nearLow, nearHigh, zoneLow, zoneHigh].every(Number.isFinite)) {
         const yNearHigh = yOf(nearHigh);
@@ -10420,7 +10421,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
   const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
 
-  // V33: la vista Velas 1m debe usar EXACTAMENTE la misma proyección
+  // V33: la vista Velas 1m debe usar VISUALMENTE la misma proyección
   // que el gráfico de línea intraminuto. Antes se reconstruía la pendiente
   // con touchDetails y eso podía desplazar el nivel: la línea de velas no
   // coincidía con la línea del gráfico normal. Ahora cada vela pregunta el
@@ -14301,9 +14302,9 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isReduccionExacta25sMode(activeModeForTick)) {
-      // V106.7 Reducción exacta 25s:
-      // Motor independiente. Busca patrones casi exactos tipo G-M-P / G-P / G-P-G-P
-      // en cualquier dirección, hasta el segundo 25. Después se descarta la vela.
+      // V106.8 Reducción visual 25s:
+      // Motor independiente de silueta visual. Busca grupo dominante que reduce
+      // G→P / G→M→P / G→P→G→P y, si aparece, contrario P→G hasta el segundo 25.
       const exactStartSec = 10;
       const exactEndSec = 25;
       if (sec >= exactStartSec && sec <= exactEndSec && lastEvaluatedMinute !== minute) {
@@ -14370,7 +14371,7 @@ function onTick(tick) {
       }
     } else {
       // V38 SNR RADAR:
-      // En SNR ya no evalúa solo en un segundo exacto.
+      // En SNR ya no evalúa solo en un segundo visual.
       // Desde 35s hasta el segundo elegido escanea en cada tick.
       // Si encuentra interacción válida con el SNR, crea la prealerta y deja de escanear esa vela.
       const radarStartSec = SNR_RADAR_START_SEC;
@@ -19374,13 +19375,13 @@ function detectSellerIncreasingPressure30s(structure, localRange, tol) {
 }
 
 
-// V106.7: nuevo modo independiente "Reducción exacta 25s".
+// V106.7: nuevo modo independiente "Reducción visual 25s".
 // No usa el motor viejo de alcista quiebres/reducción. Busca únicamente estructuras visuales
 // como las capturas: impulsos del grupo dominante que se achican con quiebres/pausas entre medio.
 // Funciona en los dos sentidos:
 // - comprador reduce en 0-25s => señal PUT
 // - vendedor reduce en 0-25s => señal CALL
-function classifyExactReductionSizeLabels(moves) {
+function classifyVisualReductionSizeLabels(moves) {
   const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
   if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
   const max = Math.max(...arr);
@@ -19394,7 +19395,7 @@ function classifyExactReductionSizeLabels(moves) {
   return { labels, pattern: labels.join("-"), max, min, ratio: max / Math.max(min, 1e-9) };
 }
 
-function buildExactReduction25sRuns(clean, side, tol, localRange) {
+function buildVisualReduction25sRuns(clean, side, tol, localRange) {
   const pts = (Array.isArray(clean) ? clean : [])
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
     .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.y))
@@ -19456,7 +19457,7 @@ function buildExactReduction25sRuns(clean, side, tol, localRange) {
   return out;
 }
 
-function scoreExactReduction25sSide(clean, side, evalMs, tol, localRange) {
+function scoreVisualReduction25sSide(clean, side, evalMs, tol, localRange) {
   const sideLabel = side > 0 ? "BUYER" : "SELLER";
   const signalDirection = side > 0 ? "PUT" : "CALL";
   const groupText = side > 0 ? "comprador" : "vendedor";
@@ -19479,7 +19480,7 @@ function scoreExactReduction25sSide(clean, side, evalMs, tol, localRange) {
   const dominantAdvance = yMax - y0;
   if (dominantAdvance < cleanProgressMin) return null;
 
-  const runs = buildExactReduction25sRuns(pts.map((p) => ({ ms: p.ms, quote: p.quote / side })), side, tol, alignedRange);
+  const runs = buildVisualReduction25sRuns(pts.map((p) => ({ ms: p.ms, quote: p.quote / side })), side, tol, alignedRange);
   const primaryRuns = [];
   const breakRuns = [];
   runs.forEach((r, idx) => {
@@ -19491,7 +19492,7 @@ function scoreExactReduction25sSide(clean, side, evalMs, tol, localRange) {
   if (primaryRuns.length < 2) return null;
 
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
-  const labelInfo = classifyExactReductionSizeLabels(primaryMoves);
+  const labelInfo = classifyVisualReductionSizeLabels(primaryMoves);
 
   let breaksBetween = 0;
   const breaksBetweenDetails = [];
@@ -19640,8 +19641,8 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
   const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
   const tol = Math.max(localRange * 0.010, Math.abs(open) * 0.00000005, 1e-9);
 
-  const bullish = scoreExactReduction25sSide(clean, 1, evalMs, tol, localRange);
-  const bearish = scoreExactReduction25sSide(clean, -1, evalMs, tol, localRange);
+  const bullish = scoreVisualReduction25sSide(clean, 1, evalMs, tol, localRange);
+  const bearish = scoreVisualReduction25sSide(clean, -1, evalMs, tol, localRange);
   const best = [bullish, bearish]
     .filter(Boolean)
     .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0))[0] || null;
@@ -19650,7 +19651,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const logicText = `Reducción exacta 25s V106.7: ${best.reasons.join(", ")}. Motor independiente: solo acepta reducciones visuales tipo G-M-P / G-P / G-P-G-P hasta el segundo 25; la entrada del grupo contrario suma pero no es obligatoria.`;
+  const logicText = `Reducción visual 25s V106.8: ${best.reasons.join(", ")}. Motor independiente: solo acepta reducciones visuales tipo G-M-P / G-P / G-P-G-P hasta el segundo 25; la entrada del grupo contrario suma pero no es obligatoria.`;
 
   return {
     direction: best.signalDirection,
@@ -19658,7 +19659,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
     points: best.points,
     meta: {
       level,
-      levelMode: "reduccion_exacta_25s",
+      levelMode: "reduccion_visual_25s",
       levelType: signalIsPut ? "buyer_exact_reduction_0_25" : "seller_exact_reduction_0_25",
       direction: best.signalDirection,
       tolerance: tol,
@@ -19680,19 +19681,19 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
       maxAnalysisSec: 25,
       signalFromSec: 10,
       motorIndependiente: true,
-      exactReductionMode: true,
-      exactReductionScore: best.points,
-      exactReductionSide: best.sideLabel,
-      exactReductionGroup: best.groupText,
-      exactReductionContraryGroup: best.contraryText,
-      exactReductionPattern: best.pattern,
-      exactReductionLabels: best.labels,
-      exactReductionMoves: best.primaryMoves,
-      exactReductionSizeRatio: best.sizeRatio,
-      exactReductionRuns: best.runs,
-      exactReductionPrimaryRuns: best.primaryRuns,
-      exactReductionBreaks: best.breaksBetween,
-      exactReductionBreakDetails: best.breaksBetweenDetails,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionSide: best.sideLabel,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionSizeRatio: best.sizeRatio,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionBreaks: best.breaksBetween,
+      visualReductionBreakDetails: best.breaksBetweenDetails,
       bigSmall: best.bigSmall,
       bigMediumSmall: best.bigMediumSmall,
       clearGMP: best.clearGMP,
@@ -19704,11 +19705,342 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
       pullbackRatio: best.pullbackRatio,
       dominantAdvance: best.dominantAdvance,
       alignedNet: best.alignedNet,
-      movementFilter: "v106_7_reduccion_exacta_25s_motor_aparte_gmp_gp_gpgp_bidireccional",
+      movementFilter: "v106_7_reduccion_visual_25s_motor_aparte_gmp_gp_gpgp_bidireccional",
       priority: best.bigMediumSmall || best.clearGMP || best.bigSmallBigSmall || best.contraryStrong ? "ALTA" : "NORMAL",
-      stage: "reduccion_exacta_25s_independiente_v106_7",
+      stage: "reduccion_visual_25s_independiente_v106_7",
       logic: logicText,
-      status: `${signalIsPut ? "📈" : "📉"} Reducción exacta 25s V106.7: ${best.groupText} reduce ${best.pattern || "visual"}${best.contraryEntryVisible ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}. Máximo ${Math.round(evalMs / 1000)}s.`,
+      status: `${signalIsPut ? "📈" : "📉"} Reducción visual 25s V106.8: ${best.groupText} reduce ${best.pattern || "visual"}${best.contraryEntryVisible ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}. Máximo ${Math.round(evalMs / 1000)}s.`,
+    },
+  };
+}
+
+
+// V106.8: Reducción visual 25s — motor de silueta separado.
+// Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
+// - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
+// - el grupo contrario, si aparece, idealmente entra P→G
+// - no busca "irregularidad" genérica; busca esta plantilla visual.
+function classifyVisualReductionLabel(value, reference) {
+  const v = Math.abs(Number(value || 0));
+  const ref = Math.max(Math.abs(Number(reference || 0)), 1e-9);
+  const r = v / ref;
+  if (r >= 0.72) return "G";
+  if (r >= 0.42) return "M";
+  return "P";
+}
+
+function summarizeVisualMoves(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  const labels = arr.map((v) => classifyVisualReductionLabel(v, max));
+  return { labels, pattern: labels.join("→"), max, min, ratio: max / Math.max(min, 1e-9) };
+}
+
+function getVisualRuns25s(clean, side, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 3) return [];
+
+  // Umbral visual más holgado que el motor viejo: el ojo separa tramos por forma,
+  // no por cada micro-tick. Pausas chicas también se conservan como cortes.
+  const visualStep = Math.max(Number(localRange || 0) * 0.020, Number(tol || 0) * 0.70, 1e-9);
+  const raw = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    cur.durationMs = Math.max(0, Number(cur.endMs || 0) - Number(cur.startMs || 0));
+    cur.delta = Number(cur.endY || 0) - Number(cur.startY || 0);
+    cur.move = Math.abs(cur.delta);
+    raw.push(cur);
+    cur = null;
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = b.y - a.y;
+    const ady = Math.abs(dy);
+    const sign = ady >= visualStep ? (dy > 0 ? 1 : -1) : 0;
+    if (!cur) {
+      cur = { sign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+      continue;
+    }
+    if (cur.sign === sign) {
+      cur.endMs = b.ms;
+      cur.endY = b.y;
+      cur.endQuote = b.quote;
+      cur.points.push(b);
+    } else {
+      flush();
+      cur = { sign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+    }
+  }
+  flush();
+
+  // Fusión simple de tramos iguales separados por pausa microscópica; si la pausa está entre
+  // dominante y contrario se mantiene porque visualmente es el quiebre/estancamiento que buscás.
+  const out = [];
+  for (const r of raw) {
+    const move = Number(r.move || 0);
+    const isTinyPause = r.sign === 0 && move < Math.max(Number(localRange || 0) * 0.015, Number(tol || 0) * 0.6) && Number(r.durationMs || 0) <= 2200;
+    if (isTinyPause && out.length && raw[raw.indexOf(r) + 1] && out[out.length - 1].sign === raw[raw.indexOf(r) + 1].sign) {
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (last && last.sign === r.sign && r.sign !== 0) {
+      last.endMs = r.endMs;
+      last.endY = r.endY;
+      last.endQuote = r.endQuote;
+      last.delta = last.endY - last.startY;
+      last.move = Math.abs(last.delta);
+      last.durationMs = Math.max(0, last.endMs - last.startMs);
+      last.points = (last.points || []).concat((r.points || []).slice(1));
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
+function hasVisualCutBetweenRuns(runs, aIdx, bIdx, cutMin) {
+  const between = (Array.isArray(runs) ? runs : []).filter((r, idx) => idx > aIdx && idx < bIdx);
+  return between.some((r) => {
+    const mv = Number(r.move || 0);
+    const dur = Number(r.durationMs || 0);
+    return r.sign < 0 ? mv >= cutMin : (r.sign === 0 && dur <= 3200);
+  });
+}
+
+function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
+  const groupText = side > 0 ? "comprador" : "vendedor";
+  const contraryText = side > 0 ? "vendedor" : "comprador";
+  const signalDirection = side > 0 ? "PUT" : "CALL";
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 5) return null;
+
+  const y0 = Number(pts[0].y);
+  const yEnd = Number(pts[pts.length - 1].y);
+  const yMax = Math.max(...pts.map((p) => p.y));
+  const yMin = Math.min(...pts.map((p) => p.y));
+  const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
+  const impulseMin = Math.max(alignedRange * 0.055, Number(tol || 0) * 1.35, 1e-9);
+  const firstBigMin = Math.max(alignedRange * 0.115, Number(tol || 0) * 2.2, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.030, Number(tol || 0) * 0.95, 1e-9);
+
+  const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
+  if (runs.length < 3) return null;
+
+  const primaryRuns = [];
+  const contraryRuns = [];
+  runs.forEach((r, idx) => {
+    const move = Number(r.move || 0);
+    if (r.sign > 0 && move >= impulseMin) primaryRuns.push({ ...r, idx, move });
+    if (r.sign < 0 && move >= Math.max(cutMin, impulseMin * 0.55)) contraryRuns.push({ ...r, idx, move });
+  });
+
+  if (primaryRuns.length < 2) return null;
+  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
+  const firstMove = primaryMoves[0];
+  if (!Number.isFinite(firstMove) || firstMove < firstBigMin) return null;
+
+  let cutsBetween = 0;
+  for (let i = 0; i < primaryRuns.length - 1; i++) {
+    if (hasVisualCutBetweenRuns(runs, primaryRuns[i].idx, primaryRuns[i + 1].idx, cutMin)) cutsBetween++;
+  }
+
+  const summary = summarizeVisualMoves(primaryMoves);
+  const labels = summary.labels;
+  const m0 = primaryMoves[0] || 0;
+  const m1 = primaryMoves[1] || 0;
+  const m2 = primaryMoves[2] || 0;
+  const m3 = primaryMoves[3] || 0;
+
+  // Plantillas visuales buscadas por el usuario.
+  const gToP = primaryMoves.length >= 2 && m0 >= m1 * 1.18;
+  const gmp = primaryMoves.length >= 3 && m0 >= m1 * 1.04 && m1 >= m2 * 1.04;
+  const reduceIncreaseReduce = primaryMoves.length >= 4 && m0 >= m1 * 1.12 && m2 >= m1 * 0.88 && m2 <= m0 * 1.45 && m2 >= m3 * 1.10;
+  const repeatedReduction = primaryMoves.slice(0, -1).filter((v, i) => v >= primaryMoves[i + 1] * 1.10).length;
+  const lateReduceAgain = primaryMoves.length >= 3 && primaryMoves.slice(1, -1).some((v, i) => v >= primaryMoves[i + 2] * 1.10);
+  const templateOk = gToP || gmp || reduceIncreaseReduce || (repeatedReduction >= 2 && (labels.includes("P") || lateReduceAgain));
+  if (!templateOk) return null;
+
+  // Contrario P→G: no obligatorio, pero es el plus más importante.
+  let contraryPG = false;
+  let contraryStrong = false;
+  let contraryPattern = "";
+  if (contraryRuns.length >= 2) {
+    const cm = contraryRuns.map((r) => Number(r.move || 0));
+    const firstC = cm[0] || 0;
+    const maxLater = Math.max(...cm.slice(1));
+    contraryPG = maxLater >= firstC * 1.18 || maxLater >= Math.max(alignedRange * 0.12, firstMove * 0.28);
+    contraryStrong = maxLater >= Math.max(alignedRange * 0.16, firstMove * 0.36);
+    contraryPattern = summarizeVisualMoves(cm).pattern;
+  } else if (contraryRuns.length === 1) {
+    contraryStrong = Number(contraryRuns[0].move || 0) >= Math.max(alignedRange * 0.18, firstMove * 0.38);
+    contraryPattern = summarizeVisualMoves([contraryRuns[0].move]).pattern;
+  }
+
+  // Bloqueos para no volver a caer en continuidad/simetría.
+  const cleanMomentum = primaryMoves.length >= 3 && m1 >= m0 * 0.92 && m2 >= m1 * 0.92 && !lateReduceAgain;
+  const lastDominatesTooMuch = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] > m0 * 1.18;
+  const tooSymmetric = primaryMoves.length >= 3 && summary.ratio <= 1.28 && !contraryPG;
+  if (cleanMomentum || lastDominatesTooMuch || tooSymmetric) return null;
+
+  let points = 0;
+  const reasons = [];
+  points += 4; reasons.push(`${groupText} entra grande`);
+  if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
+  if (gmp) { points += 6; reasons.push(`${groupText} reduce G→M→P`); }
+  else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
+  else if (gToP) { points += 5; reasons.push(`${groupText} reduce G→P`); }
+  if (repeatedReduction >= 2) { points += 2; reasons.push("reducción repetida"); }
+  if (contraryPG) { points += 5; reasons.push(`${contraryText} responde P→G`); }
+  else if (contraryStrong) { points += 3; reasons.push(`${contraryText} entra fuerte`); }
+  if (labels.includes("P")) { points += 1; reasons.push("movimiento pequeño visible"); }
+  if (Number(evalMs || 25000) <= 22000) { points += 1; reasons.push("aparece temprano"); }
+
+  if (points < 10) return null;
+
+  const quality =
+    points * 12 +
+    (gmp ? 18 : 0) +
+    (reduceIncreaseReduce ? 18 : 0) +
+    (contraryPG ? 24 : contraryStrong ? 12 : 0) +
+    Math.min(16, repeatedReduction * 6) +
+    Math.min(14, cutsBetween * 5) -
+    Math.max(0, Number(evalMs || 25000) - 22000) / 1300;
+
+  return {
+    side,
+    signalDirection,
+    groupText,
+    contraryText,
+    points,
+    quality,
+    reasons,
+    evalMs,
+    alignedRange,
+    impulseMin,
+    firstBigMin,
+    cutMin,
+    runs: runs.slice(0, 14),
+    primaryRuns: primaryRuns.slice(0, 8),
+    contraryRuns: contraryRuns.slice(0, 8),
+    primaryMoves,
+    labels,
+    pattern: summary.pattern,
+    sizeRatio: summary.ratio,
+    cutsBetween,
+    gToP,
+    gmp,
+    reduceIncreaseReduce,
+    repeatedReduction,
+    contraryPG,
+    contraryStrong,
+    contraryPattern,
+    cleanMomentum,
+    lastDominatesTooMuch,
+    tooSymmetric,
+    alignedNet: yEnd - y0,
+    dominantAdvance: yMax - y0,
+  };
+}
+
+function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 5) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(9000, Math.min(25000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 9000 || evalMs > 25000) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 5) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.010, Math.abs(open) * 0.00000005, 1e-9);
+
+  const buyerWeak = scoreReduccionVisual25sSide(clean, 1, evalMs, tol, localRange);
+  const sellerWeak = scoreReduccionVisual25sSide(clean, -1, evalMs, tol, localRange);
+  const best = [buyerWeak, sellerWeak]
+    .filter(Boolean)
+    .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0))[0] || null;
+  if (!best) return null;
+
+  const signalIsPut = best.signalDirection === "PUT";
+  const level = signalIsPut ? high : low;
+  const zone = Math.max(tol * 4, localRange * 0.10);
+  const status = `🎯 Reducción visual 25s V106.8: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción visual 25s V106.8: ${best.reasons.join(", ")}. Motor independiente de silueta: busca grupo dominante que entra grande y reduce visualmente (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma mucho, pero no es obligatorio. Si no aparece antes del segundo 25, se descarta.`;
+
+  return {
+    direction: best.signalDirection,
+    quality: best.quality,
+    points: best.points,
+    meta: {
+      level,
+      levelMode: "reduccion_visual_25s",
+      levelType: signalIsPut ? "buyer_visual_reduction_0_25" : "seller_visual_reduction_0_25",
+      direction: best.signalDirection,
+      tolerance: tol,
+      zone,
+      zoneLow: level - zone * 0.45,
+      zoneHigh: level + zone * 0.45,
+      points: best.points,
+      maxPoints: 30,
+      reasons: best.reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-25s",
+      maxAnalysisSec: 25,
+      signalFromSec: 9,
+      motorIndependiente: true,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionContraryRuns: best.contraryRuns,
+      visualReductionContraryPattern: best.contraryPattern,
+      cutsBetween: best.cutsBetween,
+      gToP: best.gToP,
+      gmp: best.gmp,
+      reduceIncreaseReduce: best.reduceIncreaseReduce,
+      repeatedReduction: best.repeatedReduction,
+      contraryPG: best.contraryPG,
+      contraryStrong: best.contraryStrong,
+      cleanMomentumBlocked: best.cleanMomentum,
+      lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
+      tooSymmetricBlocked: best.tooSymmetric,
+      movementFilter: "v106_8_reduccion_visual_25s_plantilla_g_p_p_g_bidireccional",
+      priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_25s_plantilla_v106_8",
+      logic: logicText,
+      status,
     },
   };
 }
@@ -20075,7 +20407,7 @@ function analyzeAlcistaReduccion30sCandidate(candidate, minute, opts = {}) {
     (firstColorState === "RED" && significantColorFlips >= 2);
   if (thirdColorTurnBefore30) return null;
 
-  // V105: prioridad fuerte al tipo exacto que buscás:
+  // V105: prioridad fuerte al tipo visual que buscás:
   // - reducción clara del comprador dentro de 0-30s
   // - grande → mediano → chico
   // - grande → chico
@@ -20473,8 +20805,8 @@ function evaluateMinute(minute, opts = {}) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
     } else if (isReduccionExacta25sMode(activeMode)) {
-      match = analyzeReduccionExacta25sCandidate(c, minute, evalOptions);
-      matchSource = "REDUCCION_EXACTA_25S";
+      match = analyzeReduccionVisual25sCandidate(c, minute, evalOptions);
+      matchSource = "REDUCCION_VISUAL_25S";
     } else if (isAlcistaQuiebres30sMode(activeMode)) {
       match = analyzeAlcistaQuiebres30sCandidate(c, minute, evalOptions);
       if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
@@ -20522,8 +20854,8 @@ function evaluateMinute(minute, opts = {}) {
   if (!matches.length) return false;
   matches.sort((a, b) => {
     if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode) || isReduccionExacta25sMode(activeMode)) {
-      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake || Number(a.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(a.giroPolaridadMeta?.exactReductionScore || 0) >= 10 ? 1 : 0;
-      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake || Number(b.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(b.giroPolaridadMeta?.exactReductionScore || 0) >= 10 ? 1 : 0;
+      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake || Number(a.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(a.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
+      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake || Number(b.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(b.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
       if (bp !== ap) return bp - ap;
     }
     return (
