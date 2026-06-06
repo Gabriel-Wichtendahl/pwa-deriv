@@ -1,7 +1,7 @@
 // v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
 // v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
 // v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
-// v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-25 y no dispara temprano.
+// v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-30 y no dispara temprano.
 // v106.8: agrega modo Reducción visual 25s con motor de silueta G-P/P-G independiente.
 // v106.7: agrega modo Reducción visual 25s independiente.
 // v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
@@ -888,7 +888,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_25S_ANTI_ZIGZAG_V106_9_4_5_20260606";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_TRANSFERENCIA_V106_9_4_6_20260606";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -966,7 +966,7 @@ function getModeBtnLabel(mode) {
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
   if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
   if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
-  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 Reducción visual 25s";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 Reducción visual 30s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -8457,7 +8457,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = "Modo único: Reducción visual 25s. Analiza 0-25s, marca G/M/P y permite corrección visual.";
+    modeBtn.title = "Modo único: Reducción visual 25s. Analiza 0-30s, marca G/M/P y permite corrección visual.";
   };
   paintMode();
 
@@ -9445,7 +9445,7 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
-  // Overlay de lectura visual del motor Reducción visual 25s (G/M/P + ventana 0-25s)
+  // Overlay de lectura visual del motor Reducción visual 25s (G/M/P + ventana 0-30s)
   drawVisualReductionReadingOverlay(ctx, modalCurrentItem, xOf, yOf, w, h);
 
   // precio actual / último punto: guía horizontal suave + punto más visible
@@ -14630,13 +14630,11 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isReduccionExacta25sMode(activeModeForTick)) {
-      // V106.8.1 Reducción visual 25s:
-      // NO dispara temprano. Espera a tener la ventana completa 0-25s y recién ahí
-      // compara ambas direcciones para elegir la mejor lectura visual.
-      // Se permite evaluar en el primer tick posterior a 25s (normalmente 26s) usando
-      // una frontera/interpolación exacta en 25000ms.
-      const visualEvalSec = 25;
-      const visualEvalLateSec = 28;
+      // V106.9.4.6 Reducción visual transferencia:
+      // NO dispara temprano. Espera a tener la ventana completa 0-30s y recién ahí
+      // confirma: dominante reduce + contrario aumenta + anti-zigzag.
+      const visualEvalSec = 30;
+      const visualEvalLateSec = 33;
       if (sec >= visualEvalSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
         evaluateMinute(minute, {
           evalMs: visualEvalSec * 1000,
@@ -14644,9 +14642,9 @@ function onTick(tick) {
           radar: true,
           radarStartSec: 0,
           radarEndSec: visualEvalSec,
-          forceFullWindow25s: true,
+          forceFullWindow30s: true,
         });
-        // En este modo se evalúa una sola vez por vela. Si no hay patrón válido a los 25s,
+        // En este modo se evalúa una sola vez por vela. Si no hay transferencia válida a los 30s,
         // la vela queda descartada aunque después haga algo parecido.
         lastEvaluatedMinute = minute;
       } else if (sec > visualEvalLateSec && lastEvaluatedMinute !== minute) {
@@ -19712,8 +19710,8 @@ function detectSellerIncreasingPressure30s(structure, localRange, tol) {
 // No usa el motor viejo de alcista quiebres/reducción. Busca únicamente estructuras visuales
 // como las capturas: impulsos del grupo dominante que se achican con quiebres/pausas entre medio.
 // Funciona en los dos sentidos:
-// - comprador reduce en 0-25s => señal PUT
-// - vendedor reduce en 0-25s => señal CALL
+// - comprador reduce en 0-30s => señal PUT
+// - vendedor reduce en 0-30s => señal CALL
 function classifyVisualReductionSizeLabels(moves) {
   const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
   if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
@@ -20009,9 +20007,9 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
       range: localRange,
       evalSec: Math.round(evalMs / 1000),
       analysisWindowMs: evalMs,
-      irregularityWindow: "0-25s",
-      confirmationWindow: "10-25s",
-      maxAnalysisSec: 25,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "10-30s",
+      maxAnalysisSec: 30,
       signalFromSec: 10,
       motorIndependiente: true,
       visualReductionMode: true,
@@ -20048,12 +20046,12 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
 }
 
 
-// V106.9.4.5: Reducción visual 25s — punto medio + filtro anti-zigzag estacionado.
+// V106.9.4.6: Reducción visual 30s — transferencia de fuerza + anti-zigzag.
 // Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
-// Objetivo: leer los primeros 0-25s como lo ve el ojo en Deriv:
+// Objetivo: leer los primeros 0-30s como lo ve el ojo en Deriv:
 // - grupo dominante entra grande y reduce: G→P, G→M→P, G→P→G→P
 // - el grupo contrario, si aparece, idealmente entra P→G
-// - no busca "irregularidad" genérica; busca esta plantilla visual.
+// - exige reducción del grupo dominante + aumento del grupo contrario antes del segundo 30.
 function classifyVisualReductionLabel(value, reference) {
   const v = Math.abs(Number(value || 0));
   const ref = Math.max(Math.abs(Number(reference || 0)), 1e-9);
@@ -20335,6 +20333,88 @@ function getVisualReductionSimpleShape(moves) {
   };
 }
 
+
+function findVisualReductionEnd(primaryMoves) {
+  const arr = (Array.isArray(primaryMoves) ? primaryMoves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) return { ok: false, endPos: -1, pattern: "", type: "" };
+  const m0 = arr[0], m1 = arr[1], m2 = arr[2] || 0, m3 = arr[3] || 0;
+  if (arr.length >= 3 && m0 >= m1 * 1.08 && m1 >= m2 * 1.06) return { ok: true, endPos: 2, pattern: "G→M→P", type: "GMP" };
+  if (arr.length >= 2 && m0 >= m1 * 1.18) return { ok: true, endPos: 1, pattern: m1 >= m0 * 0.42 ? "G→M" : "G→P", type: "GP" };
+  if (arr.length >= 4 && m0 >= m1 * 1.10 && m2 >= m1 * 0.84 && m2 <= m0 * 1.42 && m2 >= m3 * 1.10) {
+    return { ok: true, endPos: 3, pattern: "G→P→G→P", type: "GPGP" };
+  }
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.16) {
+      return { ok: true, endPos: i + 1, pattern: summarizeVisualMoves(arr.slice(0, i + 2)).pattern, type: "REDUCE" };
+    }
+  }
+  return { ok: false, endPos: -1, pattern: "", type: "" };
+}
+
+function findContraryIncreaseAfterReduction(contraryRuns, afterRunIdx, alignedRange, firstMove, tol = 0) {
+  const runs = (Array.isArray(contraryRuns) ? contraryRuns : [])
+    .filter((r) => r && Number(r.idx) > Number(afterRunIdx))
+    .sort((a, b) => Number(a.idx) - Number(b.idx));
+  const minUseful = Math.max(Number(alignedRange || 0) * 0.055, Number(tol || 0) * 1.15, 1e-9);
+  const usefulRuns = runs.filter((r) => Number(r.move || 0) >= minUseful);
+  const usefulMoves = usefulRuns.map((r) => Number(r.move || 0));
+  const strongSingleMin = Math.max(Number(alignedRange || 0) * 0.18, Number(firstMove || 0) * 0.36, Number(tol || 0) * 2.5, 1e-9);
+
+  if (usefulRuns.length >= 2) {
+    for (let i = 0; i < usefulRuns.length - 1; i++) {
+      const first = Number(usefulRuns[i].move || 0);
+      for (let j = i + 1; j < usefulRuns.length; j++) {
+        const later = Number(usefulRuns[j].move || 0);
+        if (later >= first * 1.16 || later >= Math.max(Number(alignedRange || 0) * 0.13, Number(firstMove || 0) * 0.28, first + minUseful * 0.45)) {
+          const seqRuns = usefulRuns.slice(i, j + 1);
+          const seqMoves = seqRuns.map((r) => Number(r.move || 0));
+          return {
+            ok: true,
+            strong: later >= strongSingleMin,
+            pattern: summarizeVisualMoves(seqMoves).pattern,
+            runs: seqRuns,
+            moves: seqMoves,
+            firstRun: usefulRuns[i],
+            lastRun: usefulRuns[j],
+            reason: "contrario aumenta después de la reducción",
+          };
+        }
+      }
+    }
+  }
+
+  const singleStrong = usefulRuns.find((r) => Number(r.move || 0) >= strongSingleMin);
+  if (singleStrong) {
+    return {
+      ok: true,
+      strong: true,
+      singleStrong: true,
+      pattern: summarizeVisualMoves([singleStrong.move]).pattern || "G",
+      runs: [singleStrong],
+      moves: [Number(singleStrong.move || 0)],
+      firstRun: singleStrong,
+      lastRun: singleStrong,
+      reason: "contrario entra grande después de la reducción",
+    };
+  }
+  return { ok: false, strong: false, pattern: usefulMoves.length ? summarizeVisualMoves(usefulMoves).pattern : "", runs: usefulRuns, moves: usefulMoves, reason: "" };
+}
+
+function findDominantWeakReturnAfterContrary(primaryRuns, afterRunIdx, firstMove) {
+  const runs = (Array.isArray(primaryRuns) ? primaryRuns : [])
+    .filter((r) => r && Number(r.idx) > Number(afterRunIdx))
+    .sort((a, b) => Number(a.idx) - Number(b.idx));
+  const moves = runs.map((r) => Number(r.move || 0)).filter((v) => Number.isFinite(v) && v > 0);
+  if (!moves.length) return { ok: false, pattern: "", runs: [], moves: [] };
+  const weakSingle = moves.length === 1 && moves[0] <= Number(firstMove || 0) * 0.66;
+  let reduces = false;
+  for (let i = 0; i < moves.length - 1; i++) {
+    if (moves[i] >= moves[i + 1] * 1.12) { reduces = true; break; }
+  }
+  const ok = weakSingle || reduces;
+  return { ok, weakSingle, reduces, pattern: summarizeVisualMoves(moves.slice(0, 3)).pattern, runs: runs.slice(0, 3), moves: moves.slice(0, 3) };
+}
+
 function getReduccionVisualQualityLabel(score) {
   const p = Number(score?.points || 0);
   const hasContraryPG = !!score?.contraryPG;
@@ -20367,7 +20447,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
 
   // V106.9.4: desplazamiento visual obligatorio.
   // La formación buscada no debe ser zigzag estacionado: el grupo que reduce tiene que
-  // desplazar la línea hacia su lado durante 0-25s, aunque internamente haga pausas/quiebres.
+  // desplazar la línea hacia su lado durante 0-30s, aunque internamente haga pausas/quiebres.
   const totalPath = pts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(pts[i].y)), 0);
   const alignedNet25 = yEnd - y0;
   const dominantAdvance25 = yMax - y0;
@@ -20380,7 +20460,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const absoluteNet25 = Math.abs(alignedNet25);
   const pathToNetRatio = totalPath / Math.max(absoluteNet25, 1e-9);
 
-  // V106.9.4.5: anti-zigzag estacionado.
+  // V106.9.4.6: anti-zigzag estacionado.
   // Buscamos un desplazamiento limpio con reducción/irregularidad, no una vela que va y viene
   // completa dentro del mismo rango. Si la eficiencia direccional es baja, el ojo la ve trabada.
   const zigzagEstancado = (
@@ -20415,7 +20495,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const microInternalRuns = macroRuns.microInternalRuns;
   const macroContraryMin = macroRuns.macroContraryMin;
 
-  // V106.9.4.5: si ambos grupos aparecen demasiadas veces dentro de 0-25s y la vela
+  // V106.9.4.6: si ambos grupos aparecen demasiadas veces dentro de 0-30s y la vela
   // no avanza con eficiencia, es zigzag completo/trabado aunque alguna secuencia parezca G/M/P.
   const tooManyAlternations = (primaryRuns.length + contraryRuns.length) >= 7 && contraryRuns.length >= 3;
   if (tooManyAlternations && directionalEfficiency < 0.34) return null;
@@ -20449,20 +20529,21 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const templateOk = gToP || gmp || reduceIncreaseReduce || (repeatedReduction >= 2 && (labels.includes("P") || lateReduceAgain));
   if (!templateOk) return null;
 
-  // Contrario P→G: no obligatorio, pero sube mucho la calidad porque confirma cambio de presión.
-  let contraryPG = false;
-  let contraryStrong = false;
-  let contraryPattern = "";
-  if (contraryRuns.length >= 2) {
-    const firstC = contraryMoves[0] || 0;
-    const maxLater = Math.max(...contraryMoves.slice(1));
-    contraryPG = maxLater >= firstC * 1.18 || maxLater >= Math.max(alignedRange * 0.12, firstMove * 0.28);
-    contraryStrong = maxLater >= Math.max(alignedRange * 0.16, firstMove * 0.36);
-    contraryPattern = contraryShape.summary.pattern;
-  } else if (contraryRuns.length === 1) {
-    contraryStrong = Number(contraryRuns[0].move || 0) >= Math.max(alignedRange * 0.18, firstMove * 0.38);
-    contraryPattern = summarizeVisualMoves([contraryRuns[0].move]).pattern;
-  }
+  // V106.9.4.6: regla central nueva.
+  // 1) El grupo dominante reduce.
+  // 2) Después aparece el grupo contrario aumentando: P→G / P→M→G / M→G,
+  //    o una entrada contraria grande aislada.
+  // 3) Si después el dominante vuelve débil/reducido, suma extra.
+  const reductionInfo = findVisualReductionEnd(primaryMoves);
+  if (!reductionInfo.ok) return null;
+  const reductionEndRunIdx = Number(primaryRuns[reductionInfo.endPos]?.idx ?? primaryRuns[Math.min(primaryRuns.length - 1, 1)]?.idx ?? -1);
+  const takeover = findContraryIncreaseAfterReduction(contraryRuns, reductionEndRunIdx, alignedRange, firstMove, tol);
+  if (!takeover.ok) return null;
+  const weakReturn = findDominantWeakReturnAfterContrary(primaryRuns, Number(takeover.lastRun?.idx ?? reductionEndRunIdx), firstMove);
+
+  let contraryPG = !!takeover.ok && !takeover.singleStrong;
+  let contraryStrong = !!takeover.strong;
+  let contraryPattern = takeover.pattern || "";
 
   // Bloqueos para no volver a caer en continuidad/simetría.
   const cleanMomentum = primaryMoves.length >= 3 && m1 >= m0 * 0.92 && m2 >= m1 * 0.92 && !lateReduceAgain;
@@ -20470,7 +20551,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const tooSymmetric = primaryMoves.length >= 3 && summary.ratio <= 1.28 && !contraryPG;
   if (cleanMomentum || lastDominatesTooMuch || tooSymmetric) return null;
 
-  // Contradicciones dentro de 0-25s: si el mismo grupo que supuestamente reduce vuelve a tomar fuerza,
+  // Contradicciones dentro de 0-30s: si el mismo grupo que supuestamente reduce vuelve a tomar fuerza,
   // o si el lado contrario también queda reduciendo sin P→G, baja la calidad o se descarta.
   const primaryRecoversLate = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] >= firstMove * 0.92 && !lateReduceAgain;
   const bothSidesReduceNoTakeover = contraryRuns.length >= 2 && contraryShape.hasReduction && !contraryPG && !contraryStrong;
@@ -20483,15 +20564,16 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const reasons = [];
   const rejectHints = [];
   points += 4; reasons.push(`${groupText} entra grande`);
-  points += 3; reasons.push("desplazamiento visual 0-25s");
+  points += 3; reasons.push("desplazamiento visual 0-30s");
   if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
   if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
   if (gmp) { points += 6; reasons.push(`${groupText} reduce G→M→P`); }
   else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
-  else if (gToP) { points += 5; reasons.push(`${groupText} reduce G→P`); }
+  else if (gToP) { points += 5; reasons.push(`${groupText} reduce ${reductionInfo.pattern || "G→P"}`); }
   if (repeatedReduction >= 2) { points += 2; reasons.push("reducción repetida"); }
-  if (contraryPG) { points += 6; reasons.push(`${contraryText} responde P→G`); }
-  else if (contraryStrong) { points += 3; reasons.push(`${contraryText} entra fuerte`); }
+  if (contraryPG) { points += 7; reasons.push(`${contraryText} aumenta ${contraryPattern || "P→G"}`); }
+  else if (contraryStrong) { points += 4; reasons.push(`${contraryText} entra grande después de la reducción`); }
+  if (weakReturn.ok) { points += 3; reasons.push(`${groupText} vuelve débil ${weakReturn.pattern || "reducido"}`); }
   if (labels.includes("P")) { points += 1; reasons.push("movimiento pequeño visible"); }
   if (cutsBetween >= 2) { points += 1; reasons.push("varios cortes visuales"); }
   if (contradictionSoft) { points -= 3; rejectHints.push("ambos lados reducen sin toma de control clara"); }
@@ -20502,11 +20584,12 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     points * 12 +
     (gmp ? 18 : 0) +
     (reduceIncreaseReduce ? 18 : 0) +
-    (contraryPG ? 30 : contraryStrong ? 12 : 0) +
+    (contraryPG ? 34 : contraryStrong ? 15 : 0) +
+    (weakReturn.ok ? 18 : 0) +
     Math.min(16, repeatedReduction * 6) +
     Math.min(14, cutsBetween * 5) -
     (contradictionSoft ? 18 : 0) -
-    Math.max(0, Number(evalMs || 25000) - 22000) / 1300;
+    Math.max(0, Number(evalMs || 30000) - 26000) / 1300;
 
   const tmp = {
     points,
@@ -20553,6 +20636,9 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     contraryPG,
     contraryStrong,
     contraryPattern,
+    transferReductionInfo: reductionInfo,
+    transferContraryTakeover: takeover,
+    transferWeakReturn: weakReturn,
     cleanMomentum,
     lastDominatesTooMuch,
     tooSymmetric,
@@ -20581,11 +20667,11 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   if (ticks.length < 5) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  // V106.8.1: este modo solo decide con la ventana completa 0-25s.
-  // Si alguien lo llama antes, no devuelve señal para evitar alertas en 5s/10s.
-  const evalMs = 25000;
-  if (Number.isFinite(optEvalMs) && optEvalMs < 24500) return null;
-  if (lastMs < 23000 && !opts?.forceFullWindow25s) return null;
+  // V106.9.4.6: este modo ahora decide con la ventana completa 0-30s.
+  // Si alguien lo llama antes, no devuelve señal para evitar alertas tempranas.
+  const evalMs = 30000;
+  if (Number.isFinite(optEvalMs) && optEvalMs < 29500) return null;
+  if (lastMs < 28000 && !opts?.forceFullWindow30s) return null;
 
   const clean = ensureTicksWithBoundary(ticks, evalMs)
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
@@ -20611,7 +20697,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   if (!best) return null;
 
   // V106.8.2: si comprador y vendedor dan lecturas demasiado cercanas, la vela queda ambigua.
-  // Esto evita señales contradictorias cuando a los 25s ambos lados muestran reducción.
+  // Esto evita señales contradictorias cuando a los 30s ambos lados muestran reducción.
   const qualityGap = second ? Number(best.quality || 0) - Number(second.quality || 0) : Infinity;
   const relativeGap = second ? qualityGap / Math.max(Number(best.quality || 0), 1e-9) : 1;
   const sameQualityAmbiguous = second && qualityGap < 18 && relativeGap < 0.16 && !best.contraryPG;
@@ -20620,10 +20706,10 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const subtype = best.contraryPG ? "cambio de presión" : best.gmp || best.reduceIncreaseReduce ? "reducción limpia" : "reducción válida";
+  const subtype = best.transferWeakReturn?.ok ? "transferencia completa" : best.contraryPG ? "reducción + aumento" : "reducción + entrada contraria";
   const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
-  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: ${best.groupText} ${best.pattern || "visual"} reduce${best.contraryPG ? ` + ${best.contraryText} ${best.contraryPattern || "P→G"} aumenta` : best.contraryStrong ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción visual 25s V106.9.4.5: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag: exige avance limpio, no ida y vuelta estacionada. Motor independiente de silueta: evalúa solo en 25s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-25s y busca macro impulsos del grupo dominante que reducen (G→P / G→M→P / G→P→G→P); el grupo contrario P→G suma cuando es una entrada visual real.`;
+  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: ${best.groupText} ${best.transferReductionInfo?.pattern || best.pattern || "visual"} reduce + ${best.contraryText} ${best.contraryPattern || "G"} aumenta${best.transferWeakReturn?.ok ? ` + ${best.groupText} vuelve débil ${best.transferWeakReturn.pattern || ""}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción visual 30s V106.9.4.6: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag: exige avance limpio, no ida y vuelta estacionada. Motor independiente de silueta: evalúa solo en 30s, comprime micro retrocesos como pausas internas, exige desplazamiento 0-30s y exige transferencia: grupo dominante reduce (G→P / G→M→P / G→P→G→P), luego el grupo contrario aumenta (P→G / P→M→G / M→G). Si el dominante vuelve débil, suma más puntos.`;
 
   return {
     direction: best.signalDirection,
@@ -20632,14 +20718,14 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
     meta: {
       level,
       levelMode: "reduccion_visual_25s",
-      levelType: signalIsPut ? "buyer_visual_reduction_0_25" : "seller_visual_reduction_0_25",
+      levelType: signalIsPut ? "buyer_visual_transfer_0_30" : "seller_visual_transfer_0_30",
       direction: best.signalDirection,
       tolerance: tol,
       zone,
       zoneLow: level - zone * 0.45,
       zoneHigh: level + zone * 0.45,
       points: best.points,
-      maxPoints: 30,
+      maxPoints: 34,
       reasons: best.reasons,
       p0: open,
       pE: current,
@@ -20648,9 +20734,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       range: localRange,
       evalSec: Math.round(evalMs / 1000),
       analysisWindowMs: evalMs,
-      irregularityWindow: "0-25s",
-      maxAnalysisSec: 25,
-      signalFromSec: 25,
+      irregularityWindow: "0-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: 30,
       motorIndependiente: true,
       visualReductionMode: true,
       visualReductionScore: best.points,
@@ -20670,6 +20756,10 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       visualReductionMicroInternalRuns: best.microInternalRuns,
       visualReductionMacroContraryMin: best.macroContraryMin,
       visualReductionContraryPattern: best.contraryPattern,
+      visualReductionTransferRequired: true,
+      visualReductionTransferReductionInfo: best.transferReductionInfo || null,
+      visualReductionTransferContraryTakeover: best.transferContraryTakeover || null,
+      visualReductionTransferWeakReturn: best.transferWeakReturn || null,
       visualDisplacementOk: best.visualDisplacementOk,
       visualDisplacementNetRatio: best.visualDisplacementNetRatio,
       visualDisplacementDominantRatio: best.visualDisplacementDominantRatio,
@@ -20691,9 +20781,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_9_4_5_anti_zigzag_limpio",
+      movementFilter: "v106_9_4_6_transferencia_30s",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_25s_anti_zigzag_v106_9_4_5",
+      stage: "reduccion_visual_30s_transferencia_v106_9_4_6",
       logic: logicText,
       status,
     },
