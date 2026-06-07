@@ -1,7 +1,7 @@
 /* sw.js — Deriv Signals v106.9.4.7 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v106-9-4-8-dominante-disparejo-30s";
+const CACHE = "deriv-assets-v106-9-4-9-asimetria-dominante-30s";
 
 const ASSETS = [
   "./",
