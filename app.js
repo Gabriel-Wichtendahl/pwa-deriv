@@ -9095,7 +9095,7 @@ function drawRoundedLabel(ctx, x, y, text, fill, stroke = "rgba(255,255,255,.22)
   } else {
     ctx.fillRect(xx, yy, w, h); ctx.strokeRect(xx, yy, w, h);
   }
-  ctx.fillStyle = "rgba(255,255,255,.96)";
+  ctx.fillStyle = "rgba(255,255,255,.78)";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(String(text), xx + w / 2, yy + h / 2 + 0.5);
@@ -9108,21 +9108,21 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   const evalMs = Math.max(1000, Math.min(60000, Number(read.evalMs || 25000)));
   const x0 = xOf(0), xEval = xOf(evalMs);
   ctx.save();
-  ctx.fillStyle = "rgba(250,204,21,.075)";
+  ctx.fillStyle = "rgba(250,204,21,.032)";
   ctx.fillRect(x0, 8, Math.max(0, xEval - x0), h - 30);
   ctx.setLineDash([5, 4]);
-  ctx.strokeStyle = "rgba(250,204,21,.72)";
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(250,204,21,.38)";
+  ctx.lineWidth = 1.05;
   ctx.beginPath(); ctx.moveTo(xEval, 8); ctx.lineTo(xEval, h - 22); ctx.stroke();
   ctx.setLineDash([]);
   ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillStyle = "rgba(254,240,138,.95)";
+  ctx.fillStyle = "rgba(254,240,138,.64)";
   ctx.fillText("25s lectura", Math.min(w - 82, xEval + 4), 19);
 
-  const buyCol = "rgba(34,197,94,.96)";
-  const sellCol = "rgba(248,113,113,.96)";
-  const buyFill = "rgba(22,163,74,.78)";
-  const sellFill = "rgba(185,28,28,.78)";
+  const buyCol = "rgba(34,197,94,.48)";
+  const sellCol = "rgba(248,113,113,.48)";
+  const buyFill = "rgba(22,163,74,.34)";
+  const sellFill = "rgba(185,28,28,.34)";
   const drawRun = (r, prefix, idx) => {
     const isBuyer = String(r.side || "") === "comprador";
     const col = isBuyer ? buyCol : sellCol;
@@ -9132,15 +9132,15 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     if (![x1, y1, x2, y2].every(Number.isFinite)) return;
     ctx.save();
     ctx.shadowColor = col;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 3;
     ctx.strokeStyle = col;
-    ctx.lineWidth = 4.4;
+    ctx.lineWidth = 2.35;
     ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(x1, y1, 3.5, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x2, y2, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x1, y1, 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2, y2, 3.0, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
     const mx = (x1 + x2) / 2;
     const my = Math.min(y1, y2);
@@ -9156,8 +9156,8 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     const x = xOf(ms);
     ctx.save();
     ctx.setLineDash([2, 5]);
-    ctx.strokeStyle = "rgba(255,255,255,.45)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255,255,255,.24)";
+    ctx.lineWidth = 0.85;
     ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
     ctx.restore();
   }
