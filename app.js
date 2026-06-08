@@ -1,3 +1,4 @@
+// v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
 // v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
 // v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
@@ -889,7 +890,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_GMP_ESTRICTO_V106_9_4_14_20260608";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -967,7 +968,7 @@ function getModeBtnLabel(mode) {
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
   if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
   if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
-  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 GMP estricto 30s";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 2 reducciones 30s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -5942,9 +5943,9 @@ function buildSignalsAnalysisExport() {
 
   return {
     exported_at: new Date().toISOString(),
-    export_scope: "analisis_reduccion_visual_signals_all_ticks",
+    export_scope: "analisis_dos_reducciones_visual_signals_all_ticks",
     app_version: "v106.9.4.15_history_1000_visible_200",
-    description: "Export para analizar patrones de los primeros 25/30s: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
+    description: "Export para analizar patrones de dos reducciones claras antes del segundo 30: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
       signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
@@ -5982,7 +5983,7 @@ async function copyTextToClipboard(text) {
 function buildSignalsAnalysisFileName(data) {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
   const count = Number(data?.counts?.signals_total || 0);
-  return `analisis-reduccion-visual-${count}-senales-${ts}.json`;
+  return `analisis-dos-reducciones-visual-${count}-senales-${ts}.json`;
 }
 function buildSignalsAnalysisText() {
   const data = buildSignalsAnalysisExport();
@@ -9162,7 +9163,7 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = "Modo único: Reducción visual 25s. Analiza 0-30s, marca G/M/P y permite corrección visual.";
+    modeBtn.title = "Modo único: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30: G-M-P / G-M / G-P / M-P repetidas.";
   };
   paintMode();
 
@@ -9171,7 +9172,7 @@ function applyTheme(theme) {
       signalMode = MODE_REDUCCION_VISUAL_25S;
       saveAnalysisMode(signalMode);
       paintMode();
-      toast("🎯 Modo único: Reducción visual 25s", 1400);
+      toast("🎯 Modo único: 2 reducciones 30s", 1400);
     };
 })();
 
@@ -15348,22 +15349,31 @@ function onTick(tick) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
     if (isReduccionExacta25sMode(activeModeForTick)) {
-      // V106.9.4.9 Reducción + aumento simple:
-      // NO dispara temprano. Espera a tener la ventana completa 0-30s y recién ahí
-      // confirma: dominante reduce + contrario aumenta + anti-zigzag.
-      const visualEvalSec = 30;
-      const visualEvalLateSec = 33;
-      if (sec >= visualEvalSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
-        evaluateMinute(minute, {
-          evalMs: visualEvalSec * 1000,
-          evalSec: visualEvalSec,
+      // V107.1 Dos reducciones claras:
+      // puede disparar apenas aparezcan 2 reducciones claras, pero nunca usa datos
+      // posteriores al segundo 30. Si a los 30 no apareció, la vela queda descartada.
+      const visualEvalStartSec = 15;
+      const visualEvalEndSec = 30;
+      const visualEvalLateSec = 33; // tolerancia por ticks tardíos; evalúa la FOTO de 30s.
+      if (sec >= visualEvalStartSec && sec <= visualEvalEndSec && lastEvaluatedMinute !== minute) {
+        const evalMsNow = Math.max(visualEvalStartSec * 1000, Math.min(msInMinute, visualEvalEndSec * 1000));
+        const ok = evaluateMinute(minute, {
+          evalMs: evalMsNow,
+          evalSec: Math.min(sec, visualEvalEndSec),
           radar: true,
           radarStartSec: 0,
-          radarEndSec: visualEvalSec,
+          radarEndSec: Math.min(sec, visualEvalEndSec),
+        });
+        if (ok || sec >= visualEvalEndSec) lastEvaluatedMinute = minute;
+      } else if (sec > visualEvalEndSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
+        evaluateMinute(minute, {
+          evalMs: visualEvalEndSec * 1000,
+          evalSec: visualEvalEndSec,
+          radar: true,
+          radarStartSec: 0,
+          radarEndSec: visualEvalEndSec,
           forceFullWindow30s: true,
         });
-        // En este modo se evalúa una sola vez por vela. Si no hay transferencia válida a los 30s,
-        // la vela queda descartada aunque después haga algo parecido.
         lastEvaluatedMinute = minute;
       } else if (sec > visualEvalLateSec && lastEvaluatedMinute !== minute) {
         lastEvaluatedMinute = minute;
@@ -21144,6 +21154,113 @@ function findVisualReductionEnd(primaryMoves) {
   return { ok: false, endPos: -1, pattern: "", type: "" };
 }
 
+
+function detectTwoClearVisualReductions(primaryMoves, labels = []) {
+  const moves = (Array.isArray(primaryMoves) ? primaryMoves : [])
+    .map(Number)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "").toUpperCase()) : summarizeVisualMoves(moves).labels;
+  const max = Math.max(...moves, 1e-9);
+  if (moves.length < 3) {
+    return {
+      ok: false,
+      pairCount: 0,
+      groupCount: 0,
+      pairs: [],
+      groups: [],
+      pattern: summarizeVisualMoves(moves).pattern,
+      reason: "menos de 3 impulsos dominantes; no hay dos reducciones",
+    };
+  }
+
+  const pairAllowed = (i) => {
+    const a = Number(moves[i] || 0);
+    const b = Number(moves[i + 1] || 0);
+    const la = labs[i] || classifyVisualReductionLabel(a, max);
+    const lb = labs[i + 1] || classifyVisualReductionLabel(b, max);
+    if (!(a > 0 && b > 0)) return null;
+
+    const ratio = a / Math.max(b, 1e-9);
+    const labelPattern = `${la}→${lb}`;
+    const isAllowedLabel = labelPattern === "G→M" || labelPattern === "G→P" || labelPattern === "M→P";
+
+    // Umbrales por lectura visual:
+    // G→M puede ser una reducción moderada, G→P debe ser fuerte y M→P debe terminar pequeño.
+    const numericOk =
+      (labelPattern === "G→M" && ratio >= 1.08) ||
+      (labelPattern === "G→P" && ratio >= 1.22 && b <= max * 0.48) ||
+      (labelPattern === "M→P" && ratio >= 1.08 && b <= max * 0.48) ||
+      // fallback: si el clasificador deja dos tramos como M/M pero numéricamente redujo claro.
+      (!isAllowedLabel && ratio >= 1.22 && b <= a * 0.82 && b <= max * 0.62);
+
+    if (!numericOk) return null;
+    return {
+      start: i,
+      end: i + 1,
+      pattern: isAllowedLabel ? labelPattern : `${la}→${lb}`,
+      a,
+      b,
+      ratio,
+      la,
+      lb,
+    };
+  };
+
+  const pairs = [];
+  for (let i = 0; i < moves.length - 1; i++) {
+    const p = pairAllowed(i);
+    if (p) pairs.push(p);
+  }
+
+  const groups = [];
+  for (let i = 0; i < moves.length - 2; i++) {
+    const p1 = pairAllowed(i);
+    const p2 = pairAllowed(i + 1);
+    if (p1 && p2) {
+      const pat = `${p1.la}→${p1.lb}→${p2.lb}`;
+      const isGmp = p1.la === "G" && p1.lb === "M" && p2.lb === "P";
+      groups.push({
+        start: i,
+        end: i + 2,
+        pattern: isGmp ? "G→M→P" : pat,
+        pairs: [p1, p2],
+        isGmp,
+      });
+    }
+  }
+
+  // Regla del usuario: antes de 30s deben existir dos reducciones claras.
+  // Pueden estar encadenadas (G→M→P) o repetidas separadas (G→M ... G→P / M→P, etc.).
+  const hasTwoPairs = pairs.length >= 2;
+  const hasGmpGroup = groups.some((g) => g.isGmp);
+  const first = pairs[0] || null;
+  const second = pairs.find((p) => first && p.start > first.start) || null;
+  const ok = hasTwoPairs || hasGmpGroup;
+
+  return {
+    ok,
+    pairCount: pairs.length,
+    groupCount: groups.length,
+    pairs,
+    groups,
+    firstPair: first,
+    secondPair: second,
+    firstPattern: first?.pattern || "",
+    secondPattern: second?.pattern || "",
+    pattern: summarizeVisualMoves(moves).pattern,
+    acceptedPattern: ok
+      ? (hasGmpGroup ? "G→M→P" : `${first?.pattern || "?"} + ${second?.pattern || "?"}`)
+      : "",
+    hasGmp: hasGmpGroup,
+    hasGM: pairs.some((p) => p.pattern === "G→M"),
+    hasGP: pairs.some((p) => p.pattern === "G→P"),
+    hasMP: pairs.some((p) => p.pattern === "M→P"),
+    reason: ok
+      ? `dos reducciones claras antes de 30s: ${hasGmpGroup ? "G→M→P" : `${first?.pattern || "?"} y ${second?.pattern || "?"}`}`
+      : `solo ${pairs.length} reducción clara; se requieren 2 antes de 30s`,
+  };
+}
+
 function findContraryIncreaseAfterReduction(contraryRuns, afterRunIdx, alignedRange, firstMove, tol = 0) {
   const runs = (Array.isArray(contraryRuns) ? contraryRuns : [])
     .filter((r) => r && Number(r.idx) > Number(afterRunIdx))
@@ -21214,13 +21331,14 @@ function getReduccionVisualQualityLabel(score) {
   const hasContraryStrong = !!score?.contraryStrong;
   const hasGmp = !!score?.gmp;
   const hasGToP = !!score?.gToP;
+  const hasTwoClearReductions = !!score?.twoClearReductions;
   const dominantDisparejo = !!score?.dominantDisparejo;
   const hasContradiction = !!score?.contradictionStrong;
   // V106.9.4.11: lo obligatorio es el dominante disparejo con desplazamiento.
   // El contrario P→G suma para A; entrada grande aislada suma; sin contrario puede ser B si el dominante es muy claro.
-  if (p >= 20 && dominantDisparejo && hasContraryPG && (hasGmp || hasGToP) && !hasContradiction) return "A";
-  if (p >= 17 && dominantDisparejo && (hasContraryPG || hasContraryStrong) && !hasContradiction) return "A";
-  if (p >= 14 && dominantDisparejo && !hasContradiction) return "B";
+  if (p >= 20 && dominantDisparejo && hasTwoClearReductions && hasContraryPG && (hasGmp || hasGToP || hasTwoClearReductions) && !hasContradiction) return "A";
+  if (p >= 17 && dominantDisparejo && hasTwoClearReductions && (hasContraryPG || hasContraryStrong) && !hasContradiction) return "A";
+  if (p >= 14 && dominantDisparejo && hasTwoClearReductions && !hasContradiction) return "B";
   return "C";
 }
 
@@ -21317,37 +21435,28 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const m2 = primaryMoves[2] || 0;
   const m3 = primaryMoves[3] || 0;
 
-  // V106.9.4.14: regla estadística estricta.
-  // Del análisis de 198 señales válidas, lo mejor fue G→M→P. G→M quedó flojo.
-  // Por eso ahora:
-  // - G→M→P necesita reducción final real hacia P/pequeño.
-  // - G→P se acepta solo si es muy limpio, con desplazamiento eficiente.
-  // - G→M sin P queda bloqueado.
-  const gmp = primaryMoves.length >= 3
-    && m0 >= m1 * 1.10
-    && m1 >= m2 * 1.12
-    && m2 <= m0 * 0.56
-    && cutsBetween >= 1;
-  const gToP = primaryMoves.length >= 2
-    && m0 >= m1 * 1.55
-    && m1 <= m0 * 0.48
-    && directionalEfficiency >= 0.52
-    && closePosition01 >= 0.60;
-  const onlyGM = primaryMoves.length === 2 && m0 > m1 && !gToP;
-  const gmWithoutFinalP = primaryMoves.length >= 2 && m0 >= m1 * 1.05 && !gmp && !gToP && !labels.includes("P");
-  if (onlyGM || gmWithoutFinalP) return null;
+  // V107.1: regla central nueva del usuario.
+  // El motor puede mirar hasta el segundo 30 y recién ahí decidir, pero NO alcanza
+  // una reducción aislada. Antes de 30s deben verse DOS reducciones claras del dominante.
+  // Cada reducción válida puede ser G→M, G→P o M→P; G→M→P cuenta porque contiene
+  // dos reducciones encadenadas. También acepta repeticiones separadas como G→M ... G→P.
+  const twoReductionInfo = detectTwoClearVisualReductions(primaryMoves, labels);
+  const gmp = !!twoReductionInfo.hasGmp;
+  const gToP = !!twoReductionInfo.hasGP;
   const reduceIncreaseReduce = false;
-  const repeatedReduction = primaryShape.repeatedReduction;
-  const lateReduceAgain = false;
-  const templateOk = gmp || gToP;
+  const repeatedReduction = Number(twoReductionInfo.pairCount || primaryShape.repeatedReduction || 0);
+  const lateReduceAgain = repeatedReduction >= 2;
+  const templateOk = !!twoReductionInfo.ok;
   if (!templateOk) return null;
 
-  // V106.9.4.14: regla central.
-  // Lo obligatorio es un dominante que reduzca de verdad: G→M→P fuerte o G→P muy limpio.
-  // El contrario suma calidad si aparece, pero no compensa un dominante G→M.
-  const reductionInfo = findVisualReductionEnd(primaryMoves);
-  if (!reductionInfo.ok) return null;
-  const dominantDisparejo = gmp || gToP;
+  const reductionInfo = {
+    ok: true,
+    endPos: Number(twoReductionInfo.secondPair?.end ?? twoReductionInfo.groups?.[0]?.end ?? Math.min(primaryMoves.length - 1, 2)),
+    pattern: twoReductionInfo.acceptedPattern || twoReductionInfo.pattern || "2 reducciones",
+    type: "TWO_CLEAR_REDUCTIONS",
+    detail: twoReductionInfo,
+  };
+  const dominantDisparejo = true;
   if (!dominantDisparejo) return null;
   const reductionEndRunIdx = Number(primaryRuns[reductionInfo.endPos]?.idx ?? primaryRuns[Math.min(primaryRuns.length - 1, 1)]?.idx ?? -1);
   const takeover = findContraryIncreaseAfterReduction(contraryRuns, reductionEndRunIdx, alignedRange, firstMove, tol);
@@ -21379,16 +21488,17 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   let points = 0;
   const reasons = [];
   const rejectHints = [];
-  if (gmp) reasons.push("patrón estadístico fuerte: G→M→P");
-  if (gToP && !gmp) reasons.push("patrón medio: G→P limpio");
+  reasons.push(twoReductionInfo.reason || "dos reducciones claras antes de 30s");
+  if (gmp) reasons.push("patrón fuerte: G→M→P");
+  if (gToP && !gmp) reasons.push("incluye reducción G→P");
   points += 4; reasons.push(`${groupText} entra grande`);
   points += 3; reasons.push("desplazamiento visual 0-30s");
   if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
   if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
-  if (gmp) { points += 6; reasons.push(`${groupText} reduce G→M→P`); }
+  if (gmp) { points += 7; reasons.push(`${groupText} reduce G→M→P`); }
   else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
-  else if (gToP) { points += 5; reasons.push(`${groupText} reduce ${reductionInfo.pattern || "G→P"}`); }
-  if (repeatedReduction >= 2) { points += 2; reasons.push("reducción repetida"); }
+  else { points += 6; reasons.push(`${groupText} hace 2 reducciones: ${twoReductionInfo.acceptedPattern || reductionInfo.pattern}`); }
+  if (repeatedReduction >= 2) { points += 3; reasons.push("reducción repetida obligatoria"); }
   if (contraryPG) { points += 7; reasons.push(`${contraryText} aumenta ${contraryPattern || "P→G"}`); }
   else if (contraryStrong) { points += 4; reasons.push(`${contraryText} entra grande después de la reducción`); }
   else { reasons.push("sin entrada contraria clara; manda el dominante disparejo"); }
@@ -21410,6 +21520,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     (contraryPG ? 36 : 0) +
     (!contraryPG && contraryStrong ? 18 : 0) +
     (dominantDisparejo ? 12 : 0) +
+    (twoReductionInfo.ok ? 18 : 0) +
     (weakReturn.ok ? 10 : 0) +
     Math.min(10, cutsBetween * 4) -
     (contradictionSoft ? 22 : 0) -
@@ -21421,6 +21532,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     gmp,
     gToP,
     dominantDisparejo,
+    twoClearReductions: twoReductionInfo.ok,
     repeatedReduction,
     contraryPG,
     contraryStrong,
@@ -21465,6 +21577,8 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     gmp,
     reduceIncreaseReduce,
     repeatedReduction,
+    twoClearReductions: twoReductionInfo.ok,
+    twoClearReductionInfo: twoReductionInfo,
     dominantDisparejo,
     contraryPG,
     contraryStrong,
@@ -21500,11 +21614,11 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   if (ticks.length < 5) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  // V106.9.4.9: este modo decide con la ventana completa 0-30s.
-  // Si alguien lo llama antes, no devuelve señal para evitar alertas tempranas.
-  const evalMs = 30000;
-  if (Number.isFinite(optEvalMs) && optEvalMs < 29500) return null;
-  if (lastMs < 28000 && !opts?.forceFullWindow30s) return null;
+  // V107.1: puede decidir antes de 30s si ya aparecen dos reducciones claras.
+  // Nunca usa datos posteriores a 30s: la última foto válida es 0-30s.
+  const evalMs = Math.max(12000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 12000 || evalMs > 30000) return null;
+  if (lastMs < evalMs - 700 && !opts?.forceFullWindow30s) return null;
 
   const clean = ensureTicksWithBoundary(ticks, evalMs)
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
@@ -21536,26 +21650,25 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const sameQualityAmbiguous = second && qualityGap < 18 && relativeGap < 0.16 && !best.contraryPG;
   if (sameQualityAmbiguous) return null;
 
-  // V106.9.4.14: R_75 fue el símbolo más flojo en el análisis, así que queda más estricto.
-  // Solo permite G→M→P claro, o G→P limpio con contrario real y buena eficiencia.
+  // V107.1: R_75 sigue con cuidado, pero ya no bloquea G→M si aparece la segunda reducción.
+  // La regla base para todos los pares es la misma: dos reducciones claras antes de 30s.
   const symbolStrict = String(candidate?.symbol || candidate?.underlying || "").trim().toUpperCase();
   if (symbolStrict === "R_75") {
-    const r75Ok = (best.gmp && Number(best.visualDisplacementEfficiency || 0) >= 0.55)
-      || (best.gToP && (best.contraryPG || best.contraryStrong) && Number(best.visualDisplacementEfficiency || 0) >= 0.58);
+    const r75Ok = !!best.twoClearReductions && Number(best.visualDisplacementEfficiency || 0) >= 0.55;
     if (!r75Ok) return null;
   }
 
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const subtype = "GMP estricto 30s";
+  const subtype = "2 reducciones claras 30s";
   const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
   const contraryTxt = best.contraryPG
     ? ` + contrario ${best.contraryText} aumenta ${best.contraryPattern || "P→G"}`
     : (best.contraryStrong ? ` + contrario ${best.contraryText} entra grande` : " + sin contrario claro");
-  const mainPatternText = best.gmp ? "G→M→P" : (best.gToP ? "G→P limpio" : (best.transferReductionInfo?.pattern || best.pattern || "G→P"));
+  const mainPatternText = best.twoClearReductionInfo?.acceptedPattern || (best.gmp ? "G→M→P" : (best.gToP ? "G→P repetido" : (best.transferReductionInfo?.pattern || best.pattern || "2 reducciones")));
   const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: dominante ${best.groupText} ${mainPatternText}${contraryTxt}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `GMP estricto 30s V106.9.4.14: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag estricto: no acepta estancado/lateral. Regla estricta por estadística: dentro de 0-30s el dominante debe formar G→M→P claro o G→P muy limpio. G→M queda bloqueado porque mostró baja efectividad. El contrario puede sumar, pero no compensa una reducción incompleta. Bloquea simetría/fuerza: dos movimientos medianos/grandes consecutivos y similares descartan la señal si no aparece una reducción fuerte posterior.`;
+  const logicText = `2 reducciones claras 30s V107.1: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag: no acepta estancado/lateral. Regla nueva: antes del segundo 30 deben existir DOS reducciones claras del dominante; cada una puede ser G→M, G→P o M→P. G→M ya no queda bloqueado si luego aparece otra reducción clara. El contrario puede sumar, pero no reemplaza la obligación de las dos reducciones. Bloquea simetría/fuerza si el dominante vuelve a tomar fuerza sin reducir.`;
 
   return {
     direction: best.signalDirection,
@@ -21582,7 +21695,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       analysisWindowMs: evalMs,
       irregularityWindow: "0-30s",
       maxAnalysisSec: 30,
-      signalFromSec: 30,
+      signalFromSec: Math.round(evalMs / 1000),
       motorIndependiente: true,
       visualReductionMode: true,
       visualReductionScore: best.points,
@@ -21606,6 +21719,10 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       visualReductionMacroContraryMin: best.macroContraryMin,
       visualReductionContraryPattern: best.contraryPattern,
       visualReductionTransferRequired: true,
+      visualReductionTwoClearRequired: true,
+      visualReductionTwoClearInfo: best.twoClearReductionInfo || null,
+      visualReductionTwoClearPairs: best.twoClearReductionInfo?.pairs || [],
+      visualReductionTwoClearGroups: best.twoClearReductionInfo?.groups || [],
       visualReductionTransferReductionInfo: best.transferReductionInfo || null,
       visualReductionTransferContraryTakeover: best.transferContraryTakeover || null,
       visualReductionTransferWeakReturn: best.transferWeakReturn || null,
@@ -21630,9 +21747,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_9_4_14_gmp_estricto_30s",
-      priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_30s_gmp_estricto_v106_9_4_14",
+      movementFilter: "v107_1_dos_reducciones_claras_30s",
+      priority: best.contraryPG || best.gmp || best.twoClearReductions ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_30s_dos_reducciones_claras_v107_1",
       logic: logicText,
       status,
     },

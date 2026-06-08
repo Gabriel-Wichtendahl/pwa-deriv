@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v107.0.0-proceso (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v107.1.0-proceso-dos-reducciones (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v107-0-0-proceso";
+const CACHE = "deriv-assets-v107-1-0-proceso-dos-reducciones";
 
 const ASSETS = [
   "./",
