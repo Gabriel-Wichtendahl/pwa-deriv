@@ -103,7 +103,8 @@ const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
 const STORE_KEY = "derivSignalsHistory_v2";
-const MAX_HISTORY = 200;
+const MAX_HISTORY = 1000;
+const MAX_VISIBLE_SIGNALS = 200;
 
 const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
@@ -4917,6 +4918,18 @@ function isCleanVisualModeItem(it) {
 function getCleanVisualHistory() {
   return (history || []).filter(isCleanVisualModeItem);
 }
+function getVisibleCleanVisualHistory() {
+  const clean = getCleanVisualHistory();
+  return clean.slice(-MAX_VISIBLE_SIGNALS);
+}
+function trimSignalsDomToVisibleLimit() {
+  try {
+    if (!signalsEl) return;
+    while (signalsEl.children.length > MAX_VISIBLE_SIGNALS) {
+      signalsEl.removeChild(signalsEl.lastElementChild);
+    }
+  } catch {}
+}
 
 function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
@@ -4933,7 +4946,13 @@ function updateCounter(viewName = null) {
     counterEl.textContent = `En vivo: ${liveReplaySymbol || SYMBOLS[0] || "—"}`;
     return;
   }
-  counterEl.textContent = `Señales: ${getCleanVisualHistory().length}`;
+  {
+    const totalSignals = getCleanVisualHistory().length;
+    const visibleSignals = Math.min(totalSignals, MAX_VISIBLE_SIGNALS);
+    counterEl.textContent = totalSignals > MAX_VISIBLE_SIGNALS
+      ? `Señales: ${totalSignals}/${MAX_HISTORY} · visibles ${visibleSignals}`
+      : `Señales: ${totalSignals}/${MAX_HISTORY}`;
+  }
 }
 
 function escapeHtml(str) {
@@ -5501,7 +5520,7 @@ function buildSignalsAnalysisExport() {
   return {
     exported_at: new Date().toISOString(),
     export_scope: "analisis_reduccion_visual_signals_all_ticks",
-    app_version: "v106.9.4.14_gmp_estricto_30s",
+    app_version: "v106.9.4.15_history_1000_visible_200",
     description: "Export para analizar patrones de los primeros 25/30s: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
@@ -13626,7 +13645,7 @@ function renderHistory() {
 
   updateCounter();
 
-  for (const it of [...getCleanVisualHistory()].reverse()) signalsEl.appendChild(buildRow(it));
+  for (const it of [...getVisibleCleanVisualHistory()].reverse()) signalsEl.appendChild(buildRow(it));
 }
 
 /* =========================
@@ -22063,7 +22082,10 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 
   updateCounter();
 
-  if (signalsEl) signalsEl.prepend(buildRow(item));
+  if (signalsEl) {
+    signalsEl.prepend(buildRow(item));
+    trimSignalsDomToVisibleLimit();
+  }
   updateRowChartBtn(item);
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
 
