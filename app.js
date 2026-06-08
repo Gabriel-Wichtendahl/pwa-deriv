@@ -79,7 +79,7 @@
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_3_API_NUEVA_PROPOSAL_COMPAT_20260604";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V107_PROCESO_DISCIPLINA_20260608";
 
 /*
   Mapa rápido de módulos:
@@ -1728,6 +1728,8 @@ const practice45Btn = $("practice45Btn");
 const practiceCallBtn = $("practiceCallBtn");
 const practicePutBtn = $("practicePutBtn");
 const practicePassBtn = $("practicePassBtn");
+const processView = $("processView");
+const processAppEl = $("processApp");
 
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
@@ -4938,6 +4940,10 @@ function updateCounter(viewName = null) {
     counterEl.textContent = `Trades ${getTradingAccountLabel()}: ${getTradeJournalVisibleCount()}`;
     return;
   }
+  if (activeView === "process") {
+    counterEl.textContent = `Proceso: ${getBrainProcessTodayScore()} pts`;
+    return;
+  }
   if (activeView === "practice") {
     counterEl.textContent = `Práctica: ${practiceSessionStats.total}`;
     return;
@@ -5347,6 +5353,423 @@ function renderTradesView() {
     ensurePracticeQueue();
     updatePracticePoolLabel();
   } catch {}
+}
+
+
+/* =========================
+   🧠 Proceso — puntos, premios y bloqueo emocional
+========================= */
+const BRAIN_PROCESS_STORE_KEY = "brainProcessEvents_v1";
+const BRAIN_PROCESS_DAILY_GOAL = 50;
+const BRAIN_PROCESS_WEEKLY_GOAL = 100;
+const BRAIN_PROCESS_MAX_EVENTS = 700;
+
+const BRAIN_PROCESS_ACTIONS = {
+  good_analysis: {
+    label: "Análisis bien hecho",
+    points: 3,
+    icon: "🎯",
+    message: "Buen análisis. Premiaste el proceso, no el resultado.",
+  },
+  avoided_missing_points: {
+    label: "No entré: faltaban puntos",
+    points: 2,
+    icon: "🛡️",
+    message: "Protegiste la cuenta. No operar también es operar bien.",
+  },
+  avoided_doubt: {
+    label: "No entré: duda real",
+    points: 2,
+    icon: "⏭️",
+    message: "Pasaste una vela dudosa. La claridad vale más que la urgencia.",
+  },
+  avoided_forcing: {
+    label: "No entré: estaba forzando",
+    points: 5,
+    icon: "🧠",
+    message: "Detectaste el impulso antes de obedecerlo.",
+    blockTrade: true,
+    blockReason: "Estoy forzando",
+  },
+  avoided_revenge: {
+    label: "Evité revancha",
+    points: 5,
+    icon: "🔥",
+    message: "Hoy le ganaste al impulso, no al mercado.",
+    blockTrade: true,
+    blockReason: "Revancha / recuperar",
+  },
+  good_otm: {
+    label: "OTM bien ejecutado",
+    points: 3,
+    icon: "✅",
+    message: "Resultado negativo, proceso correcto. No se cambia el sistema.",
+  },
+  good_itm: {
+    label: "ITM bien ejecutado",
+    points: 3,
+    icon: "✅",
+    message: "Buena ejecución. Sin euforia, seguimos igual.",
+  },
+  respected_block: {
+    label: "Respeté bloqueo",
+    points: 5,
+    icon: "🔒",
+    message: "Cortaste el patrón antes de que el patrón te controle.",
+  },
+  closed_disciplined: {
+    label: "Cerré sesión disciplinado",
+    points: 5,
+    icon: "🏁",
+    message: "Terminaste respetando el sistema. Eso también es ganar.",
+  },
+};
+
+const BRAIN_PROCESS_REWARDS = [
+  { points: 10, title: "Descanso de 3 minutos", text: "Alejate del gráfico. Respirá. Volvé solo si estás neutral." },
+  { points: 20, title: "Mate/café tranquilo", text: "Premio por respetar el sistema, no por ganar una vela." },
+  { points: 30, title: "Música 10 minutos", text: "Bajá tensión. El objetivo es claridad, no impulso." },
+  { points: 50, title: "Sesión disciplinada", text: "Podés cerrar la sesión con logro completo." },
+  { points: 100, title: "Premio semanal", text: "Elegí un premio personal por sostener disciplina." },
+];
+
+let brainProcessEvents = loadBrainProcessEvents();
+let processMiniPanelEl = null;
+let processMiniBlockedNoteEl = null;
+
+function loadBrainProcessEvents() {
+  try {
+    const raw = localStorage.getItem(BRAIN_PROCESS_STORE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(Boolean).slice(-BRAIN_PROCESS_MAX_EVENTS) : [];
+  } catch {
+    return [];
+  }
+}
+function saveBrainProcessEvents() {
+  try {
+    brainProcessEvents = (Array.isArray(brainProcessEvents) ? brainProcessEvents : []).filter(Boolean).slice(-BRAIN_PROCESS_MAX_EVENTS);
+    localStorage.setItem(BRAIN_PROCESS_STORE_KEY, JSON.stringify(brainProcessEvents));
+  } catch {}
+}
+function getBrainProcessDayKey(ts = Date.now()) {
+  const d = new Date(Number(ts) || Date.now());
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function getBrainProcessTodayEvents() {
+  const key = getBrainProcessDayKey();
+  return (brainProcessEvents || []).filter((ev) => ev && ev.day === key);
+}
+function getBrainProcessTodayScore() {
+  return getBrainProcessTodayEvents().reduce((acc, ev) => acc + (Number(ev.points) || 0), 0);
+}
+function getBrainProcessWeekEvents() {
+  const start = Date.now() - 6 * 24 * 60 * 60 * 1000;
+  return (brainProcessEvents || []).filter((ev) => Number(ev?.ts || 0) >= start);
+}
+function getBrainProcessWeekScore() {
+  return getBrainProcessWeekEvents().reduce((acc, ev) => acc + (Number(ev.points) || 0), 0);
+}
+function getBrainProcessLevel(score = getBrainProcessTodayScore()) {
+  if (score >= 80) return "Mente blindada";
+  if (score >= 50) return "Proceso completo";
+  if (score >= 30) return "En control";
+  if (score >= 15) return "Calmando impulso";
+  return "Entrenando";
+}
+function getBrainProcessStreak() {
+  const today = getBrainProcessTodayEvents().filter((ev) => Number(ev.points) > 0);
+  let streak = 0;
+  for (let i = today.length - 1; i >= 0; i--) {
+    const type = String(today[i]?.type || "");
+    if (type.includes("avoided") || type.includes("good") || type === "respected_block" || type === "closed_disciplined") streak += 1;
+    else break;
+  }
+  return streak;
+}
+function isBrainRewardClaimedToday(rewardPoints) {
+  const key = getBrainProcessDayKey();
+  return (brainProcessEvents || []).some((ev) => ev?.day === key && ev?.type === "reward_claimed" && Number(ev.rewardPoints) === Number(rewardPoints));
+}
+function getBrainProcessNextReward(score = getBrainProcessTodayScore()) {
+  return BRAIN_PROCESS_REWARDS.find((r) => Number(r.points) > Number(score)) || null;
+}
+function getBrainProcessUnlockedRewards(score = getBrainProcessTodayScore()) {
+  return BRAIN_PROCESS_REWARDS.filter((r) => Number(r.points) <= Number(score));
+}
+function makeBrainProcessEvent(actionKey, extra = {}) {
+  const action = BRAIN_PROCESS_ACTIONS[actionKey] || {};
+  const ts = Date.now();
+  return {
+    id: `process_${ts}_${Math.random().toString(36).slice(2, 8)}`,
+    type: String(actionKey || extra.type || "custom"),
+    label: extra.label || action.label || "Proceso",
+    points: Number(extra.points ?? action.points ?? 0),
+    icon: extra.icon || action.icon || "🧠",
+    message: extra.message || action.message || "Proceso registrado.",
+    ts,
+    day: getBrainProcessDayKey(ts),
+    source: extra.source || (modalCurrentItem ? "modal" : "process_tab"),
+    relatedSignalId: extra.relatedSignalId || String(modalCurrentItem?.id || ""),
+    relatedTradeId: extra.relatedTradeId || String(modalCurrentItem?.trade?.contract_id || ""),
+    blockedTrade: !!(extra.blockedTrade ?? action.blockTrade),
+    blockReason: extra.blockReason || action.blockReason || "",
+  };
+}
+function addBrainProcessEvent(actionKey, extra = {}) {
+  const ev = makeBrainProcessEvent(actionKey, extra);
+  brainProcessEvents.unshift(ev);
+  saveBrainProcessEvents();
+
+  if (ev.blockedTrade && modalCurrentItem) {
+    markBrainProcessTradeBlocked(modalCurrentItem, ev.blockReason || ev.label, ev);
+  }
+
+  renderProcessView();
+  updateProcessMiniPanelUI();
+  updateCounter(getActiveViewName());
+  try { updateModalCandleStatusUI(); } catch {}
+  toast(`${ev.icon} +${ev.points} Proceso · ${ev.label}`, 1700);
+  return ev;
+}
+function claimBrainProcessReward(rewardPoints) {
+  const reward = BRAIN_PROCESS_REWARDS.find((r) => Number(r.points) === Number(rewardPoints));
+  if (!reward) return;
+  if (getBrainProcessTodayScore() < reward.points) {
+    toast(`Faltan ${reward.points - getBrainProcessTodayScore()} puntos para ese premio`, 1400);
+    return;
+  }
+  if (isBrainRewardClaimedToday(reward.points)) {
+    toast("🎁 Ese premio ya fue tomado hoy", 1300);
+    return;
+  }
+  const ev = makeBrainProcessEvent("reward_claimed", {
+    type: "reward_claimed",
+    label: `Premio tomado: ${reward.title}`,
+    points: 0,
+    icon: "🎁",
+    message: reward.text,
+    rewardPoints: reward.points,
+    source: "process_tab",
+  });
+  ev.rewardPoints = reward.points;
+  brainProcessEvents.unshift(ev);
+  saveBrainProcessEvents();
+  renderProcessView();
+  updateProcessMiniPanelUI();
+  toast(`🎁 Premio: ${reward.title}`, 2200);
+}
+function resetBrainProcessToday() {
+  if (!confirm("¿Resetear solo los puntos de Proceso de hoy?")) return;
+  const key = getBrainProcessDayKey();
+  brainProcessEvents = (brainProcessEvents || []).filter((ev) => ev?.day !== key);
+  saveBrainProcessEvents();
+  renderProcessView();
+  updateProcessMiniPanelUI();
+  updateCounter(getActiveViewName());
+  toast("↺ Proceso de hoy reseteado", 1500);
+}
+function getBrainProcessHistoryHtml() {
+  const events = getBrainProcessTodayEvents().slice(0, 12);
+  if (!events.length) return `<div class="processEmpty">Todavía no registraste decisiones de proceso hoy.</div>`;
+  return events.map((ev) => `
+    <div class="processHistoryItem">
+      <div class="processHistoryMain">
+        <div class="processHistoryLabel">${escapeHtml(ev.icon || "🧠")} ${escapeHtml(ev.label || "Proceso")}</div>
+        <div class="processHistoryMsg">${escapeHtml(ev.message || "")}</div>
+      </div>
+      <div class="processHistoryPts">${Number(ev.points) > 0 ? "+" : ""}${Number(ev.points) || 0}</div>
+    </div>
+  `).join("");
+}
+function getBrainProcessRewardsHtml() {
+  const score = getBrainProcessTodayScore();
+  return BRAIN_PROCESS_REWARDS.map((r) => {
+    const unlocked = score >= r.points;
+    const claimed = isBrainRewardClaimedToday(r.points);
+    const right = unlocked
+      ? (claimed ? `<div class="processRewardBadge">Tomado</div>` : `<button class="processRewardClaimBtn" type="button" data-process-reward="${r.points}">🎁 Tomar</button>`)
+      : `<div class="processRewardBadge">Faltan ${r.points - score}</div>`;
+    return `
+      <div class="processRewardRow">
+        <div class="processRewardMain">
+          <div class="processRewardTitle">${unlocked ? "🎁" : "🔒"} ${r.points} pts · ${escapeHtml(r.title)}</div>
+          <div class="processRewardText">${escapeHtml(r.text)}</div>
+        </div>
+        ${right}
+      </div>
+    `;
+  }).join("");
+}
+function renderProcessView() {
+  const host = processAppEl || document.getElementById("processApp");
+  if (!host) return;
+
+  const todayScore = getBrainProcessTodayScore();
+  const weekScore = getBrainProcessWeekScore();
+  const pct = Math.max(0, Math.min(100, (todayScore / BRAIN_PROCESS_DAILY_GOAL) * 100));
+  const nextReward = getBrainProcessNextReward(todayScore);
+  const unlocked = getBrainProcessUnlockedRewards(todayScore).length;
+  const actionsHtml = Object.entries(BRAIN_PROCESS_ACTIONS).map(([key, action]) => `
+    <button class="processActionBtn ${action.blockTrade ? "blocking" : ""}" type="button" data-process-action="${escapeHtml(key)}">
+      <strong>${escapeHtml(action.icon)} ${escapeHtml(action.label)}</strong>
+      <span>+${Number(action.points) || 0} pts</span>
+    </button>
+  `).join("");
+
+  host.innerHTML = `
+    <div class="processHero">
+      <div class="processHeroTop">
+        <div>
+          <div class="processEyebrow">🧠 Proceso</div>
+          <div class="processTitle">Disciplina de hoy</div>
+        </div>
+        <div class="processScore">
+          <div class="processScoreNum">${todayScore}</div>
+          <div class="processScoreLabel">puntos</div>
+        </div>
+      </div>
+      <div class="processProgressOuter" aria-label="Progreso diario"><div class="processProgressInner" style="width:${pct.toFixed(0)}%"></div></div>
+      <div class="processMetaGrid">
+        <div class="processMetaCard"><div class="processMetaLabel">Nivel</div><div class="processMetaValue">${escapeHtml(getBrainProcessLevel(todayScore))}</div></div>
+        <div class="processMetaCard"><div class="processMetaLabel">Racha limpia</div><div class="processMetaValue">${getBrainProcessStreak()} decisiones</div></div>
+        <div class="processMetaCard"><div class="processMetaLabel">Semana</div><div class="processMetaValue">${weekScore}/${BRAIN_PROCESS_WEEKLY_GOAL} pts</div></div>
+      </div>
+      <div class="processQuote">No necesitás ganar esta vela. Necesitás ganar el hábito correcto.</div>
+    </div>
+
+    <div class="processCard">
+      <div class="processCardHead">
+        <div>
+          <div class="processCardTitle">Acción correcta</div>
+          <div class="processCardSub">Sumá puntos por conducta correcta, no por resultado.</div>
+        </div>
+      </div>
+      <div class="processActionGrid">${actionsHtml}</div>
+    </div>
+
+    <div class="processCard">
+      <div class="processCardHead">
+        <div>
+          <div class="processCardTitle">Premios</div>
+          <div class="processCardSub">Desbloqueados: ${unlocked}. ${nextReward ? `Próximo: ${escapeHtml(nextReward.title)} en ${nextReward.points - todayScore} pts.` : "Meta diaria completa."}</div>
+        </div>
+      </div>
+      <div class="processRewardList">${getBrainProcessRewardsHtml()}</div>
+    </div>
+
+    <div class="processCard">
+      <div class="processCardHead">
+        <div>
+          <div class="processCardTitle">Historial mental de hoy</div>
+          <div class="processCardSub">Esto entrena al cerebro a premiar esperar, frenar y ejecutar bien.</div>
+        </div>
+      </div>
+      <div class="processHistoryList">${getBrainProcessHistoryHtml()}</div>
+      <div class="processTools">
+        <button id="processResetTodayBtn" class="btn btnGhost" type="button">↺ Reset hoy</button>
+      </div>
+    </div>
+  `;
+
+  host.querySelectorAll("[data-process-action]").forEach((btn) => {
+    btn.onclick = () => addBrainProcessEvent(btn.dataset.processAction, { source: "process_tab" });
+  });
+  host.querySelectorAll("[data-process-reward]").forEach((btn) => {
+    btn.onclick = () => claimBrainProcessReward(Number(btn.dataset.processReward));
+  });
+  const resetBtn = host.querySelector("#processResetTodayBtn");
+  if (resetBtn) resetBtn.onclick = resetBrainProcessToday;
+}
+function initProcessView() {
+  renderProcessView();
+}
+function markBrainProcessTradeBlocked(item, reason = "Bloqueo de Proceso", ev = null) {
+  if (!item) return;
+  const block = {
+    blocked: true,
+    reason: String(reason || "Bloqueo de Proceso"),
+    label: String(ev?.label || reason || "Bloqueo de Proceso"),
+    eventId: String(ev?.id || ""),
+    at: Date.now(),
+  };
+  item.brainProcess = { ...(item.brainProcess || {}), ...block };
+  try {
+    const live = item.id ? findHistoryItemById(String(item.id)) : null;
+    if (live && live !== item) {
+      live.brainProcess = { ...(live.brainProcess || {}), ...block };
+      saveHistory(history);
+    } else if (history && history.includes(item)) {
+      saveHistory(history);
+    }
+  } catch {}
+}
+function isBrainProcessTradeBlocked(item = modalCurrentItem) {
+  return !!(item && item.brainProcess && item.brainProcess.blocked);
+}
+function getBrainProcessBlockReason(item = modalCurrentItem) {
+  return String(item?.brainProcess?.reason || item?.brainProcess?.label || "Bloqueado por Proceso");
+}
+function assertBrainProcessCanTrade(item = modalCurrentItem) {
+  if (isBrainProcessTradeBlocked(item)) {
+    throw new Error(`Proceso bloqueó esta entrada: ${getBrainProcessBlockReason(item)}`);
+  }
+}
+function ensureProcessMiniPanel() {
+  if (processMiniPanelEl && processMiniPanelEl.isConnected) return processMiniPanelEl;
+  const host = modalFooterVoteSlot || document.querySelector("#chartModal .modalReadingActionsCard") || document.querySelector("#chartModal .modalFooter");
+  if (!host) return null;
+  const panel = document.createElement("div");
+  panel.id = "processMiniPanel";
+  panel.className = "processMiniPanel";
+  panel.innerHTML = `
+    <div class="processMiniTitle"><span>🧠 Proceso rápido</span><span id="processMiniPts">${getBrainProcessTodayScore()} pts</span></div>
+    <div class="processMiniBtns">
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_missing_points">🛡️ Faltaban pts</button>
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_doubt">⏭️ Duda real</button>
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_forcing">🧠 Estoy forzando</button>
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_revenge">🔥 Revancha</button>
+      <button class="btn btnGhost" type="button" data-process-modal="good_analysis">🎯 Buen análisis</button>
+      <button class="btn btnGhost" type="button" data-process-modal="good_otm">✅ OTM bien</button>
+    </div>
+    <div id="processMiniBlockedNote" class="processBlockedNote hidden"></div>
+  `;
+  if (host === modalFooterVoteSlot) host.appendChild(panel);
+  else host.appendChild(panel);
+  panel.querySelectorAll("[data-process-modal]").forEach((btn) => {
+    btn.onclick = () => addBrainProcessEvent(btn.dataset.processModal, { source: "signal_modal" });
+  });
+  processMiniPanelEl = panel;
+  processMiniBlockedNoteEl = panel.querySelector("#processMiniBlockedNote");
+  updateProcessMiniPanelUI();
+  return panel;
+}
+function updateProcessMiniPanelUI() {
+  const panel = ensureProcessMiniPanel();
+  if (!panel) return;
+  const pts = panel.querySelector("#processMiniPts");
+  if (pts) pts.textContent = `${getBrainProcessTodayScore()} pts`;
+  const blocked = isBrainProcessTradeBlocked(modalCurrentItem);
+  const note = processMiniBlockedNoteEl || panel.querySelector("#processMiniBlockedNote");
+  if (note) {
+    note.classList.toggle("hidden", !blocked);
+    note.textContent = blocked ? `Entrada bloqueada: ${getBrainProcessBlockReason(modalCurrentItem)}.` : "";
+  }
+}
+function setProcessMiniPanelVisible(show) {
+  const panel = ensureProcessMiniPanel();
+  if (panel) panel.style.display = show ? "block" : "none";
+}
+function applyBrainProcessTradeGate(locked = false, candleClosed = false) {
+  if (!modalCurrentItem || locked || candleClosed) return;
+  if (!isBrainProcessTradeBlocked(modalCurrentItem)) return;
+  const msg = `Proceso bloqueó esta entrada: ${getBrainProcessBlockReason(modalCurrentItem)}.`;
+  paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
+  paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
 }
 
 /* =========================
@@ -6396,10 +6819,12 @@ function ensureInlineClearButtons() {
 }
 
 function setActiveView(name) {
+  if (name === "practice") name = "process";
   const isSignals = name === "signals";
   const isLive = name === "live";
   const isTrades = name === "trades";
   const isPractice = name === "practice";
+  const isProcess = name === "process";
 
   const tv = ensureTradesView();
 
@@ -6407,6 +6832,7 @@ function setActiveView(name) {
   if (liveView) liveView.classList.toggle("hidden", !isLive);
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (practiceView) practiceView.classList.toggle("hidden", !isPractice);
+  if (processView) processView.classList.toggle("hidden", !isProcess);
 
   qsAll(".tab[data-view]").forEach((t) => {
     const active = t.dataset.view === name;
@@ -6418,6 +6844,7 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isPractice) ensurePracticeReady();
+  if (isProcess) renderProcessView();
   if (isLive) {
     startLiveReplayLoop();
     setLiveTradeStatus("Modo en vivo activo: señales pausadas solo en esta pestaña. Volvé a Señales para reanudar análisis.");
@@ -6435,17 +6862,20 @@ function initTabs() {
   ensureTradesTab();
   ensureTradesView();
 
-  // V106.9.2 CLEAN: se mantienen las pestañas En vivo y Práctica.
-  qsAll('.tab[data-view="live"], .tab[data-view="practice"]').forEach((el) => { el.style.display = ""; });
+  // V107 Proceso: se mantienen En vivo y se reemplaza Práctica por 🧠 Proceso.
+  qsAll('.tab[data-view="live"], .tab[data-view="process"]').forEach((el) => { el.style.display = ""; });
+  qsAll('.tab[data-view="practice"]').forEach((el) => { el.style.display = "none"; });
   if (liveView) liveView.style.display = "";
-  if (practiceView) practiceView.style.display = "";
+  if (practiceView) practiceView.style.display = "none";
+  if (processView) processView.style.display = "";
 
   qsAll(".tab[data-view]").forEach((t) => {
     t.onclick = () => setActiveView(t.dataset.view);
   });
 
-  const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "live", "trades", "practice"].includes(saved) ? saved : "signals";
+  const savedRaw = localStorage.getItem("activeView") || "signals";
+  const saved = savedRaw === "practice" ? "process" : savedRaw;
+  const initial = ["signals", "live", "trades", "process"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 }
 
@@ -10760,6 +11190,7 @@ function updateModalCandleStatusUI() {
   const locked = isTradeLockedNow();
   const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
   const candleClosed = !isOpen;
+  const brainBlocked = isBrainProcessTradeBlocked(modalCurrentItem);
 
   if (locked) {
     bar.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
@@ -10767,6 +11198,12 @@ function updateModalCandleStatusUI() {
     bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.78), rgba(69,10,10,.78))";
     bar.style.borderColor = "rgba(248,113,113,.50)";
     bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.10) inset, 0 0 12px rgba(239,68,68,.12)";
+  } else if (brainBlocked) {
+    bar.textContent = `🧠 Proceso bloqueó esta entrada · ${getBrainProcessBlockReason(modalCurrentItem)}`;
+    bar.style.color = "#fed7aa";
+    bar.style.background = "linear-gradient(180deg, rgba(120,53,15,.42), rgba(69,26,3,.32))";
+    bar.style.borderColor = "rgba(251,146,60,.48)";
+    bar.style.boxShadow = "0 0 0 1px rgba(251,146,60,.08) inset, 0 0 12px rgba(251,146,60,.12)";
   } else if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
     const autoTxt = shouldUseAutoHighLowExecution()
@@ -10804,6 +11241,7 @@ function updateModalCandleStatusUI() {
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
+  updateProcessMiniPanelUI();
   updateModalNavVoteUI();
   updateModalFooterReadingUI();
 
@@ -10811,10 +11249,11 @@ function updateModalCandleStatusUI() {
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
+  applyBrainProcessTradeGate(locked, candleClosed);
   updateVisualReadPanelUI();
 
   // Auto-entrada real: igual que práctica, al segundo 58 si ya hay 4 puntos netos.
-  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_58");
+  if (!locked && !candleClosed && !brainBlocked) trySignalAutoEntryAt57("TIMER_58");
 }
 
 
@@ -12877,6 +13316,8 @@ updateModalFooterReadingUI();
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
+  setProcessMiniPanelVisible(true);
+  updateProcessMiniPanelUI();
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(modalCurrentItem);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
@@ -12900,6 +13341,7 @@ function closeChartModal() {
   if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
   setGiroAprendizajeControlsVisible(false);
+  setProcessMiniPanelVisible(false);
   if (visualReadPanelEl) visualReadPanelEl.style.display = "none";
   updateDisciplineLockUI(false);
 }
@@ -14175,6 +14617,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   const itemCtx = itemOverride || modalCurrentItem;
   assertCanTrade();
   assertEntryWindowOpen(itemCtx);
+  assertBrainProcessCanTrade(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
   // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 58.
   // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
@@ -22350,7 +22793,7 @@ function applyCleanReduccionVisualUI() {
     saveAnalysisMode(MODE_REDUCCION_VISUAL_25S);
 
     // Limpiar SOLO controles no funcionales para Reducción visual 25s.
-    // Se conservan En vivo y Práctica.
+    // Se conservan En vivo y Proceso.
     const hideSelectors = [
       '.evalBtn',
       '.btnGroup[aria-label="Segundo de evaluación"]',
@@ -22363,9 +22806,11 @@ function applyCleanReduccionVisualUI() {
       el.style.display = 'none';
     }));
 
-    qsAll('.tab[data-view="live"], .tab[data-view="practice"]').forEach((el) => { el.style.display = ''; });
+    qsAll('.tab[data-view="live"], .tab[data-view="process"]').forEach((el) => { el.style.display = ''; });
+    qsAll('.tab[data-view="practice"]').forEach((el) => { el.style.display = 'none'; });
     if (liveView) liveView.style.display = '';
-    if (practiceView) practiceView.style.display = '';
+    if (practiceView) practiceView.style.display = 'none';
+    if (processView) processView.style.display = '';
   } catch (e) {
     console.warn('[CLEAN_UI]', e);
   }
@@ -22434,6 +22879,7 @@ ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
 ensurePracticeExportSaveButton();
 updatePracticeExportSaveButtonUI();
+initProcessView();
 updateExportTradesButtonUI();
 
 connect();
