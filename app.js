@@ -5501,7 +5501,7 @@ function buildSignalsAnalysisExport() {
   return {
     exported_at: new Date().toISOString(),
     export_scope: "analisis_reduccion_visual_signals_all_ticks",
-    app_version: "v106.9.4.12_copy_all_analysis",
+    app_version: "v106.9.4.13_copy_download_analysis",
     description: "Export para analizar patrones de los primeros 25/30s: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
@@ -5537,16 +5537,44 @@ async function copyTextToClipboard(text) {
   if (!ok) throw new Error("El navegador no permitió copiar al portapapeles");
   return true;
 }
-async function copyAllSignalsForAnalysis() {
+function buildSignalsAnalysisFileName(data) {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+  const count = Number(data?.counts?.signals_total || 0);
+  return `analisis-reduccion-visual-${count}-senales-${ts}.json`;
+}
+function buildSignalsAnalysisText() {
+  const data = buildSignalsAnalysisExport();
+  const text = JSON.stringify(data, null, 2);
+  const kb = Math.max(1, Math.round(text.length / 1024));
+  return { data, text, kb, filename: buildSignalsAnalysisFileName(data) };
+}
+function downloadAllSignalsForAnalysis() {
   try {
-    const data = buildSignalsAnalysisExport();
-    const text = JSON.stringify(data, null, 2);
-    await copyTextToClipboard(text);
-    const kb = Math.max(1, Math.round(text.length / 1024));
-    toast(`📋 Copiado análisis: ${data.counts.signals_total} señales · ${kb} KB`, 2600);
+    const { data, text, kb, filename } = buildSignalsAnalysisText();
+    downloadTextFile(filename, text, "application/json;charset=utf-8");
+    toast(`💾 JSON generado: ${data.counts.signals_total} señales · ${kb} KB`, 3200);
+  } catch (err) {
+    console.error("downloadAllSignalsForAnalysis", err);
+    toast(`⚠️ No pude generar JSON: ${err?.message || err}`, 3500);
+  }
+}
+async function copyAllSignalsForAnalysis() {
+  let pack = null;
+  try {
+    pack = buildSignalsAnalysisText();
+    toast(`⏳ Preparando ${pack.data.counts.signals_total} señales · ${pack.kb} KB...`, 1400);
+    await copyTextToClipboard(pack.text);
+    toast(`📋 Copiado correctamente: ${pack.data.counts.signals_total} señales · ${pack.kb} KB`, 3000);
   } catch (err) {
     console.error("copyAllSignalsForAnalysis", err);
-    toast(`⚠️ No pude copiar: ${err?.message || err}`, 3500);
+    try {
+      if (!pack) pack = buildSignalsAnalysisText();
+      downloadTextFile(pack.filename, pack.text, "application/json;charset=utf-8");
+      toast(`⚠️ Portapapeles bloqueado. Descargué JSON: ${pack.data.counts.signals_total} señales · ${pack.kb} KB`, 4500);
+    } catch (err2) {
+      console.error("copyAllSignalsForAnalysis fallback", err2);
+      toast(`⚠️ No pude copiar ni descargar: ${err2?.message || err2}`, 4500);
+    }
   }
 }
 function ensureCopyAllSignalsAnalysisButton() {
@@ -5590,6 +5618,31 @@ function ensureCopyAllSignalsAnalysisButton() {
     else wrap.appendChild(btn);
   }
   btn.onclick = copyAllSignalsForAnalysis;
+
+  let downloadBtn = document.getElementById("downloadSignalsAnalysisBtn");
+  if (!downloadBtn) {
+    downloadBtn = document.createElement("button");
+    downloadBtn.id = "downloadSignalsAnalysisBtn";
+    downloadBtn.type = "button";
+    downloadBtn.className = "btn btnGhost";
+    downloadBtn.textContent = "💾 Descargar JSON";
+    downloadBtn.title = "Descarga todas las señales con ticks y resultados en un archivo JSON para análisis";
+    downloadBtn.style.padding = "8px 10px";
+    downloadBtn.style.borderRadius = "12px";
+    downloadBtn.style.fontWeight = "900";
+    downloadBtn.style.minHeight = "36px";
+    downloadBtn.style.lineHeight = "1";
+    downloadBtn.style.display = "inline-flex";
+    downloadBtn.style.alignItems = "center";
+    downloadBtn.style.justifyContent = "center";
+    downloadBtn.style.gap = "8px";
+    downloadBtn.style.opacity = "0.95";
+    downloadBtn.style.borderColor = "rgba(34,197,94,.45)";
+    downloadBtn.style.boxShadow = "0 0 12px rgba(34,197,94,.10)";
+    if (btn.nextSibling) wrap.insertBefore(downloadBtn, btn.nextSibling);
+    else wrap.appendChild(downloadBtn);
+  }
+  downloadBtn.onclick = downloadAllSignalsForAnalysis;
   return btn;
 }
 
