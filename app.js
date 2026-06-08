@@ -5391,6 +5391,208 @@ function clearTradesOnly() {
   toast(`🗑️ Trades ${getTradingAccountLabel()} borrados: ${removed}`, 1800);
 }
 
+function stripForAnalysisCopy(value, depth = 0) {
+  if (value == null) return value;
+  if (depth > 7) return null;
+  if (typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((x) => stripForAnalysisCopy(x, depth + 1));
+  const out = {};
+  const banned = /token|authorize|authorization|password|secret|pat|otp|email|phone/i;
+  for (const [k, v] of Object.entries(value)) {
+    if (banned.test(k)) continue;
+    if (typeof v === "function") continue;
+    out[k] = stripForAnalysisCopy(v, depth + 1);
+  }
+  return out;
+}
+function compactTradeForAnalysis(trade) {
+  if (!trade || typeof trade !== "object") return null;
+  const keep = [
+    "badge", "contract_id", "side", "symbol", "stake", "account_mode", "account_label",
+    "exec_mode", "contract_type", "payout_pct", "ic2_level", "ic2_step",
+    "entry_timing_mode", "entry_timing_variant", "purchase_time", "start_time",
+    "buy_price", "payout", "profit", "status", "sold_time", "expiry_time",
+    "entry_spot", "entry_spot_time", "exit_spot", "exit_spot_time", "sell_price"
+  ];
+  const out = {};
+  keep.forEach((k) => { if (trade[k] !== undefined) out[k] = trade[k]; });
+  return stripForAnalysisCopy(out);
+}
+function compactVisualLevelForAnalysis(level) {
+  if (!level || typeof level !== "object") return null;
+  const keep = [
+    "level", "levelMode", "levelType", "direction", "stage", "status", "logic",
+    "zoneLow", "zoneHigh", "tolerance", "zone", "touches", "rejectionHasForce"
+  ];
+  const out = {};
+  keep.forEach((k) => { if (level[k] !== undefined) out[k] = level[k]; });
+  return stripForAnalysisCopy(out);
+}
+function compactSignalForAnalysis(item) {
+  if (!item || typeof item !== "object") return null;
+  return stripForAnalysisCopy({
+    id: item.id,
+    minute: item.minute,
+    time: item.time,
+    symbol: item.symbol,
+    direction: item.direction,
+    mode: item.mode,
+    mode_version: item.mode_version,
+    vote: item.vote || "",
+    comment: item.comment || "",
+    nextOutcome: item.nextOutcome || "",
+    minuteComplete: !!item.minuteComplete,
+    trade: compactTradeForAnalysis(item.trade),
+    signalAutoEntry: item.signalAutoEntry ? {
+      type: item.signalAutoEntry.type,
+      attempted: item.signalAutoEntry.attempted,
+      status: item.signalAutoEntry.status,
+      side: item.signalAutoEntry.side,
+      ms: item.signalAutoEntry.ms,
+      sec: item.signalAutoEntry.sec,
+      reason: item.signalAutoEntry.reason,
+      confirmation_status: item.signalAutoEntry.confirmation_status,
+      contract_id: item.signalAutoEntry.contract_id,
+    } : null,
+    giroPolaridad: compactVisualLevelForAnalysis(item.giroPolaridad),
+    snrLevel: compactVisualLevelForAnalysis(item.snrLevel),
+    manualGiro: item.manualGiro ? stripForAnalysisCopy(item.manualGiro) : null,
+    visualRead: item.visualRead ? stripForAnalysisCopy(item.visualRead) : null,
+    ticks: Array.isArray(item.ticks)
+      ? item.ticks.map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) })).filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
+      : [],
+  });
+}
+function compactTradeJournalForAnalysis(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  return stripForAnalysisCopy({
+    journal_id: entry.journal_id,
+    saved_at: entry.saved_at,
+    feedback_at: entry.feedback_at,
+    feedback_source: entry.feedback_source,
+    vote: entry.vote || "",
+    comment: entry.comment || "",
+    id: entry.id,
+    minute: entry.minute,
+    time: entry.time,
+    symbol: entry.symbol,
+    direction: entry.direction,
+    mode: entry.mode,
+    mode_version: entry.mode_version,
+    nextOutcome: entry.nextOutcome || "",
+    minuteComplete: !!entry.minuteComplete,
+    trade: compactTradeForAnalysis(entry.trade),
+    giroPolaridad: compactVisualLevelForAnalysis(entry.giroPolaridad),
+    snrLevel: compactVisualLevelForAnalysis(entry.snrLevel),
+    visualRead: entry.visualRead ? stripForAnalysisCopy(entry.visualRead) : null,
+    ticks: Array.isArray(entry.ticks)
+      ? entry.ticks.map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) })).filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
+      : [],
+  });
+}
+function buildSignalsAnalysisExport() {
+  const signals = getCleanVisualHistory().map(compactSignalForAnalysis).filter(Boolean);
+  const signalIds = new Set(signals.map((s) => s.id).filter(Boolean));
+  const trades = (tradesJournal || [])
+    .filter((t) => isCleanVisualModeItem(t) || signalIds.has(t?.id))
+    .map(compactTradeJournalForAnalysis)
+    .filter(Boolean);
+
+  return {
+    exported_at: new Date().toISOString(),
+    export_scope: "analisis_reduccion_visual_signals_all_ticks",
+    app_version: "v106.9.4.12_copy_all_analysis",
+    description: "Export para analizar patrones de los primeros 25/30s: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
+    counts: {
+      signals_total: signals.length,
+      signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
+      trades_total: trades.length,
+    },
+    notes_for_analysis: {
+      target_window_ms: [0, 30000],
+      also_review_window_ms: [0, 25000],
+      desired_output: "buscar secuencias G/M/P y patrones repetidos que anticipan giro de la vela siguiente",
+    },
+    signals_all: signals,
+    trades_all: trades,
+  };
+}
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "readonly");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  ta.style.top = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  if (!ok) throw new Error("El navegador no permitió copiar al portapapeles");
+  return true;
+}
+async function copyAllSignalsForAnalysis() {
+  try {
+    const data = buildSignalsAnalysisExport();
+    const text = JSON.stringify(data, null, 2);
+    await copyTextToClipboard(text);
+    const kb = Math.max(1, Math.round(text.length / 1024));
+    toast(`📋 Copiado análisis: ${data.counts.signals_total} señales · ${kb} KB`, 2600);
+  } catch (err) {
+    console.error("copyAllSignalsForAnalysis", err);
+    toast(`⚠️ No pude copiar: ${err?.message || err}`, 3500);
+  }
+}
+function ensureCopyAllSignalsAnalysisButton() {
+  let wrap = document.getElementById("clearSignalsInlineBtnWrap");
+  if (!wrap && signalsEl && signalsEl.parentElement) {
+    wrap = document.createElement("div");
+    wrap.id = "clearSignalsInlineBtnWrap";
+    wrap.style.display = "flex";
+    wrap.style.justifyContent = "flex-end";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "10px";
+    wrap.style.margin = "10px 0 0 0";
+    wrap.style.width = "100%";
+    signalsEl.parentElement.insertBefore(wrap, signalsEl);
+  }
+  if (!wrap) return null;
+  wrap.style.flexWrap = "wrap";
+
+  let btn = document.getElementById("copySignalsAnalysisBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "copySignalsAnalysisBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.textContent = "📋 Copiar todas";
+    btn.title = "Copia todas las señales con ticks y resultados para analizar patrones";
+    btn.style.padding = "8px 10px";
+    btn.style.borderRadius = "12px";
+    btn.style.fontWeight = "900";
+    btn.style.minHeight = "36px";
+    btn.style.lineHeight = "1";
+    btn.style.display = "inline-flex";
+    btn.style.alignItems = "center";
+    btn.style.justifyContent = "center";
+    btn.style.gap = "8px";
+    btn.style.opacity = "0.95";
+    btn.style.borderColor = "rgba(34,211,238,.45)";
+    btn.style.boxShadow = "0 0 12px rgba(34,211,238,.10)";
+    const clearBtn = document.getElementById("clearSignalsInlineBtn");
+    if (clearBtn && clearBtn.parentElement === wrap) wrap.insertBefore(btn, clearBtn);
+    else wrap.appendChild(btn);
+  }
+  btn.onclick = copyAllSignalsForAnalysis;
+  return btn;
+}
+
 function ensureViewActionButton(viewName, opts) {
   const { id, text, title, onClick } = opts;
 
@@ -6110,6 +6312,7 @@ function ensureInlineClearButtons() {
       clearSignalsOnly();
     },
   });
+  ensureCopyAllSignalsAnalysisButton();
 
   ensureKeepClosedAwaySignalsToggle();
 
