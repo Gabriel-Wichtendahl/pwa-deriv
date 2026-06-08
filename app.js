@@ -888,7 +888,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOMINANTE_DISPAREJO_V106_9_4_8_20260606";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_GMP_ESTRICTO_V106_9_4_14_20260608";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -966,7 +966,7 @@ function getModeBtnLabel(mode) {
   if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
   if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
   if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
-  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 Reducción + aumento 30s";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 GMP estricto 30s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
@@ -5501,7 +5501,7 @@ function buildSignalsAnalysisExport() {
   return {
     exported_at: new Date().toISOString(),
     export_scope: "analisis_reduccion_visual_signals_all_ticks",
-    app_version: "v106.9.4.13_copy_download_analysis",
+    app_version: "v106.9.4.14_gmp_estricto_30s",
     description: "Export para analizar patrones de los primeros 25/30s: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
@@ -20305,7 +20305,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
 }
 
 
-// V106.9.4.11: Dominante disparejo 30s + bloqueo de simetría/fuerza.
+// V106.9.4.14: GMP estricto 30s + bloqueo de G→M y simetría/fuerza.
 // Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
 // Objetivo: leer los primeros 0-30s como lo ve el ojo en Deriv:
 // - grupo dominante con desplazamiento y movimientos dispares: G→P o G→M→P.
@@ -20855,23 +20855,37 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const m2 = primaryMoves[2] || 0;
   const m3 = primaryMoves[3] || 0;
 
-  // V106.9.4.9: regla simple. Solo aceptamos dominante que reduce con desplazamiento:
-  // G→M→P o G→P. No buscamos más variantes amplias porque abrían demasiadas señales.
-  const gToP = primaryMoves.length >= 2 && m0 >= m1 * 1.22;
-  const gmp = primaryMoves.length >= 3 && m0 >= m1 * 1.08 && m1 >= m2 * 1.06;
+  // V106.9.4.14: regla estadística estricta.
+  // Del análisis de 198 señales válidas, lo mejor fue G→M→P. G→M quedó flojo.
+  // Por eso ahora:
+  // - G→M→P necesita reducción final real hacia P/pequeño.
+  // - G→P se acepta solo si es muy limpio, con desplazamiento eficiente.
+  // - G→M sin P queda bloqueado.
+  const gmp = primaryMoves.length >= 3
+    && m0 >= m1 * 1.10
+    && m1 >= m2 * 1.12
+    && m2 <= m0 * 0.56
+    && cutsBetween >= 1;
+  const gToP = primaryMoves.length >= 2
+    && m0 >= m1 * 1.55
+    && m1 <= m0 * 0.48
+    && directionalEfficiency >= 0.52
+    && closePosition01 >= 0.60;
+  const onlyGM = primaryMoves.length === 2 && m0 > m1 && !gToP;
+  const gmWithoutFinalP = primaryMoves.length >= 2 && m0 >= m1 * 1.05 && !gmp && !gToP && !labels.includes("P");
+  if (onlyGM || gmWithoutFinalP) return null;
   const reduceIncreaseReduce = false;
   const repeatedReduction = primaryShape.repeatedReduction;
   const lateReduceAgain = false;
-  const templateOk = gToP || gmp;
+  const templateOk = gmp || gToP;
   if (!templateOk) return null;
 
-  // V106.9.4.9: regla simple central.
-  // 1) El grupo dominante reduce y sus movimientos son dispares.
-  // 2) El grupo contrario puede aumentar P→G / P→M→G / M→G, entrar grande aislado,
-  //    o no aparecer. Eso suma, pero no es obligatorio.
+  // V106.9.4.14: regla central.
+  // Lo obligatorio es un dominante que reduzca de verdad: G→M→P fuerte o G→P muy limpio.
+  // El contrario suma calidad si aparece, pero no compensa un dominante G→M.
   const reductionInfo = findVisualReductionEnd(primaryMoves);
   if (!reductionInfo.ok) return null;
-  const dominantDisparejo = summary.ratio >= 1.32 || gToP || gmp || labels.includes("P");
+  const dominantDisparejo = gmp || gToP;
   if (!dominantDisparejo) return null;
   const reductionEndRunIdx = Number(primaryRuns[reductionInfo.endPos]?.idx ?? primaryRuns[Math.min(primaryRuns.length - 1, 1)]?.idx ?? -1);
   const takeover = findContraryIncreaseAfterReduction(contraryRuns, reductionEndRunIdx, alignedRange, firstMove, tol);
@@ -20903,6 +20917,8 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   let points = 0;
   const reasons = [];
   const rejectHints = [];
+  if (gmp) reasons.push("patrón estadístico fuerte: G→M→P");
+  if (gToP && !gmp) reasons.push("patrón medio: G→P limpio");
   points += 4; reasons.push(`${groupText} entra grande`);
   points += 3; reasons.push("desplazamiento visual 0-30s");
   if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
@@ -20923,7 +20939,7 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     rejectHints.push(symmetryInfo.reason || "simetría/fuerza en dominante");
   }
 
-  if (points < 14) return null;
+  if (points < 16) return null;
 
   const quality =
     points * 12 +
@@ -21058,16 +21074,26 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const sameQualityAmbiguous = second && qualityGap < 18 && relativeGap < 0.16 && !best.contraryPG;
   if (sameQualityAmbiguous) return null;
 
+  // V106.9.4.14: R_75 fue el símbolo más flojo en el análisis, así que queda más estricto.
+  // Solo permite G→M→P claro, o G→P limpio con contrario real y buena eficiencia.
+  const symbolStrict = String(candidate?.symbol || candidate?.underlying || "").trim().toUpperCase();
+  if (symbolStrict === "R_75") {
+    const r75Ok = (best.gmp && Number(best.visualDisplacementEfficiency || 0) >= 0.55)
+      || (best.gToP && (best.contraryPG || best.contraryStrong) && Number(best.visualDisplacementEfficiency || 0) >= 0.58);
+    if (!r75Ok) return null;
+  }
+
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const subtype = "dominante disparejo 30s";
+  const subtype = "GMP estricto 30s";
   const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
   const contraryTxt = best.contraryPG
     ? ` + contrario ${best.contraryText} aumenta ${best.contraryPattern || "P→G"}`
     : (best.contraryStrong ? ` + contrario ${best.contraryText} entra grande` : " + sin contrario claro");
-  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: dominante ${best.groupText} ${best.transferReductionInfo?.pattern || best.pattern || "G→P"}${contraryTxt}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Dominante disparejo 30s V106.9.4.11: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag estricto: no acepta estancado/lateral. Regla simple: dentro de 0-30s el grupo dominante debe desplazar y mostrar movimientos dispares (G→M→P o G→P). El contrario puede aumentar (P→G / P→M→G / M→G), entrar grande aislado, o no aparecer. Bloquea simetría/fuerza: dos movimientos medianos/grandes consecutivos y similares descartan la señal si no aparece una reducción fuerte posterior.`;
+  const mainPatternText = best.gmp ? "G→M→P" : (best.gToP ? "G→P limpio" : (best.transferReductionInfo?.pattern || best.pattern || "G→P"));
+  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: dominante ${best.groupText} ${mainPatternText}${contraryTxt}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `GMP estricto 30s V106.9.4.14: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag estricto: no acepta estancado/lateral. Regla estricta por estadística: dentro de 0-30s el dominante debe formar G→M→P claro o G→P muy limpio. G→M queda bloqueado porque mostró baja efectividad. El contrario puede sumar, pero no compensa una reducción incompleta. Bloquea simetría/fuerza: dos movimientos medianos/grandes consecutivos y similares descartan la señal si no aparece una reducción fuerte posterior.`;
 
   return {
     direction: best.signalDirection,
@@ -21142,9 +21168,9 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v106_9_4_11_dominante_disparejo_anti_simetria_fuerte_30s",
+      movementFilter: "v106_9_4_14_gmp_estricto_30s",
       priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_30s_dominante_disparejo_v106_9_4_11",
+      stage: "reduccion_visual_30s_gmp_estricto_v106_9_4_14",
       logic: logicText,
       status,
     },
