@@ -1,3 +1,21 @@
+// v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108: nuevo modo Reducción Constructiva continua: dos reducciones consecutivas en ventana flotante, no atada al minuto.
+// v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
+// v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
+// v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
+// v106.8.1: Reducción visual 25s evalúa SOLO al segundo 25, compara toda la ventana 0-30 y no dispara temprano.
+// v106.8: agrega modo Reducción visual 25s con motor de silueta G-P/P-G independiente.
+// v106.7: agrega modo Reducción visual 25s independiente.
+// v106.4: no cancela AUTO58 por "proposal no prearmada"; acepta fallback duration de API nueva y permite proposal rápida en 58s.
+// v106.3: FIX proposal API nueva: payload compatible (underlying_symbol/symbol, CALL/PUT, fallbacks duración).
+// v106.2: API nueva Deriv PAT/OTP para trading, manteniendo ticks públicos legacy.
+// v106.1: diagnóstico proposal/auth.
+// v106.6: calibra Alcista quiebres 30s: bloquea doble suelo/simetría/comprador recargado; mantiene v106.4 API nueva.
+// v106.6.1: fix Parse WS visibleBreakCount no definido.
+// v106: evita lateralización y tercer cambio real de color en Alcista irregular 30s.
+// v105: prioridad a reducciones claras del comprador 0-30s (grande-mediano-chico / grande-chico / doble reducción).
+// v104: rollback soportes modal
+// Se vuelve a la base v99 porque los soportes horizontales/dinámicos aplanaban el gráfico modal.
 // app.js — BASE V3 CONFIG RESTAURADA: estética/funciones originales preservadas, motores de señal desactivados
 // ✅ Base V5 SNR: exporta likes/dislikes de Señales y guarda/exporta niveles SNR
 // ✅ FIX UI: Botones COMPRAR / VENDER en el modal uno al lado del otro (grandes, sin encimarse)
@@ -21,27 +39,49 @@
 // ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
-// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 59 si ya hay 4 confirmaciones netas para COMPRA/VENTA
-// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 59
+// ✅ NUEVO PRÁCTICA: auto-entrada al segundo 58 si ya hay 4 confirmaciones netas para COMPRA/VENTA
+// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 58
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
-// ✅ V40: AUTO 59 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
+// ✅ V40: AUTO 58 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
 // ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
-// ✅ V46: AUTO 59 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
+// ✅ V46: AUTO 58 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
 // ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
 // ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
 // ✅ V55: vuelve al En vivo v53 y agrega espacio scroll para ver COMPRAR/VENDER sin que lo tape disciplina
+// ✅ V57: En vivo opera igual que Señales: puntos manuales y ejecución automática al segundo 58
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
+// ✅ V68: Gestión IC2 5% escalonada por saldo hasta 2000, separada DEMO/REAL
+// ✅ V69: Disciplina REAL: 2 OTM o ciclo IC2 completo (2 ITM seguidos) bloquea 1h; DEMO libre para pruebas
+// ✅ V70: Merge verificado: conserva V68 escalonado + V69 disciplina REAL + V66 timing pre-proposal
+// ✅ V71: Nuevo modo 🔁 Ruptura Débil Giro: rompe zona pero no expande, responde irregular y prepara giro.
+// ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
+// ✅ V75: Ruptura Débil Giro con filtro duro: solo velas alcistas y solo VENTA/PUT.
+// ✅ V76: Ruptura Débil Giro enfocado en arranque irregular alcista temprano (0-30s), con prioridad si entra vendedor fuerte.
+// ✅ V77: Ajuste con ejemplos marcados: no depende de resistencia perfecta, prioriza devuelve fuerte/vendedor 20-30s y guarda logic explicativo.
+// ✅ V78: Ruptura Débil Giro: prealerta temprana oculta; señal visible recién 20-30s y bloquea pérdida fuerte del open antes de 20s.
+// ✅ V79: Autolimpieza de bloqueos vencidos/corruptos de Despeje mental y Disciplina REAL.
+// ✅ V80: Corrige línea vertical falsa en gráfico en vivo al iniciar vela (dedupe ms=0 y no duplica open).
+// ✅ V81: Soportes estructurales recientes en gráfico vivo: cian = estructural, amarillo = polaridad/usado dos veces.
+// ✅ V82: Merge correcto: restaura Ruptura Débil Giro V78 + autolimpieza + línea viva limpia + soportes estructurales.
+// ✅ V83: Pausa visual 5m si salen 15 señales sin operación REAL; bloqueo total tipo overlay.
+// ✅ V84: Integra imagen Pausa visual con contador real y tips/progreso dinámicos.
+// ✅ V85: Despeje mental post-OTM solo en REAL; DEMO queda libre para pruebas.
+// ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
+// ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
+// ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 
 "use strict";
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V10_MODAL_NAV_FEEDBACK_20260511";
+// ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
+
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V107_PROCESO_DISCIPLINA_20260608";
 
 /*
   Mapa rápido de módulos:
@@ -65,7 +105,8 @@ const DERIV_DTRADER_TEMPLATE =
   "https://app.deriv.com/dtrader?symbol=R_75&account=demo&lang=ES&chart_type=area&interval=1t&trade_type=rise_fall_equal";
 
 const STORE_KEY = "derivSignalsHistory_v2";
-const MAX_HISTORY = 200;
+const MAX_HISTORY = 1000;
+const MAX_VISIBLE_SIGNALS = 200;
 
 const MIN_TICKS = 3;
 const MIN_SYMBOLS_READY = 2;
@@ -101,6 +142,19 @@ const DERIV_TOKEN_DEMO_KEY = "derivDemoToken_v1";
 const DERIV_TOKEN_REAL_KEY = "derivRealToken_v1";
 const TRADE_STAKE_KEY = "tradeStake_v1";
 
+// V106.2: Deriv migró parte de cuentas a la API nueva.
+// LEGACY usa: wss://ws.derivws.com/websockets/v3 + { authorize: token }.
+// API NUEVA usa: PAT + App ID + Account ID -> REST OTP -> WebSocket autenticado.
+const DERIV_API_MODE_KEY = "derivApiMode_v1";
+const DERIV_API_MODE_LEGACY = "legacy";
+const DERIV_API_MODE_NEW_PAT = "new_pat_otp";
+const DERIV_NEW_PAT_KEY = "derivNewPatToken_v1";
+const DERIV_NEW_APP_ID_KEY = "derivNewApiAppId_v1";
+const DERIV_NEW_ACCOUNT_DEMO_KEY = "derivNewApiAccountId_demo_v1";
+const DERIV_NEW_ACCOUNT_REAL_KEY = "derivNewApiAccountId_real_v1";
+const DERIV_NEW_ACCOUNTS_CACHE_KEY = "derivNewApiAccountsCache_v1";
+const DERIV_NEW_API_BASE = "https://api.derivws.com";
+
 const DEFAULT_STAKE = 1; // USD
 const DEFAULT_DURATION = 1; // 1 minuto
 const DEFAULT_DURATION_UNIT = "m";
@@ -118,15 +172,32 @@ const C100_PAYOUT_REQUIRED = 95; // fallback para estimar nivel 2 si Deriv no in
 const C100_MIN_PAYOUT = 0; // IC2 no bloquea por payout mínimo
 const C100_CAPITAL_BASE = 0;
 const C100_MAX_LEVEL = 2;
-const C100_MODE_LABEL = "IC2";
+const C100_MODE_LABEL = "IC2 + 5% escalonado";
 const C100_LEVELS = [
   { level: 1, base: DEFAULT_STAKE, compound: DEFAULT_STAKE },
   { level: 2, base: DEFAULT_STAKE, compound: DEFAULT_STAKE * 1.95 },
 ];
 
+// V68: stake base IC2 por escalones de saldo.
+// Menos de 210 => base 100 => stake 5.
+// 210/310/410/510/610... => base 200/300/400/500/600...
+// Tope final: al llegar a 2000 visuals o más => base 2000 / stake 100.
+const C100_BALANCE_STEP_ENABLED = true;
+const C100_BALANCE_STEP_PERCENT = 0.05;
+const C100_BALANCE_STEP_MIN_BASE = 100;
+const C100_BALANCE_STEP_MAX_BASE = 2000;
+const C100_BALANCE_STEP_FIRST_THRESHOLD = 210;
+const C100_BALANCE_STEP_SIZE = 100;
+const ACCOUNT_BALANCE_CACHE_TTL_MS = 15000;
+
 const EXECUTION_MODE_KEY = "executionMode_v1";
 const EXECUTION_MODE_RISE_FALL = "RISE_FALL";
 const EXECUTION_MODE_HIGHLOW_AUTO = "HIGHLOW_FIXED_BARRIER_BY_SYMBOL";
+const ENTRY_TIMING_MODE_KEY = "entryTimingMode_v1";
+const ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY = "AUTO58_NEXT_CANDLE_EXPIRY";
+const ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY = "AUTO58_VISUAL_58_EXPIRY";
+const ENTRY_TIMING_AUTO58_DURATION_1M = "AUTO58_DURATION_1M";
+let entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
 const AUTO_PRECALC_REFRESH_MS = 45000;
 const AUTO_PRECALC_STALE_MS = 180000;
@@ -165,9 +236,21 @@ const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
 ========================= */
 const AUTOOPEN_CHART_KEY = "autoOpenChartOnSignal_v1";
 let autoOpenChartOnSignal = false;
+
+// V90: ayuda visual automática: abre replay X2 al segundo 28 si el modal sigue abierto.
+const AUTO_REPLAY_X2_KEY = "autoReplayX2OnSignal_v1";
+const AUTO_REPLAY_X2_TRIGGER_MS = 28000;
+const AUTO_REPLAY_X2_SPEED = 2;
+let autoReplayX2OnSignal = true;
+let modalAutoReplayTimer = null;
+let modalAutoReplayToken = "";
 let activeTradingAccount = ACCOUNT_MODE_DEMO;
 let c100State = null;
 let c100PanelEl = null;
+const accountBalanceCache = {
+  [ACCOUNT_MODE_DEMO]: { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 },
+  [ACCOUNT_MODE_REAL]: { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 },
+};
 
 /* =========================
    Disciplina
@@ -178,9 +261,64 @@ const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
 const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
 const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
 
-const DISCIPLINE_MAX_WINS = 3;
+// V70: disciplina SOLO para REAL.
+// - 2 OTM acumulados en la ventana actual => bloqueo 1h.
+// - ciclo IC2 completo (2 ITM consecutivos: nivel 1 + nivel 2) => bloqueo 1h.
+const DISCIPLINE_MAX_WINS = 2;
 const DISCIPLINE_MAX_LOSSES = 2;
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
+const DISCIPLINE_SCOPE_LABEL = "REAL";
+
+// Despeje mental: bloqueo total corto después de 1 OTM.
+// Es global para la PWA (DEMO/REAL) para evitar operar por impulso.
+// El bloqueo REAL de 1 hora se mantiene como está y tiene prioridad visual.
+const MENTAL_COOLDOWN_UNTIL_KEY = "mentalCooldownUntilMs_v1";
+const MENTAL_COOLDOWN_REASON_KEY = "mentalCooldownReason_v1";
+const MENTAL_COOLDOWN_LAST_CONTRACT_KEY = "mentalCooldownLastContractId_v1";
+const MENTAL_COOLDOWN_MS = 10 * 60 * 1000;
+const MENTAL_COOLDOWN_MAX_STORED_MS = MENTAL_COOLDOWN_MS + 90 * 1000; // seguridad: nunca debe quedar más de ~11m30s
+const DISCIPLINE_LOCK_MAX_STORED_MS = DISCIPLINE_LOCK_MS + 2 * 60 * 1000; // seguridad: bloqueo REAL nunca debe quedar más de ~62m
+
+let mentalCooldownUntilMs = 0;
+let mentalCooldownReason = "";
+let mentalCooldownLastContractId = "";
+let mentalCooldownOverlayEl = null;
+const MENTAL_COOLDOWN_IMAGE_SRC = "./despeje-mental-bg.png";
+const MENTAL_COOLDOWN_TIPS = [
+  "Respirá profundo. No operes desde la urgencia.",
+  "Una pérdida no se recupera con impulso, se recupera con criterio.",
+  "Soltá el gráfico. La claridad vuelve cuando bajás el ritmo.",
+  "No busques revancha. Buscá una lectura limpia.",
+  "Tu mejor operación ahora es esperar.",
+  "Aceptá el OTM sin pelearlo. El plan sigue.",
+  "La próxima entrada necesita calma, no presión.",
+  "Volvé cuando puedas explicar la operación antes de tocar el botón.",
+  "Si no hay claridad, pasar también es disciplina.",
+  "Tu mente es tu herramienta principal. Cuidala."
+];
+
+// V83: pausa visual por saturación de señales sin operar REAL.
+// Si se acumulan 15 señales en REAL sin ejecutar una operación real, bloquea toda la PWA 5 minutos.
+// No reemplaza la disciplina REAL de 1h: si la disciplina está activa, no dispara esta pausa para dejar estudiar Trades/velas.
+const SIGNAL_FATIGUE_COUNT_KEY = "signalFatigueCountSinceRealTrade_v1";
+const SIGNAL_FATIGUE_UNTIL_KEY = "signalFatigueUntilMs_v1";
+const SIGNAL_FATIGUE_REASON_KEY = "signalFatigueReason_v1";
+const SIGNAL_FATIGUE_LIMIT = 15;
+const SIGNAL_FATIGUE_MS = 5 * 60 * 1000;
+const SIGNAL_FATIGUE_MAX_STORED_MS = SIGNAL_FATIGUE_MS + 90 * 1000;
+
+let signalFatigueCount = 0;
+let signalFatigueUntilMs = 0;
+let signalFatigueReason = "";
+let signalFatigueOverlayEl = null;
+const SIGNAL_FATIGUE_IMAGE_SRC = "./pausa-visual-bg.png";
+const SIGNAL_FATIGUE_TIPS = [
+  "Soltá el gráfico. No toda señal pide una operación.",
+  "Cuando mirás de más, la lectura se vuelve ruido.",
+  "Esperar también es una decisión operativa.",
+  "Volvé solo si podés explicar por qué entrarías.",
+  "Cinco minutos sin pantalla pueden salvar una mala entrada."
+];
 
 let disciplineWindowStartMs = 0;
 let disciplineWins = 0;
@@ -443,7 +581,7 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     const resultX = cx1 - 58;
     const closeY = Number.isFinite(closeQuote) ? yOf(closeQuote) : ey;
 
-    // Punto de entrada exacto
+    // Punto de entrada visual
     ctx.shadowColor = tradeGlow;
     ctx.shadowBlur = 8;
     ctx.strokeStyle = tradeColor;
@@ -688,6 +826,40 @@ function saveTradesJournal(arr) {
 }
 let tradesJournal = loadTradesJournal();
 
+// V99: la pestaña Trades se separa por cuenta activa.
+// Los trades nuevos guardan account_mode dentro del trade y en el journal.
+function normalizeAccountModeValue(v) {
+  const s = String(v || "").toLowerCase().trim();
+  if (s === ACCOUNT_MODE_REAL || s === "real" || s === "live") return ACCOUNT_MODE_REAL;
+  if (s === ACCOUNT_MODE_DEMO || s === "demo" || s === "virtual") return ACCOUNT_MODE_DEMO;
+  return "";
+}
+function getTradeJournalAccountMode(entry) {
+  const direct = normalizeAccountModeValue(entry?.account_mode || entry?.accountMode || entry?.account || entry?.trade_account_mode || entry?.tradeAccountMode);
+  if (direct) return direct;
+  const tr = entry?.trade || {};
+  return normalizeAccountModeValue(tr.account_mode || tr.accountMode || tr.account || tr.trade_account_mode || tr.tradeAccountMode);
+}
+function getTradeJournalVisibleList() {
+  const scope = getCurrentAccountScope();
+  return (tradesJournal || []).filter((entry) => {
+    const m = getTradeJournalAccountMode(entry);
+    // Registros viejos sin cuenta: se muestran solo en DEMO para no contaminar REAL.
+    // Desde v99 todos los trades nuevos quedan separados correctamente.
+    return m ? m === scope : scope === ACCOUNT_MODE_DEMO;
+  });
+}
+function getTradeJournalVisibleCount() {
+  return getTradeJournalVisibleList().length;
+}
+function getTradeJournalHiddenOtherCount() {
+  const scope = getCurrentAccountScope();
+  return (tradesJournal || []).filter((entry) => {
+    const m = getTradeJournalAccountMode(entry);
+    return m && m !== scope;
+  }).length;
+}
+
 const MODE_NORMAL = "NORMAL";
 const MODE_GIRO = "GIRO";
 const MODE_GIRO_FLEX = "GIRO FLEX";
@@ -700,6 +872,11 @@ const MODE_SNR_SEGUNDO_TOQUE = "SNR INTERACCIÓN NIVEL";
 const MODE_SNR_POLARIDAD = "SNR POLARIDAD";
 const MODE_LINEA_DINAMICA = "LÍNEA DINÁMICA";
 const MODE_GIRO_POLARIDAD = "GIRO POLARIDAD";
+const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
+const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR QUIEBRES 30S";
+const MODE_ALCISTA_REDUCCION_30S = "ALCISTA REDUCCIÓN 30S";
+const MODE_REDUCCION_VISUAL_25S = "REDUCCIÓN VISUAL 25S";
+const MODE_REDUCCION_CONSTRUCTIVA_CONTINUA = "REDUCCIÓN CONSTRUCTIVA CONTINUA";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -708,10 +885,15 @@ const NORMAL_DEBILIDAD_LOGIC_VERSION = "NORMAL_DEBILIDAD_FUERZA_CLARA_20260427";
 const FUERZA_DEBILIDAD_CLARA_LOGIC_VERSION = "FUERZA_DEBILIDAD_CLARA_IMPULSOS_RETROCESOS_20260501";
 const LIKE_MANTENIDO_LOGIC_VERSION = "LIKE_MANTENIDO_17_TRADES_DIRECCION_ESTANCADA_20260501";
 const GIRO_APRENDIZAJE_LOGIC_VERSION = "GIRO_APRENDIZAJE_42_LIKES_ESENCIA_20260501";
-const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V51_20260522";
-const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO59_4PTS_V51_20260522";
+const GIRO_NIVEL_LOGIC_VERSION = "BASE_V12_SNR_70_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
+const SNR_POLARIDAD_LOGIC_VERSION = "SNR_POLARIDAD_70EF_GLOBAL_RECIENTE_REVIEW_KEEP_FUERA_AUTO58_4PTS_V57_20260523";
 const LINEA_DINAMICA_LOGIC_VERSION = "LINEA_DINAMICA_EXTREMA_CIERRES_MECHAS_V34_20260516";
 const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_20260501";
+const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
+const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
+const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_CONTINUA_DOS_REDUCCIONES_V108_20260611";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -721,15 +903,40 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
+  if ((raw.includes("CONSTRUCTIVA") || raw.includes("CONSTRUCTIVO")) || (raw.includes("REDUCCION") && raw.includes("CONTINUA"))) return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  if ((raw.includes("REDUCCION") || raw.includes("REDUCCIÓN")) && (raw.includes("VISUAL") || raw.includes("VISUAL") || raw.includes("25S") || raw.includes("25 S") || raw.includes("GMP") || raw.includes("G-M-P") || raw.includes("G-P") || raw.includes("P-G"))) return MODE_REDUCCION_VISUAL_25S;
+  if (raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL") || raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL")) return MODE_REDUCCION_VISUAL_25S;
+  if ((raw.includes("ALCISTA") && (raw.includes("REDUCCION") || raw.includes("REDUCCIÓN"))) || raw.includes("ALCISTA_REDUCCION") || raw.includes("ALCISTA REDUCCION")) return MODE_ALCISTA_REDUCCION_30S;
+  if ((raw.includes("ALCISTA") && (raw.includes("QUIEBRE") || raw.includes("IRREGULAR"))) || raw.includes("IRREGULAR_25") || raw.includes("IRREGULAR 25") || raw.includes("IRREGULAR_30") || raw.includes("IRREGULAR 30")) return MODE_ALCISTA_IRREGULAR_25S;
+  if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
-  return MODE_SNR_SEGUNDO_TOQUE;
+  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
 }
 function isDynamicLineMode(mode) {
   return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
 }
 function isSNRPolaridadMode(mode) {
   return normalizeSignalMode(mode) === MODE_SNR_POLARIDAD;
+}
+function isRupturaDebilGiroMode(mode) {
+  return normalizeSignalMode(mode) === MODE_RUPTURA_DEBIL_GIRO;
+}
+function isAlcistaIrregular25sMode(mode) {
+  const m = normalizeSignalMode(mode);
+  return m === MODE_ALCISTA_IRREGULAR_25S || m === MODE_ALCISTA_REDUCCION_30S;
+}
+function isAlcistaQuiebres30sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_ALCISTA_IRREGULAR_25S;
+}
+function isAlcistaReduccion30sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_ALCISTA_REDUCCION_30S;
+}
+function isReduccionExacta25sMode(mode) {
+  return normalizeSignalMode(mode) === MODE_REDUCCION_VISUAL_25S;
+}
+function isReduccionConstructivaContinuaMode(mode) {
+  return normalizeSignalMode(mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
 }
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
@@ -738,21 +945,27 @@ function isGiroFamilyMode(mode) {
 function getModeVersion(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return LINEA_DINAMICA_LOGIC_VERSION;
+  if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return ALCISTA_IRREGULAR_25S_LOGIC_VERSION;
+  if (m === MODE_ALCISTA_REDUCCION_30S) return ALCISTA_REDUCCION_30S_LOGIC_VERSION;
+  if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) return REDUCCION_CONSTRUCTIVA_LOGIC_VERSION;
+  if (m === MODE_REDUCCION_VISUAL_25S) return REDUCCION_VISUAL_25S_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
+  // V108: modo único. Siempre Reducción Constructiva continua.
   try {
-    const stored = localStorage.getItem(ANALYSIS_MODE_KEY);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
-    return normalizeSignalMode(stored || MODE_SNR_SEGUNDO_TOQUE);
   } catch {}
-  return MODE_SNR_SEGUNDO_TOQUE;
+  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
 }
 function saveAnalysisMode(mode) {
+  // V108: ignoramos cambios de modo; queda fijo en Reducción Constructiva continua.
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, normalizeSignalMode(mode));
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
@@ -760,14 +973,17 @@ function saveAnalysisMode(mode) {
 function getModeBtnLabel(mode) {
   const m = normalizeSignalMode(mode);
   if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
+  if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
+  if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
+  if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) return "🧩 Reducción constructiva";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 2 reducciones 30s";
   if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
   return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
-  const m = normalizeSignalMode(mode);
-  if (m === MODE_SNR_SEGUNDO_TOQUE) return MODE_SNR_POLARIDAD;
-  if (m === MODE_SNR_POLARIDAD) return MODE_LINEA_DINAMICA;
-  return MODE_SNR_SEGUNDO_TOQUE;
+  // V108: modo único.
+  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -1363,6 +1579,8 @@ function upsertTradeJournalFromSignal(it) {
   const entry = {
     journal_id: makeJournalIdFromSignal(it),
     saved_at: Date.now(),
+    account_mode: getTradeJournalAccountMode({ trade: it.trade }) || getCurrentAccountScope(),
+    account_label: (getTradeJournalAccountMode({ trade: it.trade }) || getCurrentAccountScope()) === ACCOUNT_MODE_REAL ? "REAL" : "DEMO",
 
     // snapshot señal
     id: it.id,
@@ -1401,6 +1619,8 @@ function upsertTradeJournalFromSignal(it) {
       comment: prev.comment || "",
       feedback_at: prev.feedback_at || 0,
       feedback_source: prev.feedback_source || "",
+      account_mode: entry.account_mode || prev.account_mode || getTradeJournalAccountMode(prev) || getCurrentAccountScope(),
+      account_label: entry.account_label || prev.account_label || ((entry.account_mode || prev.account_mode) === ACCOUNT_MODE_REAL ? "REAL" : "DEMO"),
     };
   } else {
     tradesJournal.unshift({
@@ -1518,6 +1738,8 @@ const practice45Btn = $("practice45Btn");
 const practiceCallBtn = $("practiceCallBtn");
 const practicePutBtn = $("practicePutBtn");
 const practicePassBtn = $("practicePassBtn");
+const processView = $("processView");
+const processAppEl = $("processApp");
 
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
@@ -1555,6 +1777,7 @@ const minuteCanvas = $("minuteCanvas");
 const modalCandle1mBtn = $("modalCandle1mBtn");
 const modalReplayBtn = $("modalReplayBtn");
 const modalOpenDerivBtn = $("modalOpenDerivBtn");
+const autoReplayX2Btn = $("autoReplayX2Btn");
 
 const modalBuyCallBtn = pickEl("modalBuyCallBtn");
 const modalBuyPutBtn = pickEl("modalBuyPutBtn");
@@ -1564,6 +1787,14 @@ const modalPrevItemBtn = $("modalPrevItemBtn");
 const modalNextItemBtn = $("modalNextItemBtn");
 const modalLikeBtn = $("modalLikeBtn");
 const modalDislikeBtn = $("modalDislikeBtn");
+const modalFooterPrevSlot = $("modalFooterPrevSlot");
+const modalFooterNextSlot = $("modalFooterNextSlot");
+const modalFooterVoteSlot = $("modalFooterVoteSlot");
+const modalFooterChartTools = $("modalFooterChartTools");
+const modalReadingInfoRow = $("modalReadingInfoRow");
+const modalSequenceText = $("modalSequenceText");
+const modalSequenceDetail = $("modalSequenceDetail");
+let modalFooterControlsRelocated = false;
 let modalCandleStatusEl = null;
 let signalConfirmPanelEl = null;
 let signalConfirmCountEl = null;
@@ -1581,14 +1812,25 @@ let manualGiroSummaryEl = null;
 let manualGiroStateEl = null;
 let manualGiroButtonsEl = null;
 const SIGNAL_CONFIRM_MIN = 4;
-const SIGNAL_AUTO_ENTRY_MS = 59000;
+const SIGNAL_AUTO_ENTRY_MS = 58000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
+// V65: en el timing de próxima vela no compramos apenas el reloj marca 58s.
+// Esperamos a que haya llegado el tick real >=58s y solo disparamos dentro de esta ventana.
+const SIGNAL_AUTO_POST58_MAX_MS = 59200;
+const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
+// V66: preparar proposal ANTES del post-58 para que en 58 solo se compre.
+const SIGNAL_AUTO_PREPROPOSAL_START_MS = 52000;
+const SIGNAL_AUTO_PREPROPOSAL_END_MS = 59000;
+const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 10000;
+// V106.4: con API nueva PAT/OTP no bloqueamos la operación si la proposal no quedó prearmada.
+// Si no está lista, la PWA intenta pedir proposal rápida/direct buy en el post-58.
+const SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT = false;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
-// validación de autoentrada en 59s y confirmación final por cierre en SNR/amarilla.
+// validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
 const SIGNAL_PREALERT_MAX_SEC = 45;
 // V7: aunque haya 4 puntos manuales, la entrada real solo se permite
-// si al segundo 59 el precio está dentro de la zona SNR o muy cerca.
+// si al segundo 58 el precio está dentro de la zona SNR o muy cerca.
 const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
 const SIGNAL_AUTO_SNR_NEAR_TOL_MULT = 0.75;
@@ -1606,7 +1848,7 @@ function buildSNRNearAreaMetaFromLevel(meta) {
   const tolerance = Number(meta.tolerance);
   const zoneSize = Number(meta.zone);
 
-  // Misma reconstrucción usada por el filtro de entrada en 59s.
+  // Misma reconstrucción usada por el filtro de entrada en 58s.
   // Así lo que ves en el modal coincide con lo que la PWA acepta como "cerca".
   if (!Number.isFinite(zoneLow) || !Number.isFinite(zoneHigh)) {
     if (Number.isFinite(bodyLow) && Number.isFinite(bodyHigh)) {
@@ -1768,6 +2010,8 @@ function ensureResetCacheButton() {
    State
 ========================= */
 let ws;
+let tradeWs = null;
+let tradeWsConnectPromise = null;
 
 let soundEnabled = false;
 let vibrateEnabled = true;
@@ -1815,7 +2059,18 @@ let liveReplayRaf = null;
 let liveReplayLastDrawAt = 0;
 let liveSignalConfirmations = [];
 let liveSignalMinuteKey = "";
+let liveAutoEntryState = { minuteKey: "", attempted: false, status: "idle", side: "", contract_id: "", error: "" };
+const autoPreProposalInFlight = new Set();
+const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
+const CONSTRUCTIVE_FLOATING_WINDOW_MS = 30000;
+const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
+const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 9000;
+const CONSTRUCTIVE_SCAN_STEP_MS = 900;
+const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 42000;
+let constructiveRollingTicksBySymbol = Object.create(null);
+let constructiveLastSignalBySymbol = Object.create(null);
+
 
 // V32: caché específica para la vista Velas 1m del modal.
 // La vista debe usar OHLC reales de Deriv y no velas inventadas/rellenadas.
@@ -1934,11 +2189,16 @@ function getStakeLabelEl() {
 function syncTokenInputWithCurrentAccount() {
   const tokenInput = getTokenInputEl();
   const tokenLabel = getTokenLabelEl();
-  if (tokenLabel) tokenLabel.textContent = `Token ${getTradingAccountLabel()} Deriv`;
+  const apiLabel = isNewPatApiMode() ? "PAT API nueva" : `Token ${getTradingAccountLabel()} Deriv`;
+  if (tokenLabel) tokenLabel.textContent = apiLabel;
   if (!tokenInput) return;
   tokenInput.value = getDerivToken() || "";
-  tokenInput.placeholder = `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
-  tokenInput.title = `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
+  tokenInput.placeholder = isNewPatApiMode()
+    ? "Pegá tu PAT de developers.deriv.com (scope trade)"
+    : `Pegá tu token ${getTradingAccountLabel()} (Read + Trade)`;
+  tokenInput.title = isNewPatApiMode()
+    ? "PAT de la API nueva. Se usa con App ID y Account ID para pedir OTP."
+    : `Pegá el token de la cuenta ${getTradingAccountLabel()}`;
 }
 function syncStakeInputWithCurrentAccount() {
   const stakeInput = getStakeInputEl();
@@ -1974,14 +2234,23 @@ function ensureTradingAccountButton() {
     activeTradingAccount = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_DEMO : ACCOUNT_MODE_REAL;
     saveTradingAccountMode();
     loadDiscipline();
+    loadMentalCooldown();
+    updateMentalCooldownUI();
+    applyLiveAnalysisPauseUI();
     resetAuthState();
+    resetNewApiTradingSocket();
     syncAccountScopedSettingsUI();
+    syncNewApiSettingsInputs();
     applyTradingAccountUI();
     applyTradingAccountBannerUI();
-    if (c100State) {
-      c100State.accountMode = activeTradingAccount || ACCOUNT_MODE_DEMO;
-      saveC100State();
-    }
+    try {
+      if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView();
+      else updateCounter(getActiveViewName ? getActiveViewName() : null);
+    } catch {}
+    // V67: la gestión IC2 queda separada por cuenta. Al cambiar DEMO/REAL,
+    // cargamos el estado propio de esa cuenta en vez de pisar el anterior.
+    loadC100State();
+    void refreshAccountBalance({ force: true }).catch(() => {});
     updateC100PanelUI();
     updateDisciplineLockUI(false);
     if (chartModal && !chartModal.classList.contains("hidden")) {
@@ -2046,12 +2315,302 @@ function applyTradingAccountBannerUI() {
 }
 
 /* =========================
+   V106.2 Panel API nueva PAT/OTP
+========================= */
+function ensureDerivApiModePanel() {
+  const host =
+    document.querySelector("#settingsModal .settingsBody .controls") ||
+    document.querySelector(".settingsBody .controls") ||
+    null;
+  if (!host) return null;
+
+  let panel = document.getElementById("derivApiModePanel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "derivApiModePanel";
+    panel.style.gridColumn = "1 / -1";
+    panel.style.padding = "10px";
+    panel.style.borderRadius = "16px";
+    panel.style.border = "1px solid rgba(168,85,247,.38)";
+    panel.style.background = "linear-gradient(180deg, rgba(168,85,247,.12), rgba(255,255,255,.025))";
+    panel.style.boxShadow = "0 0 22px rgba(168,85,247,.10), inset 0 0 0 1px rgba(255,255,255,.04)";
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <div style="font-weight:950;font-size:15px;letter-spacing:.2px;">API Deriv</div>
+        <div id="derivApiModeBadge" style="font-weight:950;font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.16);">—</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:8px;">
+        <button id="derivApiModeBtn" class="btn btnGhost" type="button">Cambiar API</button>
+        <label class="fieldLabel" for="derivNewAppIdInput">App ID API nueva</label>
+        <input id="derivNewAppIdInput" class="fieldInput" type="text" inputmode="numeric" placeholder="App ID de developers.deriv.com" autocomplete="off" />
+        <label class="fieldLabel" for="derivNewDemoAccountInput">Account ID DEMO API nueva</label>
+        <input id="derivNewDemoAccountInput" class="fieldInput" type="text" placeholder="Ej: DOT... / cuenta demo" autocomplete="off" />
+        <label class="fieldLabel" for="derivNewRealAccountInput">Account ID REAL API nueva</label>
+        <input id="derivNewRealAccountInput" class="fieldInput" type="text" placeholder="Ej: DOT... / cuenta real" autocomplete="off" />
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button id="derivNewSaveApiBtn" class="btn btnGhost" type="button">💾 Guardar API</button>
+          <button id="derivNewDiscoverAccountsBtn" class="btn btnGhost" type="button">🔎 Cuentas</button>
+        </div>
+        <button id="derivNewTestConnectionBtn" class="btn btnGhost" type="button">🧪 Probar API nueva / OTP</button>
+        <div id="derivNewApiStatus" style="font-size:12px;line-height:1.35;color:var(--muted,#94a3b8);">Legacy: usa token viejo. API nueva: PAT + App ID + Account ID.</div>
+      </div>
+    `;
+
+    const tokenWrap = getTokenInputEl()?.closest?.(".fieldWrap");
+    if (tokenWrap && tokenWrap.parentElement === host) tokenWrap.insertAdjacentElement("beforebegin", panel);
+    else host.prepend(panel);
+  }
+
+  const modeBtn = panel.querySelector("#derivApiModeBtn");
+  const saveBtn = panel.querySelector("#derivNewSaveApiBtn");
+  const discoverBtn = panel.querySelector("#derivNewDiscoverAccountsBtn");
+  const testBtn = panel.querySelector("#derivNewTestConnectionBtn");
+
+  if (modeBtn) {
+    modeBtn.onclick = () => {
+      setDerivApiMode(isNewPatApiMode() ? DERIV_API_MODE_LEGACY : DERIV_API_MODE_NEW_PAT);
+      resetAuthState();
+      resetNewApiTradingSocket();
+      syncAccountScopedSettingsUI();
+      syncNewApiSettingsInputs();
+      updateModalCandleStatusUI();
+      toast(`API: ${getDerivApiModeLabel()}`, 1700);
+    };
+  }
+  if (saveBtn) {
+    saveBtn.onclick = () => {
+      saveNewApiSettingsFromInputs();
+      resetAuthState();
+      resetNewApiTradingSocket();
+      toast("💾 Config API guardada", 1400);
+    };
+  }
+  if (discoverBtn) {
+    discoverBtn.onclick = async () => {
+      saveNewApiSettingsFromInputs();
+      try {
+        setNewApiStatus("Buscando cuentas…");
+        const accounts = await discoverNewApiAccounts({ save: true });
+        syncNewApiSettingsInputs();
+        const txt = accounts.length ? accounts.map((a) => `${a.isDemo ? "DEMO" : "REAL"}: ${a.id}`).join(" · ") : "Sin cuentas";
+        setNewApiStatus(`Cuentas OK: ${txt}`);
+        toast("🔎 Cuentas API nueva detectadas", 1800);
+      } catch (e) {
+        setNewApiStatus(`Error cuentas: ${e?.message || e}`);
+        alert(`Error buscando cuentas: ${e?.message || e}`);
+      }
+    };
+  }
+  if (testBtn) {
+    testBtn.onclick = async () => {
+      saveNewApiSettingsFromInputs();
+      try {
+        setDerivApiMode(DERIV_API_MODE_NEW_PAT);
+        resetAuthState();
+        resetNewApiTradingSocket();
+        syncAccountScopedSettingsUI();
+        syncNewApiSettingsInputs();
+        setNewApiStatus("Pidiendo OTP y conectando WS nuevo…");
+        await ensureNewApiTradingWs({ force: true });
+        setNewApiStatus(`✅ API nueva OK · ${getTradingAccountLabel()} · ${getDerivNewAccountId()}`);
+        toast("✅ API nueva / OTP OK", 1800);
+      } catch (e) {
+        setNewApiStatus(`❌ API nueva: ${e?.message || e}`);
+        alert(`Error API nueva: ${e?.message || e}`);
+      }
+    };
+  }
+
+  syncNewApiSettingsInputs();
+  return panel;
+}
+function setNewApiStatus(msg) {
+  const el = document.getElementById("derivNewApiStatus");
+  if (el) el.textContent = String(msg || "");
+}
+function saveNewApiSettingsFromInputs() {
+  const app = document.getElementById("derivNewAppIdInput");
+  const demo = document.getElementById("derivNewDemoAccountInput");
+  const real = document.getElementById("derivNewRealAccountInput");
+  if (app) setDerivNewAppId(app.value);
+  if (demo) setDerivNewAccountId(ACCOUNT_MODE_DEMO, demo.value);
+  if (real) setDerivNewAccountId(ACCOUNT_MODE_REAL, real.value);
+}
+function syncNewApiSettingsInputs() {
+  const panel = document.getElementById("derivApiModePanel");
+  if (!panel) return;
+  const badge = panel.querySelector("#derivApiModeBadge");
+  const modeBtn = panel.querySelector("#derivApiModeBtn");
+  const app = panel.querySelector("#derivNewAppIdInput");
+  const demo = panel.querySelector("#derivNewDemoAccountInput");
+  const real = panel.querySelector("#derivNewRealAccountInput");
+  const isNew = isNewPatApiMode();
+  if (badge) {
+    badge.textContent = isNew ? "NUEVA" : "LEGACY";
+    badge.style.color = isNew ? "#e9d5ff" : "#cffafe";
+    badge.style.borderColor = isNew ? "rgba(168,85,247,.55)" : "rgba(34,211,238,.48)";
+  }
+  if (modeBtn) {
+    modeBtn.textContent = isNew ? "🟣 Usando API nueva PAT/OTP" : "🔵 Usando API legacy";
+    modeBtn.classList.toggle("active", isNew);
+  }
+  if (app && document.activeElement !== app) app.value = getDerivNewAppId();
+  if (demo && document.activeElement !== demo) demo.value = getDerivNewAccountId(ACCOUNT_MODE_DEMO);
+  if (real && document.activeElement !== real) real.value = getDerivNewAccountId(ACCOUNT_MODE_REAL);
+  const status = isNew
+    ? `API nueva activa · cuenta actual ${getTradingAccountLabel()} · Account ID: ${getDerivNewAccountId() || "faltante"}`
+    : "API legacy activa · usa token viejo de Deriv App.";
+  setNewApiStatus(status);
+}
+
+/* =========================
    Interés Compuesto 2 niveles
    Nota: se conservan nombres internos C100* para no romper integraciones antiguas.
 ========================= */
+function getCurrentAccountScope() {
+  return activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
+}
+function getScopedStorageKey(baseKey) {
+  return `${baseKey}_${getCurrentAccountScope()}`;
+}
+function getC100StateStorageKey() {
+  return getScopedStorageKey(C100_STATE_KEY);
+}
+function getScopedTradeStakeKey() {
+  return getScopedStorageKey(TRADE_STAKE_KEY);
+}
+function setCachedAccountBalance(balance, currency = DEFAULT_CURRENCY) {
+  const b = Number(balance);
+  if (!Number.isFinite(b)) return null;
+  const scope = getCurrentAccountScope();
+  accountBalanceCache[scope] = {
+    balance: Number(b.toFixed(2)),
+    currency: String(currency || DEFAULT_CURRENCY),
+    updatedAt: Date.now(),
+  };
+  try {
+    localStorage.setItem(getScopedStorageKey("derivAccountBalanceCache_v1"), JSON.stringify(accountBalanceCache[scope]));
+  } catch {}
+  return accountBalanceCache[scope];
+}
+function loadCachedAccountBalance() {
+  const scope = getCurrentAccountScope();
+  try {
+    const raw = localStorage.getItem(getScopedStorageKey("derivAccountBalanceCache_v1"));
+    if (raw) {
+      const obj = JSON.parse(raw);
+      const b = Number(obj?.balance);
+      if (Number.isFinite(b)) {
+        accountBalanceCache[scope] = {
+          balance: Number(b.toFixed(2)),
+          currency: String(obj?.currency || DEFAULT_CURRENCY),
+          updatedAt: Number(obj?.updatedAt || 0),
+        };
+      }
+    }
+  } catch {}
+  return accountBalanceCache[scope] || { balance: null, currency: DEFAULT_CURRENCY, updatedAt: 0 };
+}
+function getCachedAccountBalance() {
+  const scope = getCurrentAccountScope();
+  const c = accountBalanceCache[scope];
+  if (c && Number.isFinite(Number(c.balance))) return c;
+  return loadCachedAccountBalance();
+}
+function adjustCachedAccountBalanceByProfit(profit) {
+  const p = Number(profit);
+  if (!Number.isFinite(p) || p === 0) return;
+  const c = getCachedAccountBalance();
+  const b = Number(c?.balance);
+  if (!Number.isFinite(b)) return;
+  setCachedAccountBalance(b + p, c.currency || DEFAULT_CURRENCY);
+}
+async function refreshAccountBalance({ force = false } = {}) {
+  const cached = getCachedAccountBalance();
+  if (!force && Number.isFinite(Number(cached.balance)) && Date.now() - Number(cached.updatedAt || 0) < ACCOUNT_BALANCE_CACHE_TTL_MS) {
+    return cached;
+  }
+  if (!ws || ws.readyState !== 1 || !getDerivToken()) return cached;
+
+  const res = await wsRequest({ balance: 1 }, 10000);
+  if (res?.error) throw new Error(res.error.message || "balance error");
+  const payload = res?.balance || {};
+  const b = Number(payload.balance ?? payload.amount ?? payload);
+  const cur = payload.currency || DEFAULT_CURRENCY;
+  return setCachedAccountBalance(b, cur) || cached;
+}
+function getC100StepInfo(balanceRaw = null) {
+  const cached = getCachedAccountBalance();
+  const balance = Number(balanceRaw ?? cached?.balance);
+  const hasBalance = Number.isFinite(balance);
+
+  if (!C100_BALANCE_STEP_ENABLED || !hasBalance) {
+    const manualStake = Number(getTradeStake());
+    const safeStake = Number.isFinite(manualStake) && manualStake > 0 ? manualStake : DEFAULT_STAKE;
+    return {
+      enabled: false,
+      hasBalance,
+      balance: hasBalance ? Number(balance.toFixed(2)) : null,
+      currency: cached?.currency || DEFAULT_CURRENCY,
+      base: null,
+      stake: Number(safeStake.toFixed(2)),
+      nextThreshold: null,
+      downThreshold: null,
+      capped: false,
+      source: hasBalance ? "manual_fallback" : "manual_sin_balance",
+    };
+  }
+
+  let base = C100_BALANCE_STEP_MIN_BASE;
+  if (balance >= C100_BALANCE_STEP_MAX_BASE) {
+    // Opción B: el último escalón se activa al llegar a 2000 visuals, no en 2010.
+    base = C100_BALANCE_STEP_MAX_BASE;
+  } else if (balance >= C100_BALANCE_STEP_FIRST_THRESHOLD) {
+    // Escalones: 210=>200, 310=>300, 410=>400, 510=>500, 610=>600...
+    base = Math.floor((balance - 10) / C100_BALANCE_STEP_SIZE) * C100_BALANCE_STEP_SIZE;
+  }
+
+  base = Math.max(C100_BALANCE_STEP_MIN_BASE, Math.min(C100_BALANCE_STEP_MAX_BASE, base));
+  const stake = Number((base * C100_BALANCE_STEP_PERCENT).toFixed(2));
+  const nextThreshold = base >= C100_BALANCE_STEP_MAX_BASE
+    ? null
+    : Math.min(C100_BALANCE_STEP_MAX_BASE, base + 110);
+  const downThreshold = base <= C100_BALANCE_STEP_MIN_BASE
+    ? null
+    : (base >= C100_BALANCE_STEP_MAX_BASE ? C100_BALANCE_STEP_MAX_BASE : base + 10);
+
+  return {
+    enabled: true,
+    hasBalance: true,
+    balance: Number(balance.toFixed(2)),
+    currency: cached?.currency || DEFAULT_CURRENCY,
+    base,
+    stake,
+    nextThreshold,
+    downThreshold,
+    capped: base >= C100_BALANCE_STEP_MAX_BASE,
+    source: "balance_step_5pct",
+  };
+}
 function getC100BaseStake() {
-  const n = Number(getTradeStake());
-  return Number.isFinite(n) && n > 0 ? Number(n.toFixed(2)) : Number(DEFAULT_STAKE.toFixed(2));
+  const info = getC100StepInfo();
+  return Number(info.stake.toFixed(2));
+}
+function getC100TradeAuditExtra(stakeUsed = null) {
+  if (!isC100Active()) return {};
+  const info = getC100StepInfo();
+  return {
+    c100_balance_step_enabled: !!info.enabled,
+    c100_balance_step_source: String(info.source || ""),
+    c100_balance: Number.isFinite(Number(info.balance)) ? Number(info.balance) : null,
+    c100_balance_currency: String(info.currency || DEFAULT_CURRENCY),
+    c100_balance_base: Number.isFinite(Number(info.base)) ? Number(info.base) : null,
+    c100_base_stake: Number(info.stake || 0),
+    c100_effective_stake: Number.isFinite(Number(stakeUsed)) ? Number(stakeUsed) : Number(getC100Stake()),
+    c100_next_threshold: info.nextThreshold,
+    c100_down_threshold: info.downThreshold,
+    c100_step_cap: info.capped ? C100_BALANCE_STEP_MAX_BASE : null,
+  };
 }
 function getC100Level(level = 1) {
   const base = getC100BaseStake();
@@ -2112,19 +2671,25 @@ function normalizeC100State(raw) {
 }
 function loadC100State() {
   try {
-    const raw = localStorage.getItem(C100_STATE_KEY);
+    const scopedKey = getC100StateStorageKey();
+    let raw = localStorage.getItem(scopedKey);
+    // Migración suave: si venías usando la clave vieja, solo la toma para DEMO.
+    if (raw === null && getCurrentAccountScope() === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(C100_STATE_KEY);
     c100State = normalizeC100State(raw ? JSON.parse(raw) : null);
+    c100State.accountMode = getCurrentAccountScope();
   } catch {
     c100State = makeFreshC100State();
   }
+  loadCachedAccountBalance();
   saveC100State();
   return c100State;
 }
 function saveC100State() {
   try {
     if (!c100State) c100State = makeFreshC100State();
+    c100State.accountMode = getCurrentAccountScope();
     c100State.updatedAt = Date.now();
-    localStorage.setItem(C100_STATE_KEY, JSON.stringify(c100State));
+    localStorage.setItem(getC100StateStorageKey(), JSON.stringify(c100State));
   } catch {}
 }
 function resetC100Gestion({ keepDay = true, keepEnabled = true } = {}) {
@@ -2168,7 +2733,9 @@ function getC100StatusText() {
   if (!c100State.enabled) return "Desactivado";
   if (c100State.pendingContractId) return "Contrato pendiente";
   if (Number(c100State.compoundStep || 0) === 1) return "Nivel 2: compuesto listo";
-  return "Nivel 1: stake base";
+  const info = getC100StepInfo();
+  if (info.enabled) return `Nivel 1: 5% de base ${info.base}`;
+  return "Nivel 1: stake manual";
 }
 function getC100DayNet() {
   return Number(c100State?.dayProfit || 0) - Number(c100State?.dayLoss || 0);
@@ -2249,6 +2816,10 @@ function updateC100PanelUI() {
   const baseStake = getC100BaseStake();
   const net = getC100DayNet();
   const status = getC100StatusText();
+  const stepInfo = getC100StepInfo();
+  const balanceTxt = Number.isFinite(Number(stepInfo.balance)) ? `$${Number(stepInfo.balance).toFixed(2)} ${escapeHtml(stepInfo.currency || DEFAULT_CURRENCY)}` : "sin saldo leído";
+  const nextTxt = stepInfo.nextThreshold ? `$${Number(stepInfo.nextThreshold).toFixed(2)}` : "tope 2000";
+  const downTxt = stepInfo.downThreshold ? `$${Number(stepInfo.downThreshold).toFixed(2)}` : "—";
 
   if (badge) {
     badge.textContent = active ? `ON · N${Number(c100State.compoundStep || 0) + 1}/2` : "OFF";
@@ -2268,10 +2839,14 @@ function updateC100PanelUI() {
   if (info) {
     info.innerHTML = `
       <div>Modo: <b>${C100_MODE_LABEL}</b> · Cuenta activa: <b>${getTradingAccountLabel()}</b></div>
-      <div>Regla: <b>Nivel 1 stake base → si gana, Nivel 2 stake + ganancia → reset</b></div>
+      <div>Timing: <b>${escapeHtml(getEntryTimingShortText())}</b></div>
+      <div>Saldo leído: <b>${balanceTxt}</b></div>
+      <div>Regla: <b>5% escalonado cada $100 hasta saldo $2000 · tope stake $100</b></div>
       <div>Nivel actual: <b>${Number(c100State.compoundStep || 0) + 1} / ${C100_MAX_LEVEL}</b></div>
+      <div>Base activa: <b>${stepInfo.enabled ? "$" + Number(stepInfo.base).toFixed(2) : "manual"}</b></div>
       <div>Stake base: <b>$${baseStake.toFixed(2)}</b></div>
       <div>Próximo stake: <b>$${stake.toFixed(2)}</b></div>
+      <div>Próximo aumento: <b>${nextTxt}</b> · Baja al anterior si cae de: <b>${downTxt}</b></div>
       <div>Estado: <b>${escapeHtml(status)}</b></div>
       <div>Ganancia/Pérdida del día: <b>${net >= 0 ? "+" : "-"}$${Math.abs(net).toFixed(2)}</b></div>
       ${c100State.pendingContractId ? `<div>Contrato pendiente: <b>${escapeHtml(c100State.pendingContractId)}</b></div>` : ""}
@@ -2310,6 +2885,7 @@ function updateC100AfterResult(result, profit = null) {
 
   c100State.pendingContractId = "";
   c100State.lastResult = normalized;
+  if (Number.isFinite(profitNum)) adjustCachedAccountBalanceByProfit(profitNum);
 
   if (normalized === "ITM") {
     const gain = Number.isFinite(profitNum) && profitNum > 0 ? profitNum : stakeUsed * (C100_PAYOUT_REQUIRED / 100);
@@ -2322,6 +2898,12 @@ function updateC100AfterResult(result, profit = null) {
       c100State.nextCompoundStake = nextStake;
       c100State.currentStake = nextStake;
       c100State.lastResult = "ITM_NIVEL_1_PASA_A_NIVEL_2";
+
+      // V69: en REAL, primer ITM del ciclo IC2. No bloquea todavía.
+      if (!isDisciplineBypassedForCurrentAccount() && !isTradeLockedNow()) {
+        disciplineWins = 1;
+        saveDiscipline();
+      }
     } else {
       const dayProfit = Number(c100State.dayProfit || 0);
       const dayLoss = Number(c100State.dayLoss || 0);
@@ -2330,6 +2912,13 @@ function updateC100AfterResult(result, profit = null) {
       c100State.dayProfit = dayProfit;
       c100State.dayLoss = dayLoss;
       c100State.lastResult = "CICLO_IC2_COMPLETO";
+
+      // V69: dos ITM consecutivos completando IC2 => bloqueo REAL por 1h.
+      if (!isDisciplineBypassedForCurrentAccount() && !isTradeLockedNow()) {
+        disciplineWins = DISCIPLINE_MAX_WINS;
+        saveDiscipline();
+        lockRealDiscipline("IC2 completo: 2 ITM seguidos");
+      }
     }
   } else {
     const loss = Number.isFinite(profitNum) && profitNum < 0 ? Math.abs(profitNum) : stakeUsed;
@@ -2340,6 +2929,12 @@ function updateC100AfterResult(result, profit = null) {
     c100State.dayProfit = dayProfit;
     c100State.dayLoss = dayLoss;
     c100State.lastResult = wasLevel2 ? "OTM_NIVEL_2_RESET" : "OTM_NIVEL_1_RESET";
+
+    // V69: una OTM corta la secuencia de 2 ITM IC2.
+    if (!isDisciplineBypassedForCurrentAccount()) {
+      disciplineWins = 0;
+      saveDiscipline();
+    }
   }
 
   saveC100State();
@@ -2349,9 +2944,11 @@ function updateC100AfterResult(result, profit = null) {
   if (normalized === "ITM" && !wasLevel2) {
     toast(`✅ IC2: nivel 1 ganado · próximo stake $${getC100Stake().toFixed(2)}`, 2400);
   } else if (normalized === "ITM" && wasLevel2) {
-    toast("✅ IC2: ciclo de 2 niveles completo · vuelve al stake base", 2600);
+    if (isTradeLockedNow()) toast("🔒 IC2 completo: REAL bloqueada 1h", 4200);
+    else toast("✅ IC2: ciclo de 2 niveles completo · vuelve al stake base", 2600);
   } else {
-    toast("↺ IC2: OTM registrado · vuelve al stake base", 2400);
+    if (isTradeLockedNow() && disciplineLosses >= DISCIPLINE_MAX_LOSSES) toast("🔒 2 OTM: REAL bloqueada 1h", 4200);
+    else toast("↺ IC2: OTM registrado · vuelve al stake base", 2400);
   }
 }
 function handleC100ContractClosed(contractId, isWin, profit = null) {
@@ -2430,6 +3027,7 @@ function ensureExecutionModeButton() {
     executionMode = shouldUseAutoHighLowExecution() ? EXECUTION_MODE_RISE_FALL : EXECUTION_MODE_HIGHLOW_AUTO;
     saveExecutionMode();
     applyExecutionModeUI();
+    applyEntryTimingModeUI();
     if (shouldUseAutoHighLowExecution()) {
       for (const it of history.slice(-12)) ensureSignalAutoPrecalc(it);
     } else {
@@ -2440,6 +3038,626 @@ function ensureExecutionModeButton() {
   };
 
   applyExecutionModeUI();
+  return btn;
+}
+
+
+/* =========================
+   Timing de entrada Rise/Fall
+   - AUTO post-58 cierre 60: espera el tick real >=58s, envía después de ese tick,
+     intenta programar inicio en la próxima vela y fija el cierre al segundo 60.
+   - V94: Cierre visual (vela) ON/OFF: misma entrada, pero vencimiento next_start+58
+     para probar acople con el gráfico de velas visual de Deriv.
+   - V66: la proposal se prepara desde 56s para que al post-58 la compra sea inmediata.
+========================= */
+function normalizeEntryTimingMode(mode) {
+  const m = String(mode || "").toUpperCase().trim();
+  // V94: dejamos solo ON/OFF para Cierre visual (vela).
+  // Si venía guardado el modo viejo duration_1m, lo tratamos como OFF (cierre 60s).
+  if (m === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY) return ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
+  return ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY;
+}
+function loadEntryTimingMode() {
+  try {
+    entryTimingMode = normalizeEntryTimingMode(localStorage.getItem(ENTRY_TIMING_MODE_KEY) || ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY);
+  } catch {
+    entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
+  }
+}
+function saveEntryTimingMode() {
+  try { localStorage.setItem(ENTRY_TIMING_MODE_KEY, normalizeEntryTimingMode(entryTimingMode)); } catch {}
+}
+function isEntryTimingVisual58() {
+  return normalizeEntryTimingMode(entryTimingMode) === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
+}
+function isNextCandleExpiryTiming() {
+  // High/Low usa barreras/proposals propios; este timing aplica a Rise/Fall.
+  const m = normalizeEntryTimingMode(entryTimingMode);
+  return (m === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY || m === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY) && !shouldUseAutoHighLowExecution();
+}
+function isEntryTimingStoredNextCandle() {
+  const m = normalizeEntryTimingMode(entryTimingMode);
+  return m === ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY || m === ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
+}
+function getEntryTimingModeLabel() {
+  const visualOn = isEntryTimingVisual58();
+  if (shouldUseAutoHighLowExecution()) return visualOn ? "⏱️ Cierre visual (vela) ON · solo RF" : "⏱️ Cierre visual (vela) OFF · solo RF";
+  return visualOn ? "⏱️ Cierre visual (vela) ON" : "⏱️ Cierre visual (vela) OFF";
+}
+function getEntryTimingShortText() {
+  const visualOn = isEntryTimingVisual58();
+  if (shouldUseAutoHighLowExecution()) return visualOn ? "Cierre visual (vela) 58s · solo Rise/Fall" : "Cierre 60s · solo Rise/Fall";
+  return visualOn ? "AUTO prearmado · cierre visual (vela) 58s" : "AUTO prearmado · cierre 60s";
+}
+function buildNextCandleTimingPlan(item = null) {
+  const anchorMs = Number(item?.signalAnchorEpochMs || 0);
+  const hasFloatingAnchor = Number.isFinite(anchorMs) && anchorMs > 0;
+  const itemMinute = Number(item?.minute);
+  const baseMinute = hasFloatingAnchor
+    ? Math.floor(anchorMs / 60000)
+    : (Number.isFinite(itemMinute) && itemMinute > 0 ? itemMinute : currentServerMinute());
+  const currentStartEpochSec = hasFloatingAnchor ? Math.floor(anchorMs / 1000) : baseMinute * 60;
+  const nextStartEpochSec = currentStartEpochSec + 60;
+  const visual58 = isEntryTimingVisual58();
+  const nextExpiryEpochSec = nextStartEpochSec + (visual58 ? 58 : 60);
+  const nowEpochSec = Math.floor(serverNowMs() / 1000);
+  return {
+    mode: visual58 ? ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY : ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY,
+    current_minute: baseMinute,
+    current_start_epoch_sec: currentStartEpochSec,
+    next_start_epoch_sec: nextStartEpochSec,
+    next_expiry_epoch_sec: nextExpiryEpochSec,
+    now_epoch_sec: nowEpochSec,
+    planned_duration_sec: nextExpiryEpochSec - nextStartEpochSec,
+    visual_candle_sync: visual58,
+    visual_candle_expiry_second: visual58 ? 58 : 60,
+    expected_contract_duration_if_bought_at_58: visual58 ? 60 : 62,
+    floating_anchor: hasFloatingAnchor,
+    anchor_epoch_ms: hasFloatingAnchor ? anchorMs : null,
+  };
+}
+const RISE_FALL_ALLOW_EQUALS_ENABLED = true;
+function getRiseFallDerivContractType(side) {
+  const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+
+  // V106.3:
+  // - API legacy: mantenemos CALLE/PUTE como veníamos usando.
+  // - API nueva PAT/OTP: empezamos con CALL/PUT porque los endpoints nuevos pueden
+  //   rechazar CALLE/PUTE. En la función de proposals agregamos fallbacks.
+  if (isNewPatApiMode()) return s || String(side || "").toUpperCase();
+
+  if (!RISE_FALL_ALLOW_EQUALS_ENABLED) return s || String(side || "").toUpperCase();
+  if (s === "CALL") return "CALLE";
+  if (s === "PUT") return "PUTE";
+  return String(side || "").toUpperCase();
+}
+function isRiseFallAllowEqualsContractType(contractType) {
+  const c = String(contractType || "").toUpperCase();
+  return c === "CALLE" || c === "PUTE";
+}
+function getRiseFallAllowEqualsAudit(side) {
+  const derivType = getRiseFallDerivContractType(side);
+  const sideNorm = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  return {
+    allow_equals: RISE_FALL_ALLOW_EQUALS_ENABLED,
+    deriv_contract_type: derivType,
+    deriv_contract_side: sideNorm,
+    allow_equals_rule: RISE_FALL_ALLOW_EQUALS_ENABLED
+      ? (sideNorm === "CALL" ? "CALL gana si salida >= entrada" : sideNorm === "PUT" ? "PUT gana si salida <= entrada" : "")
+      : "",
+  };
+}
+function buildRiseFallBaseParams(side, symbol, stake) {
+  return {
+    amount: stake,
+    basis: "stake",
+    contract_type: getRiseFallDerivContractType(side),
+    currency: DEFAULT_CURRENCY,
+    symbol,
+  };
+}
+
+// V106.3: compatibilidad con la API nueva de Options.
+// En la API nueva la documentación muestra proposals con `underlying_symbol`,
+// mientras la API legacy usaba `symbol`. Además algunos símbolos sintéticos
+// aparecen con código nuevo tipo 1HZ100V. Probamos variantes secuenciales
+// para no romper la base que ya generaba señales con R_10/R_25/R_50/R_75/R_100.
+const DERIV_NEW_SYMBOL_FALLBACKS = {
+  R_10: ["R_10", "1HZ10V"],
+  R_25: ["R_25", "1HZ25V"],
+  R_50: ["R_50", "1HZ50V"],
+  R_75: ["R_75", "1HZ75V"],
+  R_100: ["R_100", "1HZ100V"],
+  R_1000: ["R_1000", "1HZ1000V"],
+};
+function uniqList(arr) {
+  return Array.from(new Set((arr || []).map((x) => String(x || "").trim()).filter(Boolean)));
+}
+function getNewApiUnderlyingSymbolCandidates(symbol) {
+  const raw = String(symbol || "").trim();
+  return uniqList([raw, ...(DERIV_NEW_SYMBOL_FALLBACKS[raw] || [])]);
+}
+function getRiseFallContractTypeCandidates(side) {
+  const s = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side);
+  if (s === "CALL") return isNewPatApiMode() ? ["CALL", "CALLE"] : [getRiseFallDerivContractType(side), "CALL"];
+  if (s === "PUT") return isNewPatApiMode() ? ["PUT", "PUTE"] : [getRiseFallDerivContractType(side), "PUT"];
+  return [getRiseFallDerivContractType(side)];
+}
+function normalizeProposalParamsForNewApi(params = {}, symbol = "") {
+  if (!isNewPatApiMode()) return { ...params };
+  const p = { ...params };
+  delete p.symbol;
+  p.underlying_symbol = String(p.underlying_symbol || symbol || "");
+  return p;
+}
+function buildNewApiRiseFallProposalAttempts(variants, side, symbol, stake, item = null) {
+  if (!isNewPatApiMode()) return variants;
+
+  const out = [];
+  const contractTypes = getRiseFallContractTypeCandidates(side);
+  const symbols = getNewApiUnderlyingSymbolCandidates(symbol);
+  const seen = new Set();
+
+  function pushAttempt(label, params, timing) {
+    const key = JSON.stringify(params);
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ label, params, timing });
+  }
+
+  // 1) Primero intentamos el timing original pero con payload nuevo.
+  for (const v of variants || []) {
+    for (const ct of contractTypes) {
+      for (const sym of symbols) {
+        pushAttempt(
+          `${v.label}_NEW_UNDERLYING_${ct}_${sym}`,
+          normalizeProposalParamsForNewApi({ ...v.params, contract_type: ct, underlying_symbol: sym }, sym),
+          { ...(v.timing || {}), api_new_payload: true, underlying_symbol: sym, contract_type_attempt: ct }
+        );
+      }
+    }
+  }
+
+  // 2) Fallback seguro para post-58: duration 2s.
+  // La proposal se prearma 56-58s, pero se compra después del tick >=58s.
+  // Con duración 2s el cierre queda pegado al segundo 60 aprox.
+  for (const ct of contractTypes) {
+    for (const sym of symbols) {
+      pushAttempt(
+        `AUTO58_NEW_DURATION_2S_${ct}_${sym}`,
+        {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: ct,
+          currency: DEFAULT_CURRENCY,
+          duration: 2,
+          duration_unit: "s",
+          underlying_symbol: sym,
+        },
+        {
+          mode: "AUTO58_NEW_API_DURATION_2S",
+          variant: "new_api_duration_2s",
+          duration: 2,
+          duration_unit: "s",
+          underlying_symbol: sym,
+          contract_type_attempt: ct,
+          message: "Fallback API nueva: compra post-58 con duración 2s para cierre cercano al segundo 60.",
+        }
+      );
+    }
+  }
+
+  // 3) Fallback final: duración 1m con underlying_symbol, por si la cuenta no acepta 2s.
+  for (const ct of contractTypes) {
+    for (const sym of symbols) {
+      pushAttempt(
+        `AUTO58_NEW_DURATION_1M_${ct}_${sym}`,
+        {
+          amount: Number(stake),
+          basis: "stake",
+          contract_type: ct,
+          currency: DEFAULT_CURRENCY,
+          duration: 1,
+          duration_unit: "m",
+          underlying_symbol: sym,
+        },
+        {
+          mode: "AUTO58_NEW_API_DURATION_1M",
+          variant: "new_api_duration_1m",
+          duration: 1,
+          duration_unit: "m",
+          underlying_symbol: sym,
+          contract_type_attempt: ct,
+          message: "Fallback API nueva: duración 1m si Deriv rechaza date_expiry/date_start y 2s.",
+        }
+      );
+    }
+  }
+
+  return out;
+}
+function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
+  const base = buildRiseFallBaseParams(side, symbol, stake);
+  if (!isNextCandleExpiryTiming()) {
+    return [{
+      label: ENTRY_TIMING_AUTO58_DURATION_1M,
+      params: {
+        ...base,
+        duration: Number(DEFAULT_DURATION) || 1,
+        duration_unit: DEFAULT_DURATION_UNIT || "m",
+      },
+      timing: {
+        mode: ENTRY_TIMING_AUTO58_DURATION_1M,
+        variant: "duration_1m",
+        duration: Number(DEFAULT_DURATION) || 1,
+        duration_unit: DEFAULT_DURATION_UNIT || "m",
+      },
+    }];
+  }
+
+  const plan = buildNextCandleTimingPlan(item);
+  const suffix = plan.visual_candle_sync ? "visual58" : "cierre60";
+  const closeMsg = plan.visual_candle_sync
+    ? "cierre visual (vela) al segundo 58 de la vela operada"
+    : "cierre fijo al segundo 60";
+  return [
+    {
+      label: `AUTO58_DATE_START_EXPIRY_${suffix}`,
+      params: {
+        ...base,
+        date_start: plan.next_start_epoch_sec,
+        date_expiry: plan.next_expiry_epoch_sec,
+      },
+      timing: {
+        ...plan,
+        variant: plan.visual_candle_sync ? "date_start_plus_date_expiry_visual58" : "date_start_plus_date_expiry",
+        message: `AUTO pre-56/post-58: proposal prearmada; compra luego del tick >=58s; inicio programado en próxima vela y ${closeMsg}.`,
+      },
+    },
+    {
+      label: `AUTO58_DATE_EXPIRY_ONLY_${suffix}`,
+      params: {
+        ...base,
+        date_expiry: plan.next_expiry_epoch_sec,
+      },
+      timing: {
+        ...plan,
+        variant: plan.visual_candle_sync ? "date_expiry_only_visual58" : "date_expiry_only",
+        fallback_from: plan.visual_candle_sync ? "date_start_plus_date_expiry_visual58" : "date_start_plus_date_expiry",
+        message: `AUTO pre-56/post-58: Deriv no aceptó inicio programado; se usa proposal prearmada con ${closeMsg}.`,
+      },
+    },
+  ];
+}
+function getRiseFallTimingExtra(timing = null) {
+  if (!timing || typeof timing !== "object") return {};
+  return {
+    entry_timing_mode: String(timing.mode || ""),
+    entry_timing_variant: String(timing.variant || ""),
+    planned_next_start_time: Number(timing.next_start_epoch_sec || 0) || null,
+    planned_expiry_time: Number(timing.next_expiry_epoch_sec || 0) || null,
+    planned_duration_sec: Number(timing.planned_duration_sec || 0) || null,
+    visual_candle_sync: !!timing.visual_candle_sync,
+    visual_candle_expiry_second: Number(timing.visual_candle_expiry_second || 0) || null,
+    expected_contract_duration_if_bought_at_58: Number(timing.expected_contract_duration_if_bought_at_58 || 0) || null,
+    entry_timing_message: String(timing.message || ""),
+    entry_timing: { ...timing },
+  };
+}
+function extractContractAuditFields(src = null) {
+  const o = src && typeof src === "object" ? src : {};
+  const num = (...keys) => {
+    for (const k of keys) {
+      const v = Number(o?.[k]);
+      if (Number.isFinite(v)) return v;
+    }
+    return null;
+  };
+  const str = (...keys) => {
+    for (const k of keys) {
+      const v = o?.[k];
+      if (v !== undefined && v !== null && String(v) !== "") return String(v);
+    }
+    return "";
+  };
+  return {
+    purchase_time: num("purchase_time", "buy_time", "transaction_time"),
+    start_time: num("date_start", "start_time"),
+    expiry_time: num("date_expiry", "expiry_time"),
+    entry_spot: num("entry_spot", "entry_tick", "entry_spot_display_value"),
+    entry_spot_time: num("entry_spot_time", "entry_tick_time"),
+    exit_spot: num("exit_spot", "exit_tick", "exit_spot_display_value"),
+    exit_spot_time: num("exit_spot_time", "exit_tick_time"),
+    buy_price: num("buy_price", "ask_price"),
+    sell_price: num("sell_price"),
+    payout: num("payout"),
+    longcode: str("longcode", "shortcode"),
+  };
+}
+function compactAuditFields(obj = {}) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v !== null && v !== undefined && v !== "") out[k] = v;
+  }
+  return out;
+}
+async function requestRiseFallProposalWithTiming(side, symbol, stake, item = null, timeoutMs = 12000) {
+  const baseVariants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const variants = buildNewApiRiseFallProposalAttempts(baseVariants, side, symbol, stake, item);
+  const errors = [];
+
+  for (const variant of variants) {
+    try {
+      const payload = { proposal: 1, ...variant.params };
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_ATTEMPT", { label: variant.label, payload });
+      const res = await wsRequest(payload, timeoutMs);
+      if (res?.error) throw new Error(res.error.message || res.error.code || "proposal error");
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_OK", { label: variant.label, proposal_id: res?.proposal?.id || "" });
+      return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
+    } catch (e) {
+      const errText = `${variant.label}: ${e?.message || e}`;
+      errors.push(errText);
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("PROPOSAL_NEW_REJECTED", { error: errText });
+    }
+  }
+
+  const shortErrors = errors.slice(0, 8).join(" | ");
+  const extra = errors.length > 8 ? ` | +${errors.length - 8} intentos más` : "";
+  throw new Error(`Deriv rechazó proposal API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
+}
+async function buyRiseFallDirectWithTiming(side, symbol, stake, item = null, timeoutMs = 20000) {
+  const baseVariants = buildRiseFallTimingVariants(side, symbol, stake, item);
+  const variants = isNewPatApiMode()
+    ? buildNewApiRiseFallProposalAttempts(baseVariants, side, symbol, stake, item)
+    : baseVariants;
+  const errors = [];
+  for (const variant of variants) {
+    try {
+      const payload = { buy: 1, price: Number(stake), parameters: variant.params };
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_ATTEMPT", { label: variant.label, payload });
+      const res = await wsRequest(payload, timeoutMs);
+      if (res?.error) throw new Error(res.error.message || res.error.code || "buy error");
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_OK", { label: variant.label, contract_id: res?.buy?.contract_id || "" });
+      return { res, timing: variant.timing, params: variant.params, label: variant.label, errors };
+    } catch (e) {
+      const errText = `${variant.label}: ${e?.message || e}`;
+      errors.push(errText);
+      if (isNewPatApiMode()) window.DerivDebug?.log?.("BUY_NEW_REJECTED", { error: errText });
+    }
+  }
+  const shortErrors = errors.slice(0, 8).join(" | ");
+  const extra = errors.length > 8 ? ` | +${errors.length - 8} intentos más` : "";
+  throw new Error(`Deriv rechazó la compra API ${isNewPatApiMode() ? "nueva" : "legacy"} (${shortErrors}${extra}).`);
+}
+
+function getAutoPreProposalKey(item, side, symbol, stake) {
+  const plan = buildNextCandleTimingPlan(item);
+  const id = String(item?.id || `AUTO_PRE_${plan.current_minute}_${symbol}_${side}`);
+  return `${id}|${String(side || "")}|${String(symbol || "")}|${Number(stake || 0).toFixed(2)}|${plan.next_expiry_epoch_sec}`;
+}
+function isAutoPreProposalWindow(item = null) {
+  const ms = getSignalConfirmationMs(item);
+  return ms >= SIGNAL_AUTO_PREPROPOSAL_START_MS && ms <= SIGNAL_AUTO_PREPROPOSAL_END_MS;
+}
+function getValidAutoPreProposal(item, side, symbol, stake) {
+  const pp = item?.signalAutoPreProposal;
+  if (!pp || pp.status !== "ready") return null;
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide || String(pp.side || "") !== safeSide) return null;
+  if (String(pp.symbol || "") !== String(symbol || "")) return null;
+  const expectedStake = Number(stake);
+  const ppStake = Number(pp.stake);
+  if (!Number.isFinite(expectedStake) || !Number.isFinite(ppStake) || Math.abs(expectedStake - ppStake) > 0.005) return null;
+  if (!pp.proposal_id || !Number.isFinite(Number(pp.ask_price)) || Number(pp.ask_price) <= 0) return null;
+  const plan = buildNextCandleTimingPlan(item);
+  const ppExpiry = Number(pp?.timing?.next_expiry_epoch_sec || 0);
+  const planExpiry = Number(plan.next_expiry_epoch_sec || 0);
+  const ppVariant = String(pp?.timing?.variant || pp?.timing?.mode || "");
+  // V106.4:
+  // En API nueva podemos terminar usando fallback duration_2s / duration_1m.
+  // Esos fallbacks no traen next_expiry_epoch_sec, pero la proposal sí es válida.
+  // Antes se rechazaba como "no prearmada" aunque Deriv ya la hubiera devuelto OK.
+  const isDurationFallback =
+    ppVariant.includes("new_api_duration_2s") ||
+    ppVariant.includes("new_api_duration_1m") ||
+    ppVariant.includes("AUTO58_NEW_API_DURATION");
+  if (!isDurationFallback && ppExpiry && planExpiry && ppExpiry !== planExpiry) return null;
+  if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
+  return pp;
+}
+function markAutoPreProposalOnItem(item, payload) {
+  if (!item) return;
+  item.signalAutoPreProposal = payload && typeof payload === "object" ? { ...payload } : null;
+  try { saveHistory(history); } catch {}
+  try { if (modalCurrentItem && item.id && modalCurrentItem.id === item.id) updateSignalConfirmationUI(); } catch {}
+}
+async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preproposal") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!item || !safeSide) return false;
+  if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
+  if (item?.trade?.badge || item?.signalAutoEntry?.attempted) return false;
+  if (!isAutoPreProposalWindow(item)) return false;
+
+  const symbol = String(item.symbol || liveReplaySymbol || SYMBOLS[0] || "R_25");
+  try {
+    await ensureAuthorized();
+    await refreshAccountBalance({ force: false });
+  } catch {}
+  const stake = Number(getEffectiveTradeStake().toFixed(2));
+  const existing = getValidAutoPreProposal(item, safeSide, symbol, stake);
+  if (existing) return true;
+
+  const key = getAutoPreProposalKey(item, safeSide, symbol, stake);
+  if (autoPreProposalInFlight.has(key)) return false;
+  autoPreProposalInFlight.add(key);
+
+  markAutoPreProposalOnItem(item, {
+    status: "preparing",
+    side: safeSide,
+    symbol,
+    stake,
+    reason: String(reason || "auto_preproposal"),
+    prepared_start_at: Date.now(),
+    prepared_start_ms: Math.round(getSignalConfirmationMs(item)),
+  });
+
+  try {
+    await ensureAuthorized();
+    const pack = await requestRiseFallProposalWithTiming(safeSide, symbol, stake, item, 9000);
+    const proposal = pack?.res?.proposal;
+    const proposalId = proposal?.id ? String(proposal.id) : "";
+    const askPrice = Number(proposal?.ask_price);
+    const payout = Number(proposal?.payout);
+    if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
+      throw new Error("proposal prearmada inválida");
+    }
+    const profitPct = ((payout - askPrice) / askPrice) * 100;
+    markAutoPreProposalOnItem(item, {
+      status: "ready",
+      side: safeSide,
+      symbol,
+      stake,
+      proposal_id: proposalId,
+      ask_price: askPrice,
+      payout,
+      profit_pct: Number(profitPct),
+      contract_type: getRiseFallDerivContractType(safeSide),
+      ...getRiseFallAllowEqualsAudit(safeSide),
+      timing: { ...(pack.timing || {}) },
+      label: String(pack.label || ""),
+      reason: String(reason || "auto_preproposal"),
+      prepared_at: Date.now(),
+      prepared_ms: Math.round(getSignalConfirmationMs(item)),
+      expires_local_at: Date.now() + SIGNAL_AUTO_PREPROPOSAL_TTL_MS,
+    });
+    return true;
+  } catch (e) {
+    markAutoPreProposalOnItem(item, {
+      status: "error",
+      side: safeSide,
+      symbol,
+      stake,
+      reason: String(reason || "auto_preproposal"),
+      error: e?.message || String(e),
+      error_at: Date.now(),
+      error_ms: Math.round(getSignalConfirmationMs(item)),
+    });
+    return false;
+  } finally {
+    autoPreProposalInFlight.delete(key);
+  }
+}
+function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUTO_PREPROPOSAL_MISSING") {
+  if (!item || item?.signalAutoEntry?.attempted) return false;
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  item.signalAutoEntry = {
+    type: "AUTO_58_REAL",
+    attempted: true,
+    status: "cancelled",
+    side: normalizeSignalConfirmationSide(side) || "",
+    ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
+    sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
+    reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
+    at: Date.now(),
+    error: "Cancelada: la proposal no estaba prearmada. En v106.4 esto solo debe ocurrir si el modo estricto de prearmado está activado.",
+    post58_readiness: { ...(readiness || {}) },
+    preproposal: item?.signalAutoPreProposal || null,
+  };
+  saveHistory(history);
+  if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
+  toast(`⛔ AUTO ${label} cancelada: proposal no prearmada`, 2400);
+  return true;
+}
+function scanSignalAutoPreProposals() {
+  try {
+    if (areSignalsPaused()) return false;
+    if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
+    const nowMinute = currentServerMinute();
+    let started = false;
+    const candidates = (history || [])
+      .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => getSignalEnabledTradeSide(it))
+      .filter((it) => isAutoPreProposalWindow(it));
+    for (const it of candidates) {
+      const side = getSignalEnabledTradeSide(it);
+      if (side) {
+        void prepareRiseFallAutoPreProposal(it, side, "signal_scan_56_58");
+        started = true;
+      }
+    }
+    return started;
+  } catch { return false; }
+}
+function getLiveAutoPreProposalKey(sym, side, minute, stake) {
+  return `LIVE|${String(sym || "")}|${Number(minute || 0)}|${String(side || "")}|${Number(stake || 0).toFixed(2)}`;
+}
+function getLiveCachedAutoPreProposal(sym, side, minute, stake) {
+  const key = getLiveAutoPreProposalKey(sym, side, minute, stake);
+  const pp = liveAutoPreProposalCache.get(key) || null;
+  if (!pp || pp.status !== "ready") return null;
+  if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
+  return pp;
+}
+async function prepareLiveAutoPreProposalIfNeeded(reason = "live_preproposal") {
+  try {
+    if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
+    if ((localStorage.getItem("activeView") || "signals") !== "live") return false;
+    ensureLiveSignalConfirmationsForCurrentMinute();
+    const side = getLiveEnabledTradeSide();
+    if (!side) return false;
+    const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+    const minute = getLiveReplayMinute(sym);
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    if (getLiveCachedAutoPreProposal(sym, side, minute, stake)) return true;
+    const tmp = buildLiveManualTradeItem(side);
+    tmp.id = `LIVE_PREPROPOSAL-${minute}-${sym}-${side}`;
+    if (!isAutoPreProposalWindow(tmp)) return false;
+    const ok = await prepareRiseFallAutoPreProposal(tmp, side, reason);
+    if (ok && tmp.signalAutoPreProposal?.status === "ready") {
+      liveAutoPreProposalCache.set(getLiveAutoPreProposalKey(sym, side, minute, stake), { ...tmp.signalAutoPreProposal });
+      return true;
+    }
+    if (tmp.signalAutoPreProposal) liveAutoPreProposalCache.set(getLiveAutoPreProposalKey(sym, side, minute, stake), { ...tmp.signalAutoPreProposal });
+  } catch {}
+  return false;
+}
+function applyEntryTimingModeUI() {
+  const btn = pickEl("entryTimingModeBtn");
+  if (!btn) return;
+  const visualOn = isEntryTimingVisual58();
+  btn.textContent = getEntryTimingModeLabel();
+  btn.classList.toggle("active", visualOn && !shouldUseAutoHighLowExecution());
+  btn.title = visualOn
+    ? "Cierre visual (vela) ON: compra post-58 como ahora, entrada en la próxima vela y vencimiento next_start+58 para probar acople con el gráfico de velas visual de Deriv. Solo aplica a Rise/Fall."
+    : "Cierre visual (vela) OFF: compra post-58 como ahora, entrada en la próxima vela y vencimiento next_start+60. Solo aplica a Rise/Fall.";
+}
+function ensureEntryTimingModeButton() {
+  let btn = pickEl("entryTimingModeBtn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+    btn = document.createElement("button");
+    btn.id = "entryTimingModeBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.style.gridColumn = "1 / -1";
+    const execBtn = pickEl("executionModeBtn");
+    if (execBtn && execBtn.parentElement === host) execBtn.insertAdjacentElement("afterend", btn);
+    else host.appendChild(btn);
+  }
+  btn.onclick = () => {
+    entryTimingMode = isEntryTimingVisual58()
+      ? ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY
+      : ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
+    saveEntryTimingMode();
+    applyEntryTimingModeUI();
+    updateModalCandleStatusUI();
+    toast(isEntryTimingVisual58() ? "⏱️ Cierre visual (vela) ON" : "⏱️ Cierre visual (vela) OFF", 1900);
+  };
+  applyEntryTimingModeUI();
   return btn;
 }
 
@@ -3294,8 +4512,114 @@ function shouldAutoOpenChartNow() {
   // Si sale una señal nueva, la app cambia a Señales y abre/reemplaza el gráfico.
   // Solo se bloquea en Configuración para no tocar ajustes mientras los estás editando.
   if (settingsModal && !settingsModal.classList.contains("hidden")) return false;
+  if (isSignalFatigueCooldownActive()) return false;
 
   return true;
+}
+
+/* =========================
+   Auto Replay X2 en modal de señal
+========================= */
+function loadAutoReplayX2Setting() {
+  try {
+    const raw = localStorage.getItem(AUTO_REPLAY_X2_KEY);
+    // Por defecto ON: es una ayuda visual, no ejecuta operaciones ni suma puntos.
+    autoReplayX2OnSignal = raw == null ? true : raw === "1";
+  } catch {
+    autoReplayX2OnSignal = true;
+  }
+}
+function saveAutoReplayX2Setting() {
+  try { localStorage.setItem(AUTO_REPLAY_X2_KEY, autoReplayX2OnSignal ? "1" : "0"); } catch {}
+}
+function applyAutoReplayX2UI() {
+  const btn = pickEl("autoReplayX2Btn");
+  if (!btn) return;
+  btn.textContent = autoReplayX2OnSignal ? "🎬 Auto Replay X2 ON" : "🎬 Auto Replay X2 OFF";
+  btn.classList.toggle("active", !!autoReplayX2OnSignal);
+  btn.title = autoReplayX2OnSignal
+    ? "Si el modal de una señal sigue abierto, al segundo 28 cambia solo a Replay y reproduce en X2. Si cerrás el modal, se cancela."
+    : "No cambia automáticamente a Replay X2";
+}
+function ensureAutoReplayX2Button() {
+  let btn = pickEl("autoReplayX2Btn");
+  if (!btn) {
+    const host =
+      document.querySelector("#settingsModal .settingsBody .controls") ||
+      document.querySelector(".settingsBody .controls") ||
+      null;
+    if (!host) return null;
+
+    btn = document.createElement("button");
+    btn.id = "autoReplayX2Btn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    const autoOpen = pickEl("autoOpenChartBtn");
+    if (autoOpen?.parentNode === host && autoOpen.nextSibling) host.insertBefore(btn, autoOpen.nextSibling);
+    else host.appendChild(btn);
+  }
+
+  btn.onclick = () => {
+    autoReplayX2OnSignal = !autoReplayX2OnSignal;
+    saveAutoReplayX2Setting();
+    applyAutoReplayX2UI();
+    if (!autoReplayX2OnSignal) cancelModalAutoReplayX2();
+    else scheduleModalAutoReplayX2(modalCurrentItem, "toggle_on");
+    toast(autoReplayX2OnSignal ? "🎬 Auto Replay X2 ON" : "🎬 Auto Replay X2 OFF", 1200);
+  };
+
+  applyAutoReplayX2UI();
+  return btn;
+}
+function cancelModalAutoReplayX2() {
+  if (modalAutoReplayTimer) clearTimeout(modalAutoReplayTimer);
+  modalAutoReplayTimer = null;
+  modalAutoReplayToken = "";
+}
+function getModalAutoReplayToken(item = modalCurrentItem) {
+  if (!item) return "";
+  return `${String(item.id || "")}|${String(item.symbol || "")}|${Number(item.minute) || 0}|${String(modalOpenContext?.source || "")}`;
+}
+function isModalAutoReplayEligible(item = modalCurrentItem) {
+  if (!autoReplayX2OnSignal) return false;
+  if (!item || !chartModal || chartModal.classList.contains("hidden")) return false;
+  if (modalReplayState?.open) return false;
+  if (!isItemLiveMinute(item)) return false;
+  const ms = getSignalConfirmationMs(item);
+  // Si ya pasó demasiado el punto de cambio, no forzamos replay tarde para no confundirte.
+  return ms >= 0 && ms <= 36000;
+}
+function scheduleModalAutoReplayX2(item = modalCurrentItem, reason = "open") {
+  cancelModalAutoReplayX2();
+  if (!isModalAutoReplayEligible(item)) return;
+  const token = getModalAutoReplayToken(item);
+  if (!token) return;
+
+  modalAutoReplayToken = token;
+  const ms = getSignalConfirmationMs(item);
+  const delay = Math.max(250, AUTO_REPLAY_X2_TRIGGER_MS - ms);
+
+  modalAutoReplayTimer = setTimeout(() => {
+    modalAutoReplayTimer = null;
+    runModalAutoReplayX2(token, reason);
+  }, delay);
+}
+function runModalAutoReplayX2(token, reason = "timer") {
+  if (!autoReplayX2OnSignal) return;
+  if (!modalCurrentItem || getModalAutoReplayToken(modalCurrentItem) !== token) return;
+  if (!chartModal || chartModal.classList.contains("hidden")) return;
+  if (!isItemLiveMinute(modalCurrentItem)) return;
+
+  const ms = getSignalConfirmationMs(modalCurrentItem);
+  if (ms < AUTO_REPLAY_X2_TRIGGER_MS - 450) {
+    scheduleModalAutoReplayX2(modalCurrentItem, "early_retry");
+    return;
+  }
+  if (ms > 36000 || modalReplayState?.open) return;
+
+  if (modalChartView !== "candles1m") setModalChartView("candles1m");
+  openModalReplay({ speed: AUTO_REPLAY_X2_SPEED, source: "auto_x2" });
+  toast("🎬 Replay X2 automático", 900);
 }
 
 /* =========================
@@ -3337,13 +4661,16 @@ function startUiTimers() {
   uiTimer = setInterval(() => {
     updateTickHealthUI();
     updateCountdownUI();
+    updateMentalCooldownUI();
+    updateSignalFatigueUI();
     updateDisciplineLockUI(false);
     updateC100PanelUI();
-    // ✅ FIX AUTO 59 DEMO/REAL:
-    // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 59.
+    // ✅ FIX AUTO 58 DEMO/REAL:
+    // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 58.
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
     updateModalCandleStatusUI();
     refreshOpenSignalStageBadges();
+    scanSignalAutoPreProposals();
     scanSignalAutoEntriesAt57();
   }, getUiIntervalMs());
 }
@@ -3511,10 +4838,14 @@ function areSignalsPaused(viewName = null) {
   // Pausa manual global + pausa automática cuando se abre la pestaña En vivo.
   // En vivo es un modo aparte: sigue recibiendo ticks para dibujar, pero no crea nuevas señales
   // ni dispara autoentradas de señales mientras esa pestaña está activa.
+  if (isMentalCooldownActive()) return true;
+  if (isSignalFatigueCooldownActive()) return true;
   const view = viewName || getActiveViewName();
   return !!liveAnalysisPaused || view === "live";
 }
 function getSignalsPauseReason(viewName = null) {
+  if (isMentalCooldownActive()) return "mental_cooldown";
+  if (isSignalFatigueCooldownActive()) return "signal_fatigue";
   const view = viewName || getActiveViewName();
   if (view === "live") return "live_tab";
   if (liveAnalysisPaused) return "manual";
@@ -3606,11 +4937,35 @@ function ensureLiveAnalysisPauseButton() {
   applyLiveAnalysisPauseUI();
   return btn;
 }
+
+function isCleanVisualModeItem(it) {
+  return [MODE_REDUCCION_VISUAL_25S, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA].includes(normalizeSignalMode(it?.mode || MODE_REDUCCION_CONSTRUCTIVA_CONTINUA));
+}
+function getCleanVisualHistory() {
+  return (history || []).filter(isCleanVisualModeItem);
+}
+function getVisibleCleanVisualHistory() {
+  const clean = getCleanVisualHistory();
+  return clean.slice(-MAX_VISIBLE_SIGNALS);
+}
+function trimSignalsDomToVisibleLimit() {
+  try {
+    if (!signalsEl) return;
+    while (signalsEl.children.length > MAX_VISIBLE_SIGNALS) {
+      signalsEl.removeChild(signalsEl.lastElementChild);
+    }
+  } catch {}
+}
+
 function updateCounter(viewName = null) {
   const activeView = viewName || (localStorage.getItem("activeView") || "signals");
   if (!counterEl) return;
   if (activeView === "trades") {
-    counterEl.textContent = `Trades: ${tradesJournal.length}`;
+    counterEl.textContent = `Trades ${getTradingAccountLabel()}: ${getTradeJournalVisibleCount()}`;
+    return;
+  }
+  if (activeView === "process") {
+    counterEl.textContent = `Proceso: ${getBrainProcessTodayScore()} pts`;
     return;
   }
   if (activeView === "practice") {
@@ -3621,7 +4976,13 @@ function updateCounter(viewName = null) {
     counterEl.textContent = `En vivo: ${liveReplaySymbol || SYMBOLS[0] || "—"}`;
     return;
   }
-  counterEl.textContent = `Señales: ${history.length}`;
+  {
+    const totalSignals = getCleanVisualHistory().length;
+    const visibleSignals = Math.min(totalSignals, MAX_VISIBLE_SIGNALS);
+    counterEl.textContent = totalSignals > MAX_VISIBLE_SIGNALS
+      ? `Señales: ${totalSignals}/${MAX_HISTORY} · visibles ${visibleSignals}`
+      : `Señales: ${totalSignals}/${MAX_HISTORY}`;
+  }
 }
 
 function escapeHtml(str) {
@@ -3668,6 +5029,156 @@ function getTradeExecutionTitle() {
   return `Operar ${getTradingAccountLabel()} 1m`;
 }
 
+/* =========================
+   V106.2 API Deriv: Legacy vs Nueva PAT/OTP
+========================= */
+function normalizeDerivApiMode(v) {
+  const s = String(v || "").toLowerCase().trim();
+  return s === DERIV_API_MODE_NEW_PAT || s === "new" || s === "pat" || s === "otp"
+    ? DERIV_API_MODE_NEW_PAT
+    : DERIV_API_MODE_LEGACY;
+}
+function getDerivApiMode() {
+  try { return normalizeDerivApiMode(localStorage.getItem(DERIV_API_MODE_KEY) || DERIV_API_MODE_LEGACY); }
+  catch { return DERIV_API_MODE_LEGACY; }
+}
+function isNewPatApiMode() {
+  return getDerivApiMode() === DERIV_API_MODE_NEW_PAT;
+}
+function setDerivApiMode(mode) {
+  try { localStorage.setItem(DERIV_API_MODE_KEY, normalizeDerivApiMode(mode)); } catch {}
+}
+function getDerivApiModeLabel() {
+  return isNewPatApiMode() ? "API nueva PAT/OTP" : "API legacy";
+}
+function getDerivNewPatToken() {
+  try { return localStorage.getItem(DERIV_NEW_PAT_KEY) || ""; } catch { return ""; }
+}
+function setDerivNewPatToken(v) {
+  try { localStorage.setItem(DERIV_NEW_PAT_KEY, String(v || "").trim()); } catch {}
+}
+function clearDerivNewPatToken() {
+  try { localStorage.removeItem(DERIV_NEW_PAT_KEY); } catch {}
+}
+function getDerivNewAppId() {
+  try { return localStorage.getItem(DERIV_NEW_APP_ID_KEY) || ""; } catch { return ""; }
+}
+function setDerivNewAppId(v) {
+  try { localStorage.setItem(DERIV_NEW_APP_ID_KEY, String(v || "").trim()); } catch {}
+}
+function getDerivNewAccountKey(scope = getCurrentAccountScope()) {
+  return scope === ACCOUNT_MODE_REAL ? DERIV_NEW_ACCOUNT_REAL_KEY : DERIV_NEW_ACCOUNT_DEMO_KEY;
+}
+function getDerivNewAccountId(scope = getCurrentAccountScope()) {
+  try { return localStorage.getItem(getDerivNewAccountKey(scope)) || ""; } catch { return ""; }
+}
+function setDerivNewAccountId(scope, accountId) {
+  try { localStorage.setItem(getDerivNewAccountKey(scope), String(accountId || "").trim()); } catch {}
+}
+function getDerivNewApiHeaders() {
+  const token = getDerivNewPatToken();
+  const appId = getDerivNewAppId();
+  if (!token) throw new Error("Falta PAT de API nueva");
+  if (!appId) throw new Error("Falta App ID de API nueva");
+  return {
+    "Authorization": `Bearer ${token}`,
+    "Deriv-App-ID": appId,
+    "Content-Type": "application/json"
+  };
+}
+function getDerivNewApiErrorMessage(data, fallback = "Error API nueva") {
+  try {
+    const first = Array.isArray(data?.errors) ? data.errors[0] : null;
+    return first?.message || first?.code || data?.error?.message || data?.message || fallback;
+  } catch { return fallback; }
+}
+async function derivNewApiFetchJson(path, options = {}) {
+  const url = `${DERIV_NEW_API_BASE}${path}`;
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      ...getDerivNewApiHeaders(),
+      ...(options.headers || {})
+    }
+  });
+  let data = null;
+  try { data = await res.json(); } catch { data = null; }
+  if (!res.ok) {
+    throw new Error(`${res.status}: ${getDerivNewApiErrorMessage(data, res.statusText || "HTTP error")}`);
+  }
+  return data;
+}
+function findNewApiAccountsArray(obj, depth = 0) {
+  if (!obj || depth > 5) return [];
+  if (Array.isArray(obj)) {
+    const looksLikeAccounts = obj.some((x) => x && typeof x === "object" && (
+      x.id || x.account_id || x.accountId || x.loginid || x.login_id || x.account_type || x.is_virtual !== undefined || x.is_demo !== undefined
+    ));
+    if (looksLikeAccounts) return obj;
+    for (const x of obj) {
+      const found = findNewApiAccountsArray(x, depth + 1);
+      if (found.length) return found;
+    }
+    return [];
+  }
+  if (typeof obj === "object") {
+    const preferred = [obj.data?.accounts, obj.accounts, obj.data, obj.result, obj.items].filter(Boolean);
+    for (const v of preferred) {
+      const found = findNewApiAccountsArray(v, depth + 1);
+      if (found.length) return found;
+    }
+    for (const v of Object.values(obj)) {
+      const found = findNewApiAccountsArray(v, depth + 1);
+      if (found.length) return found;
+    }
+  }
+  return [];
+}
+function normalizeNewApiAccount(raw) {
+  const r = raw && typeof raw === "object" ? raw : {};
+  const id = String(r.id || r.account_id || r.accountId || r.loginid || r.login_id || r.uuid || "").trim();
+  const typeText = String(r.account_type || r.accountType || r.type || r.group || r.name || r.display_name || r.loginid || r.login_id || id || "").toLowerCase();
+  const isDemo = r.is_demo === true || r.is_virtual === true || r.demo === true || typeText.includes("demo") || typeText.includes("virtual") || id.toUpperCase().startsWith("VRTC");
+  const isReal = r.is_real === true || r.real === true || (!isDemo && (typeText.includes("real") || id));
+  return {
+    id,
+    isDemo,
+    isReal,
+    currency: String(r.currency || r.currency_code || ""),
+    raw: r
+  };
+}
+async function discoverNewApiAccounts({ save = true } = {}) {
+  const data = await derivNewApiFetchJson("/trading/v1/options/accounts", { method: "GET" });
+  const raw = findNewApiAccountsArray(data);
+  const accounts = raw.map(normalizeNewApiAccount).filter((x) => x.id);
+  if (save) {
+    try { localStorage.setItem(DERIV_NEW_ACCOUNTS_CACHE_KEY, JSON.stringify({ at: Date.now(), accounts })); } catch {}
+    const demo = accounts.find((x) => x.isDemo) || null;
+    const real = accounts.find((x) => x.isReal && !x.isDemo) || null;
+    if (demo?.id && !getDerivNewAccountId(ACCOUNT_MODE_DEMO)) setDerivNewAccountId(ACCOUNT_MODE_DEMO, demo.id);
+    if (real?.id && !getDerivNewAccountId(ACCOUNT_MODE_REAL)) setDerivNewAccountId(ACCOUNT_MODE_REAL, real.id);
+  }
+  return accounts;
+}
+async function resolveNewApiAccountId(scope = getCurrentAccountScope()) {
+  const stored = getDerivNewAccountId(scope);
+  if (stored) return stored;
+  const accounts = await discoverNewApiAccounts({ save: true });
+  const wantDemo = scope !== ACCOUNT_MODE_REAL;
+  const picked = accounts.find((x) => wantDemo ? x.isDemo : (x.isReal && !x.isDemo)) || accounts[0] || null;
+  if (!picked?.id) throw new Error(`No encontré Account ID ${wantDemo ? "DEMO" : "REAL"} en API nueva`);
+  setDerivNewAccountId(scope, picked.id);
+  try { syncNewApiSettingsInputs(); } catch {}
+  return picked.id;
+}
+async function getNewApiOtpWebSocketUrl(scope = getCurrentAccountScope()) {
+  const accountId = await resolveNewApiAccountId(scope);
+  const data = await derivNewApiFetchJson(`/trading/v1/options/accounts/${encodeURIComponent(accountId)}/otp`, { method: "POST" });
+  const url = data?.data?.url || data?.url || data?.result?.url;
+  if (!url || !String(url).startsWith("wss://")) throw new Error("OTP no devolvió URL WebSocket válida");
+  return String(url);
+}
 
 function loadKeepClosedAwaySignals() {
   try {
@@ -3711,14 +5222,12 @@ function toggleKeepClosedAwaySignals() {
   }
 }
 function ensureKeepClosedAwaySignalsToggle() {
-  const btn = ensureViewActionButton("signals", {
-    id: "keepClosedAwaySignalsBtn",
-    text: keepClosedAwaySignals ? "🧪 Guardar fuera SNR: SÍ" : "🧪 Guardar fuera SNR: NO",
-    title: "Conserva o elimina señales sin trade que cierran fuera de zona azul/amarilla",
-    onClick: toggleKeepClosedAwaySignals,
-  });
-  updateKeepClosedAwaySignalsButton();
-  return btn;
+  // V106.9.2 CLEAN: se elimina el control “Guardar fuera SNR” porque este modo no usa SNR.
+  const wrap = document.getElementById("keepClosedAwaySignalsBtnWrap");
+  if (wrap) wrap.remove();
+  const btn = document.getElementById("keepClosedAwaySignalsBtn");
+  if (btn) btn.remove();
+  return null;
 }
 
 function getSignalEvalButtons() {
@@ -3811,10 +5320,28 @@ function renderTradesView() {
   updateCounter("trades");
   list.innerHTML = "";
 
-  if (!tradesJournal.length) {
-    list.innerHTML = `<div style="padding:12px; opacity:.9;">Todavía no hay trades guardados para estudio.</div>`;
+  const visibleTrades = getTradeJournalVisibleList();
+  const otherCount = getTradeJournalHiddenOtherCount();
+  const scopeLabel = getTradingAccountLabel();
+  const scopeIcon = getTradingAccountIcon();
+
+  const header = document.createElement("div");
+  header.className = "tradesScopeNotice";
+  header.style.padding = "10px 12px";
+  header.style.margin = "8px 0 10px";
+  header.style.borderRadius = "14px";
+  header.style.border = "1px solid rgba(34,211,238,.22)";
+  header.style.background = "rgba(8,47,73,.24)";
+  header.style.fontWeight = "900";
+  header.style.fontSize = "13px";
+  header.style.color = "rgba(255,255,255,.88)";
+  header.textContent = `${scopeIcon} Trades ${scopeLabel}: ${visibleTrades.length}${otherCount ? ` · ocultos de la otra cuenta: ${otherCount}` : ""}`;
+  list.appendChild(header);
+
+  if (!visibleTrades.length) {
+    list.insertAdjacentHTML("beforeend", `<div style="padding:12px; opacity:.9;">Todavía no hay trades ${scopeLabel} guardados para estudio.</div>`);
   } else {
-    for (const entry of tradesJournal) {
+    for (const entry of visibleTrades) {
       const item = {
         id: entry.id,
         minute: entry.minute,
@@ -3829,6 +5356,7 @@ function renderTradesView() {
         journal_id: entry.journal_id || "",
         feedback_at: entry.feedback_at || 0,
         feedback_source: entry.feedback_source || "",
+        account_mode: getTradeJournalAccountMode(entry) || ACCOUNT_MODE_DEMO,
         ticks: Array.isArray(entry.ticks) ? entry.ticks : [],
         nextOutcome: entry.nextOutcome || "",
         minuteComplete: true,
@@ -3849,6 +5377,423 @@ function renderTradesView() {
     ensurePracticeQueue();
     updatePracticePoolLabel();
   } catch {}
+}
+
+
+/* =========================
+   🧠 Proceso — puntos, premios y bloqueo emocional
+========================= */
+const BRAIN_PROCESS_STORE_KEY = "brainProcessEvents_v1";
+const BRAIN_PROCESS_DAILY_GOAL = 50;
+const BRAIN_PROCESS_WEEKLY_GOAL = 100;
+const BRAIN_PROCESS_MAX_EVENTS = 700;
+
+const BRAIN_PROCESS_ACTIONS = {
+  good_analysis: {
+    label: "Análisis bien hecho",
+    points: 3,
+    icon: "🎯",
+    message: "Buen análisis. Premiaste el proceso, no el resultado.",
+  },
+  avoided_missing_points: {
+    label: "No entré: faltaban puntos",
+    points: 2,
+    icon: "🛡️",
+    message: "Protegiste la cuenta. No operar también es operar bien.",
+  },
+  avoided_doubt: {
+    label: "No entré: duda real",
+    points: 2,
+    icon: "⏭️",
+    message: "Pasaste una vela dudosa. La claridad vale más que la urgencia.",
+  },
+  avoided_forcing: {
+    label: "No entré: estaba forzando",
+    points: 5,
+    icon: "🧠",
+    message: "Detectaste el impulso antes de obedecerlo.",
+    blockTrade: true,
+    blockReason: "Estoy forzando",
+  },
+  avoided_revenge: {
+    label: "Evité revancha",
+    points: 5,
+    icon: "🔥",
+    message: "Hoy le ganaste al impulso, no al mercado.",
+    blockTrade: true,
+    blockReason: "Revancha / recuperar",
+  },
+  good_otm: {
+    label: "OTM bien ejecutado",
+    points: 3,
+    icon: "✅",
+    message: "Resultado negativo, proceso correcto. No se cambia el sistema.",
+  },
+  good_itm: {
+    label: "ITM bien ejecutado",
+    points: 3,
+    icon: "✅",
+    message: "Buena ejecución. Sin euforia, seguimos igual.",
+  },
+  respected_block: {
+    label: "Respeté bloqueo",
+    points: 5,
+    icon: "🔒",
+    message: "Cortaste el patrón antes de que el patrón te controle.",
+  },
+  closed_disciplined: {
+    label: "Cerré sesión disciplinado",
+    points: 5,
+    icon: "🏁",
+    message: "Terminaste respetando el sistema. Eso también es ganar.",
+  },
+};
+
+const BRAIN_PROCESS_REWARDS = [
+  { points: 10, title: "Descanso de 3 minutos", text: "Alejate del gráfico. Respirá. Volvé solo si estás neutral." },
+  { points: 20, title: "Mate/café tranquilo", text: "Premio por respetar el sistema, no por ganar una vela." },
+  { points: 30, title: "Música 10 minutos", text: "Bajá tensión. El objetivo es claridad, no impulso." },
+  { points: 50, title: "Sesión disciplinada", text: "Podés cerrar la sesión con logro completo." },
+  { points: 100, title: "Premio semanal", text: "Elegí un premio personal por sostener disciplina." },
+];
+
+let brainProcessEvents = loadBrainProcessEvents();
+let processMiniPanelEl = null;
+let processMiniBlockedNoteEl = null;
+
+function loadBrainProcessEvents() {
+  try {
+    const raw = localStorage.getItem(BRAIN_PROCESS_STORE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(Boolean).slice(-BRAIN_PROCESS_MAX_EVENTS) : [];
+  } catch {
+    return [];
+  }
+}
+function saveBrainProcessEvents() {
+  try {
+    brainProcessEvents = (Array.isArray(brainProcessEvents) ? brainProcessEvents : []).filter(Boolean).slice(-BRAIN_PROCESS_MAX_EVENTS);
+    localStorage.setItem(BRAIN_PROCESS_STORE_KEY, JSON.stringify(brainProcessEvents));
+  } catch {}
+}
+function getBrainProcessDayKey(ts = Date.now()) {
+  const d = new Date(Number(ts) || Date.now());
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function getBrainProcessTodayEvents() {
+  const key = getBrainProcessDayKey();
+  return (brainProcessEvents || []).filter((ev) => ev && ev.day === key);
+}
+function getBrainProcessTodayScore() {
+  return getBrainProcessTodayEvents().reduce((acc, ev) => acc + (Number(ev.points) || 0), 0);
+}
+function getBrainProcessWeekEvents() {
+  const start = Date.now() - 6 * 24 * 60 * 60 * 1000;
+  return (brainProcessEvents || []).filter((ev) => Number(ev?.ts || 0) >= start);
+}
+function getBrainProcessWeekScore() {
+  return getBrainProcessWeekEvents().reduce((acc, ev) => acc + (Number(ev.points) || 0), 0);
+}
+function getBrainProcessLevel(score = getBrainProcessTodayScore()) {
+  if (score >= 80) return "Mente blindada";
+  if (score >= 50) return "Proceso completo";
+  if (score >= 30) return "En control";
+  if (score >= 15) return "Calmando impulso";
+  return "Entrenando";
+}
+function getBrainProcessStreak() {
+  const today = getBrainProcessTodayEvents().filter((ev) => Number(ev.points) > 0);
+  let streak = 0;
+  for (let i = today.length - 1; i >= 0; i--) {
+    const type = String(today[i]?.type || "");
+    if (type.includes("avoided") || type.includes("good") || type === "respected_block" || type === "closed_disciplined") streak += 1;
+    else break;
+  }
+  return streak;
+}
+function isBrainRewardClaimedToday(rewardPoints) {
+  const key = getBrainProcessDayKey();
+  return (brainProcessEvents || []).some((ev) => ev?.day === key && ev?.type === "reward_claimed" && Number(ev.rewardPoints) === Number(rewardPoints));
+}
+function getBrainProcessNextReward(score = getBrainProcessTodayScore()) {
+  return BRAIN_PROCESS_REWARDS.find((r) => Number(r.points) > Number(score)) || null;
+}
+function getBrainProcessUnlockedRewards(score = getBrainProcessTodayScore()) {
+  return BRAIN_PROCESS_REWARDS.filter((r) => Number(r.points) <= Number(score));
+}
+function makeBrainProcessEvent(actionKey, extra = {}) {
+  const action = BRAIN_PROCESS_ACTIONS[actionKey] || {};
+  const ts = Date.now();
+  return {
+    id: `process_${ts}_${Math.random().toString(36).slice(2, 8)}`,
+    type: String(actionKey || extra.type || "custom"),
+    label: extra.label || action.label || "Proceso",
+    points: Number(extra.points ?? action.points ?? 0),
+    icon: extra.icon || action.icon || "🧠",
+    message: extra.message || action.message || "Proceso registrado.",
+    ts,
+    day: getBrainProcessDayKey(ts),
+    source: extra.source || (modalCurrentItem ? "modal" : "process_tab"),
+    relatedSignalId: extra.relatedSignalId || String(modalCurrentItem?.id || ""),
+    relatedTradeId: extra.relatedTradeId || String(modalCurrentItem?.trade?.contract_id || ""),
+    blockedTrade: !!(extra.blockedTrade ?? action.blockTrade),
+    blockReason: extra.blockReason || action.blockReason || "",
+  };
+}
+function addBrainProcessEvent(actionKey, extra = {}) {
+  const ev = makeBrainProcessEvent(actionKey, extra);
+  brainProcessEvents.unshift(ev);
+  saveBrainProcessEvents();
+
+  if (ev.blockedTrade && modalCurrentItem) {
+    markBrainProcessTradeBlocked(modalCurrentItem, ev.blockReason || ev.label, ev);
+  }
+
+  renderProcessView();
+  updateProcessMiniPanelUI();
+  updateCounter(getActiveViewName());
+  try { updateModalCandleStatusUI(); } catch {}
+  toast(`${ev.icon} +${ev.points} Proceso · ${ev.label}`, 1700);
+  return ev;
+}
+function claimBrainProcessReward(rewardPoints) {
+  const reward = BRAIN_PROCESS_REWARDS.find((r) => Number(r.points) === Number(rewardPoints));
+  if (!reward) return;
+  if (getBrainProcessTodayScore() < reward.points) {
+    toast(`Faltan ${reward.points - getBrainProcessTodayScore()} puntos para ese premio`, 1400);
+    return;
+  }
+  if (isBrainRewardClaimedToday(reward.points)) {
+    toast("🎁 Ese premio ya fue tomado hoy", 1300);
+    return;
+  }
+  const ev = makeBrainProcessEvent("reward_claimed", {
+    type: "reward_claimed",
+    label: `Premio tomado: ${reward.title}`,
+    points: 0,
+    icon: "🎁",
+    message: reward.text,
+    rewardPoints: reward.points,
+    source: "process_tab",
+  });
+  ev.rewardPoints = reward.points;
+  brainProcessEvents.unshift(ev);
+  saveBrainProcessEvents();
+  renderProcessView();
+  updateProcessMiniPanelUI();
+  toast(`🎁 Premio: ${reward.title}`, 2200);
+}
+function resetBrainProcessToday() {
+  if (!confirm("¿Resetear solo los puntos de Proceso de hoy?")) return;
+  const key = getBrainProcessDayKey();
+  brainProcessEvents = (brainProcessEvents || []).filter((ev) => ev?.day !== key);
+  saveBrainProcessEvents();
+  renderProcessView();
+  updateProcessMiniPanelUI();
+  updateCounter(getActiveViewName());
+  toast("↺ Proceso de hoy reseteado", 1500);
+}
+function getBrainProcessHistoryHtml() {
+  const events = getBrainProcessTodayEvents().slice(0, 12);
+  if (!events.length) return `<div class="processEmpty">Todavía no registraste decisiones de proceso hoy.</div>`;
+  return events.map((ev) => `
+    <div class="processHistoryItem">
+      <div class="processHistoryMain">
+        <div class="processHistoryLabel">${escapeHtml(ev.icon || "🧠")} ${escapeHtml(ev.label || "Proceso")}</div>
+        <div class="processHistoryMsg">${escapeHtml(ev.message || "")}</div>
+      </div>
+      <div class="processHistoryPts">${Number(ev.points) > 0 ? "+" : ""}${Number(ev.points) || 0}</div>
+    </div>
+  `).join("");
+}
+function getBrainProcessRewardsHtml() {
+  const score = getBrainProcessTodayScore();
+  return BRAIN_PROCESS_REWARDS.map((r) => {
+    const unlocked = score >= r.points;
+    const claimed = isBrainRewardClaimedToday(r.points);
+    const right = unlocked
+      ? (claimed ? `<div class="processRewardBadge">Tomado</div>` : `<button class="processRewardClaimBtn" type="button" data-process-reward="${r.points}">🎁 Tomar</button>`)
+      : `<div class="processRewardBadge">Faltan ${r.points - score}</div>`;
+    return `
+      <div class="processRewardRow">
+        <div class="processRewardMain">
+          <div class="processRewardTitle">${unlocked ? "🎁" : "🔒"} ${r.points} pts · ${escapeHtml(r.title)}</div>
+          <div class="processRewardText">${escapeHtml(r.text)}</div>
+        </div>
+        ${right}
+      </div>
+    `;
+  }).join("");
+}
+function renderProcessView() {
+  const host = processAppEl || document.getElementById("processApp");
+  if (!host) return;
+
+  const todayScore = getBrainProcessTodayScore();
+  const weekScore = getBrainProcessWeekScore();
+  const pct = Math.max(0, Math.min(100, (todayScore / BRAIN_PROCESS_DAILY_GOAL) * 100));
+  const nextReward = getBrainProcessNextReward(todayScore);
+  const unlocked = getBrainProcessUnlockedRewards(todayScore).length;
+  const actionsHtml = Object.entries(BRAIN_PROCESS_ACTIONS).map(([key, action]) => `
+    <button class="processActionBtn ${action.blockTrade ? "blocking" : ""}" type="button" data-process-action="${escapeHtml(key)}">
+      <strong>${escapeHtml(action.icon)} ${escapeHtml(action.label)}</strong>
+      <span>+${Number(action.points) || 0} pts</span>
+    </button>
+  `).join("");
+
+  host.innerHTML = `
+    <div class="processHero">
+      <div class="processHeroTop">
+        <div>
+          <div class="processEyebrow">🧠 Proceso</div>
+          <div class="processTitle">Disciplina de hoy</div>
+        </div>
+        <div class="processScore">
+          <div class="processScoreNum">${todayScore}</div>
+          <div class="processScoreLabel">puntos</div>
+        </div>
+      </div>
+      <div class="processProgressOuter" aria-label="Progreso diario"><div class="processProgressInner" style="width:${pct.toFixed(0)}%"></div></div>
+      <div class="processMetaGrid">
+        <div class="processMetaCard"><div class="processMetaLabel">Nivel</div><div class="processMetaValue">${escapeHtml(getBrainProcessLevel(todayScore))}</div></div>
+        <div class="processMetaCard"><div class="processMetaLabel">Racha limpia</div><div class="processMetaValue">${getBrainProcessStreak()} decisiones</div></div>
+        <div class="processMetaCard"><div class="processMetaLabel">Semana</div><div class="processMetaValue">${weekScore}/${BRAIN_PROCESS_WEEKLY_GOAL} pts</div></div>
+      </div>
+      <div class="processQuote">No necesitás ganar esta vela. Necesitás ganar el hábito correcto.</div>
+    </div>
+
+    <div class="processCard">
+      <div class="processCardHead">
+        <div>
+          <div class="processCardTitle">Acción correcta</div>
+          <div class="processCardSub">Sumá puntos por conducta correcta, no por resultado.</div>
+        </div>
+      </div>
+      <div class="processActionGrid">${actionsHtml}</div>
+    </div>
+
+    <div class="processCard">
+      <div class="processCardHead">
+        <div>
+          <div class="processCardTitle">Premios</div>
+          <div class="processCardSub">Desbloqueados: ${unlocked}. ${nextReward ? `Próximo: ${escapeHtml(nextReward.title)} en ${nextReward.points - todayScore} pts.` : "Meta diaria completa."}</div>
+        </div>
+      </div>
+      <div class="processRewardList">${getBrainProcessRewardsHtml()}</div>
+    </div>
+
+    <div class="processCard">
+      <div class="processCardHead">
+        <div>
+          <div class="processCardTitle">Historial mental de hoy</div>
+          <div class="processCardSub">Esto entrena al cerebro a premiar esperar, frenar y ejecutar bien.</div>
+        </div>
+      </div>
+      <div class="processHistoryList">${getBrainProcessHistoryHtml()}</div>
+      <div class="processTools">
+        <button id="processResetTodayBtn" class="btn btnGhost" type="button">↺ Reset hoy</button>
+      </div>
+    </div>
+  `;
+
+  host.querySelectorAll("[data-process-action]").forEach((btn) => {
+    btn.onclick = () => addBrainProcessEvent(btn.dataset.processAction, { source: "process_tab" });
+  });
+  host.querySelectorAll("[data-process-reward]").forEach((btn) => {
+    btn.onclick = () => claimBrainProcessReward(Number(btn.dataset.processReward));
+  });
+  const resetBtn = host.querySelector("#processResetTodayBtn");
+  if (resetBtn) resetBtn.onclick = resetBrainProcessToday;
+}
+function initProcessView() {
+  renderProcessView();
+}
+function markBrainProcessTradeBlocked(item, reason = "Bloqueo de Proceso", ev = null) {
+  if (!item) return;
+  const block = {
+    blocked: true,
+    reason: String(reason || "Bloqueo de Proceso"),
+    label: String(ev?.label || reason || "Bloqueo de Proceso"),
+    eventId: String(ev?.id || ""),
+    at: Date.now(),
+  };
+  item.brainProcess = { ...(item.brainProcess || {}), ...block };
+  try {
+    const live = item.id ? findHistoryItemById(String(item.id)) : null;
+    if (live && live !== item) {
+      live.brainProcess = { ...(live.brainProcess || {}), ...block };
+      saveHistory(history);
+    } else if (history && history.includes(item)) {
+      saveHistory(history);
+    }
+  } catch {}
+}
+function isBrainProcessTradeBlocked(item = modalCurrentItem) {
+  return !!(item && item.brainProcess && item.brainProcess.blocked);
+}
+function getBrainProcessBlockReason(item = modalCurrentItem) {
+  return String(item?.brainProcess?.reason || item?.brainProcess?.label || "Bloqueado por Proceso");
+}
+function assertBrainProcessCanTrade(item = modalCurrentItem) {
+  if (isBrainProcessTradeBlocked(item)) {
+    throw new Error(`Proceso bloqueó esta entrada: ${getBrainProcessBlockReason(item)}`);
+  }
+}
+function ensureProcessMiniPanel() {
+  if (processMiniPanelEl && processMiniPanelEl.isConnected) return processMiniPanelEl;
+  const host = modalFooterVoteSlot || document.querySelector("#chartModal .modalReadingActionsCard") || document.querySelector("#chartModal .modalFooter");
+  if (!host) return null;
+  const panel = document.createElement("div");
+  panel.id = "processMiniPanel";
+  panel.className = "processMiniPanel";
+  panel.innerHTML = `
+    <div class="processMiniTitle"><span>🧠 Proceso rápido</span><span id="processMiniPts">${getBrainProcessTodayScore()} pts</span></div>
+    <div class="processMiniBtns">
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_missing_points">🛡️ Faltaban pts</button>
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_doubt">⏭️ Duda real</button>
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_forcing">🧠 Estoy forzando</button>
+      <button class="btn btnGhost" type="button" data-process-modal="avoided_revenge">🔥 Revancha</button>
+      <button class="btn btnGhost" type="button" data-process-modal="good_analysis">🎯 Buen análisis</button>
+      <button class="btn btnGhost" type="button" data-process-modal="good_otm">✅ OTM bien</button>
+    </div>
+    <div id="processMiniBlockedNote" class="processBlockedNote hidden"></div>
+  `;
+  if (host === modalFooterVoteSlot) host.appendChild(panel);
+  else host.appendChild(panel);
+  panel.querySelectorAll("[data-process-modal]").forEach((btn) => {
+    btn.onclick = () => addBrainProcessEvent(btn.dataset.processModal, { source: "signal_modal" });
+  });
+  processMiniPanelEl = panel;
+  processMiniBlockedNoteEl = panel.querySelector("#processMiniBlockedNote");
+  updateProcessMiniPanelUI();
+  return panel;
+}
+function updateProcessMiniPanelUI() {
+  const panel = ensureProcessMiniPanel();
+  if (!panel) return;
+  const pts = panel.querySelector("#processMiniPts");
+  if (pts) pts.textContent = `${getBrainProcessTodayScore()} pts`;
+  const blocked = isBrainProcessTradeBlocked(modalCurrentItem);
+  const note = processMiniBlockedNoteEl || panel.querySelector("#processMiniBlockedNote");
+  if (note) {
+    note.classList.toggle("hidden", !blocked);
+    note.textContent = blocked ? `Entrada bloqueada: ${getBrainProcessBlockReason(modalCurrentItem)}.` : "";
+  }
+}
+function setProcessMiniPanelVisible(show) {
+  const panel = ensureProcessMiniPanel();
+  if (panel) panel.style.display = show ? "block" : "none";
+}
+function applyBrainProcessTradeGate(locked = false, candleClosed = false) {
+  if (!modalCurrentItem || locked || candleClosed) return;
+  if (!isBrainProcessTradeBlocked(modalCurrentItem)) return;
+  const msg = `Proceso bloqueó esta entrada: ${getBrainProcessBlockReason(modalCurrentItem)}.`;
+  paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
+  paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
 }
 
 /* =========================
@@ -3889,7 +5834,14 @@ function clearSignalsOnly() {
   toast("🧹 Señales borradas", 1600);
 }
 function clearTradesOnly() {
-  tradesJournal = [];
+  const scope = getCurrentAccountScope();
+  const before = (tradesJournal || []).length;
+  tradesJournal = (tradesJournal || []).filter((entry) => {
+    const m = getTradeJournalAccountMode(entry);
+    // Registros viejos sin cuenta pertenecen visualmente a DEMO, por compatibilidad.
+    const visibleInScope = m ? m === scope : scope === ACCOUNT_MODE_DEMO;
+    return !visibleInScope;
+  });
   saveTradesJournal(tradesJournal);
   practiceQueue = [];
   clearPracticeQueueState();
@@ -3901,7 +5853,263 @@ function clearTradesOnly() {
     if (av === "trades") renderTradesView();
     if (av === "practice") ensurePracticeReady();
   } catch {}
-  toast("🗑️ Trades borrados", 1600);
+  const removed = Math.max(0, before - (tradesJournal || []).length);
+  toast(`🗑️ Trades ${getTradingAccountLabel()} borrados: ${removed}`, 1800);
+}
+
+function stripForAnalysisCopy(value, depth = 0) {
+  if (value == null) return value;
+  if (depth > 7) return null;
+  if (typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((x) => stripForAnalysisCopy(x, depth + 1));
+  const out = {};
+  const banned = /token|authorize|authorization|password|secret|pat|otp|email|phone/i;
+  for (const [k, v] of Object.entries(value)) {
+    if (banned.test(k)) continue;
+    if (typeof v === "function") continue;
+    out[k] = stripForAnalysisCopy(v, depth + 1);
+  }
+  return out;
+}
+function compactTradeForAnalysis(trade) {
+  if (!trade || typeof trade !== "object") return null;
+  const keep = [
+    "badge", "contract_id", "side", "symbol", "stake", "account_mode", "account_label",
+    "exec_mode", "contract_type", "payout_pct", "ic2_level", "ic2_step",
+    "entry_timing_mode", "entry_timing_variant", "purchase_time", "start_time",
+    "buy_price", "payout", "profit", "status", "sold_time", "expiry_time",
+    "entry_spot", "entry_spot_time", "exit_spot", "exit_spot_time", "sell_price"
+  ];
+  const out = {};
+  keep.forEach((k) => { if (trade[k] !== undefined) out[k] = trade[k]; });
+  return stripForAnalysisCopy(out);
+}
+function compactVisualLevelForAnalysis(level) {
+  if (!level || typeof level !== "object") return null;
+  const keep = [
+    "level", "levelMode", "levelType", "direction", "stage", "status", "logic",
+    "zoneLow", "zoneHigh", "tolerance", "zone", "touches", "rejectionHasForce"
+  ];
+  const out = {};
+  keep.forEach((k) => { if (level[k] !== undefined) out[k] = level[k]; });
+  return stripForAnalysisCopy(out);
+}
+function compactSignalForAnalysis(item) {
+  if (!item || typeof item !== "object") return null;
+  return stripForAnalysisCopy({
+    id: item.id,
+    minute: item.minute,
+    time: item.time,
+    symbol: item.symbol,
+    direction: item.direction,
+    mode: item.mode,
+    mode_version: item.mode_version,
+    vote: item.vote || "",
+    comment: item.comment || "",
+    nextOutcome: item.nextOutcome || "",
+    minuteComplete: !!item.minuteComplete,
+    trade: compactTradeForAnalysis(item.trade),
+    signalAutoEntry: item.signalAutoEntry ? {
+      type: item.signalAutoEntry.type,
+      attempted: item.signalAutoEntry.attempted,
+      status: item.signalAutoEntry.status,
+      side: item.signalAutoEntry.side,
+      ms: item.signalAutoEntry.ms,
+      sec: item.signalAutoEntry.sec,
+      reason: item.signalAutoEntry.reason,
+      confirmation_status: item.signalAutoEntry.confirmation_status,
+      contract_id: item.signalAutoEntry.contract_id,
+    } : null,
+    giroPolaridad: compactVisualLevelForAnalysis(item.giroPolaridad),
+    snrLevel: compactVisualLevelForAnalysis(item.snrLevel),
+    manualGiro: item.manualGiro ? stripForAnalysisCopy(item.manualGiro) : null,
+    visualRead: item.visualRead ? stripForAnalysisCopy(item.visualRead) : null,
+    ticks: Array.isArray(item.ticks)
+      ? item.ticks.map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) })).filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
+      : [],
+  });
+}
+function compactTradeJournalForAnalysis(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  return stripForAnalysisCopy({
+    journal_id: entry.journal_id,
+    saved_at: entry.saved_at,
+    feedback_at: entry.feedback_at,
+    feedback_source: entry.feedback_source,
+    vote: entry.vote || "",
+    comment: entry.comment || "",
+    id: entry.id,
+    minute: entry.minute,
+    time: entry.time,
+    symbol: entry.symbol,
+    direction: entry.direction,
+    mode: entry.mode,
+    mode_version: entry.mode_version,
+    nextOutcome: entry.nextOutcome || "",
+    minuteComplete: !!entry.minuteComplete,
+    trade: compactTradeForAnalysis(entry.trade),
+    giroPolaridad: compactVisualLevelForAnalysis(entry.giroPolaridad),
+    snrLevel: compactVisualLevelForAnalysis(entry.snrLevel),
+    visualRead: entry.visualRead ? stripForAnalysisCopy(entry.visualRead) : null,
+    ticks: Array.isArray(entry.ticks)
+      ? entry.ticks.map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) })).filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
+      : [],
+  });
+}
+function buildSignalsAnalysisExport() {
+  const signals = getCleanVisualHistory().map(compactSignalForAnalysis).filter(Boolean);
+  const signalIds = new Set(signals.map((s) => s.id).filter(Boolean));
+  const trades = (tradesJournal || [])
+    .filter((t) => isCleanVisualModeItem(t) || signalIds.has(t?.id))
+    .map(compactTradeJournalForAnalysis)
+    .filter(Boolean);
+
+  return {
+    exported_at: new Date().toISOString(),
+    export_scope: "analisis_dos_reducciones_visual_signals_all_ticks",
+    app_version: "v106.9.4.15_history_1000_visible_200",
+    description: "Export para analizar patrones de dos reducciones claras antes del segundo 30: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
+    counts: {
+      signals_total: signals.length,
+      signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
+      trades_total: trades.length,
+    },
+    notes_for_analysis: {
+      target_window_ms: [0, 30000],
+      also_review_window_ms: [0, 25000],
+      desired_output: "buscar secuencias G/M/P y patrones repetidos que anticipan giro de la vela siguiente",
+    },
+    signals_all: signals,
+    trades_all: trades,
+  };
+}
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "readonly");
+  ta.style.position = "fixed";
+  ta.style.left = "-9999px";
+  ta.style.top = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  if (!ok) throw new Error("El navegador no permitió copiar al portapapeles");
+  return true;
+}
+function buildSignalsAnalysisFileName(data) {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+  const count = Number(data?.counts?.signals_total || 0);
+  return `analisis-dos-reducciones-visual-${count}-senales-${ts}.json`;
+}
+function buildSignalsAnalysisText() {
+  const data = buildSignalsAnalysisExport();
+  const text = JSON.stringify(data, null, 2);
+  const kb = Math.max(1, Math.round(text.length / 1024));
+  return { data, text, kb, filename: buildSignalsAnalysisFileName(data) };
+}
+function downloadAllSignalsForAnalysis() {
+  try {
+    const { data, text, kb, filename } = buildSignalsAnalysisText();
+    downloadTextFile(filename, text, "application/json;charset=utf-8");
+    toast(`💾 JSON generado: ${data.counts.signals_total} señales · ${kb} KB`, 3200);
+  } catch (err) {
+    console.error("downloadAllSignalsForAnalysis", err);
+    toast(`⚠️ No pude generar JSON: ${err?.message || err}`, 3500);
+  }
+}
+async function copyAllSignalsForAnalysis() {
+  let pack = null;
+  try {
+    pack = buildSignalsAnalysisText();
+    toast(`⏳ Preparando ${pack.data.counts.signals_total} señales · ${pack.kb} KB...`, 1400);
+    await copyTextToClipboard(pack.text);
+    toast(`📋 Copiado correctamente: ${pack.data.counts.signals_total} señales · ${pack.kb} KB`, 3000);
+  } catch (err) {
+    console.error("copyAllSignalsForAnalysis", err);
+    try {
+      if (!pack) pack = buildSignalsAnalysisText();
+      downloadTextFile(pack.filename, pack.text, "application/json;charset=utf-8");
+      toast(`⚠️ Portapapeles bloqueado. Descargué JSON: ${pack.data.counts.signals_total} señales · ${pack.kb} KB`, 4500);
+    } catch (err2) {
+      console.error("copyAllSignalsForAnalysis fallback", err2);
+      toast(`⚠️ No pude copiar ni descargar: ${err2?.message || err2}`, 4500);
+    }
+  }
+}
+function ensureCopyAllSignalsAnalysisButton() {
+  let wrap = document.getElementById("clearSignalsInlineBtnWrap");
+  if (!wrap && signalsEl && signalsEl.parentElement) {
+    wrap = document.createElement("div");
+    wrap.id = "clearSignalsInlineBtnWrap";
+    wrap.style.display = "flex";
+    wrap.style.justifyContent = "flex-end";
+    wrap.style.alignItems = "center";
+    wrap.style.gap = "10px";
+    wrap.style.margin = "10px 0 0 0";
+    wrap.style.width = "100%";
+    signalsEl.parentElement.insertBefore(wrap, signalsEl);
+  }
+  if (!wrap) return null;
+  wrap.style.flexWrap = "wrap";
+
+  let btn = document.getElementById("copySignalsAnalysisBtn");
+  if (!btn) {
+    btn = document.createElement("button");
+    btn.id = "copySignalsAnalysisBtn";
+    btn.type = "button";
+    btn.className = "btn btnGhost";
+    btn.textContent = "📋 Copiar todas";
+    btn.title = "Copia todas las señales con ticks y resultados para analizar patrones";
+    btn.style.padding = "8px 10px";
+    btn.style.borderRadius = "12px";
+    btn.style.fontWeight = "900";
+    btn.style.minHeight = "36px";
+    btn.style.lineHeight = "1";
+    btn.style.display = "inline-flex";
+    btn.style.alignItems = "center";
+    btn.style.justifyContent = "center";
+    btn.style.gap = "8px";
+    btn.style.opacity = "0.95";
+    btn.style.borderColor = "rgba(34,211,238,.45)";
+    btn.style.boxShadow = "0 0 12px rgba(34,211,238,.10)";
+    const clearBtn = document.getElementById("clearSignalsInlineBtn");
+    if (clearBtn && clearBtn.parentElement === wrap) wrap.insertBefore(btn, clearBtn);
+    else wrap.appendChild(btn);
+  }
+  btn.onclick = copyAllSignalsForAnalysis;
+
+  let downloadBtn = document.getElementById("downloadSignalsAnalysisBtn");
+  if (!downloadBtn) {
+    downloadBtn = document.createElement("button");
+    downloadBtn.id = "downloadSignalsAnalysisBtn";
+    downloadBtn.type = "button";
+    downloadBtn.className = "btn btnGhost";
+    downloadBtn.textContent = "💾 Descargar JSON";
+    downloadBtn.title = "Descarga todas las señales con ticks y resultados en un archivo JSON para análisis";
+    downloadBtn.style.padding = "8px 10px";
+    downloadBtn.style.borderRadius = "12px";
+    downloadBtn.style.fontWeight = "900";
+    downloadBtn.style.minHeight = "36px";
+    downloadBtn.style.lineHeight = "1";
+    downloadBtn.style.display = "inline-flex";
+    downloadBtn.style.alignItems = "center";
+    downloadBtn.style.justifyContent = "center";
+    downloadBtn.style.gap = "8px";
+    downloadBtn.style.opacity = "0.95";
+    downloadBtn.style.borderColor = "rgba(34,197,94,.45)";
+    downloadBtn.style.boxShadow = "0 0 12px rgba(34,197,94,.10)";
+    if (btn.nextSibling) wrap.insertBefore(downloadBtn, btn.nextSibling);
+    else wrap.appendChild(downloadBtn);
+  }
+  downloadBtn.onclick = downloadAllSignalsForAnalysis;
+  return btn;
 }
 
 function ensureViewActionButton(viewName, opts) {
@@ -4049,6 +6257,7 @@ function getLiveSignalKey(sym = liveReplaySymbol) {
 function resetLiveSignalConfirmations(reason = "") {
   liveSignalConfirmations = [];
   liveSignalMinuteKey = getLiveSignalKey(liveReplaySymbol);
+  liveAutoEntryState = { minuteKey: liveSignalMinuteKey, attempted: false, status: "idle", side: "", contract_id: "", error: "" };
   updateLiveConfirmationUI(reason);
 }
 function ensureLiveSignalConfirmationsForCurrentMinute() {
@@ -4056,6 +6265,9 @@ function ensureLiveSignalConfirmationsForCurrentMinute() {
   if (liveSignalMinuteKey !== key) {
     liveSignalConfirmations = [];
     liveSignalMinuteKey = key;
+    liveAutoEntryState = { minuteKey: key, attempted: false, status: "idle", side: "", contract_id: "", error: "" };
+  } else if (!liveAutoEntryState || liveAutoEntryState.minuteKey !== key) {
+    liveAutoEntryState = { minuteKey: key, attempted: false, status: "idle", side: "", contract_id: "", error: "" };
   }
 }
 function getLiveConfirmationScore() {
@@ -4102,9 +6314,12 @@ function updateLiveConfirmationUI(reason = "") {
     liveConfirmCountEl.style.background = enabled === "CALL" ? "rgba(22,163,74,.16)" : enabled === "PUT" ? "rgba(127,29,29,.19)" : "rgba(0,0,0,.13)";
   }
   if (liveConfirmHintEl) {
+    const msNow = getLiveReplayMsInMinute(liveReplaySymbol);
+    const secNow = Math.max(0, Math.min(60, Math.floor(msNow / 1000)));
+    const faltanAuto = Math.max(0, SIGNAL_AUTO_ENTRY_SEC - secNow);
     liveConfirmHintEl.textContent = enabled
-      ? `Listo para ${enabled === "CALL" ? "COMPRAR" : "VENDER"} · modo manual`
-      : `Modo en vivo · mínimo ${SIGNAL_CONFIRM_MIN} puntos netos`;
+      ? `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${enabled === "CALL" ? "COMPRA" : "VENTA"}${faltanAuto ? ` · faltan ${faltanAuto}s` : ""}`
+      : `Modo en vivo · mínimo ${SIGNAL_CONFIRM_MIN} puntos netos · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     liveConfirmHintEl.style.color = enabled === "CALL" ? "#bbf7d0" : enabled === "PUT" ? "#fecaca" : "rgba(255,255,255,.68)";
   }
   if (liveConfirmBuyBtn) liveConfirmBuyBtn.textContent = `🟢 + COMPRA ${buyPts}/${SIGNAL_CONFIRM_MIN}`;
@@ -4115,16 +6330,23 @@ function updateLiveConfirmationUI(reason = "") {
   }
   if (liveBuyCallBtn) {
     const enabledCall = enabled === "CALL";
-    liveBuyCallBtn.disabled = !enabledCall;
+    liveBuyCallBtn.textContent = `🟢 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s COMPRA`;
+    liveBuyCallBtn.disabled = true;
     liveBuyCallBtn.style.opacity = enabledCall ? "1" : ".45";
-    liveBuyCallBtn.title = enabledCall ? "COMPRAR habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("CALL")} puntos netos para COMPRA`;
+    liveBuyCallBtn.title = enabledCall
+      ? `COMPRA lista: se ejecuta automáticamente en el segundo ${SIGNAL_AUTO_ENTRY_SEC}`
+      : `Faltan ${getLiveMissingConfirmations("CALL")} puntos netos para COMPRA`;
   }
   if (liveBuyPutBtn) {
     const enabledPut = enabled === "PUT";
-    liveBuyPutBtn.disabled = !enabledPut;
+    liveBuyPutBtn.textContent = `🔴 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s VENTA`;
+    liveBuyPutBtn.disabled = true;
     liveBuyPutBtn.style.opacity = enabledPut ? "1" : ".45";
-    liveBuyPutBtn.title = enabledPut ? "VENDER habilitado por 4 puntos" : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
+    liveBuyPutBtn.title = enabledPut
+      ? `VENTA lista: se ejecuta automáticamente en el segundo ${SIGNAL_AUTO_ENTRY_SEC}`
+      : `Faltan ${getLiveMissingConfirmations("PUT")} puntos netos para VENTA`;
   }
+  if (enabled === "CALL" || enabled === "PUT") void prepareLiveAutoPreProposalIfNeeded("live_ui_56_58");
 }
 function addLiveSignalConfirmation(side = "CALL") {
   const safeSide = normalizeSignalConfirmationSide(side);
@@ -4133,13 +6355,41 @@ function addLiveSignalConfirmation(side = "CALL") {
   liveSignalConfirmations.push({ side: safeSide, ms: getLiveReplayMsInMinute(liveReplaySymbol), at: Date.now(), source: "live_tab_points" });
   updateLiveConfirmationUI();
   const enabled = getLiveEnabledTradeSide();
-  if (enabled === "CALL" || enabled === "PUT") toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
-  else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
+  if (enabled === "CALL" || enabled === "PUT") {
+    toast(`✅ ${enabled === "CALL" ? "COMPRA" : "VENTA"} habilitada: ${getLiveConfirmationStatusText()}`, 1400);
+    void prepareLiveAutoPreProposalIfNeeded("live_points_enabled");
+  } else toast(`🧠 ${getLiveConfirmationStatusText()}. Faltan puntos para operar.`, 1300);
 }
 function removeLiveSignalConfirmation() {
   ensureLiveSignalConfirmationsForCurrentMinute();
   liveSignalConfirmations.pop();
   updateLiveConfirmationUI();
+}
+
+
+function normalizeChartTicksNoDuplicateMs(rawTicks = []) {
+  const normalized = (Array.isArray(rawTicks) ? rawTicks : [])
+    .map((p, idx) => ({
+      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
+      quote: Number(p?.quote),
+      idx,
+    }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
+
+  const out = [];
+  for (const p of normalized) {
+    const last = out[out.length - 1];
+    // Si hay dos puntos en el mismo milisegundo (muy común en ms=0 cuando se inyecta el
+    // cierre anterior como open y llega el primer tick real), dibujar ambos genera una
+    // línea vertical falsa. Para el gráfico mantenemos solo el último precio real de ese ms.
+    if (last && Math.round(Number(last.ms)) === Math.round(Number(p.ms))) {
+      out[out.length - 1] = { ms: p.ms, quote: p.quote };
+    } else {
+      out.push({ ms: p.ms, quote: p.quote });
+    }
+  }
+  return out;
 }
 
 function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
@@ -4161,15 +6411,7 @@ function drawLiveReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   ctx.fillRect(0, 0, w, h);
   ctx.globalAlpha = 1;
 
-  let ticks = Array.isArray(item.ticks) ? item.ticks.slice() : [];
-  ticks = ticks
-    .map((p, idx) => ({
-      ms: Math.max(0, Math.min(60000, Number(p?.ms))),
-      quote: Number(p?.quote),
-      idx,
-    }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => (a.ms - b.ms) || (a.idx - b.idx));
+  let ticks = normalizeChartTicksNoDuplicateMs(item.ticks);
 
   if (ticks.length < 2) {
     drawMiniCandlesLoading(ctx, w, h, "Esperando ticks en vivo…");
@@ -4297,6 +6539,7 @@ function drawLiveReplayNow(force = false) {
   const ms = getLiveReplayMsInMinute(liveReplaySymbol);
   ensureLiveSignalConfirmationsForCurrentMinute();
   updateLiveConfirmationUI();
+  tryLiveAutoEntryAt59("LIVE_DRAW_58_SCAN");
 
   if (liveReplaySubEl) {
     const sec = Math.floor(ms / 1000);
@@ -4353,7 +6596,7 @@ function buildLiveManualTradeItem(side = "CALL") {
     symbol: sym,
     direction: safeSide,
     mode: "EN VIVO",
-    mode_version: "V53_LIVE_MODAL_POINTS",
+    mode_version: "V57_LIVE_AUTO58_POINTS",
     ticks: ticks.slice(),
     minuteComplete: false,
     signalConfirmations: (Array.isArray(liveSignalConfirmations) ? liveSignalConfirmations : []).map((ev) => ({ ...ev })),
@@ -4361,7 +6604,147 @@ function buildLiveManualTradeItem(side = "CALL") {
   };
 }
 
-async function liveManualTrade(side = "CALL") {
+function getLiveReplayLastTickMs(sym = liveReplaySymbol) {
+  const ticks = getLiveReplayTicks(sym);
+  return ticks.length ? Number(ticks[ticks.length - 1].ms) || 0 : 0;
+}
+function getPost58EntryReadinessForLive(sym = liveReplaySymbol) {
+  const ms = getLiveReplayMsInMinute(sym);
+  const lastTickMs = getLiveReplayLastTickMs(sym);
+
+  if (!isNextCandleExpiryTiming()) {
+    return { ok: ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000, ms, lastTickMs, reason: "duration_1m_window" };
+  }
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_58" };
+  }
+  if (lastTickMs < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_tick_58" };
+  }
+  if (ms > SIGNAL_AUTO_POST58_MAX_MS) {
+    return { ok: false, late: true, ms, lastTickMs, reason: "tick_58_tarde" };
+  }
+  return { ok: true, ms, lastTickMs, reason: "post_tick_58_ok" };
+}
+function isLiveAutoEntryWindowOpen(sym = liveReplaySymbol) {
+  return !!getPost58EntryReadinessForLive(sym).ok;
+}
+function formatLiveAutoEntryWaitText(sym = liveReplaySymbol) {
+  const r = getPost58EntryReadinessForLive(sym);
+  const sec = Math.max(0, Math.min(60, Math.floor(Number(r.ms || 0) / 1000)));
+  if (!isNextCandleExpiryTiming()) {
+    if (sec < SIGNAL_AUTO_ENTRY_SEC) return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    if (sec >= 60) return "vela cerrada";
+    return `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s listo`;
+  }
+  if (r.reason === "esperando_58") return `faltan ${SIGNAL_AUTO_ENTRY_SEC - sec}s para AUTO post-58`;
+  if (r.reason === "esperando_tick_58") return "esperando tick real de 58s";
+  if (r.late) return `cancelado: pasó ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`;
+  return "AUTO post-58 listo";
+}
+async function liveAutoTradeAt59(side = "CALL", reason = "LIVE_AUTO_58") {
+  const safeSide = normalizeSignalConfirmationSide(side);
+  if (!safeSide) return false;
+  ensureLiveSignalConfirmationsForCurrentMinute();
+
+  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
+  const key = getLiveSignalKey(sym);
+  if (liveAutoEntryState?.minuteKey === key && liveAutoEntryState?.attempted) return false;
+  const post58 = getPost58EntryReadinessForLive(sym);
+  if (!post58.ok) {
+    if (post58.late) {
+      liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: `Cancelada: no llegó a comprar dentro de la ventana post-58 (${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s).` };
+      setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: llegó tarde después de ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`, "error");
+    }
+    return false;
+  }
+  if (tradeInFlight) return false;
+
+  const enabledSide = getLiveEnabledTradeSide();
+  if (enabledSide !== safeSide) return false;
+
+  const item = buildLiveManualTradeItem(safeSide);
+  item.liveManualTrade = false;
+  item.liveAuto59Trade = true;
+  try {
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    const pp = getLiveCachedAutoPreProposal(sym, safeSide, getLiveReplayMinute(sym), stake);
+    if (pp) item.signalAutoPreProposal = { ...pp };
+  } catch {}
+  if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && !item.signalAutoPreProposal) {
+    liveAutoEntryState = { minuteKey: key, attempted: true, status: "cancelled", side: safeSide, contract_id: "", error: "Cancelada: proposal no prearmada antes del post-58." };
+    setLiveTradeStatus(`⛔ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} cancelada: proposal no prearmada`, "error");
+    return false;
+  }
+  item.signalAutoEntry = {
+    type: "LIVE_AUTO_58",
+    attempted: true,
+    status: "sending",
+    side: safeSide,
+    ms: Math.round(getLiveReplayMsInMinute(sym)),
+    sec: Math.round(getLiveReplayMsInMinute(sym) / 1000),
+    reason: String(reason || "LIVE_AUTO_58"),
+    at: Date.now(),
+    confirmation_status: getLiveConfirmationStatusText(),
+    post58_readiness: post58,
+  };
+
+  liveAutoEntryState = { minuteKey: key, attempted: true, status: "sending", side: safeSide, contract_id: "", error: "" };
+
+  try {
+    setLiveTradeButtonsBusy(true);
+    setLiveTradeStatus(`🚀 AUTO prearmado: enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
+
+    history.push(item);
+    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
+    saveHistory(history);
+
+    const res = await Promise.race([
+      buyOneClick(safeSide, sym, item),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout auto trade en vivo")), 22000)),
+    ]);
+    const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
+    liveAutoEntryState.status = "sent";
+    liveAutoEntryState.contract_id = cid;
+    item.signalAutoEntry.status = "sent";
+    item.signalAutoEntry.contract_id = cid;
+    item.signalAutoEntry.sent_at = Date.now();
+    saveHistory(history);
+    setLiveTradeStatus(`✅ AUTO ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviado${cid ? " · ID " + cid : ""}`, "ok");
+    toast(`✅ AUTO ${SIGNAL_AUTO_ENTRY_SEC}s en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
+    resetLiveSignalConfirmations("live_auto_sent");
+    return true;
+  } catch (e) {
+    liveAutoEntryState.status = "error";
+    liveAutoEntryState.error = e?.message || String(e);
+    try {
+      if (!item?.trade?.contract_id && !item?.signalAutoEntry?.contract_id) {
+        history = (history || []).filter((it) => it?.id !== item.id);
+        saveHistory(history);
+      }
+    } catch {}
+    const msg = e?.message || String(e);
+    setLiveTradeStatus(`⚠️ AUTO en vivo falló: ${msg}`, "error");
+    toast(`⚠️ AUTO en vivo falló: ${msg}`, 2600);
+    return false;
+  } finally {
+    setLiveTradeButtonsBusy(false);
+    updateLiveConfirmationUI();
+    updateCounter(getActiveViewName());
+  }
+}
+function tryLiveAutoEntryAt59(reason = "LIVE_TIMER_58") {
+  try {
+    if ((localStorage.getItem("activeView") || "signals") !== "live") return false;
+    ensureLiveSignalConfirmationsForCurrentMinute();
+    const side = getLiveEnabledTradeSide();
+    if (!side) return false;
+    return liveAutoTradeAt59(side, reason);
+  } catch {
+    return false;
+  }
+}
+function liveManualTrade(side = "CALL") {
   const safeSide = normalizeSignalConfirmationSide(side);
   if (!safeSide) return;
   ensureLiveSignalConfirmationsForCurrentMinute();
@@ -4370,41 +6753,13 @@ async function liveManualTrade(side = "CALL") {
     const faltan = getLiveMissingConfirmations(safeSide);
     setLiveTradeStatus(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}. ${getLiveConfirmationStatusText()}`, "pending");
     toast(`Primero marcá 4 puntos netos para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1600);
-    return;
+    return false;
   }
-  const sym = liveReplaySymbol || SYMBOLS[0] || "R_25";
-  const item = buildLiveManualTradeItem(safeSide);
-  try {
-    setLiveTradeButtonsBusy(true);
-    setLiveTradeStatus(`Enviando ${safeSide === "CALL" ? "COMPRA" : "VENTA"} en vivo ${sym}…`, "pending");
-    // Guardar el item antes de comprar para que, si Deriv acepta el contrato, pueda quedar vinculado y pasar a Trades.
-    history.push(item);
-    if (history.length > MAX_HISTORY) history = history.slice(-MAX_HISTORY);
-    saveHistory(history);
-    const res = await Promise.race([
-      buyOneClick(safeSide, sym, item),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout trade en vivo")), 22000)),
-    ]);
-    const cid = res?.buy?.contract_id ? String(res.buy.contract_id) : "";
-    setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} enviada${cid ? " · ID " + cid : ""}`, "ok");
-    toast(`✅ Trade en vivo enviado ${cid ? "ID: " + cid : ""}`, 1800);
-    resetLiveSignalConfirmations("trade_sent");
-  } catch (e) {
-    // Si no llegó a comprar, quitamos el item auxiliar para no ensuciar Señales.
-    try {
-      if (!item?.trade?.contract_id && !item?.signalAutoEntry?.contract_id) {
-        history = (history || []).filter((it) => it?.id !== item.id);
-        saveHistory(history);
-      }
-    } catch {}
-    const msg = e?.message || String(e);
-    setLiveTradeStatus(`⚠️ No se pudo enviar: ${msg}`, "error");
-    toast(`⚠️ Trade en vivo falló: ${msg}`, 2600);
-  } finally {
-    setLiveTradeButtonsBusy(false);
-    updateLiveConfirmationUI();
-    updateCounter(getActiveViewName());
-  }
+  const wait = formatLiveAutoEntryWaitText(liveReplaySymbol);
+  setLiveTradeStatus(`✅ ${safeSide === "CALL" ? "COMPRA" : "VENTA"} preparada · ${wait}. Se ejecuta automáticamente, igual que Señales.`, "pending");
+  toast(`AUTO ${SIGNAL_AUTO_ENTRY_SEC}s preparado: ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1500);
+  tryLiveAutoEntryAt59("LIVE_BUTTON_CHECK");
+  return false;
 }
 
 function initLiveTradeButtons() {
@@ -4429,7 +6784,7 @@ function initLiveTradeButtons() {
     liveBuyPutBtn.dataset.ready = "1";
   }
   updateLiveConfirmationUI();
-  setLiveTradeStatus("Modo en vivo: señales pausadas solo en esta pestaña. Sumá 4 puntos netos y operá manualmente.");
+  setLiveTradeStatus("Modo en vivo: señales pausadas. Sumá 4 puntos netos; se ejecuta automático en el segundo 58.");
 }
 
 function requestLiveReplayDraw(force = false) {
@@ -4462,7 +6817,7 @@ function updatePerViewClearButtonsVisibility(activeView) {
   const wKeepOutside = document.getElementById("keepClosedAwaySignalsBtnWrap");
 
   if (wSignals) wSignals.style.display = activeView === "signals" ? "flex" : "none";
-  if (wKeepOutside) wKeepOutside.style.display = activeView === "signals" ? "flex" : "none";
+  if (wKeepOutside) wKeepOutside.style.display = "none";
   if (wTrades) wTrades.style.display = "none";
 }
 
@@ -4476,6 +6831,7 @@ function ensureInlineClearButtons() {
       clearSignalsOnly();
     },
   });
+  ensureCopyAllSignalsAnalysisButton();
 
   ensureKeepClosedAwaySignalsToggle();
 
@@ -4487,10 +6843,12 @@ function ensureInlineClearButtons() {
 }
 
 function setActiveView(name) {
+  if (name === "practice") name = "process";
   const isSignals = name === "signals";
   const isLive = name === "live";
   const isTrades = name === "trades";
   const isPractice = name === "practice";
+  const isProcess = name === "process";
 
   const tv = ensureTradesView();
 
@@ -4498,6 +6856,7 @@ function setActiveView(name) {
   if (liveView) liveView.classList.toggle("hidden", !isLive);
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (practiceView) practiceView.classList.toggle("hidden", !isPractice);
+  if (processView) processView.classList.toggle("hidden", !isProcess);
 
   qsAll(".tab[data-view]").forEach((t) => {
     const active = t.dataset.view === name;
@@ -4509,6 +6868,7 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isPractice) ensurePracticeReady();
+  if (isProcess) renderProcessView();
   if (isLive) {
     startLiveReplayLoop();
     setLiveTradeStatus("Modo en vivo activo: señales pausadas solo en esta pestaña. Volvé a Señales para reanudar análisis.");
@@ -4526,10 +6886,20 @@ function initTabs() {
   ensureTradesTab();
   ensureTradesView();
 
-  qsAll(".tab[data-view]").forEach((t) => (t.onclick = () => setActiveView(t.dataset.view)));
+  // V107 Proceso: se mantienen En vivo y se reemplaza Práctica por 🧠 Proceso.
+  qsAll('.tab[data-view="live"], .tab[data-view="process"]').forEach((el) => { el.style.display = ""; });
+  qsAll('.tab[data-view="practice"]').forEach((el) => { el.style.display = "none"; });
+  if (liveView) liveView.style.display = "";
+  if (practiceView) practiceView.style.display = "none";
+  if (processView) processView.style.display = "";
 
-  const saved = localStorage.getItem("activeView") || "signals";
-  const initial = ["signals", "live", "trades", "practice"].includes(saved) ? saved : "signals";
+  qsAll(".tab[data-view]").forEach((t) => {
+    t.onclick = () => setActiveView(t.dataset.view);
+  });
+
+  const savedRaw = localStorage.getItem("activeView") || "signals";
+  const saved = savedRaw === "practice" ? "process" : savedRaw;
+  const initial = ["signals", "live", "trades", "process"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 }
 
@@ -4570,7 +6940,7 @@ const PRACTICE_DISPLAY_REPLAY = "REPLAY";
 const PRACTICE_DISPLAY_IMAGE = "IMAGE";
 let practiceDisplayMode = loadPracticeDisplayMode();
 const PRACTICE_CONFIRM_MIN = 4;
-const PRACTICE_AUTO_ENTRY_MS = 59000;
+const PRACTICE_AUTO_ENTRY_MS = 58000;
 const PRACTICE_AUTO_ENTRY_SEC = Math.round(PRACTICE_AUTO_ENTRY_MS / 1000);
 const PRACTICE_SEGMENTS = [
   { start: 0, end: 15000, label: "0s" },
@@ -5041,7 +7411,7 @@ function isPracticePastAutoEntryTime(round = practiceRound) {
   const ms = Number(round.replayMs ?? round.cutoffMs ?? 0);
   return Number.isFinite(ms) && ms >= PRACTICE_AUTO_ENTRY_MS;
 }
-function tryPracticeAutoEntryAt57(reason = "AUTO_59") {
+function tryPracticeAutoEntryAt57(reason = "AUTO_58") {
   if (!practiceRound || practiceRound.finished || practiceRound.answer) return false;
   if (!isPracticePastAutoEntryTime(practiceRound)) return false;
 
@@ -5050,11 +7420,11 @@ function tryPracticeAutoEntryAt57(reason = "AUTO_59") {
 
   practiceRound.answer = side;
   practiceRound.autoEntry = {
-    type: "AUTO_59",
+    type: "AUTO_58",
     side,
     ms: Math.round(Number(practiceRound.replayMs || PRACTICE_AUTO_ENTRY_MS)),
     sec: PRACTICE_AUTO_ENTRY_SEC,
-    reason: String(reason || "AUTO_59"),
+    reason: String(reason || "AUTO_58"),
     confirmationStatus: getPracticeConfirmationStatusText(),
     at: Date.now(),
   };
@@ -5224,7 +7594,7 @@ function addPracticeConfirmation(side = "CALL") {
   // En modo imagen completa no se reproduce la formación: al llegar a 4 puntos netos, muestra resultado al instante.
   if (tryPracticeImageModeAutoResult("CONFIRMACION_IMAGEN_COMPLETA")) return;
 
-  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 59s,
+  // Si el usuario supera las 4 confirmaciones netas cuando la ronda ya pasó 58s,
   // también entra automáticamente sin esperar otro frame.
   tryPracticeAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -5509,7 +7879,7 @@ function drawPracticeChart(canvas, ticks, replayMs, segmentMarks = null) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+  const pts = normalizeChartTicksNoDuplicateMs(ticks);
   const quotes = pts.map((p) => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
@@ -6161,9 +8531,9 @@ function practiceLoop(ts) {
   const visibleTicks = buildPracticeVisibleTicks(practiceRound.ticks, replayMs);
   drawPracticeChart(practiceCanvas, visibleTicks, replayMs, practiceRound.segmentMarks);
 
-  // Auto-entrada de práctica: al segundo 59, si ya hay 4 puntos netos
+  // Auto-entrada de práctica: al segundo 58, si ya hay 4 puntos netos
   // para COMPRA o VENTA y no hubo decisión manual, se elige esa dirección.
-  tryPracticeAutoEntryAt57("TIMER_59");
+  tryPracticeAutoEntryAt57("TIMER_58");
 
   const remainingSec = Math.max(0, Math.ceil((60000 - replayMs) / 1000));
   const tramo = replayMs < 15000 ? "0-15s" : replayMs < 30000 ? "15-30s" : replayMs < 45000 ? "30-45s" : "45-60s";
@@ -6681,8 +9051,11 @@ function ensureSplitClearButtons() {
 
 function repairSettingsMenuBindings() {
   try { ensureTradingAccountButton(); } catch {}
+  try { ensureDerivApiModePanel(); } catch {}
   try { ensureExecutionModeButton(); applyExecutionModeUI(); } catch {}
+  try { ensureEntryTimingModeButton(); applyEntryTimingModeUI(); } catch {}
   try { ensureAutoOpenChartButton(); applyAutoOpenChartUI(); } catch {}
+  try { ensureAutoReplayX2Button(); applyAutoReplayX2UI(); } catch {}
   try { ensureLowPowerButton(); applyLowPowerModeUI(); } catch {}
   try { ensureResetCacheButton(); } catch {}
   try { ensureC100Panel(); updateC100PanelUI(); } catch {}
@@ -6698,7 +9071,9 @@ function getSettingsMenuSelfCheckItems() {
     ["Botón engranaje", !!configBtn && typeof configBtn.onclick === "function"],
     ["Cerrar configuración", (!!settingsCloseBtn && typeof settingsCloseBtn.onclick === "function") || (!!settingsCloseBtn2 && typeof settingsCloseBtn2.onclick === "function")],
     ["Cuenta DEMO/REAL", !!pickEl("tradingAccountBtn") && typeof pickEl("tradingAccountBtn").onclick === "function"],
+    ["API Deriv", !!pickEl("derivApiModeBtn") && typeof pickEl("derivApiModeBtn").onclick === "function"],
     ["Modo ejecución", !!pickEl("executionModeBtn") && typeof pickEl("executionModeBtn").onclick === "function"],
+    ["Timing entrada", !!pickEl("entryTimingModeBtn") && typeof pickEl("entryTimingModeBtn").onclick === "function"],
     ["IC2 activar", !!pickEl("c100ToggleBtn") && typeof pickEl("c100ToggleBtn").onclick === "function"],
     ["IC2 reset", !!pickEl("c100ResetBtn") && typeof pickEl("c100ResetBtn").onclick === "function"],
     ["Bajo consumo", !!pickEl("lowPowerBtn") && typeof pickEl("lowPowerBtn").onclick === "function"],
@@ -6811,20 +9186,16 @@ function applyTheme(theme) {
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = isDynamicLineMode(signalMode)
-      ? "Modo Línea dinámica: soporte/resistencia inclinada + AUTO 59s con 4 puntos."
-      : isSNRPolaridadMode(signalMode)
-        ? "Modo SNR polaridad: ruptura + cambio de lado + retesteo de zona con radar 35s hasta el segundo elegido."
-        : "Modo SNR interacción: radar 35s-segundo elegido + SNR 70% global/reciente.";
+    modeBtn.title = "Modo único: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30: G-M-P / G-M / G-P / M-P repetidas.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = nextSignalMode(signalMode);
+      signalMode = MODE_REDUCCION_VISUAL_25S;
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(isDynamicLineMode(signalMode) ? "📐 Modo Línea dinámica" : isSNRPolaridadMode(signalMode) ? "🧲 Modo SNR polaridad" : "🎯 Modo SNR interacción", 1500);
+      toast("🎯 Modo único: 2 reducciones 30s", 1400);
     };
 })();
 
@@ -7004,6 +9375,526 @@ function showNotification(symbol, direction, modeLabel, item = null) {
 /* =========================
    Canvas chart
 ========================= */
+// V81: marcadores visuales de soportes estructurales recientes en el gráfico vivo.
+// - Cian: soporte estructural reciente de la formación actual.
+// - Amarillo: soporte de polaridad / nivel usado más de una vez.
+// - Sin carteles: solo líneas limpias dentro del gráfico.
+const LIVE_STRUCTURAL_SUPPORTS_ENABLED = true;
+const LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS = 42000;
+const LIVE_STRUCT_SUPPORT_MIN_CONFIRM_MS = 12000;
+
+function clamp01(v) {
+  return Math.max(0, Math.min(1, Number(v) || 0));
+}
+function medianNumber(values) {
+  const arr = (values || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!arr.length) return NaN;
+  const mid = Math.floor(arr.length / 2);
+  return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+}
+function dedupeTickPointsByMs(points) {
+  const map = new Map();
+  for (const p of points || []) {
+    const ms = Math.round(Number(p?.ms));
+    const quote = Number(p?.quote);
+    if (!Number.isFinite(ms) || !Number.isFinite(quote)) continue;
+    map.set(ms, { ms: Math.max(0, Math.min(60000, ms)), quote });
+  }
+  return [...map.values()].sort((a, b) => a.ms - b.ms);
+}
+function getRecentStructuralSupportMarkers(points, item = null, msNowArg = null) {
+  if (!LIVE_STRUCTURAL_SUPPORTS_ENABLED) return [];
+  const pts = dedupeTickPointsByMs(points);
+  if (pts.length < 8) return [];
+
+  const msNow = Number.isFinite(Number(msNowArg))
+    ? Math.max(0, Math.min(60000, Number(msNowArg)))
+    : Number(pts[pts.length - 1]?.ms || 0);
+  if (msNow < LIVE_STRUCT_SUPPORT_MIN_CONFIRM_MS) return [];
+
+  const quotes = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const minQ = Math.min(...quotes);
+  const maxQ = Math.max(...quotes);
+  const fullRange = Math.max(1e-12, maxQ - minQ);
+  const recentStart = Math.max(0, msNow - LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS, 10000);
+  const visibleEnd = Math.min(60000, Math.max(msNow, Number(pts[pts.length - 1]?.ms || msNow)));
+  const recent = pts.filter((p) => p.ms >= recentStart && p.ms <= visibleEnd);
+  if (recent.length < 5) return [];
+
+  const recentQuotes = recent.map((p) => p.quote);
+  const recentRange = Math.max(1e-12, Math.max(...recentQuotes) - Math.min(...recentQuotes));
+  const diffs = [];
+  for (let i = 1; i < pts.length; i++) diffs.push(Math.abs(pts[i].quote - pts[i - 1].quote));
+  const medStep = medianNumber(diffs) || (fullRange * 0.025);
+  const tol = Math.max(fullRange * 0.018, recentRange * 0.022, medStep * 1.15, 1e-9);
+  const minRebound = Math.max(fullRange * 0.07, recentRange * 0.10, medStep * 2.4, 1e-9);
+
+  const localMin = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i];
+    if (p.ms < recentStart || p.ms > visibleEnd) continue;
+    const prev = pts.slice(Math.max(0, i - 3), i);
+    const next = pts.slice(i + 1, Math.min(pts.length, i + 4));
+    if (!prev.length || !next.length) continue;
+    const prevMin = Math.min(...prev.map((x) => x.quote));
+    const nextMin = Math.min(...next.map((x) => x.quote));
+    const prevMax = Math.max(...prev.map((x) => x.quote));
+    const nextMax = Math.max(...next.map((x) => x.quote));
+
+    // Swing low real: es piso local y después hay defensa/rebote.
+    const isLow = p.quote <= prevMin + tol && p.quote <= nextMin + tol;
+    const hasRebound = Math.max(prevMax - p.quote, nextMax - p.quote) >= minRebound * 0.55
+      || nextMax - p.quote >= minRebound * 0.42;
+    if (!isLow || !hasRebound) continue;
+
+    // Evita marcar pisos demasiado viejos o que ya quedaron totalmente anulados por una caída fuerte posterior.
+    const later = pts.filter((x) => x.ms > p.ms && x.ms <= visibleEnd);
+    const laterLow = later.length ? Math.min(...later.map((x) => x.quote)) : p.quote;
+    const badlyBroken = laterLow < p.quote - tol * 2.8;
+    localMin.push({ ms: p.ms, level: p.quote, score: (hasRebound ? 2 : 0) - (badlyBroken ? 1.2 : 0), badlyBroken });
+  }
+  if (!localMin.length) return [];
+
+  // Agrupa mínimos cercanos para detectar niveles usados dos veces.
+  const clusters = [];
+  for (const m of localMin) {
+    let c = clusters.find((cl) => Math.abs(cl.level - m.level) <= tol * 1.8);
+    if (!c) {
+      c = { level: m.level, touches: [], firstMs: m.ms, lastMs: m.ms, score: 0, badlyBrokenCount: 0 };
+      clusters.push(c);
+    }
+    c.touches.push(m);
+    c.level = c.touches.reduce((acc, x) => acc + x.level, 0) / c.touches.length;
+    c.firstMs = Math.min(c.firstMs, m.ms);
+    c.lastMs = Math.max(c.lastMs, m.ms);
+    c.score += m.score;
+    if (m.badlyBroken) c.badlyBrokenCount += 1;
+  }
+
+  // Detecta polaridad simple: un máximo/resistencia previa queda cerca del nivel y luego se defiende como soporte.
+  const localHighs = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i];
+    if (p.ms < recentStart - 8000 || p.ms > visibleEnd) continue;
+    const prev = pts.slice(Math.max(0, i - 3), i);
+    const next = pts.slice(i + 1, Math.min(pts.length, i + 4));
+    if (!prev.length || !next.length) continue;
+    const prevMax = Math.max(...prev.map((x) => x.quote));
+    const nextMax = Math.max(...next.map((x) => x.quote));
+    if (p.quote >= prevMax - tol && p.quote >= nextMax - tol) localHighs.push(p);
+  }
+
+  const markers = [];
+  for (const c of clusters) {
+    const touchSpread = c.lastMs - c.firstMs;
+    const usedTwice = c.touches.length >= 2 && touchSpread >= 5000;
+    const priorHigh = localHighs.find((hi) => hi.ms < c.lastMs - 2000 && Math.abs(hi.quote - c.level) <= tol * 2.2);
+    const polarity = !!priorHigh || usedTwice;
+
+    // Para formación reciente: preferimos el soporte principal y el soporte reciente; no base antigua.
+    const lastTouchMs = c.lastMs;
+    if (lastTouchMs < Math.max(10000, msNow - LIVE_STRUCT_SUPPORT_RECENT_LOOKBACK_MS)) continue;
+
+    const after = pts.filter((p) => p.ms >= lastTouchMs && p.ms <= visibleEnd);
+    const afterHigh = after.length ? Math.max(...after.map((p) => p.quote)) : c.level;
+    const defended = afterHigh - c.level >= minRebound * 0.35;
+    if (!defended && !polarity) continue;
+
+    const xStartMs = polarity
+      ? Math.max(recentStart, Math.min(c.firstMs, priorHigh?.ms ?? c.firstMs) - 2500)
+      : Math.max(recentStart, lastTouchMs - 3500);
+    const xEndMs = polarity
+      ? Math.min(60000, Math.max(c.lastMs + 14000, visibleEnd, msNow + 3000))
+      : Math.min(60000, Math.max(lastTouchMs + 11000, msNow + 2500));
+
+    markers.push({
+      level: c.level,
+      type: polarity ? "polarity" : "structural",
+      touches: c.touches.length,
+      firstMs: c.firstMs,
+      lastMs: c.lastMs,
+      xStartMs,
+      xEndMs,
+      score: c.score + (polarity ? 2.5 : 0) + (defended ? 1.4 : 0) - c.badlyBrokenCount,
+    });
+  }
+
+  // Deja pocos niveles limpios: los más recientes/relevantes. Prioriza polaridad y último soporte.
+  markers.sort((a, b) => {
+    const pol = (b.type === "polarity") - (a.type === "polarity");
+    if (pol) return pol;
+    const score = (b.score || 0) - (a.score || 0);
+    if (Math.abs(score) > 0.25) return score;
+    return (b.lastMs || 0) - (a.lastMs || 0);
+  });
+
+  const out = [];
+  for (const m of markers) {
+    if (out.some((x) => Math.abs(x.level - m.level) <= tol * 2.2)) continue;
+    out.push(m);
+    if (out.length >= 3) break;
+  }
+  return out.sort((a, b) => a.level - b.level);
+}
+function drawLiveStructuralSupportMarkers(ctx, markers, xOf, yOf, w, h) {
+  if (!ctx || !Array.isArray(markers) || !markers.length) return;
+  ctx.save();
+  for (const m of markers) {
+    const y = yOf(Number(m.level));
+    if (!Number.isFinite(y)) continue;
+    const x1 = Math.max(8, Math.min(w - 8, xOf(Number(m.xStartMs ?? m.firstMs ?? 0))));
+    const x2 = Math.max(8, Math.min(w - 8, xOf(Number(m.xEndMs ?? m.lastMs ?? 60000))));
+    if (Math.abs(x2 - x1) < 10) continue;
+    const isPol = m.type === "polarity";
+    const col = isPol ? "rgba(250,204,21,0.92)" : "rgba(34,211,238,0.92)";
+    const glow = isPol ? "rgba(250,204,21,0.34)" : "rgba(34,211,238,0.32)";
+
+    ctx.save();
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = isPol ? 8 : 7;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = isPol ? 2.0 : 1.8;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(Math.min(x1, x2), y);
+    ctx.lineTo(Math.max(x1, x2), y);
+    ctx.stroke();
+
+    // Si el nivel fue usado varias veces, marca sutilmente los toques sin cartel.
+    if (Number(m.touches || 0) >= 2 || isPol) {
+      ctx.fillStyle = isPol ? "rgba(254,240,138,0.96)" : "rgba(165,243,252,0.92)";
+      for (const ms of [m.firstMs, m.lastMs]) {
+        const x = xOf(Number(ms));
+        if (!Number.isFinite(x) || x < 8 || x > w - 8) continue;
+        ctx.beginPath();
+        ctx.arc(x, y, isPol ? 2.6 : 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+
+
+/* =========================
+   V106.8.3 Reducción visual — lectura editable en modal
+   - Dibuja la lectura G/M/P que vio el motor sobre el gráfico.
+   - Permite feedback rápido específico para calibrar el motor.
+========================= */
+const VISUAL_READ_OVERLAY_KEY = "visualReadOverlayEnabled_v1";
+const VISUAL_READ_FEEDBACK_REASONS = [
+  { key: "sizes_wrong", label: "G/M/P mal" },
+  { key: "break_wrong", label: "Quiebre mal" },
+  { key: "missing_contrary", label: "Faltó contrario" },
+  { key: "symmetry", label: "Era simetría" },
+  { key: "continuity", label: "Era continuidad" },
+  { key: "double_floor_roof", label: "Doble suelo/techo" },
+  { key: "direction_wrong", label: "Dirección mal" },
+];
+let visualReadOverlayEnabled = (() => {
+  try { return localStorage.getItem(VISUAL_READ_OVERLAY_KEY) !== "0"; }
+  catch { return true; }
+})();
+let visualReadPanelEl = null;
+let visualReadReasonWrapEl = null;
+
+function isVisualReductionItem(item) {
+  const mode = normalizeSignalMode(item?.mode || item?.giroPolaridad?.levelMode || item?.snrLevel?.levelMode || "");
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  return mode === MODE_REDUCCION_VISUAL_25S || mode === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA || !!meta.visualReductionMode || !!meta.constructiveReductionMode || String(meta.levelMode || "") === "reduccion_visual_25s" || String(meta.levelMode || "") === "reduccion_constructiva_continua";
+}
+function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
+  if (!run || typeof run !== "object") return null;
+  const startMs = Number(run.startMs);
+  const endMs = Number(run.endMs);
+  const startQuote = Number(run.startQuote);
+  const endQuote = Number(run.endQuote);
+  if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return null;
+  return {
+    startMs,
+    endMs,
+    startQuote,
+    endQuote,
+    move: Number(run.move || Math.abs(endQuote - startQuote)) || 0,
+    sign: Number(run.sign || 0),
+    side: fallbackSide,
+    label: label || "",
+    idx: Number(run.idx || 0),
+  };
+}
+function getVisualReadPatternText(labels) {
+  const arr = Array.isArray(labels) ? labels.filter(Boolean) : [];
+  return arr.length ? arr.join("→") : "—";
+}
+function splitPatternText(pattern) {
+  const txt = String(pattern || "").replace(/-/g, "→");
+  return txt.split("→").map((x) => x.trim()).filter(Boolean);
+}
+function buildVisualReadFromItem(item) {
+  if (!item || !isVisualReductionItem(item)) return null;
+  const meta = item.giroPolaridad || item.snrLevel || {};
+  const direction = normalizeSignalConfirmationSide(meta.direction || item.direction) || "";
+  const dominant = String(meta.visualReductionGroup || "").toLowerCase().includes("vendedor") ? "vendedor" : "comprador";
+  const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
+  const primaryLabels = Array.isArray(meta.visualReductionLabels)
+    ? meta.visualReductionLabels.filter(Boolean)
+    : splitPatternText(meta.visualReductionPattern);
+  const contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
+  const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
+  const contraryRunsRaw = Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : [];
+  const primaryRuns = primaryRunsRaw
+    .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
+    .filter(Boolean);
+  const contraryRuns = contraryRunsRaw
+    .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
+    .filter(Boolean);
+  const cuts = Array.isArray(meta.visualReductionBreakDetails)
+    ? meta.visualReductionBreakDetails.map((b) => ({
+        startMs: Number(b.startMs),
+        endMs: Number(b.endMs),
+        type: String(b.type || "quiebre"),
+      })).filter((b) => Number.isFinite(b.startMs) || Number.isFinite(b.endMs))
+    : [];
+  const subtype = String(meta.visualReductionSubtype || "reducción visual");
+  const quality = String(meta.visualReductionQuality || "").toUpperCase() || "—";
+  const primaryPattern = getVisualReadPatternText(primaryLabels);
+  const contraryPattern = getVisualReadPatternText(contraryLabels);
+  return {
+    mode: MODE_REDUCCION_VISUAL_25S,
+    direction,
+    dominant,
+    contrary,
+    quality,
+    subtype,
+    primaryPattern,
+    contraryPattern,
+    reasons: Array.isArray(meta.reasons) ? meta.reasons : [],
+    rejectHints: Array.isArray(meta.rejectHints) ? meta.rejectHints : [],
+    evalMs: Number(meta.analysisWindowMs || 25000),
+    points: Number(meta.points || meta.visualReductionScore || 0),
+    primaryRuns,
+    contraryRuns,
+    cuts,
+    status: String(meta.status || ""),
+    feedback: item.visualReadFeedback || null,
+  };
+}
+function getVisualReadText(read) {
+  if (!read) return "Sin lectura visual";
+  const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+  const parts = [
+    `Calidad ${read.quality}`,
+    `${read.dominant}: ${read.primaryPattern}`,
+  ];
+  if (read.contraryPattern && read.contraryPattern !== "—") parts.push(`${read.contrary}: ${read.contraryPattern}`);
+  parts.push(`→ ${dir}`);
+  return parts.join(" · ");
+}
+function ensureVisualReadPanel() {
+  if (visualReadPanelEl && visualReadPanelEl.isConnected) return visualReadPanelEl;
+  const footer = document.querySelector("#chartModal .modalFooter") || (chartModal ? chartModal.querySelector(".modalFooter") : null);
+  if (!footer) return null;
+  const panel = document.createElement("div");
+  panel.id = "visualReadPanel";
+  panel.style.width = "100%";
+  panel.style.boxSizing = "border-box";
+  panel.style.border = "1px solid rgba(34,211,238,.28)";
+  panel.style.borderRadius = "14px";
+  panel.style.padding = "8px";
+  panel.style.background = "rgba(15,23,42,.62)";
+  panel.style.display = "none";
+  panel.style.gap = "6px";
+  panel.style.flexDirection = "column";
+  panel.style.fontSize = "11.5px";
+  panel.innerHTML = `
+    <div style="display:flex;gap:6px;align-items:center;justify-content:space-between;">
+      <button id="visualReadToggleBtn" class="btn btnGhost" type="button" style="flex:0 0 auto;min-height:32px;padding:6px 9px;font-size:12px;">👁️ Lectura ON</button>
+      <div id="visualReadSummary" style="flex:1;min-width:0;font-weight:900;line-height:1.25;color:#e0f2fe;">—</div>
+    </div>
+    <div id="visualReadDetail" style="color:rgba(226,232,240,.82);line-height:1.25;">—</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+      <button id="visualReadGoodBtn" class="btn btnGhost" type="button" style="min-height:34px;font-size:12px;">✅ Leyó bien</button>
+      <button id="visualReadBadBtn" class="btn btnGhost" type="button" style="min-height:34px;font-size:12px;">❌ Leyó mal</button>
+    </div>
+    <div id="visualReadReasonWrap" style="display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;"></div>
+  `;
+  const openBtn = modalOpenDerivBtn || footer.lastElementChild;
+  if (openBtn && openBtn.parentElement === footer) footer.insertBefore(panel, openBtn);
+  else footer.appendChild(panel);
+  visualReadPanelEl = panel;
+  visualReadReasonWrapEl = panel.querySelector("#visualReadReasonWrap");
+  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  if (toggleBtn) toggleBtn.onclick = () => {
+    visualReadOverlayEnabled = !visualReadOverlayEnabled;
+    try { localStorage.setItem(VISUAL_READ_OVERLAY_KEY, visualReadOverlayEnabled ? "1" : "0"); } catch {}
+    updateVisualReadPanelUI();
+    requestModalDraw(true);
+  };
+  const goodBtn = panel.querySelector("#visualReadGoodBtn");
+  const badBtn = panel.querySelector("#visualReadBadBtn");
+  if (goodBtn) goodBtn.onclick = () => saveVisualReadFeedback("ok", "");
+  if (badBtn) badBtn.onclick = () => {
+    if (visualReadReasonWrapEl) {
+      visualReadReasonWrapEl.style.display = visualReadReasonWrapEl.style.display === "grid" ? "none" : "grid";
+    }
+    saveVisualReadFeedback("bad", "general");
+  };
+  if (visualReadReasonWrapEl && !visualReadReasonWrapEl.dataset.ready) {
+    visualReadReasonWrapEl.dataset.ready = "1";
+    visualReadReasonWrapEl.innerHTML = VISUAL_READ_FEEDBACK_REASONS.map((r) => `<button class="btn btnGhost visualReadReasonBtn" data-reason="${r.key}" type="button" style="min-height:30px;padding:5px 6px;font-size:11px;">${r.label}</button>`).join("");
+    visualReadReasonWrapEl.querySelectorAll(".visualReadReasonBtn").forEach((btn) => {
+      btn.onclick = () => saveVisualReadFeedback("bad", btn.dataset.reason || "general");
+    });
+  }
+  return panel;
+}
+function persistModalVisualReadFeedback() {
+  try {
+    if (!modalCurrentItem?.id) return;
+    const idx = (history || []).findIndex((x) => x && x.id === modalCurrentItem.id);
+    if (idx >= 0) {
+      history[idx].visualReadFeedback = modalCurrentItem.visualReadFeedback;
+      saveHistory(history);
+    }
+    const jid = modalCurrentItem.journal_id || modalOpenContext?.journalId || makeJournalIdFromSignal(modalCurrentItem);
+    const jidx = (tradesJournal || []).findIndex((x) => x && (x.journal_id === jid || x.id === modalCurrentItem.id));
+    if (jidx >= 0) {
+      tradesJournal[jidx].visualReadFeedback = modalCurrentItem.visualReadFeedback;
+      saveTradesJournal(tradesJournal);
+    }
+  } catch {}
+}
+function saveVisualReadFeedback(verdict, reason = "") {
+  if (!modalCurrentItem || !isVisualReductionItem(modalCurrentItem)) return;
+  const read = buildVisualReadFromItem(modalCurrentItem);
+  modalCurrentItem.visualReadFeedback = {
+    verdict: String(verdict || ""),
+    reason: String(reason || ""),
+    at: Date.now(),
+    mode: MODE_REDUCCION_VISUAL_25S,
+    direction: read?.direction || modalCurrentItem.direction || "",
+    quality: read?.quality || "",
+    dominant: read?.dominant || "",
+    primaryPattern: read?.primaryPattern || "",
+    contrary: read?.contrary || "",
+    contraryPattern: read?.contraryPattern || "",
+  };
+  persistModalVisualReadFeedback();
+  updateVisualReadPanelUI();
+  toast(verdict === "ok" ? "✅ Lectura visual marcada correcta" : "❌ Corrección visual guardada", 1300);
+}
+function updateVisualReadPanelUI() {
+  const panel = ensureVisualReadPanel();
+  if (!panel) return;
+  if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem || !isVisualReductionItem(modalCurrentItem)) {
+    panel.style.display = "none";
+    return;
+  }
+  const read = buildVisualReadFromItem(modalCurrentItem);
+  panel.style.display = "none";
+  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  const summary = panel.querySelector("#visualReadSummary");
+  const detail = panel.querySelector("#visualReadDetail");
+  if (toggleBtn) {
+    toggleBtn.textContent = visualReadOverlayEnabled ? "👁️ Lectura ON" : "👁️ Lectura OFF";
+    toggleBtn.classList.toggle("active", !!visualReadOverlayEnabled);
+  }
+  if (summary) summary.textContent = getVisualReadText(read);
+  if (detail) {
+    const fb = modalCurrentItem.visualReadFeedback;
+    const fbText = fb?.verdict ? ` · Feedback: ${fb.verdict === "ok" ? "correcta" : "corregir"}${fb.reason ? ` (${fb.reason})` : ""}` : "";
+    const reasons = read?.reasons?.length ? ` · ${read.reasons.slice(0, 3).join(" · ")}` : "";
+    detail.textContent = `Ventana 0-${Math.round(Number(read?.evalMs || 25000) / 1000)}s · puntos ${read?.points || 0}${reasons}${fbText}`;
+  }
+}
+function drawRoundedLabel(ctx, x, y, text, fill, stroke = "rgba(255,255,255,.22)") {
+  const padX = 6, h = 20;
+  ctx.save();
+  ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+  const w = Math.max(28, ctx.measureText(String(text)).width + padX * 2);
+  const xx = Math.max(8, Math.min(x - w / 2, (ctx.canvas.clientWidth || ctx.canvas.width) - w - 8));
+  const yy = Math.max(8, y - h - 8);
+  ctx.fillStyle = fill;
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1;
+  if (typeof drawRoundedRect === "function") {
+    drawRoundedRect(ctx, xx, yy, w, h, 9); ctx.fill(); ctx.stroke();
+  } else {
+    ctx.fillRect(xx, yy, w, h); ctx.strokeRect(xx, yy, w, h);
+  }
+  ctx.fillStyle = "rgba(255,255,255,.78)";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(text), xx + w / 2, yy + h / 2 + 0.5);
+  ctx.restore();
+}
+function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
+  if (!ctx || !item || !visualReadOverlayEnabled || !isVisualReductionItem(item)) return;
+  const read = buildVisualReadFromItem(item);
+  if (!read) return;
+  const evalMs = Math.max(1000, Math.min(60000, Number(read.evalMs || 25000)));
+  const x0 = xOf(0), xEval = xOf(evalMs);
+  ctx.save();
+  ctx.fillStyle = "rgba(250,204,21,.032)";
+  ctx.fillRect(x0, 8, Math.max(0, xEval - x0), h - 30);
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = "rgba(250,204,21,.38)";
+  ctx.lineWidth = 1.05;
+  ctx.beginPath(); ctx.moveTo(xEval, 8); ctx.lineTo(xEval, h - 22); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillStyle = "rgba(254,240,138,.64)";
+  ctx.fillText("25s lectura", Math.min(w - 82, xEval + 4), 19);
+
+  const buyCol = "rgba(34,197,94,.48)";
+  const sellCol = "rgba(248,113,113,.48)";
+  const buyFill = "rgba(22,163,74,.34)";
+  const sellFill = "rgba(185,28,28,.34)";
+  const drawRun = (r, prefix, idx) => {
+    const isBuyer = String(r.side || "") === "comprador";
+    const col = isBuyer ? buyCol : sellCol;
+    const fill = isBuyer ? buyFill : sellFill;
+    const x1 = xOf(r.startMs), y1 = yOf(r.startQuote);
+    const x2 = xOf(r.endMs), y2 = yOf(r.endQuote);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return;
+    ctx.save();
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 3;
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2.35;
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(x1, y1, 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2, y2, 3.0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    const mx = (x1 + x2) / 2;
+    const my = Math.min(y1, y2);
+    const sideLetter = isBuyer ? "C" : "V";
+    drawRoundedLabel(ctx, mx, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+  };
+  (read.primaryRuns || []).forEach((r, i) => drawRun(r, "", i));
+  (read.contraryRuns || []).forEach((r, i) => drawRun(r, "", i));
+
+  for (const c of read.cuts || []) {
+    const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
+    if (!Number.isFinite(ms)) continue;
+    const x = xOf(ms);
+    ctx.save();
+    ctx.setLineDash([2, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,.24)";
+    ctx.lineWidth = 0.85;
+    ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // Resumen textual movido abajo del gráfico para no tapar la lectura visual.
+  ctx.restore();
+}
+
 function drawDerivLikeChart(canvas, ticks) {
   if (!canvas) return;
 
@@ -7050,6 +9941,19 @@ function drawDerivLikeChart(canvas, ticks) {
   if (modalSNRNearArea) {
     min = Math.min(min, Number(modalSNRNearArea.nearLow), Number(modalSNRNearArea.zoneLow));
     max = Math.max(max, Number(modalSNRNearArea.nearHigh), Number(modalSNRNearArea.zoneHigh));
+  }
+
+  const msNowForSupports = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
+    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
+    : null;
+  const liveStructuralSupportMarkers = getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports);
+  if (liveStructuralSupportMarkers.length) {
+    for (const m of liveStructuralSupportMarkers) {
+      if (Number.isFinite(Number(m.level))) {
+        min = Math.min(min, Number(m.level));
+        max = Math.max(max, Number(m.level));
+      }
+    }
   }
   let range = max - min;
   if (range < 1e-9) range = 1e-9;
@@ -7136,8 +10040,8 @@ function drawDerivLikeChart(canvas, ticks) {
       const zoneLow = Number(modalSNRNearArea.zoneLow);
       const zoneHigh = Number(modalSNRNearArea.zoneHigh);
 
-      // V8: área amarilla = margen exacto que la PWA considera "cerca" del SNR
-      // para permitir AUTO 59s aunque el precio no esté dentro de la zona.
+      // V8: área amarilla = margen visual que la PWA considera "cerca" del SNR
+      // para permitir AUTO 58s aunque el precio no esté dentro de la zona.
       if ([nearLow, nearHigh, zoneLow, zoneHigh].every(Number.isFinite)) {
         const yNearHigh = yOf(nearHigh);
         const yZoneHigh = yOf(zoneHigh);
@@ -7203,6 +10107,10 @@ function drawDerivLikeChart(canvas, ticks) {
     ctx.restore();
   }
 
+  // Soportes estructurales recientes del gráfico vivo (sin carteles).
+  // Cian = soporte estructural reciente. Amarillo = polaridad / nivel usado dos veces.
+  drawLiveStructuralSupportMarkers(ctx, liveStructuralSupportMarkers, xOf, yOf, w, h);
+
   // Línea dinámica de tendencia (soporte/resistencia inclinada)
   if (modalDynamicLine) {
     const y0v = Number(getDynamicLineValue(modalDynamicLine, modalCurrentItem?.minute, 0));
@@ -7266,6 +10174,9 @@ function drawDerivLikeChart(canvas, ticks) {
   });
   ctx.stroke();
 
+  // Overlay de lectura visual del motor Reducción visual 25s (G/M/P + ventana 0-30s)
+  drawVisualReductionReadingOverlay(ctx, modalCurrentItem, xOf, yOf, w, h);
+
   // precio actual / último punto: guía horizontal suave + punto más visible
   const lastPoint = pts[pts.length - 1];
   const lx = xOf(lastPoint.ms);
@@ -7305,6 +10216,11 @@ function currentServerMinute() {
 }
 function isItemLiveMinute(item) {
   if (!item) return false;
+  const anchorMs = Number(item.signalAnchorEpochMs || 0);
+  if (Number.isFinite(anchorMs) && anchorMs > 0) {
+    const elapsed = serverNowMs() - anchorMs;
+    return elapsed >= 0 && elapsed < 60000;
+  }
   return item.minute === currentServerMinute();
 }
 
@@ -7352,10 +10268,89 @@ function ensureModalCandleStatusBar() {
   modalCandleStatusEl = el;
   return modalCandleStatusEl;
 }
+
+function ensureModalFooterControlsLayout() {
+  if (modalFooterControlsRelocated) return;
+
+  try {
+    if (modalPrevItemBtn && modalFooterPrevSlot && modalPrevItemBtn.parentElement !== modalFooterPrevSlot) {
+      modalFooterPrevSlot.appendChild(modalPrevItemBtn);
+    }
+    if (modalNextItemBtn && modalFooterNextSlot && modalNextItemBtn.parentElement !== modalFooterNextSlot) {
+      modalFooterNextSlot.appendChild(modalNextItemBtn);
+    }
+    if (modalLikeBtn && modalFooterVoteSlot && modalLikeBtn.parentElement !== modalFooterVoteSlot) {
+      modalFooterVoteSlot.appendChild(modalLikeBtn);
+    }
+    if (modalDislikeBtn && modalFooterVoteSlot && modalDislikeBtn.parentElement !== modalFooterVoteSlot) {
+      modalFooterVoteSlot.appendChild(modalDislikeBtn);
+    }
+    if (modalCandle1mBtn && modalFooterChartTools && modalCandle1mBtn.parentElement !== modalFooterChartTools) {
+      modalFooterChartTools.appendChild(modalCandle1mBtn);
+    }
+    if (modalReplayBtn && modalFooterChartTools && modalReplayBtn.parentElement !== modalFooterChartTools) {
+      modalFooterChartTools.appendChild(modalReplayBtn);
+    }
+
+    const toolbar = chartModal ? chartModal.querySelector('.minuteCanvasToolbar') : null;
+    if (toolbar) {
+      toolbar.style.display = 'none';
+      toolbar.setAttribute('aria-hidden', 'true');
+    }
+    if (modalNavVoteBar) {
+      modalNavVoteBar.style.display = 'none';
+      modalNavVoteBar.setAttribute('aria-hidden', 'true');
+    }
+  } catch {}
+
+  modalFooterControlsRelocated = true;
+}
+function getModalVisualSequenceSummary(item = modalCurrentItem) {
+  const meta = item?.giroPolaridad || item?.snrLevel || null;
+  const raw = String(meta?.status || meta?.logic || '').trim();
+  if (!raw) return 'Sin lectura visual disponible.';
+  let txt = raw.replace(/^🎯\s*/,'').replace(/^🟢\s*/,'').trim();
+  txt = txt.replace(/^Reducción visual\s*[A-Z]?\s*·\s*/i, '');
+  txt = txt.replace(/^cambio de presión:\s*/i, '');
+  txt = txt.replace(/\.\s*Señal a\s*(COMPRA|VENTA)\.?/i, ' · Señal a $1');
+  return txt;
+}
+function updateModalFooterReadingUI() {
+  ensureModalFooterControlsLayout();
+  const panel = ensureVisualReadPanel();
+  const toggleBtn = panel ? panel.querySelector("#visualReadToggleBtn") : null;
+  if (toggleBtn && modalFooterChartTools && toggleBtn.parentElement !== modalFooterChartTools) {
+    modalFooterChartTools.prepend(toggleBtn);
+  }
+  if (panel) panel.style.display = "none";
+  const tradeRow = document.querySelector("#chartModal .modalFooter .tradeRow");
+  if (tradeRow) tradeRow.style.display = "none";
+
+  if (modalCurrentItem) {
+    const read = buildVisualReadFromItem(modalCurrentItem);
+    if (modalSequenceText) {
+      if (read) {
+        const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
+        modalSequenceText.textContent = `👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern && read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
+      } else {
+        modalSequenceText.textContent = getModalVisualSequenceSummary(modalCurrentItem);
+      }
+    }
+    if (modalSequenceDetail) {
+      modalSequenceDetail.textContent = getModalVisualSequenceSummary(modalCurrentItem);
+    }
+  } else {
+    if (modalSequenceText) modalSequenceText.textContent = '—';
+    if (modalSequenceDetail) modalSequenceDetail.textContent = '—';
+  }
+  if (modalReadingInfoRow) {
+    modalReadingInfoRow.style.display = (chartModal && !chartModal.classList.contains('hidden') && modalCurrentItem) ? 'grid' : 'none';
+  }
+}
 function normalizeSignalConfirmationSide(side) {
   const s = String(side || "").toUpperCase();
-  if (s === "CALL" || s === "BUY" || s === "COMPRA") return "CALL";
-  if (s === "PUT" || s === "SELL" || s === "VENTA") return "PUT";
+  if (s === "CALL" || s === "CALLE" || s === "BUY" || s === "COMPRA") return "CALL";
+  if (s === "PUT" || s === "PUTE" || s === "SELL" || s === "VENTA") return "PUT";
   return "";
 }
 function getSignalConfirmationEvents(item = modalCurrentItem) {
@@ -7548,6 +10543,10 @@ function ensureSignalConfirmationControls() {
 function getSignalConfirmationMs(item = modalCurrentItem) {
   if (!item) return 0;
   const now = serverNowMs();
+  const anchorMs = Number(item.signalAnchorEpochMs || 0);
+  if (Number.isFinite(anchorMs) && anchorMs > 0) {
+    return Math.max(0, Math.min(60000, now - anchorMs));
+  }
   const itemMinute = Number(item.minute);
   const minuteStart = Number.isFinite(itemMinute) && itemMinute > 0
     ? itemMinute * 60000
@@ -7555,6 +10554,66 @@ function getSignalConfirmationMs(item = modalCurrentItem) {
       ? currentMinuteStartMs
       : Math.floor(now / 60000) * 60000);
   return Math.max(0, Math.min(60000, now - minuteStart));
+}
+function getSignalLastTickMsInMinute(item = modalCurrentItem) {
+  if (!item) return 0;
+  const minute = Number(item.minute);
+  const sym = String(item.symbol || "");
+  let ticks = [];
+
+  if (Number.isFinite(Number(item.signalAnchorEpochMs || 0)) && Array.isArray(item.ticks) && item.ticks.length) {
+    const cleanFloating = item.ticks.map((p) => Number(p?.ms)).filter((ms) => Number.isFinite(ms));
+    return cleanFloating.length ? Math.max(...cleanFloating) : 0;
+  }
+
+  const liveTicks = Number.isFinite(minute) && sym ? minuteData?.[minute]?.[sym] : null;
+  if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
+  else if (Array.isArray(item.ticks) && item.ticks.length) ticks = item.ticks;
+
+  const clean = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => Number(p?.ms))
+    .filter((ms) => Number.isFinite(ms));
+  return clean.length ? Math.max(...clean) : 0;
+}
+function getPost58EntryReadinessForSignal(item = modalCurrentItem) {
+  const ms = getSignalConfirmationMs(item);
+
+  // El modo viejo conserva su comportamiento: desde 58s hasta antes de cerrar la vela.
+  if (!isNextCandleExpiryTiming()) {
+    return { ok: ms >= SIGNAL_AUTO_ENTRY_MS && ms < 60000, ms, lastTickMs: getSignalLastTickMsInMinute(item), reason: "duration_1m_window" };
+  }
+
+  const lastTickMs = getSignalLastTickMsInMinute(item);
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_58" };
+  }
+  if (lastTickMs < SIGNAL_AUTO_ENTRY_MS) {
+    return { ok: false, wait: true, ms, lastTickMs, reason: "esperando_tick_58" };
+  }
+  if (ms > SIGNAL_AUTO_POST58_MAX_MS) {
+    return { ok: false, late: true, ms, lastTickMs, reason: "tick_58_tarde" };
+  }
+  return { ok: true, ms, lastTickMs, reason: "post_tick_58_ok" };
+}
+function cancelSignalAutoEntryLate(item, side, readiness, reason = "AUTO_POST58_LATE") {
+  if (!item || item?.signalAutoEntry?.attempted) return false;
+  const label = side === "CALL" ? "COMPRA" : "VENTA";
+  item.signalAutoEntry = {
+    type: "AUTO_58_REAL",
+    attempted: true,
+    status: "cancelled",
+    side: normalizeSignalConfirmationSide(side) || "",
+    ms: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item))),
+    sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
+    reason: String(reason || "AUTO_POST58_LATE"),
+    at: Date.now(),
+    error: `Cancelada: no llegó a comprar dentro de la ventana post-58 (${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s).`,
+    post58_readiness: { ...(readiness || {}) },
+  };
+  saveHistory(history);
+  if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
+  toast(`⛔ AUTO ${label} cancelada: llegó tarde después de ${SIGNAL_AUTO_POST58_MAX_SEC.toFixed(1)}s`, 2200);
+  return true;
 }
 function addSignalConfirmation(side = "CALL") {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
@@ -7568,14 +10627,16 @@ function addSignalConfirmation(side = "CALL") {
 
   const enabled = getSignalEnabledTradeSide(modalCurrentItem);
   if (enabled === "CALL") {
+    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else if (enabled === "PUT") {
+    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 59s,
+  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 58s,
   // también se dispara la auto-entrada sin esperar otro tick/timer.
   trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -7760,7 +10821,7 @@ function buildSignalSNREntryGate(item, side = "", checkMs = SIGNAL_AUTO_SNR_CHEC
 
   const price = getSignalPriceAtEntryCheckMs(item, checkMs);
   if (!Number.isFinite(price)) {
-    return { ok: false, pending: true, reason: "sin_precio_59", message: "Todavía no hay precio suficiente para validar el SNR en 59s." };
+    return { ok: false, pending: true, reason: "sin_precio_58", message: "Todavía no hay precio suficiente para validar el SNR en 58s." };
   }
 
   const roleHardBreakInfo = getSignalSNRRoleHardBreakInfo(meta, getSignalLiveTicksForEntryGate(item), checkMs);
@@ -7930,8 +10991,8 @@ function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
 function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   if (!item) return null;
 
-  // V48: operaciones manuales desde la pestaña En vivo son independientes de señales/SNR/AUTO 59.
-  // Se registran como estudio, pero no se bloquean por zona ni por segundo 59.
+  // V48: operaciones manuales desde la pestaña En vivo son independientes de señales/SNR/AUTO 58.
+  // Se registran como estudio, pero no se bloquean por zona ni por segundo 58.
   if (item?.liveManualTrade) {
     const sym = item.symbol || liveReplaySymbol || "";
     const ticks = Array.isArray(item.ticks) ? item.ticks : getLiveReplayTicks(sym);
@@ -7964,7 +11025,7 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   }
 
   // V46: en modos SNR/SNR polaridad NO se exige que la vela cierre dentro del SNR
-  // ni se bloquea la autoentrada por estar lejos de la zona al check de 59s.
+  // ni se bloquea la autoentrada por estar lejos de la zona al check de 58s.
   // La operación se decide por: vela viva + 4 puntos netos + disciplina OK.
   // Igual calculamos el gate SNR para registrar si el precio estaba dentro/cerca/lejos,
   // pero no lo usamos como bloqueo operativo.
@@ -7973,27 +11034,27 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
     return {
       ok: true,
       pending: false,
-      reason: "auto59_4pts_snr_sin_cierre_zona",
+      reason: "auto58_4pts_snr_sin_cierre_zona",
       side: normalizeSignalConfirmationSide(side) || "",
       check_ms: SIGNAL_AUTO_SNR_CHECK_MS,
       check_sec: SIGNAL_AUTO_ENTRY_SEC,
-      message: "AUTO 59 habilitado por 4 puntos; cierre/zona SNR no bloquean la entrada.",
+      message: "AUTO 58 habilitado por 4 puntos; cierre/zona SNR no bloquean la entrada.",
       original_gate: gate,
     };
   }
   return Object.assign({}, gate || {}, {
     ok: true,
     pending: false,
-    reason: gate?.reason ? `auto59_4pts_sin_bloqueo_${gate.reason}` : "auto59_4pts_sin_cierre_zona",
+    reason: gate?.reason ? `auto58_4pts_sin_bloqueo_${gate.reason}` : "auto58_4pts_sin_cierre_zona",
     original_ok: !!gate?.ok,
     original_reason: gate?.reason || "sin_snr_gate",
     message: gate?.ok
-      ? (gate.message || "AUTO 59 por 4 puntos; precio dentro/cerca del SNR.")
-      : `AUTO 59 por 4 puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
+      ? (gate.message || "AUTO 58 por 4 puntos; precio dentro/cerca del SNR.")
+      : `AUTO 58 por 4 puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
   });
 }
 
-function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
+function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   const item = itemOverride || modalCurrentItem;
   if (!item || !isTradeEntryOpen(item)) return false;
   if (item?.trade?.badge) return false;
@@ -8006,6 +11067,36 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
   const side = getSignalEnabledTradeSide(item);
   if (!side) return false;
 
+  const post58 = getPost58EntryReadinessForSignal(item);
+  if (!post58.ok) {
+    if (post58.late) cancelSignalAutoEntryLate(item, side, post58, "AUTO_POST58_TICK_LATE");
+    return false;
+  }
+
+  if (isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()) {
+    const symbol = String(item.symbol || SYMBOLS[0] || "R_25");
+    const stake = Number(getEffectiveTradeStake().toFixed(2));
+    const pp = getValidAutoPreProposal(item, side, symbol, stake);
+    if (!pp && SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT) {
+      cancelSignalAutoEntryNoPreProposal(item, side, post58, "AUTO_PREPROPOSAL_MISSING");
+      return false;
+    }
+    if (!pp) {
+      // V106.4: no cancelamos por "no prearmada".
+      // Permitimos que buyOneClick pida proposal rápida / direct buy en el post-58.
+      item.signalAutoPreProposal ||= {};
+      item.signalAutoPreProposal.status = "fallback_post58";
+      item.signalAutoPreProposal.side = side;
+      item.signalAutoPreProposal.symbol = symbol;
+      item.signalAutoPreProposal.stake = stake;
+      item.signalAutoPreProposal.reason = "NO_PREARMADA_USA_FALLBACK_POST58";
+      item.signalAutoPreProposal.fallback_at = Date.now();
+      item.signalAutoPreProposal.fallback_ms = Math.round(Number(post58?.ms || getSignalConfirmationMs(item)));
+      try { saveHistory(history); } catch {}
+      try { window.DerivDebug?.log?.("AUTO58_NO_PREARM_FALLBACK", { item_id: item.id, symbol, side, stake, ms: item.signalAutoPreProposal.fallback_ms }); } catch {}
+    }
+  }
+
   let gate = null;
   try {
     gate = assertSignalSNREntryGateAt57(side, item);
@@ -8017,21 +11108,22 @@ function trySignalAutoEntryAt57(reason = "AUTO_59", itemOverride = null) {
   const label = side === "CALL" ? "COMPRA" : "VENTA";
 
   item.signalAutoEntry = {
-    type: "AUTO_59_REAL",
+    type: "AUTO_58_REAL",
     attempted: true,
     status: "sending",
     side,
     ms,
     sec: Math.round(ms / 1000),
-    reason: String(reason || "AUTO_59"),
+    reason: String(reason || "AUTO_58"),
     at: Date.now(),
     confirmation_status: getSignalConfirmationStatusText(item),
     snr_entry_gate: gate,
+    post58_readiness: post58,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
 
-  toast(`🚀 AUTO ${SIGNAL_AUTO_ENTRY_SEC}s: enviando ${label} ${getTradeScopeText()}…`, 1500);
+  toast(`🚀 AUTO 58: enviando ${label} ${getTradeScopeText()}…`, 1500);
 
   Promise.race([
     buyOneClick(side, null, item),
@@ -8069,11 +11161,11 @@ function scanSignalAutoEntriesAt57() {
     if (tradeInFlight) return false;
     const nowMinute = currentServerMinute();
     const candidates = (history || [])
-      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
       .filter((it) => getSignalEnabledTradeSide(it));
 
     for (const it of candidates) {
-      if (trySignalAutoEntryAt57("TIMER_59_SCAN", it)) return true;
+      if (trySignalAutoEntryAt57("TIMER_58_SCAN", it)) return true;
     }
   } catch {}
   return false;
@@ -8111,11 +11203,14 @@ function paintTradeButtonLocked(btn, locked, remainMs = 0, candleClosed = false)
   btn.title = getTradeExecutionTitle();
 }
 function updateModalCandleStatusUI() {
+  ensureModalFooterControlsLayout();
   const bar = ensureModalCandleStatusBar();
   if (!bar) return;
 
   if (!chartModal || chartModal.classList.contains("hidden") || !modalCurrentItem) {
     bar.style.display = "none";
+    if (modalReadingInfoRow) modalReadingInfoRow.style.display = 'none';
+    const tradeRow = document.querySelector("#chartModal .modalFooter .tradeRow"); if (tradeRow) tradeRow.style.display = "none";
     if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
     setSignalConfirmationControlsVisible(false);
     setGiroAprendizajeControlsVisible(false);
@@ -8133,6 +11228,7 @@ function updateModalCandleStatusUI() {
   const locked = isTradeLockedNow();
   const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
   const candleClosed = !isOpen;
+  const brainBlocked = isBrainProcessTradeBlocked(modalCurrentItem);
 
   if (locked) {
     bar.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
@@ -8140,6 +11236,12 @@ function updateModalCandleStatusUI() {
     bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.78), rgba(69,10,10,.78))";
     bar.style.borderColor = "rgba(248,113,113,.50)";
     bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.10) inset, 0 0 12px rgba(239,68,68,.12)";
+  } else if (brainBlocked) {
+    bar.textContent = `🧠 Proceso bloqueó esta entrada · ${getBrainProcessBlockReason(modalCurrentItem)}`;
+    bar.style.color = "#fed7aa";
+    bar.style.background = "linear-gradient(180deg, rgba(120,53,15,.42), rgba(69,26,3,.32))";
+    bar.style.borderColor = "rgba(251,146,60,.48)";
+    bar.style.boxShadow = "0 0 0 1px rgba(251,146,60,.08) inset, 0 0 12px rgba(251,146,60,.12)";
   } else if (isOpen) {
     const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
     const autoTxt = shouldUseAutoHighLowExecution()
@@ -8177,15 +11279,19 @@ function updateModalCandleStatusUI() {
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
+  updateProcessMiniPanelUI();
   updateModalNavVoteUI();
+  updateModalFooterReadingUI();
 
   applyModalExecutionButtonUI(locked, candleClosed);
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
+  applyBrainProcessTradeGate(locked, candleClosed);
+  updateVisualReadPanelUI();
 
-  // Auto-entrada real: igual que práctica, al segundo 59 si ya hay 4 puntos netos.
-  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_59");
+  // Auto-entrada real: igual que práctica, al segundo 58 si ya hay 4 puntos netos.
+  if (!locked && !candleClosed && !brainBlocked) trySignalAutoEntryAt57("TIMER_58");
 }
 
 
@@ -8485,7 +11591,7 @@ function drawDerivLikeOneMinuteCandles(canvas, item, ticks = []) {
   const pol = item?.giroPolaridad && String(item.giroPolaridad?.levelMode || "") !== "dynamic_line" ? item.giroPolaridad : null;
   const snrArea = pol ? buildSNRNearAreaMetaFromLevel(pol) : null;
 
-  // V33: la vista Velas 1m debe usar EXACTAMENTE la misma proyección
+  // V33: la vista Velas 1m debe usar VISUALMENTE la misma proyección
   // que el gráfico de línea intraminuto. Antes se reconstruía la pendiente
   // con touchDetails y eso podía desplazar el nivel: la línea de velas no
   // coincidía con la línea del gráfico normal. Ahora cada vela pregunta el
@@ -8696,7 +11802,6 @@ function ensureModalReplayBox() {
       <button id="modalReplayCloseBtn" class="modalReplayClose" type="button" aria-label="Cerrar replay">✖</button>
     </div>
     <canvas id="modalReplayCanvas"></canvas>
-    <div id="modalReplayInfo" class="modalReplayInfo">—</div>
     <div class="modalReplayControls">
       <button id="modalReplayPlayBtn" class="modalReplayControlBtn" type="button">▶️</button>
       <button id="modalReplayResetBtn" class="modalReplayControlBtn" type="button">↺</button>
@@ -8756,7 +11861,7 @@ function updateModalReplayControlsUI() {
   if (speedBtn) speedBtn.textContent = `${Number(modalReplayState.speed || 1)}x`;
   if (seek) seek.value = String(Math.max(0, Math.min(60000, Number(modalReplayState.currentMs || 0))));
 }
-function openModalReplay() {
+function openModalReplay(options = {}) {
   if (!modalCurrentItem) return;
   const ticks = getModalReplayTicks(modalCurrentItem);
   if (ticks.length < 2) {
@@ -8768,8 +11873,8 @@ function openModalReplay() {
   box.classList.remove("hidden");
   modalReplayState.open = true;
   modalReplayState.playing = true;
-  modalReplayState.speed = 1;
-  modalReplayState.currentMs = 0;
+  modalReplayState.speed = [1, 2, 4].includes(Number(options.speed)) ? Number(options.speed) : 1;
+  modalReplayState.currentMs = Math.max(0, Math.min(60000, Number(options.currentMs || 0)));
   modalReplayState.lastFrameTs = 0;
   updateModalReplayControlsUI();
   startModalReplayLoop();
@@ -8809,8 +11914,7 @@ function drawModalReplayFrame() {
   const box = document.getElementById("modalReplayBox");
   if (!box || box.classList.contains("hidden") || !modalCurrentItem) return;
   const canvas = box.querySelector("#modalReplayCanvas");
-  const info = box.querySelector("#modalReplayInfo");
-  drawModalReplayCanvas(canvas, modalCurrentItem, Number(modalReplayState.currentMs || 0), info);
+  drawModalReplayCanvas(canvas, modalCurrentItem, Number(modalReplayState.currentMs || 0), null);
   updateModalReplayControlsUI();
 }
 function drawModalReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
@@ -8951,10 +12055,9 @@ function drawModalReplayCanvas(canvas, item, replayMs = 0, infoEl = null) {
   ctx.fillText("60s", xOf(60000), h - 5);
   ctx.restore();
 
-  if (infoEl) {
-    const tickTxt = `${lastIdx + 1}/${ticks.length} ticks`;
-    infoEl.textContent = `${(ms / 1000).toFixed(1)}s · ${tickTxt} · precio ${close.toFixed(6)} · O ${open.toFixed(6)} H ${high.toFixed(6)} L ${low.toFixed(6)} C ${close.toFixed(6)}`;
-  }
+  // V97: datos técnicos del replay ocultos para liberar espacio visual.
+  // El gráfico y la vela siguen actualizándose igual; solo no se muestra la línea de segundos/ticks/precios.
+  if (infoEl) infoEl.textContent = "";
 }
 
 /* =========================
@@ -8992,6 +12095,9 @@ function requestModalDraw(force = false) {
 
     updateModalCandleStatusUI();
     updateModalNavVoteUI();
+    if (modalAutoReplayToken && !modalReplayState.open && getSignalConfirmationMs(it) >= AUTO_REPLAY_X2_TRIGGER_MS) {
+      runModalAutoReplayX2(modalAutoReplayToken, "draw_tick");
+    }
   });
 }
 
@@ -9156,107 +12262,14 @@ function setManualGiroControlsVisible(show) {
    Panel Giro + Aprendizaje en modal
 ========================= */
 function ensureGiroAprendizajeControls() {
-  if (giroAprendizajePanelEl && giroAprendizajePanelEl.isConnected) return giroAprendizajePanelEl;
-
-  const footer =
-    document.querySelector("#chartModal .modalFooter") ||
-    (chartModal ? chartModal.querySelector(".modalFooter") : null);
-  if (!footer) return null;
-
-  const panel = document.createElement("div");
-  panel.id = "giroAprendizajePanel";
-  panel.style.width = "100%";
-  panel.style.boxSizing = "border-box";
-  panel.style.margin = "0 0 8px 0";
-  panel.style.padding = "10px";
-  panel.style.borderRadius = "16px";
-  panel.style.border = "1px solid rgba(34,211,238,.24)";
-  panel.style.background = "linear-gradient(180deg, rgba(34,211,238,.10), rgba(255,255,255,.030))";
-  panel.style.boxShadow = "0 12px 26px rgba(0,0,0,.16), inset 0 0 0 1px rgba(34,211,238,.035)";
-
-  const top = document.createElement("div");
-  top.style.display = "flex";
-  top.style.alignItems = "center";
-  top.style.justifyContent = "space-between";
-  top.style.gap = "8px";
-  top.style.marginBottom = "8px";
-
-  const count = document.createElement("div");
-  count.id = "giroAprendizajeCount";
-  count.style.fontWeight = "950";
-  count.style.letterSpacing = ".25px";
-  count.style.fontSize = "14px";
-  count.style.padding = "8px 11px";
-  count.style.borderRadius = "999px";
-  count.style.border = "1px solid rgba(34,211,238,.24)";
-  count.style.background = "rgba(0,0,0,.16)";
-  count.style.whiteSpace = "normal";
-  count.style.lineHeight = "1.15";
-
-  const hint = document.createElement("div");
-  hint.id = "giroAprendizajeHint";
-  hint.style.flex = "1";
-  hint.style.textAlign = "right";
-  hint.style.fontSize = "11.5px";
-  hint.style.fontWeight = "850";
-  hint.style.opacity = ".88";
-  hint.style.lineHeight = "1.18";
-  hint.style.maxWidth = "150px";
-
-  top.appendChild(count);
-  top.appendChild(hint);
-
-  const row = document.createElement("div");
-  row.id = "giroAprendizajeButtons";
-  row.style.display = "grid";
-  row.style.gridTemplateColumns = "1fr 1fr";
-  row.style.gap = "8px";
-
-  const mk = (label, text, title) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "btn btnGhost giroLearnBtn";
-    btn.dataset.learnLabel = label;
-    btn.textContent = text;
-    btn.title = title;
-    btn.style.minHeight = "42px";
-    btn.style.borderRadius = "14px";
-    btn.style.fontWeight = "950";
-    btn.style.fontSize = "12px";
-    btn.style.padding = "9px 8px";
-    btn.style.touchAction = "manipulation";
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      if (!modalCurrentItem) return;
-      const current = getGiroAprendizajeExampleForItem(modalCurrentItem);
-      const currentLabel = current ? normalizeGiroAprendizajeLabel(current.label) : "";
-      // Si tocás de nuevo la misma etiqueta, se destilda.
-      upsertGiroAprendizajeExample(modalCurrentItem, currentLabel === normalizeGiroAprendizajeLabel(label) ? "remove" : label, "modal_signal");
-    };
-    row.appendChild(btn);
-    return btn;
-  };
-
-  mk("target", "✅ Es mi formación", "Guardar como ejemplo positivo normal para la IA local");
-  mk("avoid", "❌ No es", "Guardar como negativo fuerte: baja o bloquea parecidas");
-  mk("doubt", "⚠️ Dudosa", "Guardar como referencia débil; no empuja señales fuerte");
-  mk("clear", "⭐ Muy clara", "Guardar como positivo fuerte: pesa más que Es mi formación");
-  mk("remove", "🗑 Quitar marca", "Quitar esta vela del aprendizaje");
-
-  panel.appendChild(top);
-  panel.appendChild(row);
-
-  const signalPanel = ensureSignalConfirmationControls();
-  if (signalPanel && signalPanel.parentElement === footer) signalPanel.insertAdjacentElement("afterend", panel);
-  else footer.prepend(panel);
-
-  giroAprendizajePanelEl = panel;
-  giroAprendizajeCountEl = count;
-  giroAprendizajeHintEl = hint;
-  giroAprendizajeButtonsEl = row;
-
-  updateGiroAprendizajeControlsUI();
-  return panel;
+  // V106.9.2 CLEAN: IA local vieja eliminada para no mezclarla con Reducción visual 25s.
+  const panel = document.getElementById("giroAprendizajePanel");
+  if (panel) panel.remove();
+  giroAprendizajePanelEl = null;
+  giroAprendizajeCountEl = null;
+  giroAprendizajeHintEl = null;
+  giroAprendizajeButtonsEl = null;
+  return null;
 }
 function updateGiroAprendizajeControlsUI() {
   if (!giroAprendizajePanelEl || !giroAprendizajePanelEl.isConnected) return;
@@ -9286,14 +12299,13 @@ function updateGiroAprendizajeControlsUI() {
   }
 }
 function setGiroAprendizajeControlsVisible(show) {
-  ensureGiroAprendizajeControls();
-  if (giroAprendizajePanelEl) giroAprendizajePanelEl.style.display = show ? "block" : "none";
+  // V106.9.2 CLEAN: IA local vieja eliminada.
+  const panel = document.getElementById("giroAprendizajePanel");
+  if (panel) panel.remove();
+  giroAprendizajePanelEl = null;
 }
-
-/* =========================
-   Layout botones modal
-========================= */
 function applyModalTradeButtonsLayout() {
+  ensureModalFooterControlsLayout();
   const bCall = modalBuyCallBtn;
   const bPut = modalBuyPutBtn;
   if (!bCall || !bPut) return;
@@ -9373,6 +12385,440 @@ function applyModalTradeButtonsLayout() {
 /* =========================
    Disciplina (persistencia + UI)
 ========================= */
+
+/* =========================
+   Despeje mental post-OTM
+   - Bloqueo total corto para cortar impulso/revancha.
+   - No reemplaza el bloqueo REAL de 1 hora: ese queda como estaba.
+========================= */
+
+function isExpiryValueCorruptOrExpired(until, maxStoredMs) {
+  const n = Number(until || 0);
+  if (!Number.isFinite(n) || n <= 0) return true;
+
+  // Si quedó guardado en segundos por error, ya es un valor inválido para Date.now() en ms.
+  if (n > 0 && n < 100000000000) return true;
+
+  const now = Date.now();
+  if (n <= now) return true;
+
+  // Si por cualquier motivo quedó un timestamp demasiado lejos, lo tratamos como bloqueo corrupto.
+  if (n - now > Number(maxStoredMs || 0)) return true;
+
+  return false;
+}
+function clearExpiredOrCorruptDisciplineLock({ silent = true } = {}) {
+  try {
+    if (isDisciplineBypassedForCurrentAccount()) return false;
+    const until = Number(disciplineLockUntilMs || 0);
+    if (!until) return false;
+    if (!isExpiryValueCorruptOrExpired(until, DISCIPLINE_LOCK_MAX_STORED_MS)) return false;
+
+    disciplineLockUntilMs = 0;
+    disciplineWindowStartMs = 0;
+    disciplineWins = 0;
+    disciplineLosses = 0;
+    saveDiscipline();
+    updateDisciplineBannerUI();
+    if (!silent) toast("✅ Bloqueo REAL vencido/corregido", 2200);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isMentalCooldownEnabledForCurrentAccount() {
+  // V85: el despeje mental post-OTM queda solo para REAL.
+  // En DEMO no se dispara ni bloquea, para poder seguir probando libremente.
+  return activeTradingAccount === ACCOUNT_MODE_REAL;
+}
+function getScopedMentalCooldownStorageKey(baseKey) {
+  // Lo dejamos preparado por cuenta, pero actualmente solo REAL puede guardar/leer el bloqueo.
+  const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
+  return `${baseKey}_${scope}`;
+}
+function clearLegacyMentalCooldownKeys() {
+  // Limpieza de claves globales viejas de v73/v84 para evitar que un despeje generado en DEMO
+  // quede pegado y después bloquee cuando se cambia a REAL.
+  try {
+    localStorage.removeItem(MENTAL_COOLDOWN_UNTIL_KEY);
+    localStorage.removeItem(MENTAL_COOLDOWN_REASON_KEY);
+    localStorage.removeItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY);
+  } catch {}
+}
+function loadMentalCooldown() {
+  try {
+    clearLegacyMentalCooldownKeys();
+
+    if (!isMentalCooldownEnabledForCurrentAccount()) {
+      mentalCooldownUntilMs = 0;
+      mentalCooldownReason = "";
+      mentalCooldownLastContractId = "";
+      return;
+    }
+
+    mentalCooldownUntilMs = Number(localStorage.getItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_UNTIL_KEY)) || 0) || 0;
+    mentalCooldownReason = String(localStorage.getItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_REASON_KEY)) || "");
+    mentalCooldownLastContractId = String(localStorage.getItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_LAST_CONTRACT_KEY)) || "");
+
+    // V79/V85: si quedó un bloqueo viejo, vencido o con fecha corrupta, se limpia al abrir.
+    if (mentalCooldownUntilMs && isExpiryValueCorruptOrExpired(mentalCooldownUntilMs, MENTAL_COOLDOWN_MAX_STORED_MS)) {
+      clearMentalCooldown({ silent: true });
+    }
+  } catch {
+    mentalCooldownUntilMs = 0;
+    mentalCooldownReason = "";
+    mentalCooldownLastContractId = "";
+  }
+}
+function saveMentalCooldown() {
+  try {
+    clearLegacyMentalCooldownKeys();
+    if (!isMentalCooldownEnabledForCurrentAccount()) return;
+    localStorage.setItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_UNTIL_KEY), String(mentalCooldownUntilMs || 0));
+    localStorage.setItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_REASON_KEY), mentalCooldownReason || "");
+    localStorage.setItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_LAST_CONTRACT_KEY), mentalCooldownLastContractId || "");
+  } catch {}
+}
+function clearMentalCooldown({ silent = false } = {}) {
+  mentalCooldownUntilMs = 0;
+  mentalCooldownReason = "";
+  mentalCooldownLastContractId = "";
+  try {
+    localStorage.removeItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_UNTIL_KEY));
+    localStorage.removeItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_REASON_KEY));
+    localStorage.removeItem(getScopedMentalCooldownStorageKey(MENTAL_COOLDOWN_LAST_CONTRACT_KEY));
+    clearLegacyMentalCooldownKeys();
+  } catch {}
+  updateMentalCooldownUI();
+  applyLiveAnalysisPauseUI();
+  if (!silent) toast("🌿 Despeje mental terminado. Volvé despacio.", 2200);
+}
+function isMentalCooldownActive() {
+  if (!isMentalCooldownEnabledForCurrentAccount()) return false;
+  const until = Number(mentalCooldownUntilMs || 0);
+  if (!until) return false;
+  if (isExpiryValueCorruptOrExpired(until, MENTAL_COOLDOWN_MAX_STORED_MS)) {
+    clearMentalCooldown({ silent: true });
+    return false;
+  }
+  return true;
+}
+function getMentalCooldownRemainingMs() {
+  return Math.max(0, Number(mentalCooldownUntilMs || 0) - Date.now());
+}
+function fmtMentalCooldownRemaining(ms) {
+  const s = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const m = Math.floor(s / 60);
+  const ss = s % 60;
+  return `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+function ensureMentalCooldownOverlay() {
+  if (mentalCooldownOverlayEl && mentalCooldownOverlayEl.isConnected) return mentalCooldownOverlayEl;
+
+  let el = document.getElementById("mentalCooldownOverlay");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "mentalCooldownOverlay";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.setAttribute("aria-label", "Despeje mental");
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.zIndex = "2147483000";
+    el.style.display = "none";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "center";
+    el.style.padding = "10px";
+    el.style.background = "rgba(2,6,23,.96)";
+    el.style.color = "#e5f7ff";
+    el.style.backdropFilter = "blur(10px)";
+    el.style.pointerEvents = "auto";
+    el.style.touchAction = "none";
+    el.innerHTML = `
+      <div id="mentalCooldownArtCard" style="position:relative;width:min(94vw,560px);max-height:96svh;aspect-ratio:941/1672;overflow:hidden;border-radius:26px;box-shadow:0 26px 90px rgba(0,0,0,.72),0 0 42px rgba(34,211,238,.16);">
+        <img id="mentalCooldownBgImg" src="${MENTAL_COOLDOWN_IMAGE_SRC}" alt="Despeje mental" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;pointer-events:none;" draggable="false" />
+
+        <div id="mentalCooldownCountdown" style="position:absolute;left:11.5%;right:11.5%;top:63.2%;height:11.8%;display:flex;align-items:center;justify-content:center;font-size:clamp(50px,15vw,104px);line-height:1;font-weight:950;font-variant-numeric:tabular-nums;letter-spacing:.045em;color:#7dfcff;text-shadow:0 0 10px rgba(125,252,255,.55),0 0 30px rgba(34,211,238,.34);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">10:00</div>
+
+        <div id="mentalCooldownAdviceLayer" style="position:absolute;left:11.5%;right:11.5%;top:77.2%;height:9.6%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+          <div id="mentalCooldownDots" style="display:flex;align-items:center;justify-content:center;gap:clamp(7px,1.9vw,13px);min-height:18px;" aria-label="Progreso de despeje mental"></div>
+          <div id="mentalCooldownTipText" style="max-width:92%;min-height:44px;display:flex;align-items:center;justify-content:center;color:#9ffdf0;text-shadow:0 0 12px rgba(34,211,238,.24);font-size:clamp(13px,3.2vw,18px);line-height:1.28;font-weight:760;">Respirá profundo. No operes desde la urgencia.</div>
+        </div>
+
+        <div id="mentalCooldownReasonText" style="position:absolute;left:11.5%;right:11.5%;bottom:4.3%;height:3.2%;display:flex;align-items:center;justify-content:center;font-size:clamp(10px,2.6vw,13px);font-weight:800;line-height:1.2;color:rgba(203,213,225,.78);text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;opacity:.0;pointer-events:none;">Señales y operaciones pausadas.</div>
+      </div>
+    `;
+
+    const dotsHost = el.querySelector("#mentalCooldownDots");
+    if (dotsHost) {
+      dotsHost.innerHTML = MENTAL_COOLDOWN_TIPS.map((_, i) => `<span class="mentalCooldownDot" data-i="${i}" style="width:clamp(8px,2vw,12px);height:clamp(8px,2vw,12px);border-radius:999px;background:rgba(45,212,191,.34);box-shadow:none;transition:background .25s ease, transform .25s ease, box-shadow .25s ease, opacity .25s ease;opacity:.72;"></span>`).join("");
+    }
+
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+    el.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+    }, { passive: false });
+    document.body.appendChild(el);
+  }
+
+  mentalCooldownOverlayEl = el;
+  return mentalCooldownOverlayEl;
+}
+function updateMentalCooldownAdviceUI(el, remainingMs) {
+  try {
+    const total = Number(MENTAL_COOLDOWN_MS || 600000);
+    const remain = Math.max(0, Number(remainingMs || 0));
+    const elapsed = Math.max(0, total - remain);
+    const stepMs = total / MENTAL_COOLDOWN_TIPS.length;
+    const idx = Math.min(MENTAL_COOLDOWN_TIPS.length - 1, Math.max(0, Math.floor(elapsed / stepMs)));
+    const tipEl = el?.querySelector?.("#mentalCooldownTipText");
+    if (tipEl) tipEl.textContent = MENTAL_COOLDOWN_TIPS[idx] || "Respirá profundo. No operes desde la urgencia.";
+
+    const dots = Array.from(el?.querySelectorAll?.(".mentalCooldownDot") || []);
+    dots.forEach((dot, i) => {
+      const isActive = i === idx;
+      const isDone = i < idx;
+      dot.style.background = isActive ? "#22f4e8" : isDone ? "rgba(34,244,232,.72)" : "rgba(45,212,191,.34)";
+      dot.style.opacity = isActive ? "1" : isDone ? ".88" : ".62";
+      dot.style.transform = isActive ? "scale(1.45)" : "scale(1)";
+      dot.style.boxShadow = isActive ? "0 0 16px rgba(34,244,232,.72), 0 0 26px rgba(34,211,238,.32)" : isDone ? "0 0 8px rgba(34,211,238,.22)" : "none";
+    });
+  } catch {}
+}
+function updateMentalCooldownUI() {
+  const active = isMentalCooldownActive();
+  const el = ensureMentalCooldownOverlay();
+  if (!el) return;
+  if (!active) {
+    el.style.display = "none";
+    return;
+  }
+  const remain = getMentalCooldownRemainingMs();
+  el.style.display = "flex";
+  const cd = el.querySelector("#mentalCooldownCountdown");
+  const rs = el.querySelector("#mentalCooldownReasonText");
+  if (cd) cd.textContent = fmtMentalCooldownRemaining(remain);
+  updateMentalCooldownAdviceUI(el, remain);
+  if (rs) rs.textContent = `${mentalCooldownReason || "OTM registrada"} · señales, gráfico y operaciones bloqueadas`;
+  try { setStatus(`🌿 Despeje mental · ${fmtMentalCooldownRemaining(remain)}`); } catch {}
+}
+function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada") {
+  // V85: en DEMO no hay despeje mental. Solo REAL activa el bloqueo total de 10 minutos.
+  if (!isMentalCooldownEnabledForCurrentAccount()) return false;
+
+  // Si el OTM también disparó el bloqueo REAL de 1 hora, respetamos ese flujo como estaba:
+  // no mostramos overlay total para que puedas revisar Trades/velas durante la hora.
+  if (isTradeLockedNow()) return false;
+
+  const cid = String(contractId || "");
+  if (cid && cid === mentalCooldownLastContractId && isMentalCooldownActive()) return false;
+
+  mentalCooldownUntilMs = Date.now() + MENTAL_COOLDOWN_MS;
+  mentalCooldownReason = reason || "OTM registrada";
+  mentalCooldownLastContractId = cid;
+  saveMentalCooldown();
+  updateMentalCooldownUI();
+  applyLiveAnalysisPauseUI();
+  toast("🌿 Despeje mental: PWA bloqueada 10 minutos", 2600);
+  return true;
+}
+
+
+function loadSignalFatigueCooldown() {
+  try {
+    signalFatigueCount = Number(localStorage.getItem(SIGNAL_FATIGUE_COUNT_KEY) || 0) || 0;
+    signalFatigueUntilMs = Number(localStorage.getItem(SIGNAL_FATIGUE_UNTIL_KEY) || 0) || 0;
+    signalFatigueReason = String(localStorage.getItem(SIGNAL_FATIGUE_REASON_KEY) || "");
+
+    if (signalFatigueUntilMs && isExpiryValueCorruptOrExpired(signalFatigueUntilMs, SIGNAL_FATIGUE_MAX_STORED_MS)) {
+      clearSignalFatigueCooldown({ silent: true, resetCount: true });
+    }
+  } catch {
+    signalFatigueCount = 0;
+    signalFatigueUntilMs = 0;
+    signalFatigueReason = "";
+  }
+}
+function saveSignalFatigueCooldown() {
+  try {
+    localStorage.setItem(SIGNAL_FATIGUE_COUNT_KEY, String(Math.max(0, Number(signalFatigueCount || 0))));
+    localStorage.setItem(SIGNAL_FATIGUE_UNTIL_KEY, String(signalFatigueUntilMs || 0));
+    localStorage.setItem(SIGNAL_FATIGUE_REASON_KEY, signalFatigueReason || "");
+  } catch {}
+}
+function clearSignalFatigueCooldown({ silent = false, resetCount = true } = {}) {
+  signalFatigueUntilMs = 0;
+  signalFatigueReason = "";
+  if (resetCount) signalFatigueCount = 0;
+  try {
+    if (resetCount) localStorage.removeItem(SIGNAL_FATIGUE_COUNT_KEY);
+    localStorage.removeItem(SIGNAL_FATIGUE_UNTIL_KEY);
+    localStorage.removeItem(SIGNAL_FATIGUE_REASON_KEY);
+  } catch {}
+  updateSignalFatigueUI();
+  applyLiveAnalysisPauseUI();
+  if (!silent) toast("👁️ Pausa visual terminada. Volvé con criterio.", 2200);
+}
+function isSignalFatigueCooldownActive() {
+  const until = Number(signalFatigueUntilMs || 0);
+  if (!until) return false;
+  if (isExpiryValueCorruptOrExpired(until, SIGNAL_FATIGUE_MAX_STORED_MS)) {
+    clearSignalFatigueCooldown({ silent: true, resetCount: true });
+    return false;
+  }
+  return true;
+}
+function getSignalFatigueRemainingMs() {
+  return Math.max(0, Number(signalFatigueUntilMs || 0) - Date.now());
+}
+function fmtSignalFatigueRemaining(ms) {
+  return fmtMentalCooldownRemaining(ms);
+}
+function ensureSignalFatigueOverlay() {
+  if (signalFatigueOverlayEl && signalFatigueOverlayEl.isConnected) return signalFatigueOverlayEl;
+
+  let el = document.getElementById("signalFatigueOverlay");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "signalFatigueOverlay";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    el.setAttribute("aria-label", "Pausa visual por señales");
+    el.style.position = "fixed";
+    el.style.inset = "0";
+    el.style.zIndex = "2147482500";
+    el.style.display = "none";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "center";
+    el.style.padding = "10px";
+    el.style.background = "radial-gradient(circle at 50% 18%, rgba(124,58,237,.18), transparent 32%), radial-gradient(circle at 50% 82%, rgba(34,211,238,.13), transparent 34%), rgba(2,6,23,.972)";
+    el.style.color = "#e0f2fe";
+    el.style.backdropFilter = "blur(12px)";
+    el.style.pointerEvents = "auto";
+    el.style.touchAction = "none";
+    el.innerHTML = `
+      <div id="signalFatigueArtCard" style="position:relative;width:min(94vw,560px);max-height:96svh;aspect-ratio:941/1672;overflow:hidden;border-radius:26px;box-shadow:0 26px 90px rgba(0,0,0,.72),0 0 42px rgba(147,51,234,.18),0 0 36px rgba(34,211,238,.12);">
+        <img id="signalFatigueBgImg" src="${SIGNAL_FATIGUE_IMAGE_SRC}" alt="Pausa visual" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;user-select:none;-webkit-user-drag:none;pointer-events:none;" draggable="false" />
+
+        <div id="signalFatigueCountdown" style="position:absolute;left:11.2%;right:11.2%;top:58.6%;height:16.5%;display:flex;align-items:center;justify-content:center;font-size:clamp(54px,16vw,108px);line-height:1;font-weight:950;font-variant-numeric:tabular-nums;letter-spacing:.045em;color:#7dfcff;text-shadow:0 0 10px rgba(125,252,255,.55),0 0 30px rgba(34,211,238,.30),0 0 42px rgba(168,85,247,.20);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">05:00</div>
+
+        <div id="signalFatigueAdviceLayer" style="position:absolute;left:10.5%;right:10.5%;top:77.2%;height:11.2%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:12px;text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;">
+          <div id="signalFatigueDots" style="display:flex;align-items:center;justify-content:center;gap:clamp(8px,2.2vw,14px);min-height:20px;" aria-label="Progreso de pausa visual"></div>
+          <div id="signalFatigueTipText" style="max-width:94%;min-height:46px;display:flex;align-items:center;justify-content:center;color:#d8b4fe;text-shadow:0 0 13px rgba(168,85,247,.30),0 0 12px rgba(34,211,238,.16);font-size:clamp(13px,3.15vw,18px);line-height:1.28;font-weight:770;">Soltá el gráfico. No toda señal pide una operación.</div>
+        </div>
+
+        <div id="signalFatigueReasonText" style="position:absolute;left:10%;right:10%;bottom:3.6%;height:3.4%;display:flex;align-items:center;justify-content:center;font-size:clamp(10px,2.55vw,13px);font-weight:800;line-height:1.2;color:rgba(203,213,225,.72);text-align:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;opacity:0;pointer-events:none;">15 señales sin operación REAL.</div>
+      </div>
+    `;
+    el.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+    el.addEventListener("touchmove", (e) => {
+      e.preventDefault();
+    }, { passive: false });
+
+    const dotsHost = el.querySelector("#signalFatigueDots");
+    if (dotsHost) {
+      dotsHost.innerHTML = SIGNAL_FATIGUE_TIPS.map((_, i) => `<span class="signalFatigueDot" data-i="${i}" style="width:clamp(9px,2.2vw,13px);height:clamp(9px,2.2vw,13px);border-radius:999px;background:rgba(168,85,247,.32);box-shadow:none;transition:background .25s ease, transform .25s ease, box-shadow .25s ease, opacity .25s ease;opacity:.72;"></span>`).join("");
+    }
+
+    document.body.appendChild(el);
+  }
+
+  signalFatigueOverlayEl = el;
+  return signalFatigueOverlayEl;
+}
+function updateSignalFatigueAdviceUI(remainMs) {
+  try {
+    const el = ensureSignalFatigueOverlay();
+    const tipEl = el?.querySelector?.("#signalFatigueTipText");
+    const dots = Array.from(el?.querySelectorAll?.(".signalFatigueDot") || []);
+    const total = Math.max(1, Number(SIGNAL_FATIGUE_MS || 1));
+    const elapsed = Math.max(0, Math.min(total, total - Math.max(0, Number(remainMs || 0))));
+    const chunk = total / Math.max(1, SIGNAL_FATIGUE_TIPS.length);
+    const idx = Math.min(SIGNAL_FATIGUE_TIPS.length - 1, Math.floor(elapsed / chunk));
+
+    if (tipEl) tipEl.textContent = SIGNAL_FATIGUE_TIPS[idx] || "Soltá el gráfico. Volvé con una decisión clara.";
+    dots.forEach((dot, i) => {
+      const done = i < idx;
+      const active = i === idx;
+      dot.style.background = active
+        ? "#a78bfa"
+        : done
+          ? "rgba(34,211,238,.78)"
+          : "rgba(168,85,247,.30)";
+      dot.style.boxShadow = active
+        ? "0 0 18px rgba(167,139,250,.80),0 0 26px rgba(34,211,238,.25)"
+        : done
+          ? "0 0 12px rgba(34,211,238,.38)"
+          : "none";
+      dot.style.transform = active ? "scale(1.28)" : "scale(1)";
+      dot.style.opacity = active || done ? "1" : ".58";
+    });
+  } catch {}
+}
+function updateSignalFatigueUI() {
+  const active = isSignalFatigueCooldownActive();
+  const el = ensureSignalFatigueOverlay();
+  if (!el) return;
+  if (!active) {
+    el.style.display = "none";
+    return;
+  }
+  const remain = getSignalFatigueRemainingMs();
+  el.style.display = "flex";
+  const cd = el.querySelector("#signalFatigueCountdown");
+  const rs = el.querySelector("#signalFatigueReasonText");
+  if (cd) cd.textContent = fmtSignalFatigueRemaining(remain);
+  updateSignalFatigueAdviceUI(remain);
+  if (rs) rs.textContent = signalFatigueReason || "15 señales sin operación REAL · señales, gráfico y operaciones pausadas.";
+  try { setStatus(`👁️ Pausa visual · ${fmtSignalFatigueRemaining(remain)}`); } catch {}
+}
+function startSignalFatigueCooldown(reason = "15 señales sin operación REAL") {
+  // No pisa el despeje mental OTM ni la disciplina REAL de 1h.
+  if (isMentalCooldownActive()) return false;
+  if (isTradeLockedNow()) return false;
+  signalFatigueUntilMs = Date.now() + SIGNAL_FATIGUE_MS;
+  signalFatigueReason = reason || "15 señales sin operación REAL";
+  saveSignalFatigueCooldown();
+  updateSignalFatigueUI();
+  applyLiveAnalysisPauseUI();
+  toast("👁️ Pausa visual: 15 señales sin operación REAL · 5 minutos", 3200);
+  return true;
+}
+function resetSignalFatigueCycleAfterRealTrade(contractId = "") {
+  // Una operación REAL corta el ciclo de señales acumuladas.
+  if (activeTradingAccount !== ACCOUNT_MODE_REAL) return;
+  signalFatigueCount = 0;
+  signalFatigueUntilMs = 0;
+  signalFatigueReason = "";
+  saveSignalFatigueCooldown();
+  updateSignalFatigueUI();
+}
+function registerSignalForFatigueGuard(item = null) {
+  try {
+    if (activeTradingAccount !== ACCOUNT_MODE_REAL) return false;
+    if (isTradeLockedNow()) return false;
+    if (isMentalCooldownActive() || isSignalFatigueCooldownActive()) return false;
+    if (item?.trade?.contract_id || item?.signalAutoEntry?.contract_id) return false;
+
+    signalFatigueCount = Math.max(0, Number(signalFatigueCount || 0)) + 1;
+    saveSignalFatigueCooldown();
+
+    if (signalFatigueCount >= SIGNAL_FATIGUE_LIMIT) {
+      return startSignalFatigueCooldown(`15 señales vistas sin operación REAL · pausa visual 5 minutos`);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function getScopedDisciplineStorageKey(baseKey) {
   const scope = activeTradingAccount === ACCOUNT_MODE_REAL ? ACCOUNT_MODE_REAL : ACCOUNT_MODE_DEMO;
   return `${baseKey}_${scope}`;
@@ -9404,6 +12850,9 @@ function loadDiscipline() {
     const raw = readScopedDisciplineValue(DISCIPLINE_PENDING_CONTRACTS_KEY, "[]");
     const arr = JSON.parse(raw);
     disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
+
+    // V79: evita que quede una disciplina REAL vencida/corrupta pegada al volver a abrir.
+    clearExpiredOrCorruptDisciplineLock({ silent: true });
   } catch {
     resetDisciplineStateInMemory();
   }
@@ -9436,10 +12885,13 @@ function removePendingContract(cid) {
   if (!disciplinePendingContracts.length) stopPendingContractWatchdog();
 }
 function isDisciplineBypassedForCurrentAccount() {
-  return activeTradingAccount === ACCOUNT_MODE_REAL;
+  // V70: la disciplina de bloqueo se aplica solo en REAL.
+  // En DEMO queda libre para pruebas, pero se siguen controlando contratos pendientes.
+  return activeTradingAccount !== ACCOUNT_MODE_REAL;
 }
 function isTradeLockedNow() {
   if (isDisciplineBypassedForCurrentAccount()) return false;
+  clearExpiredOrCorruptDisciplineLock({ silent: true });
   const now = Date.now();
   return typeof disciplineLockUntilMs === "number" && disciplineLockUntilMs > now;
 }
@@ -9453,12 +12905,12 @@ function fmtRemaining(ms) {
 }
 
 function getDisciplineLockReasonText() {
-  if (disciplineWins >= DISCIPLINE_MAX_WINS) return `3 ITM alcanzados`;
+  if (disciplineWins >= DISCIPLINE_MAX_WINS) return `IC2 completo: 2 ITM seguidos`;
   if (disciplineLosses >= DISCIPLINE_MAX_LOSSES) return `2 OTM alcanzados`;
-  return `límite alcanzado`;
+  return `límite REAL alcanzado`;
 }
 function getDisciplineCounterText() {
-  return `${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM · ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`;
+  return `IC2 ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM · ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`;
 }
 function ensureDisciplineBanner() {
   if (disciplineBannerEl && disciplineBannerEl.isConnected) return disciplineBannerEl;
@@ -9516,7 +12968,7 @@ function updateDisciplineBannerUI() {
     el.style.borderColor = "rgba(248,113,113,.82)";
     el.style.background = "linear-gradient(180deg, rgba(127,29,29,.92), rgba(69,10,10,.92))";
     el.style.boxShadow = "0 12px 30px rgba(0,0,0,.42), 0 0 16px rgba(239,68,68,.16)";
-    el.innerHTML = `🔒 <b>DEMO bloqueada</b> · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
+    el.innerHTML = `🔒 <b>REAL bloqueada</b> · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
     return;
   }
 
@@ -9526,7 +12978,7 @@ function updateDisciplineBannerUI() {
     el.style.borderColor = "rgba(251,191,36,.72)";
     el.style.background = "linear-gradient(180deg, rgba(120,53,15,.96), rgba(69,26,3,.96))";
     el.style.boxShadow = "0 18px 44px rgba(0,0,0,.45), 0 0 22px rgba(251,191,36,.24)";
-    el.innerHTML = `⚠️ <b>DISCIPLINA DEMO</b><br>${getDisciplineCounterText()} · bloquea con 3 ITM o 2 OTM`;
+    el.innerHTML = `⚠️ <b>DISCIPLINA REAL</b><br>${getDisciplineCounterText()} · bloquea con 2 OTM o ciclo IC2 completo`;
     return;
   }
 
@@ -9536,7 +12988,7 @@ function disciplineTagText() {
   if (isDisciplineBypassedForCurrentAccount()) {
     const pend = (disciplinePendingContracts || []).length;
     const pTxt = pend ? ` • Pendientes:${pend}` : "";
-    return `Disciplina REAL: libre para pruebas${pTxt}`;
+    return `Disciplina DEMO: libre para pruebas${pTxt}`;
   }
 
   if (disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
@@ -9549,22 +13001,16 @@ function disciplineTagText() {
 
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
-    return `🔒 DEMO BLOQUEADA ${fmtRemaining(remain)} · ${getDisciplineLockReasonText()} · ${getDisciplineCounterText()}`;
+    return `🔒 REAL BLOQUEADA ${fmtRemaining(remain)} · ${getDisciplineLockReasonText()} · ${getDisciplineCounterText()}`;
   }
 
   const pend = (disciplinePendingContracts || []).length;
   const pTxt = pend ? ` • Pendientes:${pend}` : "";
-  return `Disciplina DEMO: ${getDisciplineCounterText()}${pTxt}`;
+  return `Disciplina REAL: ${getDisciplineCounterText()}${pTxt}`;
 }
 function updateDisciplineLockUI(forceToast = false) {
-  if (!isDisciplineBypassedForCurrentAccount() && disciplineLockUntilMs && Date.now() >= disciplineLockUntilMs) {
-    disciplineLockUntilMs = 0;
-    disciplineWindowStartMs = 0;
-    disciplineWins = 0;
-    disciplineLosses = 0;
-    saveDiscipline();
-    if (forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
-  }
+  const correctedExpiredLock = clearExpiredOrCorruptDisciplineLock({ silent: !forceToast });
+  if (correctedExpiredLock && forceToast) toast("✅ Bloqueo terminado. Contadores reseteados.", 1800);
 
   const locked = isTradeLockedNow();
   const remain = locked ? disciplineLockUntilMs - Date.now() : 0;
@@ -9592,25 +13038,41 @@ function startNewDisciplineWindowIfNeeded() {
     saveDiscipline();
   }
 }
+function lockRealDiscipline(reason = "") {
+  if (isDisciplineBypassedForCurrentAccount()) return false;
+  if (isTradeLockedNow()) return true;
+  disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
+  saveDiscipline();
+  updateDisciplineLockUI(true);
+  const msgReason = reason || getDisciplineLockReasonText();
+  toast(`🔒 REAL BLOQUEADA 1h: ${msgReason} · ${getDisciplineCounterText()}`, 5200);
+  return true;
+}
+
 function applyDisciplineOutcome(isWin) {
   updateDisciplineLockUI(false);
   if (isDisciplineBypassedForCurrentAccount()) return;
   if (isTradeLockedNow()) return;
 
-  if (isWin) disciplineWins += 1;
-  else disciplineLosses += 1;
-
-  saveDiscipline();
-
-  if (disciplineWins >= DISCIPLINE_MAX_WINS || disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
-    disciplineLockUntilMs = Date.now() + DISCIPLINE_LOCK_MS;
+  // V70: los ITM consecutivos se manejan desde IC2, porque solo bloquean
+  // cuando se completa el ciclo de dos niveles. Acá contamos OTM reales.
+  if (!isWin) {
+    disciplineLosses += 1;
+    disciplineWins = 0; // corta la secuencia IC2 de 2 ITM seguidos
     saveDiscipline();
-    updateDisciplineLockUI(true);
-    toast(`🔒 DEMO BLOQUEADA: ${getDisciplineLockReasonText()} · ${getDisciplineCounterText()} · falta ${fmtRemaining(DISCIPLINE_LOCK_MS)}`, 4200);
+
+    if (disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
+      lockRealDiscipline("2 OTM alcanzados");
+      return;
+    }
+
+    toast(`⚠️ Disciplina REAL: ${getDisciplineCounterText()}`, 1900);
+    updateDisciplineLockUI(false);
     return;
   }
 
-  toast(`✅ Disciplina: ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM • ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`, 1700);
+  // ITM nivel 1/nivel 2 se registra en updateC100AfterResult().
+  saveDiscipline();
   updateDisciplineLockUI(false);
 }
 
@@ -9751,13 +13213,13 @@ function syncVisibleVoteRows(vote = getModalCurrentVote()) {
   } catch {}
 }
 function updateModalNavVoteUI() {
-  if (!modalNavVoteBar) return;
+  ensureModalFooterControlsLayout();
   if (!modalCurrentItem || !chartModal || chartModal.classList.contains("hidden")) {
-    modalNavVoteBar.style.display = "none";
+    if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
     return;
   }
 
-  modalNavVoteBar.style.display = "inline-flex";
+  if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
 
   const source = modalOpenContext?.source === "trades" ? "trades" : "signals";
   const list = getModalNavigationList();
@@ -9859,6 +13321,7 @@ function navigateModalItem(step = 1) {
    Chart modal
 ========================= */
 function openChartModal(item, opts = {}) {
+  cancelModalAutoReplayX2();
   closeModalReplay();
   modalCurrentItem = item;
   modalOpenContext = normalizeModalContext(opts, item);
@@ -9884,20 +13347,27 @@ function openChartModal(item, opts = {}) {
 
   modalCurrentItem.signalConfirmations ||= [];
   applyModalTradeButtonsLayout();
+ensureModalFooterControlsLayout();
+updateModalFooterReadingUI();
   setSignalConfirmationControlsVisible(true);
   ensureGiroAprendizajeControls();
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
+  setProcessMiniPanelVisible(true);
+  updateProcessMiniPanelUI();
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(modalCurrentItem);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
   updateModalNavVoteUI();
   updateModalChartViewBtnUI();
+  updateVisualReadPanelUI();
 
   requestModalDraw(true);
+  scheduleModalAutoReplayX2(modalCurrentItem, "open_modal");
 }
 function closeChartModal() {
+  cancelModalAutoReplayX2();
   closeModalReplay();
   if (!chartModal) return;
   chartModal.classList.add("hidden");
@@ -9909,6 +13379,8 @@ function closeChartModal() {
   if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
   setGiroAprendizajeControlsVisible(false);
+  setProcessMiniPanelVisible(false);
+  if (visualReadPanelEl) visualReadPanelEl.style.display = "none";
   updateDisciplineLockUI(false);
 }
 if (modalCloseBtn) modalCloseBtn.onclick = closeChartModal;
@@ -10307,7 +13779,7 @@ function applyVoteButtonsVisual(row, vote = "", { lock = false } = {}) {
 
 function getSignalLifecycleStageInfo(item) {
   if (!item) return { key: "", label: "", title: "" };
-  const autoSec = Number(item.signalAutoEntrySec || SIGNAL_AUTO_ENTRY_SEC || 59);
+  const autoSec = Number(item.signalAutoEntrySec || SIGNAL_AUTO_ENTRY_SEC || 58);
   const preSec = Number(item.signalPrealertAtSec || item?.giroPolaridad?.evalSec || EVAL_SEC || 45);
   const pointsTxt = getSignalConfirmationStatusText(item);
   const hasTrade = hasSignalTradeAssociated(item);
@@ -10653,7 +14125,7 @@ function renderHistory() {
 
   updateCounter();
 
-  for (const it of [...history].reverse()) signalsEl.appendChild(buildRow(it));
+  for (const it of [...getVisibleCleanVisualHistory()].reverse()) signalsEl.appendChild(buildRow(it));
 }
 
 /* =========================
@@ -10711,19 +14183,123 @@ function updateCountdownUI() {
 let reqSeq = 1;
 const pending = new Map();
 
+function payloadNeedsAuthenticatedTradingWs(payload = {}) {
+  if (!isNewPatApiMode()) return false;
+  return !!(
+    payload.balance ||
+    payload.proposal ||
+    payload.buy ||
+    payload.proposal_open_contract ||
+    payload.portfolio ||
+    payload.profit_table ||
+    payload.statement ||
+    payload.sell ||
+    payload.forget
+  );
+}
+function getActiveTradingSocketSync() {
+  if (isNewPatApiMode()) return tradeWs && tradeWs.readyState === 1 ? tradeWs : null;
+  return ws && ws.readyState === 1 ? ws : null;
+}
+function resetNewApiTradingSocket() {
+  try { if (tradeWs) tradeWs.close(); } catch {}
+  tradeWs = null;
+  tradeWsConnectPromise = null;
+  if (isNewPatApiMode()) isAuthorized = false;
+}
+async function ensureNewApiTradingWs({ force = false } = {}) {
+  if (!isNewPatApiMode()) return ws;
+  if (!force && tradeWs && tradeWs.readyState === 1) {
+    isAuthorized = true;
+    return tradeWs;
+  }
+  if (!force && tradeWsConnectPromise) return tradeWsConnectPromise;
+  try { if (force && tradeWs) tradeWs.close(); } catch {}
+  tradeWs = null;
+
+  tradeWsConnectPromise = (async () => {
+    const token = getDerivNewPatToken();
+    const appId = getDerivNewAppId();
+    if (!token) throw new Error("Falta PAT API nueva");
+    if (!appId) throw new Error("Falta App ID API nueva");
+    const wsUrl = await getNewApiOtpWebSocketUrl(getCurrentAccountScope());
+    setNewApiStatus(`OTP OK · conectando WS ${getTradingAccountLabel()}…`);
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      const socket = new WebSocket(wsUrl);
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { socket.close(); } catch {}
+        reject(new Error("timeout WS API nueva"));
+      }, 12000);
+
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        tradeWs = socket;
+        isAuthorized = true;
+        setNewApiStatus(`✅ WS API nueva conectado · ${getTradingAccountLabel()} · ${getDerivNewAccountId()}`);
+        resolve(socket);
+      };
+      socket.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          handleDerivWsMessage(data, "trade");
+        } catch (err) {
+          setStatus(`❌ Parse WS trading: ${err?.message || err}`);
+        }
+      };
+      socket.onerror = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error("Error WS API nueva"));
+        }
+      };
+      socket.onclose = () => {
+        if (tradeWs === socket) {
+          tradeWs = null;
+          tradeWsConnectPromise = null;
+          if (isNewPatApiMode()) isAuthorized = false;
+          setNewApiStatus("WS API nueva cerrado. Se reabrirá al operar.");
+        }
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(new Error("WS API nueva cerrado antes de conectar"));
+        }
+      };
+    });
+  })().finally(() => {
+    tradeWsConnectPromise = null;
+  });
+
+  return tradeWsConnectPromise;
+}
+async function getWsForRequestPayload(payload = {}) {
+  if (payloadNeedsAuthenticatedTradingWs(payload)) return ensureNewApiTradingWs();
+  if (!ws || ws.readyState !== 1) throw new Error("WS not open");
+  return ws;
+}
+
 function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    if (!ws || ws.readyState !== 1) return reject(new Error("WS not open"));
+  return (async () => {
+    const socket = await getWsForRequestPayload(payload);
+    if (!socket || socket.readyState !== 1) throw new Error("WS not open");
 
     const req_id = reqSeq++;
-    const t = setTimeout(() => {
-      pending.delete(req_id);
-      reject(new Error("timeout"));
-    }, timeoutMs);
+    return await new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        pending.delete(req_id);
+        reject(new Error("timeout"));
+      }, timeoutMs);
 
-    pending.set(req_id, { resolve, reject, t });
-    ws.send(JSON.stringify({ ...payload, req_id }));
-  });
+      pending.set(req_id, { resolve, reject, t, via: socket === tradeWs ? "trade" : "public" });
+      socket.send(JSON.stringify({ ...payload, req_id }));
+    });
+  })();
 }
 
 /* =========================
@@ -10731,6 +14307,7 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
 ========================= */
 function getDerivToken() {
   try {
+    if (isNewPatApiMode()) return getDerivNewPatToken() || localStorage.getItem(getTradingAccountTokenKey()) || "";
     return localStorage.getItem(getTradingAccountTokenKey()) || "";
   } catch {
     return "";
@@ -10738,17 +14315,30 @@ function getDerivToken() {
 }
 function setDerivToken(t) {
   try {
+    if (isNewPatApiMode()) {
+      setDerivNewPatToken(t || "");
+      return;
+    }
     localStorage.setItem(getTradingAccountTokenKey(), t || "");
   } catch {}
 }
 function clearDerivToken() {
   try {
+    if (isNewPatApiMode()) {
+      clearDerivNewPatToken();
+      return;
+    }
     localStorage.removeItem(getTradingAccountTokenKey());
   } catch {}
 }
 
 function getTradeStake() {
-  const raw = localStorage.getItem(TRADE_STAKE_KEY);
+  let raw = null;
+  try {
+    raw = localStorage.getItem(getScopedTradeStakeKey());
+    // Migración suave: si no existe stake específico y estás en DEMO, usa el viejo.
+    if (raw === null && getCurrentAccountScope() === ACCOUNT_MODE_DEMO) raw = localStorage.getItem(TRADE_STAKE_KEY);
+  } catch {}
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_STAKE;
 }
@@ -10756,7 +14346,7 @@ function setTradeStake(n) {
   const v = Number(n);
   if (!Number.isFinite(v) || v <= 0) return false;
   try {
-    localStorage.setItem(TRADE_STAKE_KEY, String(v));
+    localStorage.setItem(getScopedTradeStakeKey(), String(v));
     return true;
   } catch {
     return false;
@@ -10764,7 +14354,7 @@ function setTradeStake(n) {
 }
 function clearTradeStake() {
   try {
-    localStorage.removeItem(TRADE_STAKE_KEY);
+    localStorage.removeItem(getScopedTradeStakeKey());
   } catch {}
 }
 
@@ -10806,23 +14396,25 @@ function isPendingContractPOCCooldownActive() {
 
 function subscribeContractOutcome(contractId, silent = false) {
   try {
-    if (!ws || ws.readyState !== 1) return;
+    const socket = getActiveTradingSocketSync();
+    if (!socket || socket.readyState !== 1) return;
     if (!contractId) return;
     const cid = String(contractId);
 
     addPendingContract(cid);
     if (contractSubs.has(cid)) return;
 
-    ws.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
+    socket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: cid, subscribe: 1 }));
     contractSubs.set(cid, "__pending__");
     if (!silent) toast(`📡 Subscript contrato ${cid}`, 900);
   } catch {}
 }
 function forgetSubscription(subId) {
   try {
-    if (!ws || ws.readyState !== 1) return;
+    const socket = getActiveTradingSocketSync();
+    if (!socket || socket.readyState !== 1) return;
     if (!subId || subId === "__pending__") return;
-    ws.send(JSON.stringify({ forget: subId }));
+    socket.send(JSON.stringify({ forget: subId }));
   } catch {}
 }
 
@@ -10881,6 +14473,7 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
         sold_time: Number(poc.sell_time || 0),
         contract_id: cid,
         outcome_source: sourceLabel,
+        ...compactAuditFields(extractContractAuditFields(poc)),
       };
       const it = signalId ? findHistoryItemById(signalId) : null;
       if (it) {
@@ -10892,6 +14485,12 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
           tradesJournal[idx].trade ||= {};
           tradesJournal[idx].trade.badge = isWin ? "ITM" : "OTM";
           Object.assign(tradesJournal[idx].trade, outcomeExtra);
+          if (!getTradeJournalAccountMode(tradesJournal[idx])) {
+            tradesJournal[idx].account_mode = getCurrentAccountScope();
+            tradesJournal[idx].account_label = getCurrentAccountScope() === ACCOUNT_MODE_REAL ? "REAL" : "DEMO";
+            tradesJournal[idx].trade.account_mode = tradesJournal[idx].account_mode;
+            tradesJournal[idx].trade.account_label = tradesJournal[idx].account_label;
+          }
           tradesJournal[idx].saved_at = Date.now();
           saveTradesJournal(tradesJournal);
           try { if ((localStorage.getItem("activeView") || "signals") === "trades") renderTradesView(); } catch {}
@@ -10901,6 +14500,7 @@ function applyClosedContractOutcomeFromPOC(poc, sourceLabel = "watchdog") {
 
     applyDisciplineOutcome(isWin);
     handleC100ContractClosed(cid, isWin, profit);
+    if (!isWin) startMentalCooldownAfterOtm(cid, `OTM ${String(poc?.underlying || poc?.display_name || "").trim() || "registrada"}`);
     removePendingContract(cid);
 
     const sid = contractSubs.get(cid);
@@ -10998,7 +14598,16 @@ function scheduleOutcomeFallbackPoll(contractId, delayMs = 85000) {
 
 async function ensureAuthorized() {
   const token = getDerivToken();
-  if (!token) throw new Error(`Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
+  if (!token) throw new Error(isNewPatApiMode()
+    ? "Sin PAT API nueva (pegalo en Configuración)"
+    : `Sin token ${getTradingAccountLabel()} (cargalo en Configuración)`);
+
+  if (isNewPatApiMode()) {
+    if (isAuthorized && tradeWs && tradeWs.readyState === 1) return true;
+    await ensureNewApiTradingWs();
+    isAuthorized = true;
+    return true;
+  }
 
   if (isAuthorized) return true;
   if (authorizeInFlight) return authorizeInFlight;
@@ -11006,6 +14615,11 @@ async function ensureAuthorized() {
   authorizeInFlight = wsRequest({ authorize: token }, 15000)
     .then((res) => {
       if (res?.error) throw new Error(res.error.message || "authorize error");
+      try {
+        const auth = res?.authorize || {};
+        const b = Number(auth.balance);
+        if (Number.isFinite(b)) setCachedAccountBalance(b, auth.currency || DEFAULT_CURRENCY);
+      } catch {}
       isAuthorized = true;
       return true;
     })
@@ -11017,6 +14631,14 @@ async function ensureAuthorized() {
 }
 
 function assertCanTrade() {
+  updateMentalCooldownUI();
+  if (isMentalCooldownActive()) {
+    throw new Error(`Despeje mental activo (${fmtMentalCooldownRemaining(getMentalCooldownRemainingMs())})`);
+  }
+  updateSignalFatigueUI();
+  if (isSignalFatigueCooldownActive()) {
+    throw new Error(`Pausa visual activa (${fmtSignalFatigueRemaining(getSignalFatigueRemainingMs())})`);
+  }
   updateDisciplineLockUI(false);
   if (isTradeLockedNow()) {
     const remain = disciplineLockUntilMs - Date.now();
@@ -11033,8 +14655,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   const itemCtx = itemOverride || modalCurrentItem;
   assertCanTrade();
   assertEntryWindowOpen(itemCtx);
+  assertBrainProcessCanTrade(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
-  // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 59.
+  // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 58.
   // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
   // En Línea dinámica se mantiene su validación específica.
   const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
@@ -11045,6 +14668,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
   try {
     await ensureAuthorized();
+    try { await refreshAccountBalance({ force: true }); } catch {}
     startNewDisciplineWindowIfNeeded();
 
     const symbol =
@@ -11052,7 +14676,20 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     const stake = Number(getEffectiveTradeStake().toFixed(2));
     let res = null;
     let contractLabel = side;
-    let tradeExtra = { side, symbol, stake };
+    const tradeAccountMode = getCurrentAccountScope();
+    let tradeExtra = {
+      side,
+      symbol,
+      stake,
+      account_mode: tradeAccountMode,
+      account_label: tradeAccountMode === ACCOUNT_MODE_REAL ? "REAL" : "DEMO",
+      account_scope: tradeAccountMode,
+      ...getC100TradeAuditExtra(stake)
+    };
+    const autoPreProposal = isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution()
+      ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
+      : null;
+    const isStrictAutoPrearmedEntry = !!(SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT && isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
     if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
     if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
     else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
@@ -11096,61 +14733,92 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         };
       }
     } else if (isC100Active()) {
-      // IC2 pide proposal antes de comprar para capturar payout y ejecutar con el stake compuesto exacto.
-      const proposalRes = await wsRequest(
-        {
-          proposal: 1,
-          amount: stake,
-          basis: "stake",
-          contract_type: side,
-          currency: DEFAULT_CURRENCY,
-          duration: Number(DEFAULT_DURATION) || 1,
-          duration_unit: DEFAULT_DURATION_UNIT || "m",
-          symbol,
-        },
-        12000
-      );
-      if (proposalRes?.error) throw new Error(proposalRes.error.message || "proposal error");
+      // V66: si es AUTO post-58 con cierre 60, la proposal debe estar prearmada desde 56-58s.
+      // Así en el post-58 solo enviamos buy(proposal_id), sin gastar tiempo pidiendo proposal.
+      let proposalId = "";
+      let askPrice = NaN;
+      let payout = NaN;
+      let profitPct = NaN;
+      let timing = null;
+      let usedPreProposal = false;
 
-      const proposal = proposalRes?.proposal;
-      const proposalId = proposal?.id ? String(proposal.id) : "";
-      const askPrice = Number(proposal?.ask_price);
-      const payout = Number(proposal?.payout);
+      if (autoPreProposal) {
+        proposalId = String(autoPreProposal.proposal_id || "");
+        askPrice = Number(autoPreProposal.ask_price);
+        payout = Number(autoPreProposal.payout);
+        profitPct = Number(autoPreProposal.profit_pct);
+        timing = autoPreProposal.timing || null;
+        usedPreProposal = true;
+      } else {
+        if (isStrictAutoPrearmedEntry) {
+          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
+        }
+        const proposalPack = await requestRiseFallProposalWithTiming(side, symbol, stake, itemCtx, 12000);
+        const proposal = proposalPack?.res?.proposal;
+        proposalId = proposal?.id ? String(proposal.id) : "";
+        askPrice = Number(proposal?.ask_price);
+        payout = Number(proposal?.payout);
+        profitPct = ((payout - askPrice) / askPrice) * 100;
+        timing = proposalPack.timing;
+      }
+
       if (!proposalId || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) {
         throw new Error("Deriv no confirmó proposal válida para IC2.");
       }
-      const profitPct = ((payout - askPrice) / askPrice) * 100;
       assertC100PayoutOK(profitPct);
 
       res = await wsRequest({ buy: proposalId, price: askPrice }, 20000);
       tradeExtra = {
         ...tradeExtra,
-        exec_mode: "IC2_RISE_FALL_PROPOSAL",
-        contract_type: side,
+        exec_mode: usedPreProposal ? "IC2_RISE_FALL_PREPROPOSAL" : "IC2_RISE_FALL_PROPOSAL",
+        contract_type: getRiseFallDerivContractType(side),
+        side,
+        ...getRiseFallAllowEqualsAudit(side),
         payout_pct: Number(profitPct),
         proposal_id: proposalId,
         ic2_enabled: true,
         ic2_mode: C100_MODE_LABEL,
         ic2_level: c100State?.level || null,
         ic2_step: c100State?.compoundStep || 0,
+        entry_preproposal_used: !!usedPreProposal,
+        entry_preproposal_prepared_ms: usedPreProposal ? Math.round(Number(autoPreProposal.prepared_ms || 0)) : null,
+        entry_preproposal_age_ms: usedPreProposal ? Math.max(0, Date.now() - Number(autoPreProposal.prepared_at || Date.now())) : null,
+        entry_preproposal_reason: usedPreProposal ? String(autoPreProposal.reason || "") : "",
+        ...getRiseFallTimingExtra(timing),
       };
     } else {
-      res = await wsRequest(
-        {
-          buy: 1,
-          price: stake,
-          parameters: {
-            amount: stake,
-            basis: "stake",
-            contract_type: side,
-            currency: DEFAULT_CURRENCY,
-            duration: Number(DEFAULT_DURATION) || 1,
-            duration_unit: DEFAULT_DURATION_UNIT || "m",
-            symbol,
-          },
-        },
-        20000
-      );
+      if (autoPreProposal) {
+        res = await wsRequest({ buy: autoPreProposal.proposal_id, price: Number(autoPreProposal.ask_price) }, 20000);
+        tradeExtra = {
+          ...tradeExtra,
+          exec_mode: "RISE_FALL_PREPROPOSAL",
+          contract_type: String(autoPreProposal.contract_type || getRiseFallDerivContractType(side)),
+          side,
+          ...getRiseFallAllowEqualsAudit(side),
+          payout_pct: Number(autoPreProposal.profit_pct),
+          proposal_id: String(autoPreProposal.proposal_id || ""),
+          entry_preproposal_used: true,
+          entry_preproposal_prepared_ms: Math.round(Number(autoPreProposal.prepared_ms || 0)),
+          entry_preproposal_age_ms: Math.max(0, Date.now() - Number(autoPreProposal.prepared_at || Date.now())),
+          entry_preproposal_reason: String(autoPreProposal.reason || ""),
+          ...getRiseFallTimingExtra(autoPreProposal.timing),
+        };
+      } else {
+        if (isStrictAutoPrearmedEntry) {
+          throw new Error("AUTO post-58 cancelado: la proposal no estaba prearmada antes de 58s.");
+        }
+        const buyPack = await buyRiseFallDirectWithTiming(side, symbol, stake, itemCtx, 20000);
+        res = buyPack.res;
+        tradeExtra = {
+          ...tradeExtra,
+          exec_mode: "RISE_FALL_BUY",
+          contract_type: getRiseFallDerivContractType(side),
+          side,
+          ...getRiseFallAllowEqualsAudit(side),
+          entry_preproposal_used: false,
+          ...getRiseFallTimingExtra(buyPack.timing),
+        };
+      }
     }
 
     if (res?.error) throw new Error(res.error.message || "buy error");
@@ -11158,6 +14826,19 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
     const cid = res?.buy?.contract_id;
     if (!cid) throw new Error("buy ok pero sin contract_id (no puedo trackear ITM/OTM)");
+
+    resetSignalFatigueCycleAfterRealTrade(cid);
+
+    try {
+      Object.assign(tradeExtra, compactAuditFields(extractContractAuditFields(res?.buy || {})));
+      if (!tradeExtra.purchase_time) tradeExtra.purchase_time = Math.floor(serverNowMs() / 1000);
+      if (itemCtx?.signalAutoEntry?.post58_readiness) {
+        tradeExtra.entry_trigger_mode = isNextCandleExpiryTiming() ? "PREPROPOSAL_POST_TICK_58" : "AUTO58_NORMAL";
+        tradeExtra.entry_trigger_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.ms || 0));
+        tradeExtra.entry_trigger_last_tick_ms = Math.round(Number(itemCtx.signalAutoEntry.post58_readiness.lastTickMs || 0));
+        tradeExtra.entry_trigger_reason = String(itemCtx.signalAutoEntry.post58_readiness.reason || "");
+      }
+    } catch {}
 
     if (isC100Active()) markC100PendingContract(cid);
 
@@ -11234,6 +14915,7 @@ function initTokenAndStakeUI() {
   ensureTradingAccountButton();
   applyTradingAccountUI();
   applyTradingAccountBannerUI();
+  ensureDerivApiModePanel();
   ensureC100Panel();
   updateC100PanelUI();
   const tokenInput = pickEl("tokenInput", "derivTokenInput", "demoTokenInput", "tokenDemoInput", "tradeTokenInput");
@@ -11245,12 +14927,16 @@ function initTokenAndStakeUI() {
   if (tokenSaveBtn && tokenInput) {
     tokenSaveBtn.onclick = () => {
       const v = String(tokenInput.value || "").trim();
-      if (!v) return alert(`Pegá un token ${getTradingAccountLabel()} primero.`);
+      if (!v) return alert(isNewPatApiMode() ? "Pegá el PAT de API nueva primero." : `Pegá un token ${getTradingAccountLabel()} primero.`);
       setDerivToken(v);
+      saveNewApiSettingsFromInputs();
       resetAuthState();
+      resetNewApiTradingSocket();
+      void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
       syncAccountScopedSettingsUI();
-      toast(`💾 Token ${getTradingAccountLabel()} guardado ✓`, 1600);
-      alert(`✅ Token ${getTradingAccountLabel()} guardado.`);
+      syncNewApiSettingsInputs();
+      toast(`💾 ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado ✓`, 1600);
+      alert(`✅ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado.`);
     };
   }
 
@@ -11258,9 +14944,11 @@ function initTokenAndStakeUI() {
     tokenClearBtn.onclick = () => {
       clearDerivToken();
       resetAuthState();
+      resetNewApiTradingSocket();
       syncAccountScopedSettingsUI();
-      toast(`🗑️ Token ${getTradingAccountLabel()} borrado ✓`, 1600);
-      alert(`🗑️ Token ${getTradingAccountLabel()} borrado.`);
+      syncNewApiSettingsInputs();
+      toast(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado ✓`, 1600);
+      alert(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado.`);
     };
   }
 
@@ -11625,12 +15313,18 @@ function onTick(tick) {
 
   const prevLast = lastQuoteBySymbol[symbol];
   lastQuoteBySymbol[symbol] = tick.quote;
+  rememberConstructiveRollingTick(symbol, epochMs, tick.quote);
+  updateConstructiveFloatingSignalsOnTick(symbol, epochMs, tick.quote);
 
   if (lastMinuteSeenBySymbol[symbol] !== minute) {
     lastMinuteSeenBySymbol[symbol] = minute;
     minuteData[minute] ||= {};
     minuteData[minute][symbol] ||= [];
-    if (minuteData[minute][symbol].length === 0 && prevLast != null) {
+    // No inyectar el cierre anterior como open si el primer tick real ya llegó en ms=0.
+    // Si se inyectan ambos en ms=0, el gráfico en vivo dibuja una línea vertical falsa
+    // al inicio de la vela. Cuando el primer tick llega tarde (>0), sí usamos prevLast
+    // para mostrar continuidad visual desde 0s.
+    if (minuteData[minute][symbol].length === 0 && prevLast != null && Number(msInMinute) > 0) {
       minuteData[minute][symbol].push({ ms: 0, quote: prevLast });
     }
   }
@@ -11644,7 +15338,13 @@ function onTick(tick) {
 
   minuteData[minute] ||= {};
   minuteData[minute][symbol] ||= [];
-  minuteData[minute][symbol].push({ ms: msInMinute, quote: tick.quote });
+  const currentMinuteTicks = minuteData[minute][symbol];
+  const lastMinutePoint = currentMinuteTicks[currentMinuteTicks.length - 1];
+  if (lastMinutePoint && Math.round(Number(lastMinutePoint.ms)) === Math.round(Number(msInMinute))) {
+    currentMinuteTicks[currentMinuteTicks.length - 1] = { ms: msInMinute, quote: tick.quote };
+  } else {
+    currentMinuteTicks.push({ ms: msInMinute, quote: tick.quote });
+  }
 
   candleOC[minute] ||= {};
   if (!candleOC[minute][symbol]) {
@@ -11664,10 +15364,15 @@ function onTick(tick) {
     modalLive &&
     chartModal &&
     !chartModal.classList.contains("hidden") &&
-    modalCurrentItem.minute === minute &&
-    modalCurrentItem.symbol === symbol
+    modalCurrentItem.symbol === symbol &&
+    (modalCurrentItem.minute === minute || (Number.isFinite(Number(modalCurrentItem.signalAnchorEpochMs || 0)) && isItemLiveMinute(modalCurrentItem)))
   ) {
-    modalCurrentItem.ticks = minuteData[minute][symbol].slice();
+    if (Number.isFinite(Number(modalCurrentItem.signalAnchorEpochMs || 0))) {
+      const liveItem = findHistoryItemById(modalCurrentItem.id);
+      if (liveItem?.ticks) modalCurrentItem.ticks = liveItem.ticks.slice();
+    } else {
+      modalCurrentItem.ticks = minuteData[minute][symbol].slice();
+    }
     requestModalDraw(false);
   }
 
@@ -11680,14 +15385,87 @@ function onTick(tick) {
     for (const it of tail) updateRowChartBtn(it);
   }
 
-  // ✅ FIX AUTO 59: también revisar en cada tick, salvo cuando el análisis está pausado
+  // ✅ FIX AUTO 58: también revisar en cada tick, salvo cuando el análisis está pausado
   // o la pestaña En vivo está activa (modo aparte).
   if (!areSignalsPaused()) scanSignalAutoEntriesAt57();
 
   if (!areSignalsPaused()) {
     const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isDynamicLineMode(activeModeForTick)) {
+    if (isReduccionConstructivaContinuaMode(activeModeForTick)) {
+      // V108: modo flotante. No espera al segundo 30 del minuto Deriv.
+      // Escanea cada tick y crea la señal cuando se completan 2 reducciones claras
+      // antes de 30s desde el inicio real del primer movimiento.
+      scanConstructiveReductionContinuousOnTick(symbol, epochMs);
+    } else if (isReduccionExacta25sMode(activeModeForTick)) {
+      // V107.1 Dos reducciones claras:
+      // puede disparar apenas aparezcan 2 reducciones claras, pero nunca usa datos
+      // posteriores al segundo 30. Si a los 30 no apareció, la vela queda descartada.
+      const visualEvalStartSec = 15;
+      const visualEvalEndSec = 30;
+      const visualEvalLateSec = 33; // tolerancia por ticks tardíos; evalúa la FOTO de 30s.
+      if (sec >= visualEvalStartSec && sec <= visualEvalEndSec && lastEvaluatedMinute !== minute) {
+        const evalMsNow = Math.max(visualEvalStartSec * 1000, Math.min(msInMinute, visualEvalEndSec * 1000));
+        const ok = evaluateMinute(minute, {
+          evalMs: evalMsNow,
+          evalSec: Math.min(sec, visualEvalEndSec),
+          radar: true,
+          radarStartSec: 0,
+          radarEndSec: Math.min(sec, visualEvalEndSec),
+        });
+        if (ok || sec >= visualEvalEndSec) lastEvaluatedMinute = minute;
+      } else if (sec > visualEvalEndSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
+        evaluateMinute(minute, {
+          evalMs: visualEvalEndSec * 1000,
+          evalSec: visualEvalEndSec,
+          radar: true,
+          radarStartSec: 0,
+          radarEndSec: visualEvalEndSec,
+          forceFullWindow30s: true,
+        });
+        lastEvaluatedMinute = minute;
+      } else if (sec > visualEvalLateSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+      }
+    } else if (isAlcistaIrregular25sMode(activeModeForTick)) {
+      // V98 Alcista irregular 30s:
+      // Analiza hasta 30s. La señal visible puede salir entre 20-30s
+      // si la vela está verde y muestra avance irregular / estructura insana.
+      const irregularStartSec = 20;
+      const irregularEndSec = 30;
+      if (sec >= irregularStartSec && sec <= irregularEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(irregularStartSec * 1000, Math.min(msInMinute, irregularEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec: irregularStartSec,
+          radarEndSec: irregularEndSec,
+        });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > irregularEndSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+      }
+    } else if (isRupturaDebilGiroMode(activeModeForTick)) {
+      // V78 Ruptura Débil Giro:
+      // 0-15s queda como observación interna, pero NO se muestra señal todavía.
+      // La señal visible recién puede salir entre 20-30s, si la vela sigue alcista
+      // y no perdió el open con fuerza antes de los 20s.
+      // La operación no sale sola por radar: requiere 4 puntos manuales como el resto.
+      const ruptureStartSec = 20;
+      const ruptureEndSec = 30;
+      if (sec >= ruptureStartSec && sec <= ruptureEndSec && lastEvaluatedMinute !== minute) {
+        const ok = evaluateMinute(minute, {
+          evalMs: Math.max(ruptureStartSec * 1000, Math.min(msInMinute, ruptureEndSec * 1000)),
+          evalSec: sec,
+          radar: true,
+          radarStartSec: ruptureStartSec,
+          radarEndSec: ruptureEndSec,
+        });
+        if (ok) lastEvaluatedMinute = minute;
+      } else if (sec > ruptureEndSec && lastEvaluatedMinute !== minute) {
+        lastEvaluatedMinute = minute;
+      }
+    } else if (isDynamicLineMode(activeModeForTick)) {
       // Línea dinámica queda igual: evalúa una sola vez en el segundo elegido.
       if (sec >= EVAL_SEC && lastEvaluatedMinute !== minute) {
         lastEvaluatedMinute = minute;
@@ -11701,7 +15479,7 @@ function onTick(tick) {
       }
     } else {
       // V38 SNR RADAR:
-      // En SNR ya no evalúa solo en un segundo exacto.
+      // En SNR ya no evalúa solo en un segundo visual.
       // Desde 35s hasta el segundo elegido escanea en cada tick.
       // Si encuentra interacción válida con el SNR, crea la prealerta y deja de escanear esa vela.
       const radarStartSec = SNR_RADAR_START_SEC;
@@ -12554,8 +16332,8 @@ const RULES_LIKE_MANTENIDO = {
 
 function normalizeTradeDirection(dir) {
   const d = String(dir || "").toUpperCase();
-  if (d === "CALL" || d === "BUY" || d === "COMPRA") return "CALL";
-  if (d === "PUT" || d === "SELL" || d === "VENTA") return "PUT";
+  if (d === "CALL" || d === "CALLE" || d === "BUY" || d === "COMPRA") return "CALL";
+  if (d === "PUT" || d === "PUTE" || d === "SELL" || d === "VENTA") return "PUT";
   return "";
 }
 
@@ -13673,7 +17451,7 @@ function analyzeSNRPolaridadCandidate(candidate, minute, rules = RULES_GIRO_DOBL
   if (ticks.length < 4) return null;
 
   const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(1000, Math.min(59000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
+  const evalMs = Math.max(1000, Math.min(58000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
   const evalSecUsed = Number.isFinite(Number(opts?.evalSec)) ? Number(opts.evalSec) : Math.round(evalMs / 1000);
   const radarStartSec = Number.isFinite(Number(opts?.radarStartSec)) ? Number(opts.radarStartSec) : SNR_RADAR_START_SEC;
   const radarEndSec = Number.isFinite(Number(opts?.radarEndSec)) ? Number(opts.radarEndSec) : Number(EVAL_SEC || 45);
@@ -14580,7 +18358,7 @@ function analyzeGiroSNRSecondTouchCandidate(candidate, minute, rules = RULES_GIR
   if (ticks.length < 4) return null;
 
   const optEvalMs = Number(opts?.evalMs);
-  const evalMs = Math.max(1000, Math.min(59000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
+  const evalMs = Math.max(1000, Math.min(58000, Number.isFinite(optEvalMs) ? optEvalMs : Number(EVAL_SEC || 45) * 1000));
   const evalSecUsed = Number.isFinite(Number(opts?.evalSec)) ? Number(opts.evalSec) : Math.round(evalMs / 1000);
   const radarStartSec = Number.isFinite(Number(opts?.radarStartSec)) ? Number(opts.radarStartSec) : SNR_RADAR_START_SEC;
   const radarEndSec = Number.isFinite(Number(opts?.radarEndSec)) ? Number(opts.radarEndSec) : Number(EVAL_SEC || 45);
@@ -15990,7 +19768,7 @@ function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_
   const meta = getSignalDynamicLineMeta(item);
   if (!meta) return { ok: false, pending: false, reason: "sin_linea_dinamica", message: "La señal no trae línea dinámica válida." };
   const price = getSignalPriceAtEntryCheckMs(item, checkMs);
-  if (!Number.isFinite(price)) return { ok: false, pending: true, reason: "sin_precio_59", message: "Todavía no hay precio suficiente para validar la línea en 59s." };
+  if (!Number.isFinite(price)) return { ok: false, pending: true, reason: "sin_precio_58", message: "Todavía no hay precio suficiente para validar la línea en 58s." };
   const line = getDynamicLineValue(meta, item?.minute, checkMs);
   if (!Number.isFinite(line)) return { ok: false, pending: false, reason: "linea_invalida", message: "No se pudo proyectar la línea dinámica." };
   const wanted = normalizeSignalConfirmationSide(side) || String(meta.direction || item?.direction || "").toUpperCase();
@@ -16031,6 +19809,3114 @@ function buildSignalDynamicLineEntryGate(item, side = "", checkMs = SIGNAL_AUTO_
       ? `Precio ${Math.round(checkMs / 1000)}s respeta línea dinámica (${price.toFixed(6)} vs ${line.toFixed(6)})`
       : `${isSupport ? "Soporte dinámico roto: precio debajo de la línea, no se convierte en venta" : "Resistencia dinámica rota: precio encima de la línea, no se convierte en compra"} (${price.toFixed(6)} vs ${line.toFixed(6)})`,
   };
+}
+
+
+function getRupturaDebilGiroPathStats(pts) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 2) return { path: 0, net: 0, irregularity: 0, turns: 0 };
+  let path = 0;
+  let turns = 0;
+  let lastSign = 0;
+  for (let i = 1; i < clean.length; i++) {
+    const d = clean[i].quote - clean[i - 1].quote;
+    path += Math.abs(d);
+    const sign = d > 0 ? 1 : d < 0 ? -1 : 0;
+    if (sign && lastSign && sign !== lastSign) turns++;
+    if (sign) lastSign = sign;
+  }
+  const net = clean[clean.length - 1].quote - clean[0].quote;
+  return { path, net, irregularity: path / Math.max(Math.abs(net), 1e-9), turns };
+}
+
+function getRupturaDebilGiroRuns(pts, tol = 0) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  const runs = [];
+  let active = null;
+  for (let i = 1; i < clean.length; i++) {
+    const prev = clean[i - 1];
+    const cur = clean[i];
+    const d = cur.quote - prev.quote;
+    const sign = d > tol ? 1 : d < -tol ? -1 : 0;
+    if (!sign) continue;
+    if (!active || active.sign !== sign) {
+      if (active) runs.push(active);
+      active = {
+        sign,
+        startMs: Number(prev.ms),
+        endMs: Number(cur.ms),
+        move: Math.abs(d),
+        from: Number(prev.quote),
+        to: Number(cur.quote),
+        steps: 1,
+      };
+    } else {
+      active.endMs = Number(cur.ms);
+      active.move += Math.abs(d);
+      active.to = Number(cur.quote);
+      active.steps += 1;
+    }
+  }
+  if (active) runs.push(active);
+  return runs;
+}
+
+function getRupturaDebilGiroMaxPullback(pts) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 2) return 0;
+  let peak = Number(clean[0].quote);
+  let maxPullback = 0;
+  for (const p of clean) {
+    const q = Number(p.quote);
+    if (q > peak) peak = q;
+    maxPullback = Math.max(maxPullback, peak - q);
+  }
+  return maxPullback;
+}
+
+function isRupturaDebilGiroBullishOnlySetup(pts, range = null) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 3) return false;
+
+  const open = Number(clean[0]?.quote);
+  const current = Number(clean[clean.length - 1]?.quote);
+  const qs = clean.map((p) => Number(p.quote));
+  const localRange = Number.isFinite(Number(range)) && Number(range) > 0
+    ? Number(range)
+    : Math.max(Math.max(...qs) - Math.min(...qs), Math.abs(open) * 0.000001, 1e-9);
+
+  const bullishTol = Math.max(localRange * 0.025, Math.abs(open) * 0.00000008, 1e-9);
+  return Number.isFinite(open) && Number.isFinite(current) && current > open + bullishTol;
+}
+
+function analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs) {
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const evalTime = Number(evalMs || clean[clean.length - 1]?.ms || 0);
+  if (evalTime < 20000 || evalTime > 30000) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(
+    Number(range || 0),
+    high - low,
+    Math.abs(open) * 0.000001,
+    1e-9
+  );
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+
+  // V78: no mostrar señal si la vela apenas subió y después perdió el open con fuerza.
+  // Queremos comprador irregular que sigue siendo comprador, no una caída temprana que recupera tarde.
+  const early20 = clean.filter((p) => Number(p.ms) <= 20000);
+  const early20Quotes = early20.map((p) => Number(p.quote)).filter(Number.isFinite);
+  const early20Min = early20Quotes.length ? Math.min(...early20Quotes) : open;
+  const early20Close = early20.length ? Number(early20[early20.length - 1].quote) : current;
+  const earlyLossBelowOpen = Math.max(0, open - early20Min);
+  const earlyLostOpenStrong = earlyLossBelowOpen >= Math.max(localRange * 0.28, tol * 8);
+  const stillBelowOpenAt20 = Number.isFinite(early20Close) && early20Close <= open + Math.max(localRange * 0.010, tol * 1.2);
+  if (earlyLostOpenStrong || stillBelowOpenAt20) return null;
+
+  // Filtro duro: solo vela alcista en el momento de detección.
+  if (!isRupturaDebilGiroBullishOnlySetup(clean, localRange)) return null;
+
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const runs = getRupturaDebilGiroRuns(clean, tol);
+  const upRuns = runs.filter((r) => r.sign > 0 && r.move > tol * 1.2);
+  const downRuns = runs.filter((r) => r.sign < 0 && r.move > tol * 1.2);
+  const upMoves = upRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+  const downMoves = downRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxUpRun = upMoves.length ? Math.max(...upMoves) : 0;
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const avgUp = upMoves.length ? totalUp / upMoves.length : 0;
+  const upVar = upMoves.length >= 2
+    ? upMoves.reduce((a, b) => a + Math.pow(b - avgUp, 2), 0) / upMoves.length
+    : 0;
+  const upCv = avgUp > 0 ? Math.sqrt(upVar) / avgUp : 0;
+
+  const net = current - open;
+  const highFromOpen = high - open;
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const path = Math.max(stats.path, totalUp + totalDown, 1e-9);
+  const efficiency = net / path;
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
+
+  const firstUp = upMoves[0] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+  const midUp = upMoves.length >= 3 ? upMoves[Math.floor(upMoves.length / 2)] : 0;
+
+  // V78: los ejemplos buenos muestran comprador irregular, pero con intención alcista sostenida.
+  // Por eso la señal visible no sale en 0-15s: se espera confirmación 20-30s.
+  // Lo importante es: comprador intenta avanzar alcista, pero los empujes salen desparejos,
+  // devuelve mucho o aparece vendedor antes de 30s, sin perder fuerte el open antes de 20s.
+  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.12, tol * 2.0);
+  const decreasingPushes = upMoves.length >= 2 && (lastUp <= firstUp * (anySellerEntry ? 0.96 : 0.84));
+  const unevenPushes = upMoves.length >= 3 && (upCv >= 0.30 || Math.min(...upMoves) <= Math.max(...upMoves) * 0.60);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.24 || (midUp && Math.abs(midUp - firstUp) >= avgUp * 0.28));
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.42 && stats.turns >= 2);
+  const givesBackMuch = pullbackRatio >= 0.24 || maxPullbackRatio >= 0.17;
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.22, maxUpRun * 0.48, tol * 2.8);
+
+  const sellerRunsInWindow = downRuns.filter((r) => Number(r.startMs) <= 30000);
+  const sellerAfter15 = sellerRunsInWindow.some((r) => Number(r.startMs) >= 15000 && Number(r.startMs) <= 30000 && Number(r.move) >= Math.max(localRange * 0.14, tol * 2.1));
+  const sellerAfter20 = sellerRunsInWindow.some((r) => Number(r.startMs) >= 20000 && Number(r.startMs) <= 30000 && Number(r.move) >= Math.max(localRange * 0.16, tol * 2.3));
+  const buyerTriesTwiceAndFails =
+    upRuns.length >= 2 &&
+    downRuns.length >= 1 &&
+    totalDown >= totalUp * 0.18 &&
+    (decreasingPushes || differentSizedBreaks || givesBackMuch);
+  const secondPushWeakAfterSeller =
+    upRuns.length >= 2 &&
+    downRuns.length >= 1 &&
+    lastUp <= Math.max(firstUp * 0.98, avgUp * 0.88) &&
+    anySellerEntry;
+
+  const highIdx = quotes.indexOf(high);
+  const highMs = Number(clean[highIdx]?.ms || evalTime);
+  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.10, tol * 1.5);
+  const recent = clean.slice(Math.max(0, clean.length - 4));
+  const recentQuotes = recent.map((p) => Number(p.quote));
+  const recentRange = recentQuotes.length ? Math.max(...recentQuotes) - Math.min(...recentQuotes) : 0;
+  const lateStall = recent.length >= 3 && recentRange <= Math.max(localRange * 0.18, tol * 2.2) && highMs <= evalTime - 4000;
+
+  // Evita marcar un CALL sano como giro: impulso limpio, poca devolución y alta eficiencia.
+  const cleanBullishContinuation =
+    efficiency >= 0.78 &&
+    pullbackRatio <= 0.18 &&
+    stats.turns <= 1 &&
+    !decreasingPushes &&
+    !unevenPushes &&
+    !strongContrary;
+  if (cleanBullishContinuation) return null;
+
+  // Debe haber desplazamiento alcista suficiente. No queremos ruido sin intención compradora.
+  const enoughBullishDisplacement = highFromOpen >= Math.max(localRange * 0.28, tol * 4.0) && net > tol * 1.3;
+  if (!enoughBullishDisplacement) return null;
+
+  let points = 0;
+  const reasons = [];
+
+  // Base: vela alcista con intención, pero no sana/limpia.
+  points += 1;
+  reasons.push("vela alcista con desplazamiento inicial");
+
+  if (evalTime <= 15000) { points += 2; reasons.push("irregularidad en 0-15s"); }
+  else { points += 1; reasons.push("irregularidad en 15-30s"); }
+
+  if (decreasingPushes) { points += 2; reasons.push("empujes compradores cada vez más cortos"); }
+  if (differentSizedBreaks || unevenPushes) { points += 2; reasons.push("quiebres/impulsos de distinto tamaño"); }
+  if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
+  if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / avance desordenado"); }
+  if (stalledAfterHigh || lateStall) { points += 1; reasons.push("se traba después de avanzar"); }
+  if (buyerTriesTwiceAndFails) { points += 2; reasons.push("comprador intenta dos veces y falla calidad"); }
+  if (secondPushWeakAfterSeller) { points += 1; reasons.push("segunda respuesta compradora débil tras vendedor"); }
+  if (strongContrary) { points += 3; reasons.push("entrada fuerte del vendedor"); }
+  else if (sellerAfter20) {
+    points += 2;
+    reasons.push("vendedor entra antes de 30s");
+  } else if (maxDownRun >= Math.max(localRange * 0.15, maxUpRun * 0.34, tol * 2.1)) {
+    points += 1;
+    reasons.push("presión vendedora presente");
+  }
+
+  const hasIrregularCore = decreasingPushes || differentSizedBreaks || unevenPushes || givesBackMuch || zigzagDirty || stalledAfterHigh || lateStall || buyerTriesTwiceAndFails || secondPushWeakAfterSeller || sellerAfter20;
+  if (!hasIrregularCore) return null;
+
+  // Con irregularidad sola ya puede salir, pero solo después de confirmación 20-30s. Con vendedor fuerte gana prioridad.
+  if (points < 5) return null;
+
+  const earlyBonus = evalTime <= 22000 ? 12 : evalTime <= 26000 ? 8 : 4;
+  const priorityBonus =
+    (strongContrary ? 36 : 0) +
+    (sellerAfter20 ? 14 : sellerAfter15 ? 8 : 0) +
+    (buyerTriesTwiceAndFails ? 12 : 0) +
+    (givesBackMuch ? 8 : 0);
+  const quality =
+    points * 14 +
+    earlyBonus +
+    priorityBonus +
+    Math.min(18, stats.turns * 4) +
+    Math.min(18, Math.max(0, stats.irregularity - 1) * 12) +
+    Math.min(16, pullbackRatio * 18) +
+    Math.min(10, upCv * 12) -
+    Math.max(0, evalTime - 15000) / 2200;
+
+  const logicText = `Vela alcista con arranque irregular confirmado 20-30s: ${reasons.join(", ")}. Filtro V78: no perdió fuerte el open antes de 20s.`;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "ruptura_debil_giro",
+      levelType: "early_bullish_irregularity",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 12,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalTime / 1000),
+      earlyWindow: "20-30s",
+      hiddenObservationWindow: "0-15s",
+      confirmationWindow: "20-30s",
+      earlyLossBelowOpen,
+      earlyLostOpenStrong,
+      stillBelowOpenAt20,
+      analysisWindowMs: evalTime,
+      bullishCandleOnly: true,
+      disabledMirrorCall: true,
+      earlyIrregularityOnly: true,
+      strongContrary,
+      sellerAfter15,
+      sellerAfter20,
+      buyerTriesTwiceAndFails,
+      secondPushWeakAfterSeller,
+      totalUp,
+      totalDown,
+      maxUpRun,
+      maxDownRun,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      efficiency,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      upCv,
+      decreasingPushes,
+      unevenPushes,
+      differentSizedBreaks,
+      zigzagDirty,
+      givesBackMuch,
+      stalledAfterHigh,
+      lateStall,
+      breakMs: null,
+      breakPrice: null,
+      stage: "ruptura_debil_giro_inicio_irregular_alcista_v78_confirmada",
+      movementFilter: "vela_alcista_irregular_confirmada_20_30s_no_pierde_open",
+      priority: strongContrary || sellerAfter20 ? "ALTA" : "NORMAL",
+      logic: logicText,
+      status: `🔁 Ruptura Débil Giro: vela alcista con arranque irregular confirmado 20-30s${strongContrary ? " + vendedor fuerte" : sellerAfter20 ? " + vendedor antes de 30s" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
+}
+
+
+
+function classifyAlcista30sLegs(upLegs) {
+  const moves = (Array.isArray(upLegs) ? upLegs : []).map((x) => Number(x.move || 0)).filter(Number.isFinite);
+  const maxUp = moves.length ? Math.max(...moves) : 0;
+  if (!maxUp) return { labels: [], pattern: "", maxUp: 0, minUp: 0, sizeRatio: 0 };
+  const minUp = moves.length ? Math.min(...moves.filter((v) => v > 0)) : 0;
+  const labels = moves.map((v) => {
+    if (v >= maxUp * 0.72) return "G";
+    if (v >= maxUp * 0.38) return "M";
+    return "P";
+  });
+  return {
+    labels,
+    pattern: labels.join("-"),
+    maxUp,
+    minUp,
+    sizeRatio: minUp > 0 ? maxUp / minUp : 0,
+  };
+}
+
+function analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange) {
+  const swingTol = Math.max(localRange * 0.010, tol * 0.75, 1e-9);
+  const visibleUpMin = Math.max(localRange * 0.052, tol * 1.85, 1e-9);
+  const visibleBreakMin = Math.max(localRange * 0.038, tol * 1.45, 1e-9);
+  const pausePriceTol = Math.max(localRange * 0.017, tol * 1.05, 1e-9);
+  const pauseMinMs = 700; // permite pausa visual de 1 tick / 1-2 segundos, sin exigir 5s.
+
+  const rawRuns = getRupturaDebilGiroRuns(clean, swingTol);
+  const upLegs = [];
+  const downLegs = [];
+  rawRuns.forEach((r, idx) => {
+    const item = { ...r, idx, move: Number(r.move || 0), startMs: Number(r.startMs || 0), endMs: Number(r.endMs || 0) };
+    if (item.sign > 0 && item.move >= visibleUpMin) upLegs.push(item);
+    if (item.sign < 0 && item.move >= visibleBreakMin) downLegs.push(item);
+  });
+
+  const breakDetails = [];
+  const countedDownRunIdx = new Set();
+  for (let i = 0; i < upLegs.length - 1; i++) {
+    const prevUp = upLegs[i];
+    const nextUp = upLegs[i + 1];
+    const betweenRuns = rawRuns
+      .map((r, idx) => ({ ...r, idx }))
+      .filter((r) => Number(r.idx) > Number(prevUp.idx) && Number(r.idx) < Number(nextUp.idx));
+    const downBetween = betweenRuns
+      .filter((r) => r.sign < 0)
+      .sort((a, b) => Number(b.move || 0) - Number(a.move || 0))[0] || null;
+    if (downBetween && Number(downBetween.move || 0) >= visibleBreakMin * 0.72) {
+      countedDownRunIdx.add(Number(downBetween.idx));
+      breakDetails.push({
+        type: "retroceso",
+        ms: Number(downBetween.startMs || prevUp.endMs),
+        move: Number(downBetween.move || 0),
+        fromUp: i,
+        visible: true,
+      });
+      continue;
+    }
+
+    const gapMs = Math.max(0, Number(nextUp.startMs || 0) - Number(prevUp.endMs || 0));
+    if (gapMs >= pauseMinMs) {
+      const betweenPts = clean.filter((p) => Number(p.ms) >= Number(prevUp.endMs || 0) && Number(p.ms) <= Number(nextUp.startMs || 0));
+      const maxQ = betweenPts.length ? Math.max(...betweenPts.map((p) => Number(p.quote))) : Number(prevUp.to || 0);
+      const minQ = betweenPts.length ? Math.min(...betweenPts.map((p) => Number(p.quote))) : Number(prevUp.to || 0);
+      const noProgress = maxQ <= Number(prevUp.to || 0) + pausePriceTol;
+      const gaveSomething = (Number(prevUp.to || 0) - minQ) >= pausePriceTol * 0.45;
+      if (noProgress || gaveSomething) {
+        breakDetails.push({
+          type: "pausa",
+          ms: Number(prevUp.endMs || 0),
+          durationMs: gapMs,
+          move: Math.max(0, Number(prevUp.to || 0) - minQ),
+          fromUp: i,
+          visible: true,
+        });
+      }
+    }
+  }
+
+  for (const d of downLegs) {
+    if (countedDownRunIdx.has(Number(d.idx))) continue;
+    // Retrocesos adicionales también cuentan si están dentro de 0-30s y no son micro ruido.
+    breakDetails.push({ type: "retroceso_extra", ms: Number(d.startMs || 0), move: Number(d.move || 0), visible: true });
+  }
+
+  breakDetails.sort((a, b) => Number(a.ms || 0) - Number(b.ms || 0));
+  const legInfo = classifyAlcista30sLegs(upLegs);
+  const upMoves = upLegs.map((r) => Number(r.move || 0));
+  const downMoves = downLegs.map((r) => Number(r.move || 0));
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxDown = downMoves.length ? Math.max(...downMoves) : 0;
+  const firstUp = upMoves[0] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+  let reductionPairs = 0;
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    if (upMoves[i] >= upMoves[i + 1] * 1.25 && upMoves[i] >= visibleUpMin) reductionPairs++;
+  }
+  const maxIdx = upMoves.indexOf(legInfo.maxUp);
+  const afterMax = maxIdx >= 0 ? upMoves.slice(maxIdx + 1) : [];
+  const postMaxWeakening = afterMax.some((v) => v <= legInfo.maxUp * 0.68);
+  const threeStepReduction = upMoves.length >= 3 && upMoves[0] >= upMoves[1] * 1.14 && upMoves[1] >= upMoves[2] * 1.12;
+  const clearSizeContrast = legInfo.sizeRatio >= 1.35 || new Set(legInfo.labels).size >= 2;
+  const pureIncreasing = upMoves.length >= 3 && upMoves.every((v, i) => i === 0 || v >= upMoves[i - 1] * 0.96) && !postMaxWeakening;
+  const allSimilar = legInfo.sizeRatio > 0 && legInfo.sizeRatio <= 1.28 && upMoves.length >= 3;
+  const visibleBreakCount = breakDetails.length;
+
+  return {
+    rawRuns,
+    upLegs,
+    downLegs,
+    upMoves,
+    downMoves,
+    totalUp,
+    totalDown,
+    maxDown,
+    firstUp,
+    lastUp,
+    visibleBreakCount,
+    breakDetails: breakDetails.slice(0, 8),
+    pauseBreaks: breakDetails.filter((b) => b.type === "pausa").length,
+    retroBreaks: breakDetails.filter((b) => String(b.type || "").includes("retroceso")).length,
+    reductionPairs,
+    threeStepReduction,
+    clearSizeContrast,
+    postMaxWeakening,
+    pureIncreasing,
+    allSimilar,
+    pattern: legInfo.pattern,
+    legLabels: legInfo.labels,
+    sizeRatio: legInfo.sizeRatio,
+    visibleUpMin,
+    visibleBreakMin,
+    pausePriceTol,
+    pauseMinMs,
+  };
+}
+
+
+// V106.6: calibración del modo Alcista quiebres 30s con tus correcciones.
+// La clave nueva es distinguir quiebre de debilidad vs quiebre que arma piso/doble suelo y recarga comprador.
+function getAlcista30sLocalExtrema(clean, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 30000))
+    .sort((a, b) => a.ms - b.ms);
+  const extrema = { lows: [], highs: [] };
+  if (pts.length < 5) return extrema;
+
+  const depthMin = Math.max(localRange * 0.055, tol * 2.6, 1e-9);
+  const look = 3;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const q = Number(pts[i].quote);
+    const left = pts.slice(Math.max(0, i - look), i);
+    const right = pts.slice(i + 1, Math.min(pts.length, i + 1 + look));
+    if (!left.length || !right.length) continue;
+    const leftMax = Math.max(...left.map((p) => Number(p.quote)));
+    const rightMax = Math.max(...right.map((p) => Number(p.quote)));
+    const leftMin = Math.min(...left.map((p) => Number(p.quote)));
+    const rightMin = Math.min(...right.map((p) => Number(p.quote)));
+    const isLow = q <= leftMin + tol * 0.9 && q <= rightMin + tol * 0.9;
+    const isHigh = q >= leftMax - tol * 0.9 && q >= rightMax - tol * 0.9;
+    const lowDepth = Math.max(leftMax - q, rightMax - q);
+    const highDepth = Math.max(q - leftMin, q - rightMin);
+    if (isLow && lowDepth >= depthMin) extrema.lows.push({ ms: pts[i].ms, quote: q, depth: lowDepth, idx: i });
+    if (isHigh && highDepth >= depthMin) extrema.highs.push({ ms: pts[i].ms, quote: q, depth: highDepth, idx: i });
+  }
+  return extrema;
+}
+
+function detectAlcista30sDoubleBottomRetake(clean, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 30000))
+    .sort((a, b) => a.ms - b.ms);
+  const result = {
+    detected: false,
+    block: false,
+    pairCount: 0,
+    clusterCount: 0,
+    strongRetake: false,
+    buyerImpulseAfterFloor: 0,
+    pairs: [],
+    reason: "",
+  };
+  if (pts.length < 6) return result;
+  const extrema = getAlcista30sLocalExtrema(pts, evalMs, tol, localRange);
+  const lows = extrema.lows || [];
+  if (lows.length < 2) return result;
+
+  const lowPriceTol = Math.max(localRange * 0.105, tol * 4.2, 1e-9);
+  const minGapMs = 3000;
+  const maxGapMs = 18000;
+  const retakeMin = Math.max(localRange * 0.20, tol * 5.2, 1e-9);
+  const pairs = [];
+
+  for (let i = 0; i < lows.length - 1; i++) {
+    for (let j = i + 1; j < lows.length; j++) {
+      const a = lows[i];
+      const b = lows[j];
+      const gap = Number(b.ms) - Number(a.ms);
+      if (gap < minGapMs || gap > maxGapMs) continue;
+      const priceDiff = Math.abs(Number(a.quote) - Number(b.quote));
+      if (priceDiff > lowPriceTol) continue;
+      const after = pts.filter((p) => Number(p.ms) >= Number(b.ms));
+      const maxAfter = after.length ? Math.max(...after.map((p) => Number(p.quote))) : Number(b.quote);
+      const retake = maxAfter - Number(b.quote);
+      const strongRetake = retake >= retakeMin;
+      pairs.push({
+        firstMs: Number(a.ms),
+        secondMs: Number(b.ms),
+        firstLow: Number(a.quote),
+        secondLow: Number(b.quote),
+        priceDiff,
+        gapMs: gap,
+        retake,
+        strongRetake,
+      });
+    }
+  }
+
+  if (!pairs.length) return result;
+  // Agrupamos pares para saber si hay más de un doble suelo visible dentro de 0-30.
+  const used = [];
+  for (const pair of pairs) {
+    const overlaps = used.some((u) => Math.abs(u.secondMs - pair.firstMs) < 2500 || Math.abs(u.secondMs - pair.secondMs) < 2500);
+    if (!overlaps) used.push(pair);
+  }
+
+  const strongest = pairs.slice().sort((a, b) => Number(b.retake || 0) - Number(a.retake || 0))[0] || null;
+  result.detected = true;
+  result.pairCount = pairs.length;
+  result.clusterCount = used.length;
+  result.strongRetake = pairs.some((p) => p.strongRetake);
+  result.buyerImpulseAfterFloor = Number(strongest?.retake || 0);
+  result.pairs = pairs.slice(0, 4);
+  result.reason = result.strongRetake
+    ? "doble suelo con comprador retomando fuerte"
+    : "doble suelo/retest de piso dentro de 0-30s";
+  // Bloqueo principal pedido por vos: doble suelo + recuperación compradora o dos pisos repetidos visibles.
+  result.block = result.strongRetake || result.clusterCount >= 2;
+  return result;
+}
+
+function detectAlcista30sSymmetricCycles(structure, efficiency = 0, pullbackRatio = 0) {
+  const rawRuns = Array.isArray(structure?.rawRuns) ? structure.rawRuns : [];
+  const visibleUpMin = Number(structure?.visibleUpMin || 0);
+  const visibleBreakMin = Number(structure?.visibleBreakMin || 0);
+  const sig = rawRuns
+    .filter((r) => r && ((r.sign > 0 && Number(r.move || 0) >= visibleUpMin * 0.85) || (r.sign < 0 && Number(r.move || 0) >= visibleBreakMin * 0.85)))
+    .map((r) => ({ sign: Number(r.sign), move: Number(r.move || 0), startMs: Number(r.startMs || 0), endMs: Number(r.endMs || 0) }));
+
+  let pairSimilar = 0;
+  for (let i = 0; i < sig.length - 1; i++) {
+    const a = sig[i];
+    const b = sig[i + 1];
+    if (!a.sign || !b.sign || a.sign === b.sign) continue;
+    const ratio = Math.max(a.move, b.move) / Math.max(Math.min(a.move, b.move), 1e-9);
+    if (ratio <= 1.45) pairSimilar++;
+  }
+
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  const downMoves = Array.isArray(structure?.downMoves) ? structure.downMoves.map(Number).filter(Number.isFinite) : [];
+  const upSizeRatio = Number(structure?.sizeRatio || 0);
+  const downMax = downMoves.length ? Math.max(...downMoves) : 0;
+  const downMin = downMoves.length ? Math.min(...downMoves.filter((v) => v > 0)) : 0;
+  const downSizeRatio = downMin > 0 ? downMax / downMin : 0;
+
+  const upAlmostSame = upMoves.length >= 3 && upSizeRatio > 0 && upSizeRatio <= 1.55;
+  const downAlmostSame = downMoves.length >= 2 && downSizeRatio > 0 && downSizeRatio <= 1.75;
+  const alternatingEnough = pairSimilar >= 2;
+  const detected =
+    (alternatingEnough && Number(efficiency) >= 0.34 && Number(pullbackRatio) >= 0.12) ||
+    (upAlmostSame && Number(structure?.visibleBreakCount || 0) >= 2 && !structure?.threeStepReduction && !structure?.postMaxWeakening && Number(efficiency) >= 0.42);
+
+  return {
+    detected,
+    block: detected && !structure?.threeStepReduction && !structure?.postMaxWeakening,
+    pairSimilar,
+    upAlmostSame,
+    downAlmostSame,
+    upSizeRatio,
+    downSizeRatio,
+    reason: detected ? "movimientos casi simétricos / ordenados" : "",
+  };
+}
+
+function detectBuyerIncreasingAfterBreak30s(structure) {
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  if (upMoves.length < 3) return { detected: false, block: false, reason: "" };
+  const firstBreak = Array.isArray(structure?.breakDetails) ? structure.breakDetails.find((b) => Number.isFinite(Number(b.fromUp))) : null;
+  const startIdx = Math.max(1, Number(firstBreak?.fromUp || 0) + 1);
+  const after = upMoves.slice(startIdx);
+  const before = upMoves.slice(0, startIdx);
+  const beforeMax = before.length ? Math.max(...before) : upMoves[0];
+  const afterMax = after.length ? Math.max(...after) : 0;
+  const last = after.length ? after[after.length - 1] : 0;
+  const firstAfter = after.length ? after[0] : 0;
+  const monotonicRise = after.length >= 2 && last >= firstAfter * 1.22;
+  const dominantAfterBreak = afterMax >= beforeMax * 1.16;
+  const smallToBig = upMoves.length >= 3 && upMoves[1] >= upMoves[0] * 1.22 && upMoves[2] >= upMoves[1] * 0.90 && !structure?.postMaxWeakening;
+  const detected = (monotonicRise || dominantAfterBreak || smallToBig) && !structure?.threeStepReduction && !structure?.postMaxWeakening;
+  return {
+    detected,
+    block: detected,
+    monotonicRise,
+    dominantAfterBreak,
+    smallToBig,
+    beforeMax,
+    afterMax,
+    reason: detected ? "comprador se recarga / aumenta después del quiebre" : "",
+  };
+}
+
+function detectBuyerReductionAfterBreak30s(structure) {
+  const upMoves = Array.isArray(structure?.upMoves) ? structure.upMoves.map(Number).filter(Number.isFinite) : [];
+  if (upMoves.length < 2) return { detected: false, strength: 0, reason: "" };
+  let reductions = 0;
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    if (upMoves[i] >= upMoves[i + 1] * 1.16) reductions++;
+  }
+  const detected = !!structure?.threeStepReduction || !!structure?.postMaxWeakening || reductions >= 1;
+  return {
+    detected,
+    strength: (structure?.threeStepReduction ? 2 : 0) + (structure?.postMaxWeakening ? 2 : 0) + reductions,
+    reductions,
+    reason: detected ? "comprador reduce después del quiebre" : "",
+  };
+}
+
+function detectSellerIncreasingPressure30s(structure, localRange, tol) {
+  const downMoves = Array.isArray(structure?.downMoves) ? structure.downMoves.map(Number).filter(Number.isFinite) : [];
+  if (!downMoves.length) return { detected: false, strong: false, reason: "" };
+  const first = downMoves[0];
+  const last = downMoves[downMoves.length - 1];
+  const maxDown = Math.max(...downMoves);
+  const minStrong = Math.max(Number(localRange || 0) * 0.12, Number(tol || 0) * 2.2, 1e-9);
+  const detected = downMoves.length >= 2 && (last >= first * 1.12 || maxDown >= first * 1.35);
+  const strong = detected && maxDown >= minStrong;
+  return {
+    detected,
+    strong,
+    first,
+    last,
+    maxDown,
+    reason: strong ? "vendedor aumenta presión claramente" : detected ? "vendedor aumenta presión" : "",
+  };
+}
+
+
+// V106.7: nuevo modo independiente "Reducción visual 25s".
+// No usa el motor viejo de alcista quiebres/reducción. Busca únicamente estructuras visuales
+// como las capturas: impulsos del grupo dominante que se achican con quiebres/pausas entre medio.
+// Funciona en los dos sentidos:
+// - comprador reduce en 0-30s => señal PUT
+// - vendedor reduce en 0-30s => señal CALL
+function classifyVisualReductionSizeLabels(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  const labels = arr.map((v) => {
+    const r = v / Math.max(max, 1e-9);
+    if (r >= 0.86) return "G";
+    if (r >= 0.42) return "M";
+    return "P";
+  });
+  return { labels, pattern: labels.join("-"), max, min, ratio: max / Math.max(min, 1e-9) };
+}
+
+function buildVisualReduction25sRuns(clean, side, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.y))
+    .sort((a, b) => a.ms - b.ms);
+  const runs = [];
+  if (pts.length < 3) return runs;
+
+  const segMin = Math.max(Number(localRange || 0) * 0.018, Number(tol || 0) * 0.75, 1e-9);
+  let cur = null;
+  const finish = () => {
+    if (!cur) return;
+    cur.durationMs = Math.max(0, Number(cur.endMs || 0) - Number(cur.startMs || 0));
+    cur.move = Math.abs(Number(cur.endY || 0) - Number(cur.startY || 0));
+    cur.delta = Number(cur.endY || 0) - Number(cur.startY || 0);
+    runs.push(cur);
+    cur = null;
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = b.y - a.y;
+    const ady = Math.abs(dy);
+    const segSign = ady >= segMin ? (dy > 0 ? 1 : -1) : 0;
+    if (!cur) {
+      cur = { sign: segSign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+      continue;
+    }
+    // Pausas de 1 tick / 1-2s se conservan como quiebres si cortan dos impulsos.
+    if (cur.sign === segSign) {
+      cur.endMs = b.ms;
+      cur.endY = b.y;
+      cur.endQuote = b.quote;
+      cur.points.push(b);
+    } else {
+      finish();
+      cur = { sign: segSign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+    }
+  }
+  finish();
+
+  // Limpieza mínima: fusionar pausas microscópicas con el quiebre vecino, pero sin perder la marca de pausa.
+  const out = [];
+  for (const r of runs) {
+    if (!out.length) { out.push({ ...r }); continue; }
+    const last = out[out.length - 1];
+    if (r.sign === last.sign && r.sign !== 0) {
+      last.endMs = r.endMs;
+      last.endY = r.endY;
+      last.endQuote = r.endQuote;
+      last.move = Math.abs(last.endY - last.startY);
+      last.delta = last.endY - last.startY;
+      last.durationMs = Math.max(0, last.endMs - last.startMs);
+      last.points = (last.points || []).concat((r.points || []).slice(1));
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
+function scoreVisualReduction25sSide(clean, side, evalMs, tol, localRange) {
+  const sideLabel = side > 0 ? "BUYER" : "SELLER";
+  const signalDirection = side > 0 ? "PUT" : "CALL";
+  const groupText = side > 0 ? "comprador" : "vendedor";
+  const contraryText = side > 0 ? "vendedor" : "comprador";
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * side }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number(p.ms) <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 6) return null;
+
+  const y0 = Number(pts[0].y);
+  const yEnd = Number(pts[pts.length - 1].y);
+  const yMax = Math.max(...pts.map((p) => p.y));
+  const yMin = Math.min(...pts.map((p) => p.y));
+  const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
+  const visibleImpulseMin = Math.max(alignedRange * 0.105, Number(tol || 0) * 2.1, 1e-9);
+  const visibleBreakMin = Math.max(alignedRange * 0.040, Number(tol || 0) * 1.20, 1e-9);
+  const cleanProgressMin = Math.max(alignedRange * 0.20, Number(tol || 0) * 3.0, 1e-9);
+
+  const dominantAdvance = yMax - y0;
+  if (dominantAdvance < cleanProgressMin) return null;
+
+  const runs = buildVisualReduction25sRuns(pts.map((p) => ({ ms: p.ms, quote: p.quote / side })), side, tol, alignedRange);
+  const primaryRuns = [];
+  const breakRuns = [];
+  runs.forEach((r, idx) => {
+    const move = Number(r.move || 0);
+    if (r.sign > 0 && move >= visibleImpulseMin) primaryRuns.push({ ...r, idx, move });
+    if (r.sign <= 0 && (move >= visibleBreakMin || Number(r.durationMs || 0) <= 2600)) breakRuns.push({ ...r, idx, move });
+  });
+
+  if (primaryRuns.length < 2) return null;
+
+  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
+  const labelInfo = classifyVisualReductionSizeLabels(primaryMoves);
+
+  let breaksBetween = 0;
+  const breaksBetweenDetails = [];
+  for (let i = 0; i < primaryRuns.length - 1; i++) {
+    const a = primaryRuns[i];
+    const b = primaryRuns[i + 1];
+    const between = runs.filter((r, idx) => idx > a.idx && idx < b.idx);
+    const validBreak = between.find((r) => {
+      const mv = Number(r.move || 0);
+      return r.sign < 0
+        ? mv >= visibleBreakMin
+        : (r.sign === 0 && Number(r.durationMs || 0) <= 3000);
+    });
+    if (validBreak) {
+      breaksBetween++;
+      breaksBetweenDetails.push({
+        fromMove: i,
+        toMove: i + 1,
+        type: validBreak.sign < 0 ? "retroceso" : "pausa corta",
+        move: Number(validBreak.move || 0),
+        durationMs: Number(validBreak.durationMs || 0),
+        startMs: Number(validBreak.startMs || 0),
+        endMs: Number(validBreak.endMs || 0),
+      });
+    }
+  }
+
+  if (breaksBetween < Math.min(2, primaryRuns.length - 1)) return null;
+
+  const m0 = primaryMoves[0] || 0;
+  const m1 = primaryMoves[1] || 0;
+  const m2 = primaryMoves[2] || 0;
+  const m3 = primaryMoves[3] || 0;
+  const bigSmall = primaryMoves.length >= 2 && m0 >= m1 * 1.22;
+  const bigMediumSmall = primaryMoves.length >= 3 && m0 >= m1 * 1.10 && m1 >= m2 * 1.08;
+  const clearGMP = primaryMoves.length >= 3 && labelInfo.labels[0] === "G" && ["M", "P"].includes(labelInfo.labels[1]) && labelInfo.labels[2] === "P";
+  const bigSmallBigSmall = primaryMoves.length >= 4 && m0 >= m1 * 1.22 && m2 >= m3 * 1.14 && m2 <= m0 * 1.28;
+  const repeatedReductionPairs = primaryMoves.slice(0, -1).filter((v, i) => v >= primaryMoves[i + 1] * 1.14).length;
+  const cleanExactPattern = bigMediumSmall || clearGMP || bigSmallBigSmall || (bigSmall && repeatedReductionPairs >= 1);
+  if (!cleanExactPattern) return null;
+
+  // Bloqueos: esto no debe ser momentum sano ni secuencia en aumento.
+  const increasingAfterFirst = primaryMoves.length >= 3 && m1 >= m0 * 0.92 && m2 >= m1 * 0.96;
+  const lastDominates = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] >= m0 * 1.08;
+  if (increasingAfterFirst || lastDominates) return null;
+
+  const primaryStartMs = Number(primaryRuns[0]?.startMs || 0);
+  const lastPrimary = primaryRuns[primaryRuns.length - 1];
+  const afterLast = runs.filter((r, idx) => idx > Number(lastPrimary.idx));
+  const contraryRuns = afterLast.filter((r) => r.sign < 0 && Number(r.move || 0) >= Math.max(alignedRange * 0.075, Number(tol || 0) * 1.8));
+  const contraryEntry = contraryRuns.length ? contraryRuns.slice().sort((a, b) => Number(b.move || 0) - Number(a.move || 0))[0] : null;
+  const contraryEntryVisible = !!contraryEntry;
+  const contraryStrong = contraryEntryVisible && Number(contraryEntry.move || 0) >= Math.max(alignedRange * 0.15, Math.max(...primaryMoves) * 0.32, Number(tol || 0) * 2.6);
+
+  const pauseBreaks = breaksBetweenDetails.filter((b) => b.type === "pausa corta").length;
+  const retroBreaks = breaksBetweenDetails.filter((b) => b.type === "retroceso").length;
+  const totalPrimary = primaryMoves.reduce((a, b) => a + b, 0);
+  const totalCounter = runs.filter((r) => r.sign < 0).reduce((a, r) => a + Number(r.move || 0), 0);
+  const pullbackRatio = totalCounter / Math.max(totalPrimary, 1e-9);
+  const alignedNet = yEnd - y0;
+  const closeStillInDominantSide = alignedNet > Math.max(alignedRange * 0.02, Number(tol || 0));
+
+  let points = 0;
+  const reasons = [];
+  points += 3; reasons.push(`${groupText} domina 0-${Math.round(evalMs / 1000)}s`);
+  points += 3; reasons.push(`${primaryRuns.length} impulsos visibles del ${groupText}`);
+  points += 3; reasons.push(`${breaksBetween} quiebres/pausas entre impulsos`);
+  if (bigMediumSmall || clearGMP) { points += 5; reasons.push("patrón grande-mediano-pequeño"); }
+  else if (bigSmallBigSmall) { points += 5; reasons.push("patrón grande-pequeño-grande-pequeño"); }
+  else if (bigSmall) { points += 4; reasons.push("patrón grande-pequeño"); }
+  if (repeatedReductionPairs >= 2) { points += 2; reasons.push("reducción repetida"); }
+  if (pauseBreaks > 0) { points += 1; reasons.push("pausa corta de 1 tick/1-2s válida"); }
+  if (retroBreaks > 0) { points += 1; reasons.push("retrocesos visibles separan movimientos"); }
+  if (contraryStrong) { points += 3; reasons.push(`entrada fuerte del ${contraryText}`); }
+  else if (contraryEntryVisible) { points += 2; reasons.push(`entrada del ${contraryText} ayuda`); }
+  if (pullbackRatio >= 0.20) { points += 1; reasons.push("devuelve parte del avance"); }
+  if (!closeStillInDominantSide && contraryEntryVisible) { points += 1; reasons.push(`${contraryText} empieza a tomar control`); }
+
+  if (points < 12) return null;
+
+  const quality =
+    points * 14 +
+    Math.min(20, primaryRuns.length * 5) +
+    Math.min(18, breaksBetween * 6) +
+    (bigMediumSmall || clearGMP ? 18 : 0) +
+    (bigSmallBigSmall ? 18 : 0) +
+    (contraryStrong ? 16 : contraryEntryVisible ? 8 : 0) +
+    Math.min(12, labelInfo.ratio * 2) -
+    Math.max(0, Number(evalMs || 25000) - 20000) / 1800;
+
+  return {
+    side,
+    sideLabel,
+    signalDirection,
+    groupText,
+    contraryText,
+    quality,
+    points,
+    reasons,
+    evalMs,
+    alignedRange,
+    visibleImpulseMin,
+    visibleBreakMin,
+    primaryRuns: primaryRuns.slice(0, 6),
+    breakRuns: breakRuns.slice(0, 8),
+    runs: runs.slice(0, 12),
+    primaryMoves,
+    labels: labelInfo.labels,
+    pattern: labelInfo.pattern,
+    sizeRatio: labelInfo.ratio,
+    breaksBetween,
+    breaksBetweenDetails,
+    bigSmall,
+    bigMediumSmall,
+    clearGMP,
+    bigSmallBigSmall,
+    repeatedReductionPairs,
+    contraryEntryVisible,
+    contraryStrong,
+    contraryEntry,
+    pullbackRatio,
+    dominantAdvance,
+    alignedNet,
+  };
+}
+
+function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(10000, Math.min(25000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 10000 || evalMs > 25000) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.010, Math.abs(open) * 0.00000005, 1e-9);
+
+  const bullish = scoreVisualReduction25sSide(clean, 1, evalMs, tol, localRange);
+  const bearish = scoreVisualReduction25sSide(clean, -1, evalMs, tol, localRange);
+  const best = [bullish, bearish]
+    .filter(Boolean)
+    .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0))[0] || null;
+  if (!best) return null;
+
+  const signalIsPut = best.signalDirection === "PUT";
+  const level = signalIsPut ? high : low;
+  const zone = Math.max(tol * 4, localRange * 0.10);
+  const logicText = `Reducción visual 25s V106.8.1: ${best.reasons.join(", ")}. Motor independiente: solo acepta reducciones visuales tipo G-M-P / G-P / G-P-G-P hasta el segundo 25; la entrada del grupo contrario suma pero no es obligatoria.`;
+
+  return {
+    direction: best.signalDirection,
+    quality: best.quality,
+    points: best.points,
+    meta: {
+      level,
+      levelMode: "reduccion_visual_25s",
+      levelType: signalIsPut ? "buyer_exact_reduction_0_25" : "seller_exact_reduction_0_25",
+      direction: best.signalDirection,
+      tolerance: tol,
+      zone,
+      zoneLow: level - zone * 0.45,
+      zoneHigh: level + zone * 0.45,
+      points: best.points,
+      maxPoints: 24,
+      reasons: best.reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "10-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: 10,
+      motorIndependiente: true,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionSide: best.sideLabel,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionSymmetryPenalty: best.symmetryPenalty,
+      visualReductionSymmetryRecovered: best.symmetryRecovered,
+      visualReductionSymmetryInfo: best.symmetryInfo,
+      visualReductionSizeRatio: best.sizeRatio,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionBreaks: best.breaksBetween,
+      visualReductionBreakDetails: best.breaksBetweenDetails,
+      bigSmall: best.bigSmall,
+      bigMediumSmall: best.bigMediumSmall,
+      clearGMP: best.clearGMP,
+      bigSmallBigSmall: best.bigSmallBigSmall,
+      repeatedReductionPairs: best.repeatedReductionPairs,
+      contraryEntryVisible: best.contraryEntryVisible,
+      contraryStrong: best.contraryStrong,
+      contraryEntry: best.contraryEntry || null,
+      pullbackRatio: best.pullbackRatio,
+      dominantAdvance: best.dominantAdvance,
+      alignedNet: best.alignedNet,
+      movementFilter: "v106_7_reduccion_visual_25s_motor_aparte_gmp_gp_gpgp_bidireccional",
+      priority: best.bigMediumSmall || best.clearGMP || best.bigSmallBigSmall || best.contraryStrong ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_25s_independiente_v106_7",
+      logic: logicText,
+      status: `${signalIsPut ? "📈" : "📉"} Reducción visual 25s V106.8.1: ${best.groupText} reduce ${best.pattern || "visual"}${best.contraryEntryVisible ? ` + entra ${best.contraryText}` : ""}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}. Máximo ${Math.round(evalMs / 1000)}s.`,
+    },
+  };
+}
+
+
+// V106.9.4.14: GMP estricto 30s + bloqueo de G→M y simetría/fuerza.
+// Los micro retrocesos quedan como pausas internas, no como entrada real del grupo contrario.
+// Objetivo: leer los primeros 0-30s como lo ve el ojo en Deriv:
+// - grupo dominante con desplazamiento y movimientos dispares: G→P o G→M→P.
+// - el grupo contrario puede aumentar P→G / P→M→G / M→G, entrar grande aislado, o no aparecer.
+// - lo obligatorio es que el dominante sea claro, desplazado y disparejo.
+function classifyVisualReductionLabel(value, reference) {
+  const v = Math.abs(Number(value || 0));
+  const ref = Math.max(Math.abs(Number(reference || 0)), 1e-9);
+  const r = v / ref;
+  if (r >= 0.72) return "G";
+  // V106.9.4.4: G más exigente y M amplio. Si el segundo tramo es
+  // claramente menor al primero, visualmente ya no lo marcamos como G.
+  if (r >= 0.34) return "M";
+  return "P";
+}
+
+function summarizeVisualMoves(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (!arr.length) return { labels: [], pattern: "", max: 0, min: 0, ratio: 0 };
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  const labels = arr.map((v) => classifyVisualReductionLabel(v, max));
+  return { labels, pattern: labels.join("→"), max, min, ratio: max / Math.max(min, 1e-9) };
+}
+
+function analyzeDominantVisualSymmetry(moves, labels = []) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "")) : [];
+  if (arr.length < 2) {
+    return { penalty: 0, similarPairs: 0, heavySimilarPairs: 0, recovered: false, block: false, reason: "" };
+  }
+
+  let similarPairs = 0;
+  let heavySimilarPairs = 0;
+  let firstHeavyPairIndex = -1;
+  const max = Math.max(...arr, 1e-9);
+  const pairDetails = [];
+
+  for (let i = 0; i < arr.length - 1; i++) {
+    const a = arr[i];
+    const b = arr[i + 1];
+    const bigEnough = a >= max * 0.30 && b >= max * 0.30;
+    const ratio = Math.min(a, b) / Math.max(a, b, 1e-9);
+    const sameLabel = labs[i] && labs[i] === labs[i + 1];
+    const mediumOrBig = ["M", "G"].includes(labs[i]) && ["M", "G"].includes(labs[i + 1]);
+
+    // V106.9.4.11: dos movimientos medianos/grandes parecidos no son debilidad;
+    // son continuidad/fuerza. Ya no alcanza con restar poco: si no hay una reducción
+    // fuerte posterior, la señal se descarta.
+    const similar = bigEnough && (ratio >= 0.80 || sameLabel || (mediumOrBig && ratio >= 0.74));
+    if (similar) {
+      similarPairs += 1;
+      const heavy = (mediumOrBig && ratio >= 0.74) || sameLabel || ratio >= 0.88;
+      if (heavy) {
+        heavySimilarPairs += 1;
+        if (firstHeavyPairIndex < 0) firstHeavyPairIndex = i;
+      }
+      pairDetails.push({ index: i, ratio, heavy, a, b, la: labs[i], lb: labs[i + 1] });
+    }
+  }
+
+  let recovered = false;
+  let recoveredStrong = false;
+  for (const pair of pairDetails) {
+    const start = Number(pair.index || 0);
+    const base = Math.min(pair.a, pair.b);
+    for (let j = start + 2; j < arr.length; j++) {
+      const c = arr[j];
+      const lab = labs[j] || classifyVisualReductionLabel(c, max);
+      const reduceAfter = c <= base * 0.72;
+      const strongReduceAfter = (lab === "P" && c <= base * 0.68) || c <= base * 0.58;
+      if (reduceAfter) recovered = true;
+      if (strongReduceAfter) recoveredStrong = true;
+    }
+  }
+
+  // Si hay fuerza simétrica M→M / G→G / M≈G y no termina con una reducción real,
+  // se bloquea. Ejemplo del usuario: mediano-grande + mediano + mediano = fuerza compradora,
+  // no giro. Solo se permite si luego aparece una caída clara hacia P.
+  const block = heavySimilarPairs >= 1 && !recoveredStrong;
+
+  let penalty = heavySimilarPairs * 4 + Math.max(0, similarPairs - heavySimilarPairs) * 2;
+  if (recoveredStrong) penalty = Math.max(0, penalty - 4);
+  else if (recovered) penalty = Math.max(2, penalty - 1);
+  penalty = Math.min(8, penalty);
+
+  const reason = block
+    ? `bloqueo: simetría/fuerza dominante sin reducción fuerte posterior (${similarPairs} par/es similar/es)`
+    : (penalty > 0
+      ? (recoveredStrong
+        ? `castigo leve: simetría recuperada por reducción fuerte posterior (${similarPairs} par/es similar/es)`
+        : `castigo fuerte: simetría/fuerza en movimientos consecutivos (${similarPairs} par/es similar/es)`)
+      : "");
+
+  return { penalty, similarPairs, heavySimilarPairs, firstHeavyPairIndex, recovered, recoveredStrong, block, reason, pairDetails };
+}
+
+function makeVisualRunFromPoints(points, sign) {
+  const pts = (Array.isArray(points) ? points : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.y) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y));
+  if (pts.length < 2) return null;
+  const a = pts[0];
+  const b = pts[pts.length - 1];
+  const out = {
+    sign: Number(sign || 0),
+    startMs: a.ms,
+    endMs: b.ms,
+    startY: a.y,
+    endY: b.y,
+    startQuote: a.quote,
+    endQuote: b.quote,
+    points: pts,
+  };
+  out.durationMs = Math.max(0, out.endMs - out.startMs);
+  out.delta = out.endY - out.startY;
+  out.move = Math.abs(out.delta);
+  return out;
+}
+function expandDeceleratingVisualRun(run, localRange, tol) {
+  if (!run || !Number.isFinite(Number(run.sign)) || Number(run.sign) === 0) return [run].filter(Boolean);
+  const pts = Array.isArray(run.points) ? run.points : [];
+  if (pts.length < 5 || Number(run.durationMs || 0) < 6500) return [run];
+
+  const minStep = Math.max(Number(localRange || 0) * 0.018, Number(tol || 0) * 0.70, 1e-9);
+  const sign = Number(run.sign || 0);
+  const steps = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = Number(b.y) - Number(a.y);
+    const move = Math.abs(dy);
+    if (Math.sign(dy || 0) === sign && move >= minStep) {
+      steps.push({ from: i - 1, to: i, move });
+    }
+  }
+  if (steps.length < 4) return [run];
+
+  // V106.9.4.4: punto medio.
+  // No dividimos un movimiento continuo solo porque se curva o porque los pips se achican.
+  // Para partir un macro impulso tiene que existir un "descanso" visual: un paso muy chico
+  // entre dos avances visibles del mismo grupo. Si el paso chico está al final de una curva,
+  // no se toma como nuevo tramo.
+  const pauseIdxs = [];
+  for (let i = 1; i < steps.length - 1; i++) {
+    const prev = Number(steps[i - 1].move || 0);
+    const cur = Number(steps[i].move || 0);
+    const next = Number(steps[i + 1].move || 0);
+    const prevVisible = prev >= minStep * 2.25;
+    const nextVisible = next >= minStep * 2.25;
+    const isSmallRest = cur <= Math.max(minStep * 1.45, Math.min(prev, next) * 0.52);
+    if (prevVisible && nextVisible && isSmallRest) pauseIdxs.push(i);
+  }
+  if (!pauseIdxs.length) return [run];
+
+  const pieces = [];
+  let startStep = 0;
+  for (const pauseIdx of pauseIdxs.slice(0, 3)) {
+    const endStep = Math.max(startStep, pauseIdx - 1);
+    const piece = makeVisualRunFromPoints(pts.slice(steps[startStep].from, steps[endStep].to + 1), sign);
+    if (piece) pieces.push(piece);
+    startStep = Math.min(steps.length - 1, pauseIdx + 1);
+  }
+  if (startStep < steps.length) {
+    const piece = makeVisualRunFromPoints(pts.slice(steps[startStep].from, steps[steps.length - 1].to + 1), sign);
+    if (piece) pieces.push(piece);
+  }
+
+  const validPieces = pieces.filter((piece) => Number(piece.move || 0) >= Math.max(minStep * 1.8, Number(run.move || 0) * 0.12));
+  if (validPieces.length < 2) return [run];
+
+  const moves = validPieces.map((x) => Number(x.move || 0));
+  const total = Number(run.move || 0);
+  const firstIsRelevant = moves[0] >= Math.max(total * 0.22, minStep * 2.3);
+  const hasRealReduction = moves.some((v, i) => i > 0 && moves[i - 1] >= v * 1.08) || moves[moves.length - 1] <= moves[0] * 0.78;
+
+  // Si no hay reducción visual entre piezas, o el primer tramo no pesa, lo dejamos como un solo impulso.
+  if (!firstIsRelevant || !hasRealReduction) return [run];
+
+  return validPieces.map((piece) => ({ ...piece, internalSplit: true, parentStartMs: run.startMs, parentEndMs: run.endMs, splitReason: "visual_pause_required" }));
+}
+function getVisualRuns25s(clean, side, evalMs, tol, localRange) {
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 3) return [];
+
+  // Umbral visual más holgado que el motor viejo: el ojo separa tramos por forma,
+  // no por cada micro-tick. Pausas chicas también se conservan como cortes.
+  const visualStep = Math.max(Number(localRange || 0) * 0.020, Number(tol || 0) * 0.70, 1e-9);
+  const raw = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    cur.durationMs = Math.max(0, Number(cur.endMs || 0) - Number(cur.startMs || 0));
+    cur.delta = Number(cur.endY || 0) - Number(cur.startY || 0);
+    cur.move = Math.abs(cur.delta);
+    raw.push(cur);
+    cur = null;
+  };
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dy = b.y - a.y;
+    const ady = Math.abs(dy);
+    const sign = ady >= visualStep ? (dy > 0 ? 1 : -1) : 0;
+    if (!cur) {
+      cur = { sign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+      continue;
+    }
+    if (cur.sign === sign) {
+      cur.endMs = b.ms;
+      cur.endY = b.y;
+      cur.endQuote = b.quote;
+      cur.points.push(b);
+    } else {
+      flush();
+      cur = { sign, startMs: a.ms, endMs: b.ms, startY: a.y, endY: b.y, startQuote: a.quote, endQuote: b.quote, points: [a, b] };
+    }
+  }
+  flush();
+
+  // V106.9.4.4: ya no unimos automáticamente dos impulsos del mismo grupo
+  // separados por una pausa mínima. Esa pausa no cuenta como entrada contraria,
+  // pero sí sirve para partir el movimiento dominante en G/M/P cuando visualmente corresponde.
+  const expanded = [];
+  for (const r of raw) {
+    const parts = expandDeceleratingVisualRun(r, localRange, tol);
+    for (const p of parts) expanded.push({ ...p });
+  }
+
+  const out = [];
+  for (const r of expanded) {
+    const last = out[out.length - 1];
+    if (last && last.sign === r.sign && r.sign !== 0 && !last.internalSplit && !r.internalSplit) {
+      last.endMs = r.endMs;
+      last.endY = r.endY;
+      last.endQuote = r.endQuote;
+      last.delta = last.endY - last.startY;
+      last.move = Math.abs(last.delta);
+      last.durationMs = Math.max(0, last.endMs - last.startMs);
+      last.points = (last.points || []).concat((r.points || []).slice(1));
+    } else {
+      out.push({ ...r });
+    }
+  }
+  return out;
+}
+
+function hasVisualCutBetweenRuns(runs, aIdx, bIdx, cutMin) {
+  const between = (Array.isArray(runs) ? runs : []).filter((r, idx) => idx > aIdx && idx < bIdx);
+  return between.some((r) => {
+    const mv = Number(r.move || 0);
+    const dur = Number(r.durationMs || 0);
+    return r.sign < 0 ? mv >= cutMin : (r.sign === 0 && dur <= 3200);
+  });
+}
+
+
+// V106.9.4: Macro filtro visual con desplazamiento.
+// El ojo no interpreta cada rebote pequeño como entrada contraria. Si el movimiento dominante
+// baja/sube y aparece un rebote chico entre dos tramos del mismo lado, lo tratamos como pausa
+// interna. Solo marcamos grupo contrario cuando la respuesta tiene tamaño visual real o aparece
+// después de una reducción clara y luego aumenta.
+function isVisualReductionAlreadyFormed(primaryMoves) {
+  const arr = (Array.isArray(primaryMoves) ? primaryMoves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) return false;
+  if (arr[0] >= arr[1] * 1.16) return true;
+  if (arr.length >= 3 && arr[0] >= arr[1] * 1.04 && arr[1] >= arr[2] * 1.04) return true;
+  let reductions = 0;
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.10) reductions++;
+  }
+  return reductions >= 2;
+}
+
+function classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin) {
+  const all = Array.isArray(runs) ? runs : [];
+  const primaryRuns = [];
+  const contraryRaw = [];
+  const microInternalRuns = [];
+  const macroContraryMinBase = Math.max(Number(alignedRange || 0) * 0.105, Number(impulseMin || 0) * 1.55, Number(cutMin || 0) * 2.2, 1e-9);
+
+  all.forEach((r, idx) => {
+    const move = Number(r.move || 0);
+    if (r.sign > 0 && move >= Number(impulseMin || 0)) primaryRuns.push({ ...r, idx, move });
+    if (r.sign < 0 && move >= Number(cutMin || 0)) contraryRaw.push({ ...r, idx, move });
+  });
+
+  const primaryBefore = (idx) => primaryRuns.filter((p) => p.idx < idx);
+  const primaryAfter = (idx) => primaryRuns.filter((p) => p.idx > idx);
+  const contraryRuns = [];
+
+  contraryRaw.forEach((r, localIdx) => {
+    const before = primaryBefore(r.idx);
+    const after = primaryAfter(r.idx);
+    const prevP = before[before.length - 1] || null;
+    const nextP = after[0] || null;
+    const surroundingMax = Math.max(Number(prevP?.move || 0), Number(nextP?.move || 0), 1e-9);
+    const surroundedBySameSide = !!(prevP && nextP);
+    const smallInsideDominant = surroundedBySameSide && r.move < surroundingMax * 0.46 && r.move < macroContraryMinBase;
+    const formedReductionBefore = isVisualReductionAlreadyFormed(before.map((p) => Number(p.move || 0)));
+    const laterContrary = contraryRaw.slice(localIdx + 1).find((c) => Number(c.move || 0) >= Math.max(r.move * 1.28, macroContraryMinBase));
+    const isBigContrary = r.move >= macroContraryMinBase;
+    const isSmallThenBigContraryAfterReduction = formedReductionBefore && !!laterContrary && r.move >= Math.max(Number(cutMin || 0), Number(impulseMin || 0) * 0.42);
+
+    if (smallInsideDominant && !isSmallThenBigContraryAfterReduction) {
+      microInternalRuns.push({ ...r, macroRole: "internal_pause" });
+      return;
+    }
+
+    if (isBigContrary || isSmallThenBigContraryAfterReduction) {
+      contraryRuns.push({ ...r, macroRole: isBigContrary ? "real_contrary" : "small_then_big_contrary" });
+    } else {
+      microInternalRuns.push({ ...r, macroRole: "internal_pause" });
+    }
+  });
+
+  return { primaryRuns, contraryRuns, microInternalRuns, contraryRaw, macroContraryMin: macroContraryMinBase };
+}
+
+
+function getVisualReductionSimpleShape(moves) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) {
+    return {
+      hasReduction: false,
+      hasIncrease: false,
+      repeatedReduction: 0,
+      repeatedIncrease: 0,
+      ratio: 0,
+      lastVsFirst: 0,
+      summary: summarizeVisualMoves(arr),
+    };
+  }
+  let repeatedReduction = 0;
+  let repeatedIncrease = 0;
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.10) repeatedReduction++;
+    if (arr[i + 1] >= arr[i] * 1.10) repeatedIncrease++;
+  }
+  const first = arr[0];
+  const last = arr[arr.length - 1];
+  const max = Math.max(...arr);
+  const min = Math.min(...arr);
+  return {
+    hasReduction: repeatedReduction >= 1 || first >= last * 1.16,
+    hasIncrease: repeatedIncrease >= 1 || last >= first * 1.16,
+    repeatedReduction,
+    repeatedIncrease,
+    ratio: max / Math.max(min, 1e-9),
+    lastVsFirst: last / Math.max(first, 1e-9),
+    summary: summarizeVisualMoves(arr),
+  };
+}
+
+
+function findVisualReductionEnd(primaryMoves) {
+  const arr = (Array.isArray(primaryMoves) ? primaryMoves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  if (arr.length < 2) return { ok: false, endPos: -1, pattern: "", type: "" };
+  const m0 = arr[0], m1 = arr[1], m2 = arr[2] || 0, m3 = arr[3] || 0;
+  if (arr.length >= 3 && m0 >= m1 * 1.08 && m1 >= m2 * 1.06) return { ok: true, endPos: 2, pattern: "G→M→P", type: "GMP" };
+  if (arr.length >= 2 && m0 >= m1 * 1.18) return { ok: true, endPos: 1, pattern: m1 >= m0 * 0.42 ? "G→M" : "G→P", type: "GP" };
+  if (arr.length >= 4 && m0 >= m1 * 1.10 && m2 >= m1 * 0.84 && m2 <= m0 * 1.42 && m2 >= m3 * 1.10) {
+    return { ok: true, endPos: 3, pattern: "G→P→G→P", type: "GPGP" };
+  }
+  for (let i = 0; i < arr.length - 1; i++) {
+    if (arr[i] >= arr[i + 1] * 1.16) {
+      return { ok: true, endPos: i + 1, pattern: summarizeVisualMoves(arr.slice(0, i + 2)).pattern, type: "REDUCE" };
+    }
+  }
+  return { ok: false, endPos: -1, pattern: "", type: "" };
+}
+
+
+function detectTwoClearVisualReductions(primaryMoves, labels = []) {
+  const moves = (Array.isArray(primaryMoves) ? primaryMoves : [])
+    .map(Number)
+    .filter((v) => Number.isFinite(v) && v > 0);
+  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "").toUpperCase()) : summarizeVisualMoves(moves).labels;
+  const max = Math.max(...moves, 1e-9);
+  if (moves.length < 3) {
+    return {
+      ok: false,
+      pairCount: 0,
+      groupCount: 0,
+      pairs: [],
+      groups: [],
+      pattern: summarizeVisualMoves(moves).pattern,
+      reason: "menos de 3 impulsos dominantes; no hay dos reducciones",
+    };
+  }
+
+  const pairAllowed = (i) => {
+    const a = Number(moves[i] || 0);
+    const b = Number(moves[i + 1] || 0);
+    const la = labs[i] || classifyVisualReductionLabel(a, max);
+    const lb = labs[i + 1] || classifyVisualReductionLabel(b, max);
+    if (!(a > 0 && b > 0)) return null;
+
+    const ratio = a / Math.max(b, 1e-9);
+    const labelPattern = `${la}→${lb}`;
+    const isAllowedLabel = labelPattern === "G→M" || labelPattern === "G→P" || labelPattern === "M→P";
+
+    // Umbrales por lectura visual:
+    // G→M puede ser una reducción moderada, G→P debe ser fuerte y M→P debe terminar pequeño.
+    const numericOk =
+      (labelPattern === "G→M" && ratio >= 1.08) ||
+      (labelPattern === "G→P" && ratio >= 1.22 && b <= max * 0.48) ||
+      (labelPattern === "M→P" && ratio >= 1.08 && b <= max * 0.48) ||
+      // fallback: si el clasificador deja dos tramos como M/M pero numéricamente redujo claro.
+      (!isAllowedLabel && ratio >= 1.22 && b <= a * 0.82 && b <= max * 0.62);
+
+    if (!numericOk) return null;
+    return {
+      start: i,
+      end: i + 1,
+      pattern: isAllowedLabel ? labelPattern : `${la}→${lb}`,
+      a,
+      b,
+      ratio,
+      la,
+      lb,
+    };
+  };
+
+  const pairs = [];
+  for (let i = 0; i < moves.length - 1; i++) {
+    const p = pairAllowed(i);
+    if (p) pairs.push(p);
+  }
+
+  const groups = [];
+  for (let i = 0; i < moves.length - 2; i++) {
+    const p1 = pairAllowed(i);
+    const p2 = pairAllowed(i + 1);
+    if (p1 && p2) {
+      const pat = `${p1.la}→${p1.lb}→${p2.lb}`;
+      const isGmp = p1.la === "G" && p1.lb === "M" && p2.lb === "P";
+      groups.push({
+        start: i,
+        end: i + 2,
+        pattern: isGmp ? "G→M→P" : pat,
+        pairs: [p1, p2],
+        isGmp,
+      });
+    }
+  }
+
+  // Regla del usuario: antes de 30s deben existir dos reducciones claras.
+  // Pueden estar encadenadas (G→M→P) o repetidas separadas (G→M ... G→P / M→P, etc.).
+  const hasTwoPairs = pairs.length >= 2;
+  const hasGmpGroup = groups.some((g) => g.isGmp);
+  const first = pairs[0] || null;
+  const second = pairs.find((p) => first && p.start > first.start) || null;
+  const ok = hasTwoPairs || hasGmpGroup;
+
+  return {
+    ok,
+    pairCount: pairs.length,
+    groupCount: groups.length,
+    pairs,
+    groups,
+    firstPair: first,
+    secondPair: second,
+    firstPattern: first?.pattern || "",
+    secondPattern: second?.pattern || "",
+    pattern: summarizeVisualMoves(moves).pattern,
+    acceptedPattern: ok
+      ? (hasGmpGroup ? "G→M→P" : `${first?.pattern || "?"} + ${second?.pattern || "?"}`)
+      : "",
+    hasGmp: hasGmpGroup,
+    hasGM: pairs.some((p) => p.pattern === "G→M"),
+    hasGP: pairs.some((p) => p.pattern === "G→P"),
+    hasMP: pairs.some((p) => p.pattern === "M→P"),
+    reason: ok
+      ? `dos reducciones claras antes de 30s: ${hasGmpGroup ? "G→M→P" : `${first?.pattern || "?"} y ${second?.pattern || "?"}`}`
+      : `solo ${pairs.length} reducción clara; se requieren 2 antes de 30s`,
+  };
+}
+
+function findContraryIncreaseAfterReduction(contraryRuns, afterRunIdx, alignedRange, firstMove, tol = 0) {
+  const runs = (Array.isArray(contraryRuns) ? contraryRuns : [])
+    .filter((r) => r && Number(r.idx) > Number(afterRunIdx))
+    .sort((a, b) => Number(a.idx) - Number(b.idx));
+  const minUseful = Math.max(Number(alignedRange || 0) * 0.055, Number(tol || 0) * 1.15, 1e-9);
+  const usefulRuns = runs.filter((r) => Number(r.move || 0) >= minUseful);
+  const usefulMoves = usefulRuns.map((r) => Number(r.move || 0));
+  const strongSingleMin = Math.max(Number(alignedRange || 0) * 0.18, Number(firstMove || 0) * 0.36, Number(tol || 0) * 2.5, 1e-9);
+
+  if (usefulRuns.length >= 2) {
+    for (let i = 0; i < usefulRuns.length - 1; i++) {
+      const first = Number(usefulRuns[i].move || 0);
+      for (let j = i + 1; j < usefulRuns.length; j++) {
+        const later = Number(usefulRuns[j].move || 0);
+        if (later >= first * 1.16 || later >= Math.max(Number(alignedRange || 0) * 0.13, Number(firstMove || 0) * 0.28, first + minUseful * 0.45)) {
+          const seqRuns = usefulRuns.slice(i, j + 1);
+          const seqMoves = seqRuns.map((r) => Number(r.move || 0));
+          return {
+            ok: true,
+            strong: later >= strongSingleMin,
+            pattern: summarizeVisualMoves(seqMoves).pattern,
+            runs: seqRuns,
+            moves: seqMoves,
+            firstRun: usefulRuns[i],
+            lastRun: usefulRuns[j],
+            reason: "contrario aumenta después de la reducción",
+          };
+        }
+      }
+    }
+  }
+
+  const singleStrong = usefulRuns.find((r) => Number(r.move || 0) >= strongSingleMin);
+  if (singleStrong) {
+    return {
+      ok: true,
+      strong: true,
+      singleStrong: true,
+      pattern: summarizeVisualMoves([singleStrong.move]).pattern || "G",
+      runs: [singleStrong],
+      moves: [Number(singleStrong.move || 0)],
+      firstRun: singleStrong,
+      lastRun: singleStrong,
+      reason: "contrario entra grande después de la reducción",
+    };
+  }
+  return { ok: false, strong: false, pattern: usefulMoves.length ? summarizeVisualMoves(usefulMoves).pattern : "", runs: usefulRuns, moves: usefulMoves, reason: "" };
+}
+
+function findDominantWeakReturnAfterContrary(primaryRuns, afterRunIdx, firstMove) {
+  const runs = (Array.isArray(primaryRuns) ? primaryRuns : [])
+    .filter((r) => r && Number(r.idx) > Number(afterRunIdx))
+    .sort((a, b) => Number(a.idx) - Number(b.idx));
+  const moves = runs.map((r) => Number(r.move || 0)).filter((v) => Number.isFinite(v) && v > 0);
+  if (!moves.length) return { ok: false, pattern: "", runs: [], moves: [] };
+  const weakSingle = moves.length === 1 && moves[0] <= Number(firstMove || 0) * 0.66;
+  let reduces = false;
+  for (let i = 0; i < moves.length - 1; i++) {
+    if (moves[i] >= moves[i + 1] * 1.12) { reduces = true; break; }
+  }
+  const ok = weakSingle || reduces;
+  return { ok, weakSingle, reduces, pattern: summarizeVisualMoves(moves.slice(0, 3)).pattern, runs: runs.slice(0, 3), moves: moves.slice(0, 3) };
+}
+
+function getReduccionVisualQualityLabel(score) {
+  const p = Number(score?.points || 0);
+  const hasContraryPG = !!score?.contraryPG;
+  const hasContraryStrong = !!score?.contraryStrong;
+  const hasGmp = !!score?.gmp;
+  const hasGToP = !!score?.gToP;
+  const hasTwoClearReductions = !!score?.twoClearReductions;
+  const dominantDisparejo = !!score?.dominantDisparejo;
+  const hasContradiction = !!score?.contradictionStrong;
+  // V106.9.4.11: lo obligatorio es el dominante disparejo con desplazamiento.
+  // El contrario P→G suma para A; entrada grande aislada suma; sin contrario puede ser B si el dominante es muy claro.
+  if (p >= 20 && dominantDisparejo && hasTwoClearReductions && hasContraryPG && (hasGmp || hasGToP || hasTwoClearReductions) && !hasContradiction) return "A";
+  if (p >= 17 && dominantDisparejo && hasTwoClearReductions && (hasContraryPG || hasContraryStrong) && !hasContradiction) return "A";
+  if (p >= 14 && dominantDisparejo && hasTwoClearReductions && !hasContradiction) return "B";
+  return "C";
+}
+
+function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
+  const groupText = side > 0 ? "comprador" : "vendedor";
+  const contraryText = side > 0 ? "vendedor" : "comprador";
+  const signalDirection = side > 0 ? "PUT" : "CALL";
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || 25000))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 5) return null;
+
+  const y0 = Number(pts[0].y);
+  const yEnd = Number(pts[pts.length - 1].y);
+  const yMax = Math.max(...pts.map((p) => p.y));
+  const yMin = Math.min(...pts.map((p) => p.y));
+  const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
+  const impulseMin = Math.max(alignedRange * 0.055, Number(tol || 0) * 1.35, 1e-9);
+  const firstBigMin = Math.max(alignedRange * 0.115, Number(tol || 0) * 2.2, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.030, Number(tol || 0) * 0.95, 1e-9);
+
+  // V106.9.4: desplazamiento visual obligatorio.
+  // La formación buscada no debe ser zigzag estacionado: el grupo que reduce tiene que
+  // desplazar la línea hacia su lado durante 0-30s, aunque internamente haga pausas/quiebres.
+  const totalPath = pts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(pts[i].y)), 0);
+  const alignedNet25 = yEnd - y0;
+  const dominantAdvance25 = yMax - y0;
+  const oppositeDip25 = Math.max(0, y0 - yMin);
+  const netDisplacementRatio = alignedNet25 / Math.max(alignedRange, 1e-9);
+  const dominantDisplacementRatio = dominantAdvance25 / Math.max(alignedRange, 1e-9);
+  const oppositeDipRatio = oppositeDip25 / Math.max(alignedRange, 1e-9);
+  const closePosition01 = (yEnd - yMin) / Math.max(alignedRange, 1e-9);
+  const directionalEfficiency = alignedNet25 / Math.max(totalPath, 1e-9);
+  const absoluteNet25 = Math.abs(alignedNet25);
+  const pathToNetRatio = totalPath / Math.max(absoluteNet25, 1e-9);
+
+  // V106.9.4.9: anti-zigzag estacionado estricto.
+  // Buscamos un desplazamiento limpio con reducción/irregularidad, no una vela que va y viene
+  // completa dentro del mismo rango. Si la eficiencia direccional es baja, el ojo la ve trabada.
+  const zigzagEstancado = (
+    directionalEfficiency < 0.34 ||
+    pathToNetRatio > 3.25 ||
+    oppositeDipRatio >= 0.30 ||
+    (dominantDisplacementRatio < 0.72 && directionalEfficiency < 0.42) ||
+    (closePosition01 < 0.54 && directionalEfficiency < 0.44)
+  );
+  if (zigzagEstancado) return null;
+
+  // V106.9.4.9: el grupo dominante tiene que ser realmente el que más desplazó.
+  // No alcanza con una secuencia de tamaños; tiene que mantener dirección/color y avance limpio.
+  const displacementOk = (
+    dominantAdvance25 >= Math.max(alignedRange * 0.58, Number(tol || 0) * 4.2) &&
+    dominantAdvance25 >= oppositeDip25 * 1.55 &&
+    alignedNet25 >= Math.max(alignedRange * 0.20, Number(tol || 0) * 1.7) &&
+    closePosition01 >= 0.55 &&
+    directionalEfficiency >= 0.38
+  );
+  if (!displacementOk) return null;
+
+  const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
+  if (runs.length < 3) return null;
+
+  const macroRuns = classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin);
+  const primaryRuns = macroRuns.primaryRuns;
+  const contraryRuns = macroRuns.contraryRuns;
+  const microInternalRuns = macroRuns.microInternalRuns;
+  const macroContraryMin = macroRuns.macroContraryMin;
+
+  // V106.9.4.9: si ambos grupos aparecen demasiadas veces dentro de 0-30s y la vela
+  // no avanza con eficiencia, es zigzag completo/trabado aunque alguna secuencia parezca G/M/P.
+  const tooManyAlternations = (primaryRuns.length + contraryRuns.length) >= 6 && contraryRuns.length >= 2;
+  if (tooManyAlternations && directionalEfficiency < 0.48) return null;
+
+  if (primaryRuns.length < 2) return null;
+  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
+  const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
+  const firstMove = primaryMoves[0];
+  if (!Number.isFinite(firstMove) || firstMove < firstBigMin) return null;
+
+  let cutsBetween = 0;
+  for (let i = 0; i < primaryRuns.length - 1; i++) {
+    if (hasVisualCutBetweenRuns(runs, primaryRuns[i].idx, primaryRuns[i + 1].idx, cutMin)) cutsBetween++;
+  }
+
+  const summary = summarizeVisualMoves(primaryMoves);
+  const labels = summary.labels;
+  const symmetryInfo = analyzeDominantVisualSymmetry(primaryMoves, labels);
+  if (symmetryInfo.block) return null;
+  const primaryShape = getVisualReductionSimpleShape(primaryMoves);
+  const contraryShape = getVisualReductionSimpleShape(contraryMoves);
+  const m0 = primaryMoves[0] || 0;
+  const m1 = primaryMoves[1] || 0;
+  const m2 = primaryMoves[2] || 0;
+  const m3 = primaryMoves[3] || 0;
+
+  // V107.1: regla central nueva del usuario.
+  // El motor puede mirar hasta el segundo 30 y recién ahí decidir, pero NO alcanza
+  // una reducción aislada. Antes de 30s deben verse DOS reducciones claras del dominante.
+  // Cada reducción válida puede ser G→M, G→P o M→P; G→M→P cuenta porque contiene
+  // dos reducciones encadenadas. También acepta repeticiones separadas como G→M ... G→P.
+  const twoReductionInfo = detectTwoClearVisualReductions(primaryMoves, labels);
+  const gmp = !!twoReductionInfo.hasGmp;
+  const gToP = !!twoReductionInfo.hasGP;
+  const reduceIncreaseReduce = false;
+  const repeatedReduction = Number(twoReductionInfo.pairCount || primaryShape.repeatedReduction || 0);
+  const lateReduceAgain = repeatedReduction >= 2;
+  const templateOk = !!twoReductionInfo.ok;
+  if (!templateOk) return null;
+
+  const reductionInfo = {
+    ok: true,
+    endPos: Number(twoReductionInfo.secondPair?.end ?? twoReductionInfo.groups?.[0]?.end ?? Math.min(primaryMoves.length - 1, 2)),
+    pattern: twoReductionInfo.acceptedPattern || twoReductionInfo.pattern || "2 reducciones",
+    type: "TWO_CLEAR_REDUCTIONS",
+    detail: twoReductionInfo,
+  };
+  const dominantDisparejo = true;
+  if (!dominantDisparejo) return null;
+  const reductionEndRunIdx = Number(primaryRuns[reductionInfo.endPos]?.idx ?? primaryRuns[Math.min(primaryRuns.length - 1, 1)]?.idx ?? -1);
+  const takeover = findContraryIncreaseAfterReduction(contraryRuns, reductionEndRunIdx, alignedRange, firstMove, tol);
+  const hasContraryTakeover = !!(takeover && takeover.ok && !takeover.singleStrong);
+  const hasContrarySingleStrong = !!(takeover && takeover.ok && takeover.singleStrong);
+  const weakReturn = hasContraryTakeover || hasContrarySingleStrong
+    ? findDominantWeakReturnAfterContrary(primaryRuns, Number(takeover.lastRun?.idx ?? reductionEndRunIdx), firstMove)
+    : { ok: false, pattern: "", runs: [], moves: [] };
+
+  let contraryPG = hasContraryTakeover;
+  let contraryStrong = hasContrarySingleStrong || !!(hasContraryTakeover && takeover.strong);
+  let contraryPattern = hasContraryTakeover || hasContrarySingleStrong ? (takeover.pattern || "") : "";
+
+  // Bloqueos para no volver a caer en continuidad/simetría.
+  const cleanMomentum = primaryMoves.length >= 3 && m1 >= m0 * 0.92 && m2 >= m1 * 0.92 && !lateReduceAgain;
+  const lastDominatesTooMuch = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] > m0 * 1.18;
+  const tooSymmetric = primaryMoves.length >= 3 && summary.ratio <= 1.28 && !contraryPG && !symmetryInfo.recovered;
+  if (cleanMomentum || lastDominatesTooMuch || tooSymmetric) return null;
+
+  // Contradicciones dentro de 0-30s: si el mismo grupo que supuestamente reduce vuelve a tomar fuerza,
+  // o si el lado contrario también queda reduciendo sin P→G, baja la calidad o se descarta.
+  const primaryRecoversLate = primaryMoves.length >= 3 && primaryMoves[primaryMoves.length - 1] >= firstMove * 0.92 && !lateReduceAgain;
+  const bothSidesReduceNoTakeover = contraryRuns.length >= 2 && contraryShape.hasReduction && !contraryPG && !contraryStrong;
+  const contraryDominatesAgainstReading = contraryRuns.length >= 2 && contraryShape.hasReduction && contraryShape.ratio >= primaryShape.ratio * 0.92 && !contraryPG;
+  const contradictionStrong = primaryRecoversLate || contraryDominatesAgainstReading;
+  const contradictionSoft = bothSidesReduceNoTakeover;
+  if (contradictionStrong) return null;
+
+  let points = 0;
+  const reasons = [];
+  const rejectHints = [];
+  reasons.push(twoReductionInfo.reason || "dos reducciones claras antes de 30s");
+  if (gmp) reasons.push("patrón fuerte: G→M→P");
+  if (gToP && !gmp) reasons.push("incluye reducción G→P");
+  points += 4; reasons.push(`${groupText} entra grande`);
+  points += 3; reasons.push("desplazamiento visual 0-30s");
+  if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
+  if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
+  if (gmp) { points += 7; reasons.push(`${groupText} reduce G→M→P`); }
+  else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
+  else { points += 6; reasons.push(`${groupText} hace 2 reducciones: ${twoReductionInfo.acceptedPattern || reductionInfo.pattern}`); }
+  if (repeatedReduction >= 2) { points += 3; reasons.push("reducción repetida obligatoria"); }
+  if (contraryPG) { points += 7; reasons.push(`${contraryText} aumenta ${contraryPattern || "P→G"}`); }
+  else if (contraryStrong) { points += 4; reasons.push(`${contraryText} entra grande después de la reducción`); }
+  else { reasons.push("sin entrada contraria clara; manda el dominante disparejo"); }
+  if (weakReturn.ok) { points += 3; reasons.push(`${groupText} vuelve débil ${weakReturn.pattern || "reducido"}`); }
+  if (labels.includes("P")) { points += 1; reasons.push("movimiento pequeño visible"); }
+  if (cutsBetween >= 2) { points += 1; reasons.push("varios cortes visuales"); }
+  if (contradictionSoft) { points -= 3; rejectHints.push("ambos lados reducen sin toma de control clara"); }
+  if (symmetryInfo.penalty > 0) {
+    points -= symmetryInfo.penalty;
+    rejectHints.push(symmetryInfo.reason || "simetría/fuerza en dominante");
+  }
+
+  if (points < 16) return null;
+
+  const quality =
+    points * 12 +
+    (gmp ? 22 : 0) +
+    (gToP ? 16 : 0) +
+    (contraryPG ? 36 : 0) +
+    (!contraryPG && contraryStrong ? 18 : 0) +
+    (dominantDisparejo ? 12 : 0) +
+    (twoReductionInfo.ok ? 18 : 0) +
+    (weakReturn.ok ? 10 : 0) +
+    Math.min(10, cutsBetween * 4) -
+    (contradictionSoft ? 22 : 0) -
+    (Number(symmetryInfo.penalty || 0) * 18) -
+    Math.max(0, Number(evalMs || 30000) - 30000) / 1300;
+
+  const tmp = {
+    points,
+    gmp,
+    gToP,
+    dominantDisparejo,
+    twoClearReductions: twoReductionInfo.ok,
+    repeatedReduction,
+    contraryPG,
+    contraryStrong,
+    contradictionStrong,
+    symmetryPenalty: symmetryInfo.penalty,
+  };
+  const qualityLabel = getReduccionVisualQualityLabel(tmp);
+  if (qualityLabel === "C") return null;
+
+  return {
+    side,
+    signalDirection,
+    groupText,
+    contraryText,
+    points,
+    quality,
+    qualityLabel,
+    reasons,
+    rejectHints,
+    evalMs,
+    alignedRange,
+    impulseMin,
+    firstBigMin,
+    cutMin,
+    runs: runs.slice(0, 14),
+    primaryRuns: primaryRuns.slice(0, 8),
+    contraryRuns: contraryRuns.slice(0, 8),
+    microInternalRuns: microInternalRuns.slice(0, 10),
+    macroContraryMin,
+    primaryMoves,
+    contraryMoves,
+    labels,
+    pattern: summary.pattern,
+    sizeRatio: summary.ratio,
+    symmetryInfo,
+    symmetryPenalty: symmetryInfo.penalty,
+    symmetryRecovered: symmetryInfo.recovered,
+    primaryShape,
+    contraryShape,
+    cutsBetween,
+    gToP,
+    gmp,
+    reduceIncreaseReduce,
+    repeatedReduction,
+    twoClearReductions: twoReductionInfo.ok,
+    twoClearReductionInfo: twoReductionInfo,
+    dominantDisparejo,
+    contraryPG,
+    contraryStrong,
+    contraryPattern,
+    transferReductionInfo: reductionInfo,
+    transferContraryTakeover: takeover,
+    transferWeakReturn: weakReturn,
+    cleanMomentum,
+    lastDominatesTooMuch,
+    tooSymmetric,
+    primaryRecoversLate,
+    bothSidesReduceNoTakeover,
+    contraryDominatesAgainstReading,
+    contradictionStrong,
+    contradictionSoft,
+    alignedNet: yEnd - y0,
+    dominantAdvance: yMax - y0,
+    visualDisplacementOk: displacementOk,
+    visualDisplacementNetRatio: netDisplacementRatio,
+    visualDisplacementDominantRatio: dominantDisplacementRatio,
+    visualDisplacementOppositeDipRatio: oppositeDipRatio,
+    visualDisplacementClosePosition: closePosition01,
+    visualDisplacementEfficiency: directionalEfficiency,
+    visualDisplacementTotalPath: totalPath,
+    visualDisplacementPathToNetRatio: pathToNetRatio,
+    zigzagEstancadoBlocked: zigzagEstancado,
+    tooManyAlternationsBlocked: tooManyAlternations,
+  };
+}
+
+function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 5) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  // V107.1: puede decidir antes de 30s si ya aparecen dos reducciones claras.
+  // Nunca usa datos posteriores a 30s: la última foto válida es 0-30s.
+  const evalMs = Math.max(12000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 12000 || evalMs > 30000) return null;
+  if (lastMs < evalMs - 700 && !opts?.forceFullWindow30s) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 5) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.010, Math.abs(open) * 0.00000005, 1e-9);
+
+  const buyerWeak = scoreReduccionVisual25sSide(clean, 1, evalMs, tol, localRange);
+  const sellerWeak = scoreReduccionVisual25sSide(clean, -1, evalMs, tol, localRange);
+  const ordered = [buyerWeak, sellerWeak]
+    .filter(Boolean)
+    .sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0));
+  const best = ordered[0] || null;
+  const second = ordered[1] || null;
+  if (!best) return null;
+
+  // V106.8.2: si comprador y vendedor dan lecturas demasiado cercanas, la vela queda ambigua.
+  // Esto evita señales contradictorias cuando a los 30s ambos lados muestran reducción.
+  const qualityGap = second ? Number(best.quality || 0) - Number(second.quality || 0) : Infinity;
+  const relativeGap = second ? qualityGap / Math.max(Number(best.quality || 0), 1e-9) : 1;
+  const sameQualityAmbiguous = second && qualityGap < 18 && relativeGap < 0.16 && !best.contraryPG;
+  if (sameQualityAmbiguous) return null;
+
+  // V107.1: R_75 sigue con cuidado, pero ya no bloquea G→M si aparece la segunda reducción.
+  // La regla base para todos los pares es la misma: dos reducciones claras antes de 30s.
+  const symbolStrict = String(candidate?.symbol || candidate?.underlying || "").trim().toUpperCase();
+  if (symbolStrict === "R_75") {
+    const r75Ok = !!best.twoClearReductions && Number(best.visualDisplacementEfficiency || 0) >= 0.55;
+    if (!r75Ok) return null;
+  }
+
+  const signalIsPut = best.signalDirection === "PUT";
+  const level = signalIsPut ? high : low;
+  const zone = Math.max(tol * 4, localRange * 0.10);
+  const subtype = "2 reducciones claras 30s";
+  const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
+  const contraryTxt = best.contraryPG
+    ? ` + contrario ${best.contraryText} aumenta ${best.contraryPattern || "P→G"}`
+    : (best.contraryStrong ? ` + contrario ${best.contraryText} entra grande` : " + sin contrario claro");
+  const mainPatternText = best.twoClearReductionInfo?.acceptedPattern || (best.gmp ? "G→M→P" : (best.gToP ? "G→P repetido" : (best.transferReductionInfo?.pattern || best.pattern || "2 reducciones")));
+  const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: dominante ${best.groupText} ${mainPatternText}${contraryTxt}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `2 reducciones claras 30s V107.1: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag: no acepta estancado/lateral. Regla nueva: antes del segundo 30 deben existir DOS reducciones claras del dominante; cada una puede ser G→M, G→P o M→P. G→M ya no queda bloqueado si luego aparece otra reducción clara. El contrario puede sumar, pero no reemplaza la obligación de las dos reducciones. Bloquea simetría/fuerza si el dominante vuelve a tomar fuerza sin reducir.`;
+
+  return {
+    direction: best.signalDirection,
+    quality: best.quality,
+    points: best.points,
+    meta: {
+      level,
+      levelMode: "reduccion_visual_25s",
+      levelType: signalIsPut ? "buyer_visual_transfer_0_30" : "seller_visual_transfer_0_30",
+      direction: best.signalDirection,
+      tolerance: tol,
+      zone,
+      zoneLow: level - zone * 0.45,
+      zoneHigh: level + zone * 0.45,
+      points: best.points,
+      maxPoints: 28,
+      reasons: best.reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: Math.round(evalMs / 1000),
+      motorIndependiente: true,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionQuality: best.qualityLabel,
+      visualReductionSubtype: subtype,
+      visualReductionQualityGap: Number.isFinite(qualityGap) ? qualityGap : null,
+      visualReductionRelativeGap: Number.isFinite(relativeGap) ? relativeGap : null,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionSymmetryPenalty: best.symmetryPenalty,
+      visualReductionSymmetryRecovered: best.symmetryRecovered,
+      visualReductionSymmetryInfo: best.symmetryInfo,
+      visualReductionContraryMoves: best.contraryMoves,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionContraryRuns: best.contraryRuns,
+      visualReductionMicroInternalRuns: best.microInternalRuns,
+      visualReductionMacroContraryMin: best.macroContraryMin,
+      visualReductionContraryPattern: best.contraryPattern,
+      visualReductionTransferRequired: true,
+      visualReductionTwoClearRequired: true,
+      visualReductionTwoClearInfo: best.twoClearReductionInfo || null,
+      visualReductionTwoClearPairs: best.twoClearReductionInfo?.pairs || [],
+      visualReductionTwoClearGroups: best.twoClearReductionInfo?.groups || [],
+      visualReductionTransferReductionInfo: best.transferReductionInfo || null,
+      visualReductionTransferContraryTakeover: best.transferContraryTakeover || null,
+      visualReductionTransferWeakReturn: best.transferWeakReturn || null,
+      visualDisplacementOk: best.visualDisplacementOk,
+      visualDisplacementNetRatio: best.visualDisplacementNetRatio,
+      visualDisplacementDominantRatio: best.visualDisplacementDominantRatio,
+      visualDisplacementOppositeDipRatio: best.visualDisplacementOppositeDipRatio,
+      visualDisplacementClosePosition: best.visualDisplacementClosePosition,
+      visualDisplacementEfficiency: best.visualDisplacementEfficiency,
+      cutsBetween: best.cutsBetween,
+      gToP: best.gToP,
+      gmp: best.gmp,
+      reduceIncreaseReduce: best.reduceIncreaseReduce,
+      repeatedReduction: best.repeatedReduction,
+      primaryShape: best.primaryShape,
+      contraryShape: best.contraryShape,
+      contradictionStrong: best.contradictionStrong,
+      contradictionSoft: best.contradictionSoft,
+      rejectHints: best.rejectHints,
+      contraryPG: best.contraryPG,
+      contraryStrong: best.contraryStrong,
+      cleanMomentumBlocked: best.cleanMomentum,
+      lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
+      tooSymmetricBlocked: best.tooSymmetric,
+      movementFilter: "v107_1_dos_reducciones_claras_30s",
+      priority: best.contraryPG || best.gmp || best.twoClearReductions ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_30s_dos_reducciones_claras_v107_1",
+      logic: logicText,
+      status,
+    },
+  };
+}
+
+
+/* =========================
+   V108 — Reducción Constructiva continua
+   - No está atada al minuto Deriv.
+   - Escanea una ventana flotante: el "minuto" de estudio empieza donde arranca
+     el primer movimiento de la primera reducción.
+   - Señal cuando hay 2 reducciones claras/consecutivas antes de 30s.
+========================= */
+function rememberConstructiveRollingTick(symbol, epochMs, quote) {
+  try {
+    const sym = String(symbol || "");
+    const ep = Number(epochMs);
+    const q = Number(quote);
+    if (!sym || !Number.isFinite(ep) || !Number.isFinite(q)) return;
+    constructiveRollingTicksBySymbol[sym] ||= [];
+    const arr = constructiveRollingTicksBySymbol[sym];
+    const last = arr[arr.length - 1];
+    if (last && Math.round(Number(last.epochMs)) === Math.round(ep)) {
+      last.quote = q;
+    } else {
+      arr.push({ epochMs: ep, quote: q });
+    }
+    const minEpoch = ep - CONSTRUCTIVE_ROLLING_KEEP_MS;
+    while (arr.length && Number(arr[0].epochMs) < minEpoch) arr.shift();
+  } catch {}
+}
+function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
+  try {
+    const sym = String(symbol || "");
+    const ep = Number(epochMs);
+    const q = Number(quote);
+    if (!sym || !Number.isFinite(ep) || !Number.isFinite(q) || !Array.isArray(history)) return;
+    let changed = false;
+    for (const it of history.slice(-40)) {
+      if (!it || !it.signalFloatingWindow || String(it.symbol || "") !== sym) continue;
+      if (it.trade?.badge) continue;
+      const anchor = Number(it.signalAnchorEpochMs || 0);
+      if (!Number.isFinite(anchor) || anchor <= 0) continue;
+      const ms = ep - anchor;
+      if (ms < -250 || ms > 61000) continue;
+      it.ticks ||= [];
+      if (ms >= 0 && ms <= 60000) {
+        const last = it.ticks[it.ticks.length - 1];
+        const point = { ms: Math.max(0, Math.min(60000, ms)), quote: q };
+        if (last && Math.round(Number(last.ms)) === Math.round(point.ms)) it.ticks[it.ticks.length - 1] = point;
+        else it.ticks.push(point);
+        changed = true;
+      }
+      if (ms >= 60000 && !it.minuteComplete) {
+        it.minuteComplete = true;
+        const first = Number(it.ticks?.[0]?.quote);
+        const lastQ = Number((it.ticks || []).slice(-1)[0]?.quote);
+        const out = compareConsecutiveCloses(first, lastQ);
+        if (out) it.nextOutcome = out;
+        changed = true;
+        updateRowNextArrow(it);
+        updateRowChartBtn(it);
+      }
+      if (modalCurrentItem && modalCurrentItem.id === it.id) {
+        modalCurrentItem.ticks = Array.isArray(it.ticks) ? it.ticks.slice() : [];
+        requestModalDraw(false);
+      }
+    }
+    if (changed) saveHistory(history);
+  } catch {}
+}
+function getConstructiveLabelRank(label) {
+  const l = String(label || "").toUpperCase();
+  if (l === "G") return 3;
+  if (l === "M") return 2;
+  if (l === "P") return 1;
+  return 0;
+}
+function buildConstructiveReductionPairs(moves, labels) {
+  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "").toUpperCase()) : [];
+  const pairs = [];
+  for (let i = 0; i < arr.length - 1; i++) {
+    const a = arr[i];
+    const b = arr[i + 1];
+    const la = labs[i] || classifyVisualReductionLabel(a, Math.max(...arr));
+    const lb = labs[i + 1] || classifyVisualReductionLabel(b, Math.max(...arr));
+    const rankDrop = getConstructiveLabelRank(la) > getConstructiveLabelRank(lb);
+    const ratio = a / Math.max(b, 1e-9);
+    const minRatio = la === "G" && lb === "P" ? 1.34 : la === "M" && lb === "P" ? 1.15 : 1.08;
+    const validLabel = (la === "G" && (lb === "M" || lb === "P")) || (la === "M" && lb === "P");
+    if (validLabel && rankDrop && ratio >= minRatio) {
+      pairs.push({ index: i, from: la, to: lb, a, b, ratio, pattern: `${la}→${lb}` });
+    }
+  }
+  return pairs;
+}
+function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, localRange) {
+  const groupText = side > 0 ? "comprador" : "vendedor";
+  const contraryText = side > 0 ? "vendedor" : "comprador";
+  const signalDirection = side > 0 ? "PUT" : "CALL";
+  const pts = (Array.isArray(clean) ? clean : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || CONSTRUCTIVE_FLOATING_WINDOW_MS))
+    .sort((a, b) => a.ms - b.ms);
+  if (pts.length < 6) return null;
+
+  const y0 = Number(pts[0].y);
+  const yEnd = Number(pts[pts.length - 1].y);
+  const yMax = Math.max(...pts.map((p) => p.y));
+  const yMin = Math.min(...pts.map((p) => p.y));
+  const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
+  const impulseMin = Math.max(alignedRange * 0.045, Number(tol || 0) * 1.05, 1e-9);
+  const firstBigMin = Math.max(alignedRange * 0.090, Number(tol || 0) * 1.8, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.024, Number(tol || 0) * 0.75, 1e-9);
+
+  const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
+  if (runs.length < 4) return null;
+  const macroRuns = classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin);
+  const primaryRuns = macroRuns.primaryRuns || [];
+  const contraryRuns = macroRuns.contraryRuns || [];
+  if (primaryRuns.length < 3) return null;
+
+  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
+  const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
+  const firstMove = primaryMoves[0];
+  if (!Number.isFinite(firstMove) || firstMove < firstBigMin) return null;
+
+  let cutsBetween = 0;
+  for (let i = 0; i < primaryRuns.length - 1; i++) {
+    if (hasVisualCutBetweenRuns(runs, primaryRuns[i].idx, primaryRuns[i + 1].idx, cutMin)) cutsBetween++;
+  }
+  if (cutsBetween < 2) return null;
+
+  const summary = summarizeVisualMoves(primaryMoves);
+  const labels = summary.labels;
+  const reductionPairs = buildConstructiveReductionPairs(primaryMoves, labels);
+  const consecutivePair = reductionPairs.some((p, i) => reductionPairs[i + 1] && Number(reductionPairs[i + 1].index) === Number(p.index) + 1);
+  if (reductionPairs.length < 2) return null;
+
+  // Dos reducciones constructivas: idealmente encadenadas (G→M→P). Si no son encadenadas,
+  // igual se aceptan cuando se repite otra reducción clara dentro de la misma ventana flotante.
+  const twoReductionsOk = consecutivePair || reductionPairs.length >= 2;
+  if (!twoReductionsOk) return null;
+
+  const symmetryInfo = analyzeDominantVisualSymmetry(primaryMoves, labels);
+  if (symmetryInfo.block && !consecutivePair) return null;
+
+  const net = yEnd - y0;
+  const dominantAdvance = yMax - y0;
+  const oppositeDip = Math.max(0, y0 - yMin);
+  const totalPath = pts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(pts[i].y)), 0);
+  const efficiency = Math.abs(net) / Math.max(totalPath, 1e-9);
+
+  // No queremos una lectura totalmente lateral: debe haber intención inicial del grupo que reduce,
+  // pero no exigimos que cierre pegado al extremo porque los ejemplos pueden terminar en transferencia.
+  if (dominantAdvance < Math.max(alignedRange * 0.32, Number(tol || 0) * 2.4)) return null;
+  if (oppositeDip > dominantAdvance * 0.95 && !consecutivePair) return null;
+
+  const firstReduction = reductionPairs[0];
+  const secondReduction = reductionPairs[1];
+  const anchorOffsetMs = Math.max(0, Number(primaryRuns[0]?.startMs || 0));
+  const formedAtMs = Math.max(Number(primaryRuns[Math.min(primaryRuns.length - 1, secondReduction.index + 1)]?.endMs || evalMs), Number(primaryRuns[0]?.endMs || 0));
+  if (formedAtMs > CONSTRUCTIVE_FLOATING_WINDOW_MS) return null;
+
+  const contraryAfterSecond = contraryRuns.filter((r) => Number(r.idx) > Number(primaryRuns[Math.min(primaryRuns.length - 1, secondReduction.index + 1)]?.idx || 0));
+  const contraryStrong = contraryAfterSecond.some((r) => Number(r.move || 0) >= Math.max(alignedRange * 0.12, firstMove * 0.28, Number(tol || 0) * 2.0));
+
+  let points = 0;
+  const reasons = [];
+  points += 5; reasons.push(`${groupText} inicia movimiento claro`);
+  points += 7; reasons.push(`2 reducciones constructivas: ${reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ")}`);
+  if (consecutivePair) { points += 4; reasons.push("reducciones consecutivas encadenadas"); }
+  else { points += 2; reasons.push("segunda reducción repetida en la misma formación"); }
+  if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales entre reducciones"); }
+  if (contraryStrong) { points += 3; reasons.push(`${contraryText} aparece después de la reducción`); }
+  if (labels.includes("P")) { points += 1; reasons.push("aparece tramo pequeño visible"); }
+  if (efficiency < 0.16 && !contraryStrong) points -= 2;
+  if (symmetryInfo.penalty > 0) points -= Math.min(4, symmetryInfo.penalty);
+  if (points < 13) return null;
+
+  const quality = points * 12 + (consecutivePair ? 28 : 14) + Math.min(18, cutsBetween * 5) + (contraryStrong ? 20 : 0) - Math.max(0, formedAtMs - 24000) / 900;
+  const subtype = consecutivePair ? "2 reducciones encadenadas" : "2 reducciones repetidas";
+
+  return {
+    side,
+    signalDirection,
+    groupText,
+    contraryText,
+    points,
+    quality,
+    qualityLabel: quality >= 250 ? "A" : quality >= 185 ? "B" : "C",
+    reasons,
+    evalMs,
+    formedAtMs,
+    anchorOffsetMs,
+    alignedRange,
+    runs: runs.slice(0, 16),
+    primaryRuns: primaryRuns.slice(0, 10),
+    contraryRuns: contraryRuns.slice(0, 10),
+    primaryMoves,
+    contraryMoves,
+    labels,
+    pattern: labels.join("→"),
+    reductionPairs,
+    consecutivePair,
+    cutsBetween,
+    contraryStrong,
+    symmetryInfo,
+    visualDisplacementEfficiency: efficiency,
+    dominantAdvance,
+    oppositeDip,
+    subtype,
+  };
+}
+function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const evalMs = Math.min(CONSTRUCTIVE_FLOATING_WINDOW_MS, Math.max(CONSTRUCTIVE_SCAN_MIN_WINDOW_MS, Number(opts?.evalMs || lastMs || 0)));
+  if (lastMs < CONSTRUCTIVE_SCAN_MIN_WINDOW_MS) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.009, Math.abs(open) * 0.00000005, 1e-9);
+
+  const buyer = scoreConstructiveReductionContinuousSide(clean, 1, evalMs, tol, localRange);
+  const seller = scoreConstructiveReductionContinuousSide(clean, -1, evalMs, tol, localRange);
+  const ordered = [buyer, seller].filter(Boolean).sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0));
+  const best = ordered[0] || null;
+  const second = ordered[1] || null;
+  if (!best || best.qualityLabel === "C") return null;
+  const gap = second ? Number(best.quality || 0) - Number(second.quality || 0) : Infinity;
+  if (second && gap < 18 && !best.contraryStrong && !best.consecutivePair) return null;
+
+  const signalIsPut = best.signalDirection === "PUT";
+  const level = signalIsPut ? high : low;
+  const zone = Math.max(tol * 4, localRange * 0.10);
+  const mainPatternText = best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
+  const status = `🧩 Reducción constructiva ${best.qualityLabel} · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción Constructiva V108: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
+
+  return {
+    direction: best.signalDirection,
+    quality: best.quality,
+    points: best.points,
+    meta: {
+      level,
+      levelMode: "reduccion_constructiva_continua",
+      levelType: signalIsPut ? "buyer_constructive_reduction" : "seller_constructive_reduction",
+      direction: best.signalDirection,
+      tolerance: tol,
+      zone,
+      zoneLow: level - zone * 0.45,
+      zoneHigh: level + zone * 0.45,
+      points: best.points,
+      maxPoints: 28,
+      reasons: best.reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(best.formedAtMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "flotante 0-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: Math.round(best.formedAtMs / 1000),
+      motorIndependiente: true,
+      constructiveReductionMode: true,
+      visualReductionMode: true,
+      visualReductionScore: best.points,
+      visualReductionQuality: best.qualityLabel,
+      visualReductionSubtype: best.subtype,
+      visualReductionGroup: best.groupText,
+      visualReductionContraryGroup: best.contraryText,
+      visualReductionPattern: best.pattern,
+      visualReductionLabels: best.labels,
+      visualReductionMoves: best.primaryMoves,
+      visualReductionRuns: best.runs,
+      visualReductionPrimaryRuns: best.primaryRuns,
+      visualReductionContraryRuns: best.contraryRuns,
+      constructiveReductionPairs: best.reductionPairs,
+      constructiveReductionConsecutive: !!best.consecutivePair,
+      constructiveAnchorOffsetMs: best.anchorOffsetMs,
+      constructiveFormedAtMs: best.formedAtMs,
+      constructiveFloatingWindow: true,
+      cutsBetween: best.cutsBetween,
+      contraryStrong: best.contraryStrong,
+      visualDisplacementEfficiency: best.visualDisplacementEfficiency,
+      movementFilter: "v108_reduccion_constructiva_continua_dos_reducciones",
+      priority: best.consecutivePair || best.contraryStrong ? "ALTA" : "NORMAL",
+      stage: "reduccion_constructiva_continua_v108",
+      logic: logicText,
+      status,
+    },
+  };
+}
+function normalizeConstructiveAbsWindow(absTicks, anchorEpochMs, nowEpochMs) {
+  const start = Number(anchorEpochMs);
+  const end = Math.min(Number(nowEpochMs), start + CONSTRUCTIVE_FLOATING_WINDOW_MS);
+  return (Array.isArray(absTicks) ? absTicks : [])
+    .filter((p) => Number(p.epochMs) >= start && Number(p.epochMs) <= end)
+    .map((p) => ({ ms: Number(p.epochMs) - start, quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
+    .sort((a, b) => a.ms - b.ms);
+}
+function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
+  try {
+    if (!isReduccionConstructivaContinuaMode(signalMode)) return false;
+    if (areSignalsPaused()) return false;
+    const sym = String(symbol || "");
+    const now = Number(epochMs);
+    const absTicks = constructiveRollingTicksBySymbol[sym] || [];
+    if (!sym || !Number.isFinite(now) || absTicks.length < 8) return false;
+    const lastSig = constructiveLastSignalBySymbol[sym] || null;
+    if (lastSig && now - Number(lastSig.epochMs || 0) < CONSTRUCTIVE_SIGNAL_COOLDOWN_MS) return false;
+
+    const minStart = now - CONSTRUCTIVE_FLOATING_WINDOW_MS;
+    const starts = [];
+    let lastStart = -Infinity;
+    for (const p of absTicks) {
+      const ep = Number(p.epochMs);
+      if (!Number.isFinite(ep) || ep < minStart || ep > now - CONSTRUCTIVE_SCAN_MIN_WINDOW_MS) continue;
+      if (ep - lastStart >= CONSTRUCTIVE_SCAN_STEP_MS) {
+        starts.push(ep);
+        lastStart = ep;
+      }
+    }
+    if (!starts.length) return false;
+
+    let bestPack = null;
+    for (const start of starts) {
+      const ticks = normalizeConstructiveAbsWindow(absTicks, start, now);
+      if (ticks.length < 6) continue;
+      const match = analyzeConstructiveReductionContinuousCandidate({ symbol: sym, ticks }, { evalMs: Math.min(now - start, CONSTRUCTIVE_FLOATING_WINDOW_MS) });
+      if (!match) continue;
+      const anchorEpochMs = start + Number(match.meta?.constructiveAnchorOffsetMs || 0);
+      if (now - anchorEpochMs > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
+      const anchoredTicks = normalizeConstructiveAbsWindow(absTicks, anchorEpochMs, now);
+      const refined = analyzeConstructiveReductionContinuousCandidate({ symbol: sym, ticks: anchoredTicks }, { evalMs: Math.min(now - anchorEpochMs, CONSTRUCTIVE_FLOATING_WINDOW_MS) }) || match;
+      const q = Number(refined.quality || 0) - Math.max(0, (now - anchorEpochMs) - Number(refined.meta?.constructiveFormedAtMs || 0)) / 2500;
+      if (!bestPack || q > Number(bestPack.rank || 0)) {
+        bestPack = { match: refined, anchorEpochMs, ticks: anchoredTicks, rank: q };
+      }
+    }
+    if (!bestPack?.match) return false;
+
+    const anchorEpochMs = Math.round(Number(bestPack.anchorEpochMs));
+    const direction = String(bestPack.match.direction || "").toUpperCase();
+    const signalKey = `${Math.floor(anchorEpochMs / 1000)}|${sym}|${direction}`;
+    if (lastSig && String(lastSig.key || "") === signalKey) return false;
+    if ((history || []).some((it) => String(it?.constructiveSignalKey || "") === signalKey)) return false;
+
+    const anchorMinute = Math.floor(anchorEpochMs / 60000);
+    const timeTxt = new Date(anchorEpochMs).toISOString().substr(11, 8) + " UTC";
+    const mode = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+    const added = addSignal(anchorMinute, sym, direction, bestPack.ticks, {
+      id: `FLOAT-${Math.floor(anchorEpochMs)}-${sym}-${direction}`,
+      time: timeTxt,
+      mode,
+      mode_version: getModeVersion(mode),
+      giroNivelScore: Math.round(bestPack.match.quality || 0),
+      giroNivelPoints: bestPack.match.points,
+      giroPolaridadScore: Math.round(bestPack.match.quality || 0),
+      giroPolaridadPoints: bestPack.match.points,
+      giroPolaridad: bestPack.match.meta,
+      aiLocalMatchSource: "REDUCCION_CONSTRUCTIVA_CONTINUA",
+      signalLifecycleStage: "floating_prealert",
+      signalPrealertAtSec: Math.round(Number(bestPack.match.meta?.signalFromSec || 0)),
+      signalRadar: true,
+      signalRadarStartSec: 0,
+      signalRadarEndSec: 30,
+      signalAutoEntrySec: SIGNAL_AUTO_ENTRY_SEC,
+      signalRequiresManualPoints: SIGNAL_CONFIRM_MIN,
+      signalConfirmations: [],
+      signalFloatingWindow: true,
+      signalAnchorEpochMs: anchorEpochMs,
+      signalAnchorSecond: Number(((anchorEpochMs % 60000) + 60000) % 60000) / 1000,
+      constructiveSignalKey: signalKey,
+      minuteComplete: false,
+    });
+    if (added) {
+      constructiveLastSignalBySymbol[sym] = { epochMs: now, key: signalKey };
+      toast(`🧩 ${sym}: 2 reducciones constructivas detectadas`, 1800);
+      return true;
+    }
+  } catch (e) {
+    try { window.DerivDebug?.log?.("CONSTRUCTIVE_SCAN_ERROR", { error: e?.message || String(e) }); } catch {}
+  }
+  return false;
+}
+
+function analyzeAlcistaQuiebres30sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
+
+  const clean = ensureTicksWithBoundary(ticks, evalMs)
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+  const greenTol = Math.max(localRange * 0.014, tol * 1.35);
+  if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
+  if (!(current > open + greenTol)) return null;
+
+  // Máximo dos cambios reales de color antes de 30s: permitimos que se ponga roja 1-2 veces,
+  // pero no lateralización cruzando el open todo el tiempo.
+  const significantColorTol = Math.max(localRange * 0.10, tol * 3.0);
+  const colorStates = [];
+  let activeColorState = "";
+  for (const p of clean) {
+    if (Number(p.ms) > evalMs) break;
+    const d = Number(p.quote) - open;
+    const st = d > significantColorTol ? "GREEN" : d < -significantColorTol ? "RED" : "";
+    if (!st) continue;
+    if (st !== activeColorState) {
+      colorStates.push({ state: st, ms: Number(p.ms), delta: d });
+      activeColorState = st;
+    }
+  }
+  const significantColorFlips = Math.max(0, colorStates.length - 1);
+  const firstColorState = colorStates[0]?.state || "";
+  if (significantColorFlips > 2 || (firstColorState === "RED" && significantColorFlips >= 2)) return null;
+
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const net = current - open;
+  const highFromOpen = high - open;
+  const path = Math.max(stats.path, 1e-9);
+  const efficiency = net / path;
+  const structure = analyzeAlcista30sVisualStructure(clean, evalMs, tol, localRange);
+  const upLegs = structure.upLegs || [];
+  const downLegs = structure.downLegs || [];
+  const upMoves = structure.upMoves || [];
+  const downMoves = structure.downMoves || [];
+  const totalUp = Number(structure.totalUp || 0);
+  const totalDown = Number(structure.totalDown || 0);
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
+
+  const buyerAdvanceVisible =
+    highFromOpen >= Math.max(localRange * 0.30, tol * 3.8) &&
+    totalUp >= Math.max(localRange * 0.46, tol * 4.6) &&
+    net >= Math.max(localRange * 0.035, tol * 1.25);
+  if (!buyerAdvanceVisible) return null;
+
+  // Requisito nuevo: irregularidad visual con quiebres claros. Una pausa de 1 tick / 1-2s cuenta
+  // si realmente corta el avance y después vuelve otro movimiento alcista visible.
+  if (upLegs.length < 3) return null;
+  if (structure.visibleBreakCount < 2) return null;
+  if (!structure.clearSizeContrast) return null;
+
+  const hasVisualWeakening =
+    structure.threeStepReduction ||
+    structure.reductionPairs >= 1 ||
+    structure.postMaxWeakening ||
+    (!structure.pureIncreasing && structure.legLabels.length >= 4 && new Set(structure.legLabels).size >= 2);
+  if (!hasVisualWeakening) return null;
+
+  const closeNearHigh = (high - current) <= Math.max(localRange * 0.080, tol * 2.0);
+  const cleanBullishContinuation =
+    efficiency >= 0.68 &&
+    pullbackRatio <= 0.15 &&
+    maxPullbackRatio <= 0.11 &&
+    closeNearHigh &&
+    structure.visibleBreakCount < 3 &&
+    !structure.threeStepReduction &&
+    !structure.postMaxWeakening;
+  if (cleanBullishContinuation) return null;
+
+  const allSimilarClean =
+    structure.allSimilar &&
+    efficiency >= 0.56 &&
+    pullbackRatio <= 0.18 &&
+    !structure.postMaxWeakening;
+  if (allSimilarClean) return null;
+
+  const pureIncreasingDanger =
+    structure.pureIncreasing &&
+    !structure.postMaxWeakening &&
+    pullbackRatio <= 0.24;
+  if (pureIncreasingDanger) return null;
+
+  const maxUpRun = structure.sizeRatio ? structure.maxUp : (upMoves.length ? Math.max(...upMoves) : 0);
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const anySellerEntry = maxDownRun >= Math.max(localRange * 0.08, tol * 1.8);
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.18, maxUpRun * 0.38, tol * 2.4);
+  const sellerMomentumIncreasing = downMoves.length >= 2 && downMoves[downMoves.length - 1] >= downMoves[0] * 1.14;
+
+  const doubleBottomRetake = detectAlcista30sDoubleBottomRetake(clean, evalMs, tol, localRange);
+  const symmetricCycles = detectAlcista30sSymmetricCycles(structure, efficiency, pullbackRatio);
+  const buyerIncreasingAfterBreak = detectBuyerIncreasingAfterBreak30s(structure);
+  const buyerReductionAfterBreak = detectBuyerReductionAfterBreak30s(structure);
+  const sellerPressure = detectSellerIncreasingPressure30s(structure, localRange, tol);
+
+  // Bloqueos pedidos: quiebres que forman doble suelo/piso defendido, simetría fuerte o comprador recargado
+  // no son la irregularidad buscada aunque tengan zigzag.
+  if (doubleBottomRetake.block) return null;
+  if (symmetricCycles.block) return null;
+  if (buyerIncreasingAfterBreak.block && !sellerPressure.strong && !buyerReductionAfterBreak.detected) return null;
+
+  let points = 0;
+  const reasons = [];
+  points += 2; reasons.push("vela alcista a 20-30s");
+  points += 4; reasons.push(`${structure.visibleBreakCount} quiebres visibles 0-30s`);
+  points += 3; reasons.push(`patrón ${structure.pattern || "irregular"}`);
+  if (structure.threeStepReduction) { points += 4; reasons.push("secuencia grande-mediano-pequeño"); }
+  else if (structure.reductionPairs >= 2) { points += 4; reasons.push("doble reducción compradora"); }
+  else if (structure.reductionPairs >= 1) { points += 3; reasons.push("reducción compradora visible"); }
+  if (structure.postMaxWeakening) { points += 2; reasons.push("después del grande vuelve mediano/chico"); }
+  if (buyerReductionAfterBreak.detected) { points += Math.min(3, buyerReductionAfterBreak.strength); reasons.push("comprador reduce después del quiebre"); }
+  if (structure.pauseBreaks > 0) { points += 1; reasons.push("pausa corta visible entre impulsos"); }
+  if (pullbackRatio >= 0.18 || maxPullbackRatio >= 0.12) { points += 2; reasons.push("devuelve parte del avance"); }
+  if (stats.turns >= 3) { points += 1; reasons.push("zigzag claro"); }
+  if (strongContrary) { points += 2; reasons.push("entrada vendedora fuerte"); }
+  else if (anySellerEntry) { points += 1; reasons.push("entrada vendedora ayuda"); }
+  if (sellerPressure.strong) { points += 2; reasons.push("vendedor aumenta presión claramente"); }
+  else if (sellerMomentumIncreasing || sellerPressure.detected) { points += 1; reasons.push("vendedor aumenta presión"); }
+  if (doubleBottomRetake.detected) { points -= doubleBottomRetake.strongRetake ? 6 : 4; reasons.push("castigo: doble suelo / piso defendido"); }
+  if (symmetricCycles.detected) { points -= 5; reasons.push("castigo: simetría de movimientos"); }
+  if (buyerIncreasingAfterBreak.detected) { points -= 4; reasons.push("castigo: comprador aumenta después del quiebre"); }
+  if (efficiency >= 0.62 && closeNearHigh && !structure.postMaxWeakening) { points -= 2; reasons.push("riesgo de continuidad limpia"); }
+
+  if (points < 11) return null;
+
+  const quality =
+    points * 14 +
+    Math.min(22, structure.visibleBreakCount * 7) +
+    Math.min(18, structure.sizeRatio * 5) +
+    Math.min(16, pullbackRatio * 18) +
+    (structure.threeStepReduction ? 18 : 0) +
+    (structure.postMaxWeakening ? 12 : 0) +
+    (buyerReductionAfterBreak.detected ? 10 : 0) +
+    (sellerPressure.strong ? 12 : strongContrary ? 14 : anySellerEntry ? 6 : 0) -
+    (doubleBottomRetake.detected ? 18 : 0) -
+    (symmetricCycles.detected ? 14 : 0) -
+    (buyerIncreasingAfterBreak.detected ? 12 : 0) -
+    Math.max(0, evalMs - 22000) / 2600;
+
+  const logicText = `Alcista irregular con QUIEBRES V106.6 calibrado: ${reasons.join(", ")}. Regla: exige quiebres que muestren pérdida de calidad compradora; bloquea doble suelo/piso defendido, simetría marcada y comprador que se recarga después del quiebre.`;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "alcista_irregular_quiebres_30s",
+      levelType: "visual_buyer_breaks_0_30",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 22,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "20-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: 20,
+      bullishCandleOnly: true,
+      greenAtConfirm: true,
+      buyerAdvanceVisible,
+      visualBreaksRequired: true,
+      visualBreakCount: structure.visibleBreakCount,
+      visualBreakDetails: structure.breakDetails,
+      pauseBreaks: structure.pauseBreaks,
+      retroBreaks: structure.retroBreaks,
+      upLegsCount: upLegs.length,
+      downLegsCount: downLegs.length,
+      upLegPattern: structure.pattern,
+      upLegLabels: structure.legLabels,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      sizeRatio: structure.sizeRatio,
+      reductionPairs: structure.reductionPairs,
+      threeStepReduction: structure.threeStepReduction,
+      postMaxWeakening: structure.postMaxWeakening,
+      pureIncreasing: structure.pureIncreasing,
+      cleanBullishContinuation,
+      efficiency,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      strongContrary,
+      anySellerEntry,
+      sellerMomentumIncreasing,
+      sellerPressure,
+      doubleBottomRetake,
+      symmetricCycles,
+      buyerIncreasingAfterBreak,
+      buyerReductionAfterBreak,
+      antiRules: {
+        blockDoubleBottomRetake: !!doubleBottomRetake.block,
+        blockSymmetry: !!symmetricCycles.block,
+        blockBuyerRecharge: !!buyerIncreasingAfterBreak.block,
+      },
+      significantColorFlips,
+      colorStates,
+      movementFilter: "v106_6_quiebres_visuales_calibrado_anti_doble_suelo_simetria_0_30",
+      priority: structure.visibleBreakCount >= 3 || structure.threeStepReduction || strongContrary ? "ALTA" : "NORMAL",
+      stage: "alcista_irregular_quiebres_30s_calibrado_v106_6",
+      logic: logicText,
+      status: `🧩 Alcista quiebres 30s V106.6: ${structure.pattern || "irregular"}, ${structure.visibleBreakCount} quiebres, comprador ${buyerReductionAfterBreak.detected ? "reduce" : "irregular"}${sellerPressure.strong ? " + vendedor aumenta" : strongContrary ? " + vendedor fuerte" : anySellerEntry ? " + vendedor ayuda" : ""}. Sin doble suelo/simetría fuerte. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
+}
+
+
+function analyzeAlcistaReduccion30sCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
+
+  const pts = ensureTicksWithBoundary(ticks, evalMs);
+  const clean = (Array.isArray(pts) ? pts : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length < 6) return null;
+
+  const quotes = clean.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const current = Number(quotes[quotes.length - 1]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
+  const tol = Math.max(localRange * 0.012, Math.abs(open) * 0.00000005, 1e-9);
+  const greenTol = Math.max(localRange * 0.014, tol * 1.35);
+
+  // V95: calibrado con ejemplos marcados como "movimiento irregular claro".
+  // El foco ya no es vendedor obligatorio, sino irregularidad real del comprador entre 0-30s:
+  // grande-mediano-pequeño, empujes que reducen, cambios de tamaño, devoluciones y estructura insana.
+  if (!Number.isFinite(open) || !Number.isFinite(current)) return null;
+  const greenAtConfirm = current > open + greenTol;
+  if (!greenAtConfirm) return null;
+
+  let belowMs = 0;
+  let maxBelowRunMs = 0;
+  let activeBelowStart = null;
+  const belowLine = open - Math.max(localRange * 0.035, tol * 1.8);
+  for (let i = 1; i < clean.length; i++) {
+    const a = clean[i - 1];
+    const b = clean[i];
+    const mid = (Number(a.quote) + Number(b.quote)) / 2;
+    const dt = Math.max(0, Math.min(Number(b.ms), evalMs) - Math.max(Number(a.ms), 0));
+    if (mid < belowLine) {
+      belowMs += dt;
+      if (activeBelowStart === null) activeBelowStart = Number(a.ms);
+      maxBelowRunMs = Math.max(maxBelowRunMs, Math.min(Number(b.ms), evalMs) - activeBelowStart);
+    } else {
+      activeBelowStart = null;
+    }
+  }
+
+  const stats = getRupturaDebilGiroPathStats(clean);
+  const runs = getRupturaDebilGiroRuns(clean, tol);
+  const upRuns = runs.filter((r) => r.sign > 0 && r.move > tol * 1.2);
+  const downRuns = runs.filter((r) => r.sign < 0 && r.move > tol * 1.2);
+  const upMoves = upRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+  const downMoves = downRuns.map((r) => Number(r.move)).filter(Number.isFinite);
+
+  const totalUp = upMoves.reduce((a, b) => a + b, 0);
+  const totalDown = downMoves.reduce((a, b) => a + b, 0);
+  const maxUpRun = upMoves.length ? Math.max(...upMoves) : 0;
+  const minUpRun = upMoves.length ? Math.min(...upMoves) : 0;
+  const maxDownRun = downMoves.length ? Math.max(...downMoves) : 0;
+  const minDownRun = downMoves.length ? Math.min(...downMoves) : 0;
+  const avgUp = upMoves.length ? totalUp / upMoves.length : 0;
+  const upVar = upMoves.length >= 2
+    ? upMoves.reduce((a, b) => a + Math.pow(b - avgUp, 2), 0) / upMoves.length
+    : 0;
+  const upCv = avgUp > 0 ? Math.sqrt(upVar) / avgUp : 0;
+  const avgDown = downMoves.length ? totalDown / downMoves.length : 0;
+  const downVar = downMoves.length >= 2
+    ? downMoves.reduce((a, b) => a + Math.pow(b - avgDown, 2), 0) / downMoves.length
+    : 0;
+  const downCv = avgDown > 0 ? Math.sqrt(downVar) / avgDown : 0;
+
+  const net = current - open;
+  const highFromOpen = high - open;
+  const maxPullback = getRupturaDebilGiroMaxPullback(clean);
+  const path = Math.max(stats.path, totalUp + totalDown, 1e-9);
+  const efficiency = net / path;
+  const pullbackRatio = totalDown / Math.max(totalUp, 1e-9);
+  const maxPullbackRatio = maxPullback / Math.max(totalUp, localRange, 1e-9);
+  const firstUp = upMoves[0] || 0;
+  const secondUp = upMoves[1] || 0;
+  const thirdUp = upMoves[2] || 0;
+  const lastUp = upMoves[upMoves.length - 1] || 0;
+
+  // Debe haber avance comprador real, porque el patrón buscado es comprador dominante pero irregular.
+  const buyerAdvanceVisible =
+    highFromOpen >= Math.max(localRange * 0.30, tol * 3.8) &&
+    totalUp >= Math.max(localRange * 0.48, tol * 4.8) &&
+    net >= Math.max(localRange * 0.035, tol * 1.35);
+  if (!buyerAdvanceVisible) return null;
+
+  const wasRedEarly = low < open - Math.max(localRange * 0.045, tol * 2.0);
+  const retookGreen = wasRedEarly && current > open + Math.max(localRange * 0.040, tol * 2.0);
+  const strongRetakeGreen = wasRedEarly && current > open + Math.max(localRange * 0.075, tol * 3.0);
+  const tooMuchTimeBelowWithoutControl =
+    (maxBelowRunMs >= 9500 || belowMs >= 12000) &&
+    !strongRetakeGreen;
+  if (tooMuchTimeBelowWithoutControl) return null;
+
+  // V106: filtros tomados de tus comentarios de "qué evitar":
+  // 1) Evitar velas que van y vienen muchas veces entre rojo/verde antes de 30s.
+  // 2) Evitar lateralización/rango: comprador fuerte y vendedor parecido, mucho recorrido
+  //    pero poco avance sostenido hacia arriba.
+  const significantColorTol = Math.max(localRange * 0.10, tol * 3.0);
+  const colorStates = [];
+  let activeColorState = "";
+  for (const p of clean) {
+    if (Number(p.ms) > evalMs) break;
+    const d = Number(p.quote) - open;
+    const st = d > significantColorTol ? "GREEN" : d < -significantColorTol ? "RED" : "";
+    if (!st) continue;
+    if (st !== activeColorState) {
+      colorStates.push({ state: st, ms: Number(p.ms), delta: d });
+      activeColorState = st;
+    }
+  }
+  const significantColorFlips = Math.max(0, colorStates.length - 1);
+  const firstColorState = colorStates[0]?.state || "";
+  const thirdColorTurnBefore30 =
+    significantColorFlips > 2 ||
+    (firstColorState === "RED" && significantColorFlips >= 2);
+  if (thirdColorTurnBefore30) return null;
+
+  // V105: prioridad fuerte al tipo visual que buscás:
+  // - reducción clara del comprador dentro de 0-30s
+  // - grande → mediano → chico
+  // - grande → chico
+  // - ideal: dos reducciones alcistas visibles en la misma formación.
+  const visibleUpMoveMin = Math.max(localRange * 0.055, tol * 2.0);
+  const clearReductionPairs = [];
+  for (let i = 0; i < upMoves.length - 1; i++) {
+    const a = Number(upMoves[i] || 0);
+    const b = Number(upMoves[i + 1] || 0);
+    if (a >= visibleUpMoveMin && b >= Math.max(tol * 1.15, visibleUpMoveMin * 0.22) && a >= b * 1.32) {
+      clearReductionPairs.push({ from: a, to: b, index: i, ratio: a / Math.max(b, 1e-9) });
+    }
+  }
+  const clearBigSmallReduction = clearReductionPairs.some((p) => p.ratio >= 1.55);
+  const threeStepReduction = upMoves.length >= 3 &&
+    firstUp >= Math.max(visibleUpMoveMin, secondUp * 1.16) &&
+    secondUp >= Math.max(tol * 1.35, thirdUp * 1.16) &&
+    thirdUp >= Math.max(tol * 1.05, visibleUpMoveMin * 0.18);
+  const broadReduction = upMoves.length >= 2 && lastUp <= firstUp * 0.80 && firstUp >= visibleUpMoveMin;
+  const visibleReductionCount = (threeStepReduction ? 1 : 0) + clearReductionPairs.length;
+  const doubleClearBuyerReduction = visibleReductionCount >= 2 || (threeStepReduction && clearBigSmallReduction);
+  const decreasingPushes = threeStepReduction || clearBigSmallReduction || broadReduction || doubleClearBuyerReduction;
+  const sizeRatioUp = minUpRun > 0 ? maxUpRun / minUpRun : 0;
+  const mixedSizes = upMoves.length >= 3 && (sizeRatioUp >= 1.55 || upCv >= 0.30);
+  const veryMixedSizes = upMoves.length >= 3 && (sizeRatioUp >= 2.05 || upCv >= 0.44);
+  const differentSizedBreaks = upMoves.length >= 2 && (upCv >= 0.24 || sizeRatioUp >= 1.45);
+  const givesBackMuch = pullbackRatio >= 0.18 || maxPullbackRatio >= 0.12;
+  const zigzagDirty = stats.turns >= 3 || (stats.irregularity >= 1.24 && stats.turns >= 2);
+
+  // Irregularidad que va en aumento es más peligrosa: solo pasa si además hay mucha suciedad o presión.
+  const increasingOnly = upMoves.length >= 2 && lastUp >= firstUp * 1.30 && !decreasingPushes && upCv <= 0.38;
+
+  const anySellerEntry = downMoves.length > 0 && maxDownRun >= Math.max(localRange * 0.09, tol * 1.9);
+  const strongContrary = maxDownRun >= Math.max(localRange * 0.20, maxUpRun * 0.42, tol * 2.6);
+  const sellerPressureCore =
+    strongContrary ||
+    anySellerEntry ||
+    pullbackRatio >= 0.19 ||
+    maxPullbackRatio >= 0.13 ||
+    totalDown >= Math.max(totalUp * 0.17, tol * 2.8);
+
+  const firstDown = downMoves[0] || 0;
+  const lastDown = downMoves[downMoves.length - 1] || 0;
+  const sellerReducing = downMoves.length >= 2 && lastDown <= firstDown * 0.72 && downCv <= 0.38;
+  const sellerNotReducing = !sellerReducing && (strongContrary || (downMoves.length >= 2 && lastDown >= firstDown * 0.72) || downMoves.length === 1);
+
+  // V96: filtros negativos tomados de comentarios de señales malas:
+  // - comprador pequeño->grande / mediano->grande habla de fuerza alcista, no de debilidad.
+  // - vendedor que reduce o queda más débil que la respuesta compradora no confirma venta.
+  // - comprador recto con mucho desplazamiento + respuesta fuerte posterior se descarta.
+  const earlyBuyerUps = upRuns
+    .filter((r) => Number(r.startMs) <= 18000)
+    .map((r) => Number(r.move || 0))
+    .filter(Number.isFinite);
+  const earlyBuyerSecondBigger = earlyBuyerUps.length >= 2 && earlyBuyerUps[1] >= earlyBuyerUps[0] * 1.42 && earlyBuyerUps[1] >= Math.max(localRange * 0.12, tol * 3.0);
+  const earlyBuyerLastBigger = earlyBuyerUps.length >= 2 && earlyBuyerUps[earlyBuyerUps.length - 1] >= earlyBuyerUps[0] * 1.35 && earlyBuyerUps[earlyBuyerUps.length - 1] >= Math.max(localRange * 0.14, tol * 3.0);
+  const buyerEarlyExpansion = earlyBuyerSecondBigger || earlyBuyerLastBigger;
+  const buyerExpansionAfterSeller = runs.some((r, idx) => {
+    if (!r || r.sign !== -1) return false;
+    const next = runs.slice(idx + 1).find((x) => x && x.sign === 1);
+    if (!next) return false;
+    return Number(next.move || 0) >= Math.max(Number(r.move || 0) * 1.16, localRange * 0.12, tol * 3.0);
+  });
+  const buyerStrongResponseAfterSeller = buyerExpansionAfterSeller || (
+    anySellerEntry && maxUpRun >= Math.max(maxDownRun * 1.18, localRange * 0.24, tol * 4.0)
+  );
+  const sellerMomentumIncreasing = downMoves.length >= 2 && (
+    lastDown >= firstDown * 1.18 ||
+    maxDownRun >= firstDown * 1.32
+  );
+  const sellerWeakVsBuyer = maxDownRun < maxUpRun * 0.58 || totalDown < totalUp * 0.55;
+  const directionalProgress = Math.abs(net) / Math.max(path, 1e-9);
+  const rangeBattleBalance =
+    totalUp >= Math.max(localRange * 0.86, tol * 5.0) &&
+    totalDown >= Math.max(localRange * 0.46, tol * 3.5) &&
+    totalDown / Math.max(totalUp, 1e-9) >= 0.34 &&
+    stats.turns >= 3;
+  const buyerSellerSimilarStrong =
+    maxUpRun >= Math.max(localRange * 0.20, tol * 3.2) &&
+    maxDownRun >= Math.max(localRange * 0.18, tol * 3.0) &&
+    maxDownRun >= maxUpRun * 0.62 &&
+    maxDownRun <= maxUpRun * 1.38 &&
+    stats.turns >= 3;
+  const noSustainedAdvance =
+    net <= localRange * 0.44 ||
+    (high - current) >= Math.max(localRange * 0.16, tol * 2.4);
+  const lateralizedFirst30 =
+    (rangeBattleBalance && directionalProgress <= 0.34 && noSustainedAdvance) ||
+    (buyerSellerSimilarStrong && directionalProgress <= 0.42 && noSustainedAdvance) ||
+    (significantColorFlips >= 2 && rangeBattleBalance && directionalProgress <= 0.45);
+  if (lateralizedFirst30) return null;
+  const buyerStraightForce = maxUpRun >= Math.max(localRange * 0.42, tol * 5.0) && efficiency >= 0.44 && stats.turns <= 4 && !threeStepReduction;
+  const clearReductionAfterExpansion = (() => {
+    if (!buyerEarlyExpansion || upMoves.length < 3) return false;
+    const maxIdx = upMoves.indexOf(maxUpRun);
+    if (maxIdx < 0 || maxIdx >= upMoves.length - 1) return false;
+    const after = upMoves.slice(maxIdx + 1);
+    if (!after.length) return false;
+    const lastAfter = after[after.length - 1] || 0;
+    const hasVisibleDrop = lastAfter <= maxUpRun * 0.62 || Math.min(...after) <= maxUpRun * 0.50;
+    const hasTwoAfter = after.length >= 2 && after[0] >= after[1] * 0.82;
+    return hasVisibleDrop && (hasTwoAfter || after.length >= 1);
+  })();
+  const oppositeSetupBuyerStrongSellerWeak =
+    (buyerEarlyExpansion || buyerStrongResponseAfterSeller || buyerStraightForce) &&
+    (sellerReducing || sellerWeakVsBuyer) &&
+    !sellerMomentumIncreasing &&
+    !threeStepReduction &&
+    !doubleClearBuyerReduction &&
+    !clearBigSmallReduction &&
+    !clearReductionAfterExpansion;
+  if (oppositeSetupBuyerStrongSellerWeak) return null;
+
+  // Si el comprador va claramente de menor a mayor y no aparece una reducción visible o fuerza bajista creciente,
+  // se considera continuación/peligro, aunque el movimiento sea "irregular" visualmente.
+  const dangerousBuyerIncreasing = buyerEarlyExpansion && !threeStepReduction && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion && !sellerMomentumIncreasing && !(strongContrary && sellerNotReducing);
+  if (dangerousBuyerIncreasing) return null;
+
+  const colorFlipAndRetake = retookGreen && (stats.turns >= 2 || givesBackMuch || sellerPressureCore) && !buyerStrongResponseAfterSeller;
+  const highIdx = clean.findIndex((p) => Number(p.quote) === high);
+  const highMs = Number(clean[highIdx]?.ms || evalMs);
+  const stalledAfterHigh = highIdx <= clean.length - 3 && (high - current) >= Math.max(localRange * 0.070, tol * 1.25);
+
+  const buyerWeaknessCore = decreasingPushes || doubleClearBuyerReduction || clearBigSmallReduction || givesBackMuch || zigzagDirty || stalledAfterHigh || clearReductionAfterExpansion;
+  const sellerStrengthCore = sellerMomentumIncreasing || (strongContrary && sellerNotReducing);
+  const buyerDominantButIrregular = greenAtConfirm && buyerAdvanceVisible && (
+    buyerWeaknessCore ||
+    (mixedSizes && !dangerousBuyerIncreasing && !oppositeSetupBuyerStrongSellerWeak) ||
+    colorFlipAndRetake ||
+    sellerStrengthCore
+  );
+  if (!buyerDominantButIrregular) return null;
+
+  // Bloqueo de simetría/fuerza: entradas parecidas + avance eficiente = fuerza, no irregularidad.
+  const symmetricStrength =
+    upMoves.length >= 3 &&
+    upCv <= 0.18 &&
+    sizeRatioUp > 0 && sizeRatioUp <= 1.35 &&
+    efficiency >= 0.62 &&
+    pullbackRatio <= 0.18 &&
+    stats.turns <= 2 &&
+    !decreasingPushes &&
+    !veryMixedSizes &&
+    !colorFlipAndRetake;
+  if (symmetricStrength) return null;
+
+  const cleanBullishContinuation =
+    efficiency >= 0.72 &&
+    pullbackRatio <= 0.16 &&
+    maxPullbackRatio <= 0.11 &&
+    stats.turns <= 1 &&
+    !sellerPressureCore &&
+    !decreasingPushes &&
+    !mixedSizes &&
+    !colorFlipAndRetake;
+  if (cleanBullishContinuation) return null;
+
+  // Si lo único que hay es vendedor que se va apagando, no lo usamos como confirmación.
+  // La presión contraria ayuda, pero no reemplaza la irregularidad del comprador.
+  const irregularCore = buyerWeaknessCore || doubleClearBuyerReduction || clearBigSmallReduction || (mixedSizes && !buyerEarlyExpansion) || veryMixedSizes || colorFlipAndRetake || sellerStrengthCore;
+  if (!irregularCore) return null;
+
+  if (increasingOnly && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion && !colorFlipAndRetake && !sellerStrengthCore && !givesBackMuch) return null;
+  if (sellerReducing && buyerStrongResponseAfterSeller && !doubleClearBuyerReduction && !threeStepReduction && !clearBigSmallReduction && !sellerStrengthCore) return null;
+  if (sellerReducing && !decreasingPushes && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion && !colorFlipAndRetake && !givesBackMuch && !sellerStrengthCore) return null;
+
+  let points = 0;
+  const reasons = [];
+  points += 2;
+  reasons.push("vela verde al confirmar 20-30s");
+  points += 2;
+  reasons.push("comprador avanza, pero irregular");
+  if (doubleClearBuyerReduction) { points += 7; reasons.push("doble reducción clara del comprador"); }
+  else if (threeStepReduction) { points += 6; reasons.push("irregularidad que reduce: grande-mediano-pequeño"); }
+  else if (clearBigSmallReduction) { points += 5; reasons.push("reducción clara: grande-chico"); }
+  else if (decreasingPushes) { points += 4; reasons.push("empujes compradores se reducen"); }
+  if (veryMixedSizes) { points += 3; reasons.push("cambios de tamaño muy claros"); }
+  else if (mixedSizes || differentSizedBreaks) { points += 2; reasons.push("impulsos compradores de distintos tamaños"); }
+  if (givesBackMuch) { points += 2; reasons.push("avanza y devuelve demasiado"); }
+  if (zigzagDirty) { points += 2; reasons.push("zigzag sucio / estructura insana"); }
+  if (colorFlipAndRetake) { points += 2; reasons.push("vendedor la pone roja/casi roja y comprador retoma verde"); }
+  if (stalledAfterHigh) { points += 1; reasons.push("se frena después de avanzar"); }
+  if (clearReductionAfterExpansion && !threeStepReduction) { points += 2; reasons.push("sube y después reduce visible"); }
+  if (sellerMomentumIncreasing) { points += 2; reasons.push("vendedor aumenta presión"); }
+  if (strongContrary && sellerNotReducing) { points += 2; reasons.push("entrada fuerte del vendedor sin reducir"); }
+  else if (sellerPressureCore && sellerNotReducing && !sellerWeakVsBuyer) { points += 1; reasons.push("vendedor presiona sin reducir"); }
+  else if (sellerReducing) { points -= 2; reasons.push("vendedor reduce: debilidad bajista"); }
+  if (buyerStrongResponseAfterSeller && !doubleClearBuyerReduction && !threeStepReduction && !clearBigSmallReduction) { points -= 3; reasons.push("comprador responde más fuerte al vendedor"); }
+  if (buyerEarlyExpansion && !doubleClearBuyerReduction && !clearBigSmallReduction && !clearReductionAfterExpansion) { points -= 3; reasons.push("comprador va de pequeño/mediano a grande"); }
+  if (buyerStraightForce) { points -= 2; reasons.push("comprador recto con fuerza"); }
+  if (increasingOnly) { points -= 3; reasons.push("irregularidad en aumento: más peligrosa"); }
+
+  if (points < 8) return null;
+
+  const priorityBonus =
+    (doubleClearBuyerReduction ? 42 : 0) +
+    (decreasingPushes ? 30 : 0) +
+    (threeStepReduction ? 20 : 0) +
+    (clearBigSmallReduction ? 18 : 0) +
+    (clearReductionAfterExpansion ? 10 : 0) +
+    (veryMixedSizes && !buyerEarlyExpansion ? 14 : mixedSizes && !buyerEarlyExpansion ? 6 : 0) +
+    (colorFlipAndRetake ? 10 : 0) +
+    (sellerMomentumIncreasing ? 14 : 0) +
+    (strongContrary && sellerNotReducing ? 10 : sellerPressureCore && sellerNotReducing && !sellerWeakVsBuyer ? 4 : 0) +
+    (evalMs <= 22000 ? 6 : 0) -
+    (buyerEarlyExpansion && !clearReductionAfterExpansion ? 18 : 0) -
+    (buyerStrongResponseAfterSeller ? 18 : 0) -
+    (buyerStraightForce ? 10 : 0) -
+    (increasingOnly ? 16 : 0) -
+    (sellerReducing ? 12 : 0) -
+    (sellerWeakVsBuyer ? 6 : 0);
+
+  const quality =
+    points * 14 +
+    priorityBonus +
+    Math.min(20, stats.turns * 4) +
+    Math.min(20, Math.max(0, stats.irregularity - 1) * 12) +
+    Math.min(20, upCv * 12) +
+    Math.min(16, pullbackRatio * 18) -
+    Math.max(0, evalMs - 20000) / 2200;
+
+  const priority = doubleClearBuyerReduction || threeStepReduction || clearBigSmallReduction || decreasingPushes || clearReductionAfterExpansion || sellerStrengthCore || colorFlipAndRetake ? "ALTA" : "NORMAL";
+  const logicText = `Vela alcista irregular V106 confirmada 20-30s: ${reasons.join(", ")}. Regla V106: prioridad a reducciones claras del comprador dentro de 0-30s, pero se descartan lateralización/rango grande, comprador-vendedor muy parecidos y más de dos cambios reales de color antes de 30s.`;
+
+  return {
+    direction: "PUT",
+    quality,
+    points,
+    meta: {
+      level: high,
+      levelMode: "alcista_irregular_30s",
+      levelType: "clear_buyer_irregularity_0_30",
+      direction: "PUT",
+      tolerance: tol,
+      zone: Math.max(tol * 4, localRange * 0.10),
+      zoneLow: high - Math.max(tol * 2, localRange * 0.045),
+      zoneHigh: high + Math.max(tol * 2, localRange * 0.045),
+      points,
+      maxPoints: 20,
+      reasons,
+      p0: open,
+      pE: current,
+      high,
+      low,
+      range: localRange,
+      evalSec: Math.round(evalMs / 1000),
+      analysisWindowMs: evalMs,
+      irregularityWindow: "0-30s",
+      confirmationWindow: "20-30s",
+      maxAnalysisSec: 30,
+      signalFromSec: 20,
+      bullishCandleOnly: true,
+      greenAtConfirm,
+      buyerAdvanceVisible,
+      buyerDominantButIrregular,
+      irregularCore,
+      decreasingPushes,
+      threeStepReduction,
+      clearBigSmallReduction,
+      doubleClearBuyerReduction,
+      visibleReductionCount,
+      clearReductionPairs,
+      mixedSizes,
+      veryMixedSizes,
+      differentSizedBreaks,
+      increasingOnly,
+      symmetricStrength,
+      cleanBullishContinuation,
+      sellerPressureCore,
+      sellerReducing,
+      sellerNotReducing,
+      canHaveSellerButSellerMustNotReduce: true,
+      belowMs,
+      maxBelowRunMs,
+      wasRedEarly,
+      retookGreen,
+      strongRetakeGreen,
+      tooMuchTimeBelowWithoutControl,
+      strongContrary,
+      anySellerEntry,
+      totalUp,
+      totalDown,
+      maxUpRun,
+      minUpRun,
+      maxDownRun,
+      minDownRun,
+      pullbackRatio,
+      maxPullback,
+      maxPullbackRatio,
+      pathStats: stats,
+      efficiency,
+      upRuns: upMoves,
+      downRuns: downMoves,
+      upCv,
+      downCv,
+      zigzagDirty,
+      givesBackMuch,
+      colorFlipAndRetake,
+      stalledAfterHigh,
+      highMs,
+      stage: "alcista_irregular_30s_v106_evita_lateralizacion_color",
+      buyerWeaknessCore,
+      sellerStrengthCore,
+      buyerEarlyExpansion,
+      earlyBuyerSecondBigger,
+      earlyBuyerLastBigger,
+      buyerStrongResponseAfterSeller,
+      buyerStraightForce,
+      sellerWeakVsBuyer,
+      significantColorFlips,
+      colorStates,
+      thirdColorTurnBefore30,
+      lateralizedFirst30,
+      rangeBattleBalance,
+      buyerSellerSimilarStrong,
+      directionalProgress,
+      noSustainedAdvance,
+      sellerMomentumIncreasing,
+      clearReductionAfterExpansion,
+      dangerousBuyerIncreasing,
+      oppositeSetupBuyerStrongSellerWeak,
+      movementFilter: "v106_reducciones_claras_sin_lateralizacion_ni_tercer_cambio_color",
+      priority,
+      logic: logicText,
+      status: `🟢 Alcista irregular 30s V106: ${doubleClearBuyerReduction ? "doble reducción compradora" : threeStepReduction ? "grande-mediano-chico" : clearBigSmallReduction ? "grande-chico" : decreasingPushes || clearReductionAfterExpansion ? "comprador reduce" : "comprador irregular visible"}${sellerStrengthCore ? " + vendedor fuerte/aumenta" : ""}. Señal a VENTA. Auto solo en ${SIGNAL_AUTO_ENTRY_SEC}s con ${SIGNAL_CONFIRM_MIN} puntos manuales.`,
+    },
+  };
+}
+
+function analyzeRupturaDebilGiroCandidate(candidate, minute, opts = {}) {
+  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
+  if (ticks.length < 6) return null;
+  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
+  const optEvalMs = Number(opts?.evalMs);
+  const evalMs = Math.max(20000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
+  if (evalMs < 20000 || evalMs > 30000) return null;
+  const pts = ensureTicksWithBoundary(ticks, evalMs);
+  if (pts.length < 6) return null;
+  const qs = pts.map((p) => Number(p.quote)).filter(Number.isFinite);
+  if (qs.length < 6) return null;
+  const high = Math.max(...qs);
+  const low = Math.min(...qs);
+  const range = Math.max(high - low, Math.abs(qs[0]) * 0.000001, 1e-9);
+  if (!Number.isFinite(range) || range <= 0) return null;
+
+  // V78: este modo queda enfocado SOLO en velas alcistas con arranque irregular,
+  // pero la señal visible se confirma recién entre 20-30s.
+  // La irregularidad temprana 0-15s queda como observación interna, no como señal inmediata.
+  // Si además aparece una entrada fuerte vendedora, se prioriza frente a otros pares.
+  if (!isRupturaDebilGiroBullishOnlySetup(pts, range)) return null;
+
+  return analyzeRupturaDebilGiroEarlyBullishIrregular(pts, range, evalMs);
 }
 
 function evaluateMinute(minute, opts = {}) {
@@ -16075,6 +22961,34 @@ function evaluateMinute(minute, opts = {}) {
     if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
+    } else if (isReduccionConstructivaContinuaMode(activeMode)) {
+      match = analyzeConstructiveReductionContinuousCandidate(c, evalOptions);
+      matchSource = "REDUCCION_CONSTRUCTIVA_CONTINUA";
+    } else if (isReduccionExacta25sMode(activeMode)) {
+      match = analyzeReduccionVisual25sCandidate(c, minute, evalOptions);
+      matchSource = "REDUCCION_VISUAL_25S";
+    } else if (isAlcistaQuiebres30sMode(activeMode)) {
+      match = analyzeAlcistaQuiebres30sCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
+      matchSource = "ALCISTA_QUIEBRES_30S";
+    } else if (isAlcistaReduccion30sMode(activeMode)) {
+      match = analyzeAlcistaReduccion30sCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
+      matchSource = "ALCISTA_REDUCCION_30S";
+    } else if (isRupturaDebilGiroMode(activeMode)) {
+      // V78: doble seguro para que este modo no muestre velas bajistas ni señales COMPRA.
+      // Solo acepta velas alcistas con irregularidad confirmada entre 20-30s.
+      const evalMsForRuptura = Number(evalOptions?.evalMs || 0);
+      const ptsForRuptura = ensureTicksWithBoundary(c.ticks || [], Number.isFinite(evalMsForRuptura) && evalMsForRuptura > 0 ? evalMsForRuptura : Number((c.ticks || []).slice(-1)[0]?.ms || 0));
+      const qsForRuptura = ptsForRuptura.map((p) => Number(p.quote)).filter(Number.isFinite);
+      const rangeForRuptura = qsForRuptura.length
+        ? Math.max(Math.max(...qsForRuptura) - Math.min(...qsForRuptura), Math.abs(qsForRuptura[0]) * 0.000001, 1e-9)
+        : 0;
+      if (!isRupturaDebilGiroBullishOnlySetup(ptsForRuptura, rangeForRuptura)) continue;
+
+      match = analyzeRupturaDebilGiroCandidate(c, minute, evalOptions);
+      if (match && String(match.direction || "").toUpperCase() !== "PUT") match = null;
+      matchSource = "RUPTURA_DEBIL_GIRO_INICIO_IRREGULAR";
     } else if (isSNRPolaridadMode(activeMode)) {
       match = analyzeSNRPolaridadCandidate(c, minute, RULES_GIRO_DOBLE_RECHAZO, evalOptions);
       matchSource = "SNR_POLARIDAD";
@@ -16098,11 +23012,18 @@ function evaluateMinute(minute, opts = {}) {
   }
 
   if (!matches.length) return false;
-  matches.sort((a, b) =>
-    b.quality - a.quality ||
-    b.giroNivelPoints - a.giroNivelPoints ||
-    b.giroNivelScore - a.giroNivelScore
-  );
+  matches.sort((a, b) => {
+    if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode) || isReduccionExacta25sMode(activeMode) || isReduccionConstructivaContinuaMode(activeMode)) {
+      const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake || Number(a.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(a.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
+      const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake || Number(b.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(b.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
+      if (bp !== ap) return bp - ap;
+    }
+    return (
+      b.quality - a.quality ||
+      b.giroNivelPoints - a.giroNivelPoints ||
+      b.giroNivelScore - a.giroNivelScore
+    );
+  });
 
   // V14: si hay interacción con nivel, se elige la mejor; no se cancela por empate de calidad.
 
@@ -16170,9 +23091,15 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 
   updateCounter();
 
-  if (signalsEl) signalsEl.prepend(buildRow(item));
+  if (signalsEl) {
+    signalsEl.prepend(buildRow(item));
+    trimSignalsDomToVisibleLimit();
+  }
   updateRowChartBtn(item);
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
+
+  const fatigueTriggered = registerSignalForFatigueGuard(item);
+  if (fatigueTriggered) return item;
 
   if (soundEnabled && sound) {
     sound.currentTime = 0;
@@ -16203,6 +23130,43 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 /* =========================
    WebSocket Deriv
 ========================= */
+function handleDerivWsMessage(data, source = "public") {
+  if (data && data.req_id && pending.has(data.req_id)) {
+    const p = pending.get(data.req_id);
+    clearTimeout(p.t);
+    pending.delete(data.req_id);
+    p.resolve(data);
+    return;
+  }
+
+  if (data?.proposal_open_contract) {
+    const poc = data.proposal_open_contract;
+    const cid = String(poc?.contract_id || "");
+    const subId = data?.subscription?.id;
+
+    if (cid) {
+      if (subId) contractSubs.set(cid, subId);
+
+      if (poc?.is_sold) {
+        applyClosedContractOutcomeFromPOC(poc, source === "trade" ? "stream-api-nueva" : "stream");
+      }
+    }
+    return;
+  }
+
+  if (data?.error) {
+    const emsg = data.error.message || "unknown";
+    if (isPendingContractPOCRateLimitMessage(emsg)) {
+      setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
+      setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
+    } else {
+      setStatus(`⚠️ WS ${source === "trade" ? "trading" : "public"}: ${emsg}`);
+    }
+  }
+
+  if (data.tick) onTick(data.tick);
+}
+
 function connect() {
   try {
     setStatus("Conectando…");
@@ -16215,6 +23179,7 @@ function connect() {
   ws.onopen = async () => {
     try {
       resetAuthState();
+      if (isNewPatApiMode()) resetNewApiTradingSocket();
     } catch {}
 
     setStatus("Conectado – Suscribiendo…");
@@ -16227,47 +23192,20 @@ function connect() {
     }, 350);
 
     updateDisciplineLockUI(false);
+    try {
+      await ensureAuthorized();
+      await refreshAccountBalance({ force: true });
+      updateC100PanelUI();
+    } catch (e) {
+      if (isNewPatApiMode()) setNewApiStatus(`API nueva pendiente: ${e?.message || e}`);
+    }
     await resubscribePendingContracts();
   };
 
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-
-      if (data && data.req_id && pending.has(data.req_id)) {
-        const p = pending.get(data.req_id);
-        clearTimeout(p.t);
-        pending.delete(data.req_id);
-        p.resolve(data);
-        return;
-      }
-
-      if (data?.proposal_open_contract) {
-        const poc = data.proposal_open_contract;
-        const cid = String(poc?.contract_id || "");
-        const subId = data?.subscription?.id;
-
-        if (cid) {
-          if (subId) contractSubs.set(cid, subId);
-
-          if (poc?.is_sold) {
-            applyClosedContractOutcomeFromPOC(poc, "stream");
-          }
-        }
-        return;
-      }
-
-      if (data?.error) {
-        const emsg = data.error.message || "unknown";
-        if (isPendingContractPOCRateLimitMessage(emsg)) {
-          setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
-          setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
-        } else {
-          setStatus(`⚠️ WS error: ${emsg}`);
-        }
-      }
-
-      if (data.tick) onTick(data.tick);
+      handleDerivWsMessage(data, "public");
     } catch (err) {
       setStatus(`❌ Parse WS: ${err?.message || err}`);
     }
@@ -16280,6 +23218,7 @@ function connect() {
   ws.onclose = (ev) => {
     try {
       resetAuthState();
+      resetNewApiTradingSocket();
     } catch {}
 
     for (const [id, p] of pending.entries()) {
@@ -16317,7 +23256,7 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     if (!ws || ws.readyState === 3) {
       try {
-        connect();
+        
       } catch {}
     }
     startPendingContractWatchdog({ immediate: true });
@@ -16414,18 +23353,51 @@ if (practiceCanvas) {
   practiceCanvas.addEventListener("click", handlePracticeCanvasPick);
 }
 
+function applyCleanReduccionVisualUI() {
+  try {
+    signalMode = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+    saveAnalysisMode(MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
+
+    // Limpiar SOLO controles no funcionales para Reducción visual 25s.
+    // Se conservan En vivo y Proceso.
+    const hideSelectors = [
+      '.evalBtn',
+      '.btnGroup[aria-label="Segundo de evaluación"]',
+      '#modeBtn',
+      '#keepClosedAwaySignalsBtnWrap',
+      '#keepClosedAwaySignalsBtn',
+      '#giroAprendizajePanel'
+    ];
+    hideSelectors.forEach((sel) => document.querySelectorAll(sel).forEach((el) => {
+      el.style.display = 'none';
+    }));
+
+    qsAll('.tab[data-view="live"], .tab[data-view="process"]').forEach((el) => { el.style.display = ''; });
+    qsAll('.tab[data-view="practice"]').forEach((el) => { el.style.display = 'none'; });
+    if (liveView) liveView.style.display = '';
+    if (practiceView) practiceView.style.display = 'none';
+    if (processView) processView.style.display = '';
+  } catch (e) {
+    console.warn('[CLEAN_UI]', e);
+  }
+}
+
 /* =========================
    Inicialización
 ========================= */
 loadLowPowerMode();
 loadLiveAnalysisPaused();
 loadAutoOpenChartSetting();
+loadAutoReplayX2Setting();
 loadTradingAccountMode();
 loadC100State();
+loadMentalCooldown();
+loadSignalFatigueCooldown();
 loadDiscipline();
 startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
 loadExecutionMode();
+loadEntryTimingMode();
 loadKeepClosedAwaySignals();
 
 renderHistory();
@@ -16440,10 +23412,13 @@ ensureAutoOpenChartButton();
 applyAutoOpenChartUI();
 ensureExecutionModeButton();
 applyExecutionModeUI();
+ensureEntryTimingModeButton();
+applyEntryTimingModeUI();
 
 ensureTradingAccountButton();
 applyTradingAccountUI();
 applyTradingAccountBannerUI();
+ensureDerivApiModePanel();
 ensureC100Panel();
 updateC100PanelUI();
 initWakeButton();
@@ -16455,11 +23430,13 @@ try { ensureSettingsSelfCheckButton(); runSettingsMenuSelfCheck({ silent: true }
 
 applyModalTradeButtonsLayout();
 updateModalCandleStatusUI();
+updateMentalCooldownUI();
 updateDisciplineLockUI(false);
 
 seedTradesJournalFromHistory();
 
 initTabs();
+applyCleanReduccionVisualUI();
 paintLiveSymbolButtons();
 ensureInlineClearButtons();
 ensureLiveAnalysisPauseButton();
@@ -16468,6 +23445,7 @@ ensurePracticeFilterButton();
 applyPracticeFilterButtonUI();
 ensurePracticeExportSaveButton();
 updatePracticeExportSaveButtonUI();
+initProcessView();
 updateExportTradesButtonUI();
 
 connect();

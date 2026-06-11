@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v108.0.0-proceso-reduccion-constructiva (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v55-en-vivo-v53-scroll-botones";
+const CACHE = "deriv-assets-v108-0-0-proceso-reduccion-constructiva";
 
 const ASSETS = [
   "./",
@@ -13,6 +13,8 @@ const ASSETS = [
   "./icon-512.png",
   "./alert.mp3",
   "./bg-neon.png",
+  "./despeje-mental-bg.png",
+  "./pausa-visual-bg.png",
 ];
 
 self.addEventListener("install", (e) => {
