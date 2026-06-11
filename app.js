@@ -1,4 +1,5 @@
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108.1: agrega Reducción Constructiva como modo separado sobre v107.1, sin reemplazar el modo 2 reducciones 30s.
 // v108: nuevo modo Reducción Constructiva continua: dos reducciones consecutivas en ventana flotante, no atada al minuto.
 // v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
 // v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
@@ -911,7 +912,7 @@ function normalizeSignalMode(mode) {
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
-  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  return MODE_REDUCCION_VISUAL_25S;
 }
 function isDynamicLineMode(mode) {
   return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
@@ -954,18 +955,25 @@ function getModeVersion(mode) {
   return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
-  // V108: modo único. Siempre Reducción Constructiva continua.
+  // V108.1: se conserva la última base v107.1 y se agrega Reducción Constructiva como modo separado.
+  // Si no hay modo guardado, arranca en el modo anterior: 2 reducciones 30s.
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
+    const saved = normalizeSignalMode(localStorage.getItem(ANALYSIS_MODE_KEY) || MODE_REDUCCION_VISUAL_25S);
+    const allowed = [MODE_REDUCCION_VISUAL_25S, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA];
+    const mode = allowed.includes(saved) ? saved : MODE_REDUCCION_VISUAL_25S;
+    localStorage.setItem(ANALYSIS_MODE_KEY, mode);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
+    return mode;
   } catch {}
-  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  return MODE_REDUCCION_VISUAL_25S;
 }
 function saveAnalysisMode(mode) {
-  // V108: ignoramos cambios de modo; queda fijo en Reducción Constructiva continua.
+  // Guarda el modo elegido sin pisarlo por defecto.
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
+    const m = normalizeSignalMode(mode || MODE_REDUCCION_VISUAL_25S);
+    const allowed = [MODE_REDUCCION_VISUAL_25S, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA];
+    localStorage.setItem(ANALYSIS_MODE_KEY, allowed.includes(m) ? m : MODE_REDUCCION_VISUAL_25S);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
@@ -982,8 +990,10 @@ function getModeBtnLabel(mode) {
   return "🎯 SNR interacción";
 }
 function nextSignalMode(mode) {
-  // V108: modo único.
-  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  // V108.1: alterna entre la base v107.1 y el nuevo modo constructivo.
+  const m = normalizeSignalMode(mode || MODE_REDUCCION_VISUAL_25S);
+  if (m === MODE_REDUCCION_VISUAL_25S) return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  return MODE_REDUCCION_VISUAL_25S;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -9180,22 +9190,30 @@ function applyTheme(theme) {
 
   signalMode = loadAnalysisMode();
 
+  const getModeTitle = () => {
+    const m = normalizeSignalMode(signalMode);
+    if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) {
+      return "Modo nuevo: Reducción constructiva. No está atado al minuto Deriv; arranca su ventana propia en el primer movimiento y exige 2 reducciones constructivas consecutivas antes de 30s.";
+    }
+    return "Modo base v107.1: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30 del minuto Deriv: G-M-P / G-M / G-P / M-P repetidas.";
+  };
+
   const paintMode = () => {
     if (!modeBtn) return;
     signalMode = normalizeSignalMode(signalMode);
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = "Modo único: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30: G-M-P / G-M / G-P / M-P repetidas.";
+    modeBtn.title = getModeTitle();
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = MODE_REDUCCION_VISUAL_25S;
+      signalMode = nextSignalMode(signalMode);
       saveAnalysisMode(signalMode);
       paintMode();
-      toast("🎯 Modo único: 2 reducciones 30s", 1400);
+      toast(`Modo: ${getModeBtnLabel(signalMode)}`, 1500);
     };
 })();
 

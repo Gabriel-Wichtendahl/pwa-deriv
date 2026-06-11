@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v108.0.0-proceso-reduccion-constructiva (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v108.1.0-proceso-reduccion-constructiva-sobre-v107-1 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v108-0-0-proceso-reduccion-constructiva";
+const CACHE = "deriv-assets-v108-1-0-proceso-reduccion-constructiva-sobre-v107-1";
 
 const ASSETS = [
   "./",
