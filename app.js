@@ -1,4 +1,5 @@
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108.5: corrige modo flotante: ahora/estado usan el ancla real, el gráfico vivo no muestra futuro y Lectura ON se dibuja desde los ticks reales del mismo gráfico.
 // v108.4: corrige Lectura ON para que coincida con el gráfico: overlay dibuja la polilínea real de ticks y en Constructiva muestra solo la cadena aceptada G→M→P.
 // v108.2: endurece Reducción Constructiva visual: solo reducciones MUY claras, consecutivas y con menos ruido.
 // v108.1: agrega Reducción Constructiva como modo separado sobre v107.1, sin reemplazar el modo 2 reducciones 30s.
@@ -896,7 +897,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_LECTURA_MATCH_V108_4_20260612";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_FLOATING_SYNC_V108_5_20260612";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -9672,15 +9673,21 @@ function buildVisualReadFromItem(item) {
   const direction = normalizeSignalConfirmationSide(meta.direction || item.direction) || "";
   const dominant = String(meta.visualReductionGroup || "").toLowerCase().includes("vendedor") ? "vendedor" : "comprador";
   const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
-  const primaryLabels = Array.isArray(meta.visualReductionLabels)
+  const isConstructiveRead = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  let primaryLabels = Array.isArray(meta.visualReductionLabels)
     ? meta.visualReductionLabels.filter(Boolean)
     : splitPatternText(meta.visualReductionPattern);
+  if (isConstructiveRead) {
+    const patLabels = splitPatternText(meta.visualReductionPattern || meta.acceptedChainPattern || "G→M→P");
+    primaryLabels = (patLabels.length >= 3 ? patLabels.slice(0, 3) : primaryLabels.slice(0, 3));
+  }
   const contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
   const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
   const contraryRunsRaw = Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : [];
-  const primaryRuns = primaryRunsRaw
+  let primaryRuns = primaryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
     .filter(Boolean);
+  if (isConstructiveRead) primaryRuns = primaryRuns.slice(0, 3);
   const contraryRuns = contraryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
     .filter(Boolean);
@@ -9696,7 +9703,7 @@ function buildVisualReadFromItem(item) {
   const primaryPattern = getVisualReadPatternText(primaryLabels);
   const contraryPattern = getVisualReadPatternText(contraryLabels);
   return {
-    mode: MODE_REDUCCION_VISUAL_25S,
+    mode: isConstructiveRead ? MODE_REDUCCION_CONSTRUCTIVA_CONTINUA : MODE_REDUCCION_VISUAL_25S,
     direction,
     dominant,
     contrary,
@@ -9864,12 +9871,42 @@ function drawRoundedLabel(ctx, x, y, text, fill, stroke = "rgba(255,255,255,.22)
   ctx.fillText(String(text), xx + w / 2, yy + h / 2 + 0.5);
   ctx.restore();
 }
+function getVisualReadRunPathFromTicks(item, run) {
+  const startMs = Number(run?.startMs);
+  const endMs = Number(run?.endMs);
+  const startQuote = Number(run?.startQuote);
+  const endQuote = Number(run?.endQuote);
+  if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return [];
+  const a = Math.min(startMs, endMs);
+  const b = Math.max(startMs, endMs);
+  const raw = Array.isArray(item?.ticks) ? item.ticks : [];
+  const inside = raw
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= a && p.ms <= b)
+    .sort((p1, p2) => Number(p1.ms) - Number(p2.ms));
+
+  const out = [];
+  out.push({ ms: startMs, quote: startQuote, boundary: true });
+  for (const p of inside) {
+    if (Math.abs(Number(p.ms) - startMs) < 0.5 || Math.abs(Number(p.ms) - endMs) < 0.5) continue;
+    out.push(p);
+  }
+  out.push({ ms: endMs, quote: endQuote, boundary: true });
+  return out
+    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
+    .sort((p1, p2) => Number(p1.ms) - Number(p2.ms));
+}
 function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   if (!ctx || !item || !visualReadOverlayEnabled || !isVisualReductionItem(item)) return;
   const read = buildVisualReadFromItem(item);
   if (!read) return;
-  const evalMs = Math.max(1000, Math.min(60000, Number(read.evalMs || 25000)));
+
+  const meta = item.giroPolaridad || item.snrLevel || {};
+  const isConstructive = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  const formedMs = Number(meta.constructiveFormedAtMs || meta.signalFromSec * 1000 || read.evalMs || 25000);
+  const evalMs = Math.max(1000, Math.min(60000, isConstructive && Number.isFinite(formedMs) ? formedMs : Number(read.evalMs || 25000)));
   const x0 = xOf(0), xEval = xOf(evalMs);
+
   ctx.save();
   ctx.fillStyle = "rgba(250,204,21,.032)";
   ctx.fillRect(x0, 8, Math.max(0, xEval - x0), h - 30);
@@ -9882,61 +9919,67 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   ctx.fillStyle = "rgba(254,240,138,.64)";
   ctx.fillText(`${Math.round(evalMs / 1000)}s lectura`, Math.min(w - 82, xEval + 4), 19);
 
-  const buyCol = "rgba(34,197,94,.48)";
-  const sellCol = "rgba(248,113,113,.48)";
-  const buyFill = "rgba(22,163,74,.34)";
-  const sellFill = "rgba(185,28,28,.34)";
+  const buyCol = "rgba(34,197,94,.55)";
+  const sellCol = "rgba(248,113,113,.55)";
+  const buyFill = "rgba(22,163,74,.38)";
+  const sellFill = "rgba(185,28,28,.38)";
+  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 3) : (read.primaryRuns || []);
+  const contraryRuns = isConstructive ? [] : (read.contraryRuns || []);
+
   const drawRun = (r, prefix, idx) => {
     const isBuyer = String(r.side || "") === "comprador";
     const col = isBuyer ? buyCol : sellCol;
     const fill = isBuyer ? buyFill : sellFill;
-    const runPts = Array.isArray(r.points) && r.points.length >= 2
-      ? r.points
-          .map((p) => ({ x: xOf(Number(p.ms)), y: yOf(Number(p.quote)), ms: Number(p.ms), quote: Number(p.quote) }))
-          .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+    const realPath = getVisualReadRunPathFromTicks(item, r);
+    const fallbackPts = Array.isArray(r.points) && r.points.length >= 2
+      ? r.points.map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) })).filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
       : [];
-    const x1 = xOf(r.startMs), y1 = yOf(r.startQuote);
-    const x2 = xOf(r.endMs), y2 = yOf(r.endQuote);
-    const pathPts = runPts.length >= 2 ? runPts : [{ x: x1, y: y1 }, { x: x2, y: y2 }];
-    if (!pathPts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
+    const path = (realPath.length >= 2 ? realPath : fallbackPts.length >= 2 ? fallbackPts : [
+      { ms: Number(r.startMs), quote: Number(r.startQuote) },
+      { ms: Number(r.endMs), quote: Number(r.endQuote) },
+    ]).map((p) => ({ x: xOf(Number(p.ms)), y: yOf(Number(p.quote)), ms: Number(p.ms), quote: Number(p.quote) }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    if (path.length < 2) return;
+
     ctx.save();
     ctx.shadowColor = col;
     ctx.shadowBlur = 3;
     ctx.strokeStyle = col;
-    ctx.lineWidth = 2.35;
+    ctx.lineWidth = 2.45;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
-    pathPts.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    path.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
     ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(pathPts[0].x, pathPts[0].y, 2.4, 0, Math.PI * 2); ctx.fill();
-    const lastP = pathPts[pathPts.length - 1];
-    ctx.beginPath(); ctx.arc(lastP.x, lastP.y, 3.0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(path[0].x, path[0].y, 2.5, 0, Math.PI * 2); ctx.fill();
+    const lastP = path[path.length - 1];
+    ctx.beginPath(); ctx.arc(lastP.x, lastP.y, 3.1, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
-    const midP = pathPts[Math.floor(pathPts.length / 2)] || { x: (x1 + x2) / 2, y: Math.min(y1, y2) };
-    const mx = midP.x;
-    const my = Math.min(...pathPts.map((p) => p.y));
-    const sideLetter = isBuyer ? "C" : "V";
-    drawRoundedLabel(ctx, mx, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
-  };
-  (read.primaryRuns || []).forEach((r, i) => drawRun(r, "", i));
-  (read.contraryRuns || []).forEach((r, i) => drawRun(r, "", i));
 
-  for (const c of read.cuts || []) {
-    const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
-    if (!Number.isFinite(ms)) continue;
-    const x = xOf(ms);
-    ctx.save();
-    ctx.setLineDash([2, 5]);
-    ctx.strokeStyle = "rgba(255,255,255,.24)";
-    ctx.lineWidth = 0.85;
-    ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
-    ctx.restore();
+    const midP = path[Math.floor(path.length / 2)] || { x: (path[0].x + lastP.x) / 2, y: Math.min(path[0].y, lastP.y) };
+    const my = Math.min(...path.map((p) => p.y));
+    const sideLetter = isBuyer ? "C" : "V";
+    drawRoundedLabel(ctx, midP.x, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+  };
+  primaryRuns.forEach((r, i) => drawRun(r, "", i));
+  contraryRuns.forEach((r, i) => drawRun(r, "", i));
+
+  if (!isConstructive) {
+    for (const c of read.cuts || []) {
+      const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
+      if (!Number.isFinite(ms)) continue;
+      const x = xOf(ms);
+      ctx.save();
+      ctx.setLineDash([2, 5]);
+      ctx.strokeStyle = "rgba(255,255,255,.24)";
+      ctx.lineWidth = 0.85;
+      ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
+      ctx.restore();
+    }
   }
 
-  // Resumen textual movido abajo del gráfico para no tapar la lectura visual.
   ctx.restore();
 }
 
@@ -9963,7 +10006,8 @@ function drawDerivLikeChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
+  const pts = getItemVisibleTicksForModal(modalCurrentItem, ticks);
+  if (!pts || pts.length < 2) return;
 
   const quotes = pts.map((p) => p.quote);
   let min = Math.min(...quotes);
@@ -10010,7 +10054,7 @@ function drawDerivLikeChart(canvas, ticks) {
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
   const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
-    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
+    ? getItemElapsedMs(modalCurrentItem)
     : null;
 
   const segments = [
@@ -10267,6 +10311,39 @@ function isItemLiveMinute(item) {
     return elapsed >= 0 && elapsed < 60000;
   }
   return item.minute === currentServerMinute();
+}
+function getItemElapsedMs(item) {
+  if (!item) return null;
+  const anchorMs = Number(item.signalAnchorEpochMs || 0);
+  if (Number.isFinite(anchorMs) && anchorMs > 0) {
+    return Math.max(0, Math.min(60000, serverNowMs() - anchorMs));
+  }
+  if (Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs) {
+    return Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs));
+  }
+  const m = Number(item.minute);
+  if (Number.isFinite(m) && m > 0) {
+    return Math.max(0, Math.min(60000, serverNowMs() - m * 60000));
+  }
+  return null;
+}
+function getItemRemainingSec(item) {
+  const elapsed = getItemElapsedMs(item);
+  if (!Number.isFinite(Number(elapsed))) return getCurrentMinuteRemainingSec();
+  return Math.max(0, 60 - Math.max(0, Math.min(59, Math.floor(Number(elapsed) / 1000))));
+}
+function getItemVisibleTicksForModal(item, ticks) {
+  const arr = (Array.isArray(ticks) ? ticks : [])
+    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    .sort((a, b) => Number(a.ms) - Number(b.ms));
+
+  if (!item?.signalFloatingWindow || !isItemLiveMinute(item)) return arr;
+
+  const elapsed = getItemElapsedMs(item);
+  if (!Number.isFinite(Number(elapsed))) return arr;
+  const maxMs = Math.max(0, Math.min(60000, Number(elapsed) + 350));
+  return arr.filter((p) => Number(p.ms) <= maxMs);
 }
 
 function getCurrentMinuteRemainingSec() {
@@ -11288,7 +11365,7 @@ function updateModalCandleStatusUI() {
     bar.style.borderColor = "rgba(251,146,60,.48)";
     bar.style.boxShadow = "0 0 0 1px rgba(251,146,60,.08) inset, 0 0 12px rgba(251,146,60,.12)";
   } else if (isOpen) {
-    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
+    const sec = String(getItemRemainingSec(modalCurrentItem)).padStart(2, "0");
     const autoTxt = shouldUseAutoHighLowExecution()
       ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
       : "";
@@ -22147,7 +22224,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
   const status = `🧩 Reducción constructiva MUY CLARA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V108.4 LECTURA MATCH: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
+  const logicText = `Reducción Constructiva V108.5 FLOATING SYNC: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
 
   return {
     direction: best.signalDirection,
@@ -22188,6 +22265,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       visualReductionMoves: Array.isArray(best.acceptedChainRuns) && best.acceptedChainRuns.length ? best.acceptedChainRuns.map((r) => Number(r.move || 0)) : best.primaryMoves,
       visualReductionRuns: best.runs,
       visualReductionPrimaryRuns: Array.isArray(best.acceptedChainRuns) && best.acceptedChainRuns.length ? best.acceptedChainRuns : best.primaryRuns,
+      acceptedChainPattern: best.acceptedChainPattern,
+      acceptedChainLabels: best.acceptedChainLabels,
+      acceptedChainRuns: best.acceptedChainRuns,
       visualReductionContraryRuns: [],
       visualReductionAllPrimaryRuns: best.primaryRuns,
       visualReductionAllContraryRuns: best.contraryRuns,
@@ -22199,9 +22279,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v108_4_lectura_match",
+      movementFilter: "v108_5_floating_sync",
       priority: "ALTA",
-      stage: "reduccion_constructiva_lectura_match_v108_4",
+      stage: "reduccion_constructiva_floating_sync_v108_5",
       logic: logicText,
       status,
     },
