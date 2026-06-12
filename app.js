@@ -1,4 +1,5 @@
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108.2: endurece Reducción Constructiva visual: solo reducciones MUY claras, consecutivas y con menos ruido.
 // v108.1: agrega Reducción Constructiva como modo separado sobre v107.1, sin reemplazar el modo 2 reducciones 30s.
 // v108: nuevo modo Reducción Constructiva continua: dos reducciones consecutivas en ventana flotante, no atada al minuto.
 // v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
@@ -894,7 +895,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_CONTINUA_DOS_REDUCCIONES_V108_20260611";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_VISUAL_MUY_CLARA_V108_2_20260612";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -2075,9 +2076,9 @@ const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 const CONSTRUCTIVE_FLOATING_WINDOW_MS = 30000;
 const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
-const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 9000;
-const CONSTRUCTIVE_SCAN_STEP_MS = 900;
-const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 42000;
+const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 14000;
+const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
+const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 70000;
 let constructiveRollingTicksBySymbol = Object.create(null);
 let constructiveLastSignalBySymbol = Object.create(null);
 
@@ -9193,7 +9194,7 @@ function applyTheme(theme) {
   const getModeTitle = () => {
     const m = normalizeSignalMode(signalMode);
     if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) {
-      return "Modo nuevo: Reducción constructiva. No está atado al minuto Deriv; arranca su ventana propia en el primer movimiento y exige 2 reducciones constructivas consecutivas antes de 30s.";
+      return "Modo nuevo: Reducción constructiva MUY ESTRICTA. No está atado al minuto Deriv; arranca su ventana propia en el primer movimiento y exige 2 reducciones consecutivas muy claras antes de 30s.";
     }
     return "Modo base v107.1: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30 del minuto Deriv: G-M-P / G-M / G-P / M-P repetidas.";
   };
@@ -21907,9 +21908,12 @@ function buildConstructiveReductionPairs(moves, labels) {
     const lb = labs[i + 1] || classifyVisualReductionLabel(b, Math.max(...arr));
     const rankDrop = getConstructiveLabelRank(la) > getConstructiveLabelRank(lb);
     const ratio = a / Math.max(b, 1e-9);
-    const minRatio = la === "G" && lb === "P" ? 1.34 : la === "M" && lb === "P" ? 1.15 : 1.08;
+    // V108.2: modo MUY visual. No aceptamos reducciones apenas matemáticas.
+    // Tiene que verse una caída clara de tamaño: G→M, G→P o M→P con margen real.
+    const minRatio = la === "G" && lb === "P" ? 1.75 : la === "M" && lb === "P" ? 1.35 : 1.28;
     const validLabel = (la === "G" && (lb === "M" || lb === "P")) || (la === "M" && lb === "P");
-    if (validLabel && rankDrop && ratio >= minRatio) {
+    const absoluteDropOk = (a - b) >= Math.max(Math.max(...arr) * 0.16, b * 0.22, 1e-9);
+    if (validLabel && rankDrop && ratio >= minRatio && absoluteDropOk) {
       pairs.push({ index: i, from: la, to: lb, a, b, ratio, pattern: `${la}→${lb}` });
     }
   }
@@ -21930,9 +21934,11 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const yMax = Math.max(...pts.map((p) => p.y));
   const yMin = Math.min(...pts.map((p) => p.y));
   const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
-  const impulseMin = Math.max(alignedRange * 0.045, Number(tol || 0) * 1.05, 1e-9);
-  const firstBigMin = Math.max(alignedRange * 0.090, Number(tol || 0) * 1.8, 1e-9);
-  const cutMin = Math.max(alignedRange * 0.024, Number(tol || 0) * 0.75, 1e-9);
+  // V108.2: umbrales más duros. La formación tiene que verse clara a simple vista,
+  // no salir por micro-zigzags o reducciones apenas porcentuales.
+  const impulseMin = Math.max(alignedRange * 0.070, Number(tol || 0) * 1.65, 1e-9);
+  const firstBigMin = Math.max(alignedRange * 0.155, Number(tol || 0) * 3.0, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.045, Number(tol || 0) * 1.20, 1e-9);
 
   const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
   if (runs.length < 4) return null;
@@ -21958,13 +21964,23 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const consecutivePair = reductionPairs.some((p, i) => reductionPairs[i + 1] && Number(reductionPairs[i + 1].index) === Number(p.index) + 1);
   if (reductionPairs.length < 2) return null;
 
-  // Dos reducciones constructivas: idealmente encadenadas (G→M→P). Si no son encadenadas,
-  // igual se aceptan cuando se repite otra reducción clara dentro de la misma ventana flotante.
-  const twoReductionsOk = consecutivePair || reductionPairs.length >= 2;
-  if (!twoReductionsOk) return null;
+  // V108.2: para bajar señales falsas, el modo Constructivo exige dos reducciones CONSECUTIVAS.
+  // La lectura visual buscada es una secuencia limpia tipo G→M→P / G→M→P visual, no dos
+  // reducciones sueltas perdidas en un zigzag.
+  if (!consecutivePair) return null;
+
+  const chainIndex = reductionPairs.findIndex((p, i) => reductionPairs[i + 1] && Number(reductionPairs[i + 1].index) === Number(p.index) + 1);
+  const chainFirst = reductionPairs[chainIndex];
+  const chainSecond = reductionPairs[chainIndex + 1];
+  const chainStartLabel = String(chainFirst?.from || "");
+  const chainMiddleLabel = String(chainFirst?.to || "");
+  const chainEndLabel = String(chainSecond?.to || "");
+  const chainHasClearVisualScale = chainStartLabel === "G" && (chainMiddleLabel === "M" || chainMiddleLabel === "P") && chainEndLabel === "P";
+  const chainRatioOk = Number(chainFirst?.ratio || 0) >= 1.28 && Number(chainSecond?.ratio || 0) >= 1.28;
+  if (!chainHasClearVisualScale || !chainRatioOk) return null;
 
   const symmetryInfo = analyzeDominantVisualSymmetry(primaryMoves, labels);
-  if (symmetryInfo.block && !consecutivePair) return null;
+  if (symmetryInfo.block) return null;
 
   const net = yEnd - y0;
   const dominantAdvance = yMax - y0;
@@ -21974,33 +21990,40 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
 
   // No queremos una lectura totalmente lateral: debe haber intención inicial del grupo que reduce,
   // pero no exigimos que cierre pegado al extremo porque los ejemplos pueden terminar en transferencia.
-  if (dominantAdvance < Math.max(alignedRange * 0.32, Number(tol || 0) * 2.4)) return null;
-  if (oppositeDip > dominantAdvance * 0.95 && !consecutivePair) return null;
+  if (dominantAdvance < Math.max(alignedRange * 0.42, Number(tol || 0) * 3.6)) return null;
+  // Si el precio vuelve demasiado contra el movimiento dominante antes de completar la lectura,
+  // visualmente ya no es una reducción limpia sino ruido/lateralidad.
+  if (oppositeDip > dominantAdvance * 0.62) return null;
 
-  const firstReduction = reductionPairs[0];
-  const secondReduction = reductionPairs[1];
+  const firstReduction = chainFirst;
+  const secondReduction = chainSecond;
   const anchorOffsetMs = Math.max(0, Number(primaryRuns[0]?.startMs || 0));
-  const formedAtMs = Math.max(Number(primaryRuns[Math.min(primaryRuns.length - 1, secondReduction.index + 1)]?.endMs || evalMs), Number(primaryRuns[0]?.endMs || 0));
+  const chainEndRun = primaryRuns[Math.min(primaryRuns.length - 1, secondReduction.index + 1)];
+  const formedAtMs = Math.max(Number(chainEndRun?.endMs || evalMs), Number(primaryRuns[0]?.endMs || 0));
   if (formedAtMs > CONSTRUCTIVE_FLOATING_WINDOW_MS) return null;
+  if (formedAtMs < 12000) return null;
+  const chainDurationMs = Math.max(0, Number(chainEndRun?.endMs || 0) - Number(primaryRuns[0]?.startMs || 0));
+  if (chainDurationMs < 9000 || chainDurationMs > 30000) return null;
+  const chainRunsCount = Math.max(0, Number(secondReduction.index || 0) + 2);
+  if (chainRunsCount > 4) return null;
 
   const contraryAfterSecond = contraryRuns.filter((r) => Number(r.idx) > Number(primaryRuns[Math.min(primaryRuns.length - 1, secondReduction.index + 1)]?.idx || 0));
   const contraryStrong = contraryAfterSecond.some((r) => Number(r.move || 0) >= Math.max(alignedRange * 0.12, firstMove * 0.28, Number(tol || 0) * 2.0));
 
   let points = 0;
   const reasons = [];
-  points += 5; reasons.push(`${groupText} inicia movimiento claro`);
-  points += 7; reasons.push(`2 reducciones constructivas: ${reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ")}`);
-  if (consecutivePair) { points += 4; reasons.push("reducciones consecutivas encadenadas"); }
-  else { points += 2; reasons.push("segunda reducción repetida en la misma formación"); }
-  if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales entre reducciones"); }
+  points += 6; reasons.push(`${groupText} inicia movimiento grande y visible`);
+  points += 9; reasons.push(`2 reducciones constructivas MUY claras: ${[chainFirst, chainSecond].map((p) => p.pattern).join(" + ")}`);
+  points += 5; reasons.push("reducciones consecutivas encadenadas");
+  if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales reales entre reducciones"); }
   if (contraryStrong) { points += 3; reasons.push(`${contraryText} aparece después de la reducción`); }
-  if (labels.includes("P")) { points += 1; reasons.push("aparece tramo pequeño visible"); }
-  if (efficiency < 0.16 && !contraryStrong) points -= 2;
-  if (symmetryInfo.penalty > 0) points -= Math.min(4, symmetryInfo.penalty);
-  if (points < 13) return null;
+  if (chainEndLabel === "P") { points += 2; reasons.push("termina en tramo pequeño visible"); }
+  if (efficiency < 0.20 && !contraryStrong) points -= 3;
+  if (symmetryInfo.penalty > 0) points -= Math.min(5, symmetryInfo.penalty);
+  if (points < 20) return null;
 
-  const quality = points * 12 + (consecutivePair ? 28 : 14) + Math.min(18, cutsBetween * 5) + (contraryStrong ? 20 : 0) - Math.max(0, formedAtMs - 24000) / 900;
-  const subtype = consecutivePair ? "2 reducciones encadenadas" : "2 reducciones repetidas";
+  const quality = points * 12 + 34 + Math.min(18, cutsBetween * 5) + (contraryStrong ? 18 : 0) - Math.max(0, formedAtMs - 26000) / 850;
+  const subtype = "2 reducciones muy claras encadenadas";
 
   return {
     side,
@@ -22058,16 +22081,17 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const ordered = [buyer, seller].filter(Boolean).sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0));
   const best = ordered[0] || null;
   const second = ordered[1] || null;
-  if (!best || best.qualityLabel === "C") return null;
+  // V108.2: solo calidad A. Si no se ve muy claro, no avisa.
+  if (!best || best.qualityLabel !== "A") return null;
   const gap = second ? Number(best.quality || 0) - Number(second.quality || 0) : Infinity;
-  if (second && gap < 18 && !best.contraryStrong && !best.consecutivePair) return null;
+  if (second && gap < 34) return null;
 
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
-  const status = `🧩 Reducción constructiva ${best.qualityLabel} · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V108: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
+  const status = `🧩 Reducción constructiva MUY CLARA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción Constructiva V108.2 MUY ESTRICTA: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
 
   return {
     direction: best.signalDirection,
@@ -22117,9 +22141,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v108_reduccion_constructiva_continua_dos_reducciones",
-      priority: best.consecutivePair || best.contraryStrong ? "ALTA" : "NORMAL",
-      stage: "reduccion_constructiva_continua_v108",
+      movementFilter: "v108_2_reduccion_constructiva_visual_muy_clara",
+      priority: "ALTA",
+      stage: "reduccion_constructiva_visual_muy_clara_v108_2",
       logic: logicText,
       status,
     },
@@ -22211,7 +22235,7 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
     });
     if (added) {
       constructiveLastSignalBySymbol[sym] = { epochMs: now, key: signalKey };
-      toast(`🧩 ${sym}: 2 reducciones constructivas detectadas`, 1800);
+      toast(`🧩 ${sym}: 2 reducciones MUY claras`, 1800);
       return true;
     }
   } catch (e) {
