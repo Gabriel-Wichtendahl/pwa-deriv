@@ -1,4 +1,5 @@
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108.4: corrige Lectura ON para que coincida con el gráfico: overlay dibuja la polilínea real de ticks y en Constructiva muestra solo la cadena aceptada G→M→P.
 // v108.2: endurece Reducción Constructiva visual: solo reducciones MUY claras, consecutivas y con menos ruido.
 // v108.1: agrega Reducción Constructiva como modo separado sobre v107.1, sin reemplazar el modo 2 reducciones 30s.
 // v108: nuevo modo Reducción Constructiva continua: dos reducciones consecutivas en ventana flotante, no atada al minuto.
@@ -895,7 +896,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_VISUAL_MUY_CLARA_V108_2_20260612";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_LECTURA_MATCH_V108_4_20260612";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -2076,9 +2077,9 @@ const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
 const CONSTRUCTIVE_FLOATING_WINDOW_MS = 30000;
 const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
-const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 14000;
+const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 18000;
 const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
-const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 70000;
+const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 90000;
 let constructiveRollingTicksBySymbol = Object.create(null);
 let constructiveLastSignalBySymbol = Object.create(null);
 
@@ -2176,8 +2177,16 @@ function setCompactModalHeader(item, ticksCount = null) {
     const mode = formatCompactModeLabel(item.mode || "NORMAL");
     const n = ticksCount == null ? (Array.isArray(item.ticks) ? item.ticks.length : 0) : Number(ticksCount) || 0;
     const live = modalLive && isItemLiveMinute(item) ? " · LIVE" : "";
-    const nextOutcomeTxt = formatNextCandleOutcomeLabel(item, true);
-    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${nextOutcomeTxt ? " · " + nextOutcomeTxt : ""}${live}`;
+    const outcomeValue = getItemNextOutcomeValue(item);
+    let signalOrResultTxt = "";
+    if (item?.signalFloatingWindow && !item?.minuteComplete) {
+      signalOrResultTxt = formatNextCandleDirectionLabel(item.direction).replace("PROX VELA", "SEÑAL");
+    } else if (item?.minuteComplete && outcomeValue) {
+      signalOrResultTxt = formatNextCandleOutcomeLabel(item, true).replace("PROX VELA", "RESULTADO");
+    } else {
+      signalOrResultTxt = formatNextCandleDirectionLabel(item.direction);
+    }
+    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${signalOrResultTxt ? " · " + signalOrResultTxt : ""}${live}`;
   }
 }
 
@@ -9194,7 +9203,7 @@ function applyTheme(theme) {
   const getModeTitle = () => {
     const m = normalizeSignalMode(signalMode);
     if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) {
-      return "Modo nuevo: Reducción constructiva MUY ESTRICTA. No está atado al minuto Deriv; arranca su ventana propia en el primer movimiento y exige 2 reducciones consecutivas muy claras antes de 30s.";
+      return "Modo nuevo: Reducción constructiva GMP LIMPIO. No está atado al minuto Deriv; arranca su ventana propia en el primer movimiento y exige G→M→P visual, sin contra-movimiento fuerte entre tramos y sin expansión posterior antes de 30s.";
     }
     return "Modo base v107.1: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30 del minuto Deriv: G-M-P / G-M / G-P / M-P repetidas.";
   };
@@ -9631,6 +9640,11 @@ function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
   const startQuote = Number(run.startQuote);
   const endQuote = Number(run.endQuote);
   if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return null;
+  const points = Array.isArray(run.points)
+    ? run.points
+        .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
+        .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
+    : [];
   return {
     startMs,
     endMs,
@@ -9641,6 +9655,7 @@ function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
     side: fallbackSide,
     label: label || "",
     idx: Number(run.idx || 0),
+    points,
   };
 }
 function getVisualReadPatternText(labels) {
@@ -9865,7 +9880,7 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   ctx.setLineDash([]);
   ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(254,240,138,.64)";
-  ctx.fillText("25s lectura", Math.min(w - 82, xEval + 4), 19);
+  ctx.fillText(`${Math.round(evalMs / 1000)}s lectura`, Math.min(w - 82, xEval + 4), 19);
 
   const buyCol = "rgba(34,197,94,.48)";
   const sellCol = "rgba(248,113,113,.48)";
@@ -9875,23 +9890,34 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     const isBuyer = String(r.side || "") === "comprador";
     const col = isBuyer ? buyCol : sellCol;
     const fill = isBuyer ? buyFill : sellFill;
+    const runPts = Array.isArray(r.points) && r.points.length >= 2
+      ? r.points
+          .map((p) => ({ x: xOf(Number(p.ms)), y: yOf(Number(p.quote)), ms: Number(p.ms), quote: Number(p.quote) }))
+          .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y))
+      : [];
     const x1 = xOf(r.startMs), y1 = yOf(r.startQuote);
     const x2 = xOf(r.endMs), y2 = yOf(r.endQuote);
-    if (![x1, y1, x2, y2].every(Number.isFinite)) return;
+    const pathPts = runPts.length >= 2 ? runPts : [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+    if (!pathPts.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y))) return;
     ctx.save();
     ctx.shadowColor = col;
     ctx.shadowBlur = 3;
     ctx.strokeStyle = col;
     ctx.lineWidth = 2.35;
     ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    pathPts.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+    ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(x1, y1, 2.4, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(x2, y2, 3.0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(pathPts[0].x, pathPts[0].y, 2.4, 0, Math.PI * 2); ctx.fill();
+    const lastP = pathPts[pathPts.length - 1];
+    ctx.beginPath(); ctx.arc(lastP.x, lastP.y, 3.0, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
-    const mx = (x1 + x2) / 2;
-    const my = Math.min(y1, y2);
+    const midP = pathPts[Math.floor(pathPts.length / 2)] || { x: (x1 + x2) / 2, y: Math.min(y1, y2) };
+    const mx = midP.x;
+    const my = Math.min(...pathPts.map((p) => p.y));
     const sideLetter = isBuyer ? "C" : "V";
     drawRoundedLabel(ctx, mx, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
   };
@@ -21936,9 +21962,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const alignedRange = Math.max(yMax - yMin, Number(localRange || 0), Math.abs(y0) * 0.000001, 1e-9);
   // V108.2: umbrales más duros. La formación tiene que verse clara a simple vista,
   // no salir por micro-zigzags o reducciones apenas porcentuales.
-  const impulseMin = Math.max(alignedRange * 0.070, Number(tol || 0) * 1.65, 1e-9);
-  const firstBigMin = Math.max(alignedRange * 0.155, Number(tol || 0) * 3.0, 1e-9);
-  const cutMin = Math.max(alignedRange * 0.045, Number(tol || 0) * 1.20, 1e-9);
+  const impulseMin = Math.max(alignedRange * 0.090, Number(tol || 0) * 2.10, 1e-9);
+  const firstBigMin = Math.max(alignedRange * 0.220, Number(tol || 0) * 4.0, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.040, Number(tol || 0) * 1.05, 1e-9);
 
   const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
   if (runs.length < 4) return null;
@@ -21956,7 +21982,8 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   for (let i = 0; i < primaryRuns.length - 1; i++) {
     if (hasVisualCutBetweenRuns(runs, primaryRuns[i].idx, primaryRuns[i + 1].idx, cutMin)) cutsBetween++;
   }
-  if (cutsBetween < 2) return null;
+  // V108.3: los cortes entre tramos no deben ser contra-movimientos fuertes.
+  // No exigimos "2 cortes" como condición, porque eso estaba premiando zigzags con C/V intercalados.
 
   const summary = summarizeVisualMoves(primaryMoves);
   const labels = summary.labels;
@@ -21975,11 +22002,36 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const chainStartLabel = String(chainFirst?.from || "");
   const chainMiddleLabel = String(chainFirst?.to || "");
   const chainEndLabel = String(chainSecond?.to || "");
-  const chainHasClearVisualScale = chainStartLabel === "G" && (chainMiddleLabel === "M" || chainMiddleLabel === "P") && chainEndLabel === "P";
-  const chainRatioOk = Number(chainFirst?.ratio || 0) >= 1.28 && Number(chainSecond?.ratio || 0) >= 1.28;
+
+  // V108.3: en este modo ya no aceptamos G→P suelto + otra reducción ni cadenas con expansión.
+  // Lo que buscás visualmente es una reducción constructiva limpia: G→M→P.
+  const chainHasClearVisualScale = chainStartLabel === "G" && chainMiddleLabel === "M" && chainEndLabel === "P";
+  const chainRatioOk = Number(chainFirst?.ratio || 0) >= 1.42 && Number(chainSecond?.ratio || 0) >= 1.36;
   if (!chainHasClearVisualScale || !chainRatioOk) return null;
 
-  const symmetryInfo = analyzeDominantVisualSymmetry(primaryMoves, labels);
+  const chainStartRun = primaryRuns[Number(chainFirst.index || 0)] || null;
+  const chainMiddleRun = primaryRuns[Number(chainFirst.index || 0) + 1] || null;
+  const chainEndRunForClean = primaryRuns[Number(chainSecond.index || 0) + 1] || null;
+  if (!chainStartRun || !chainMiddleRun || !chainEndRunForClean) return null;
+
+  // Si entre G, M y P aparece una C/V contraria fuerte, ya no es reducción constructiva limpia:
+  // es zigzag/lateralidad. Las pausas chicas pueden existir, pero no un contra-movimiento real.
+  const strongContraryInside = contraryRuns
+    .filter((r) => Number(r.idx) > Number(chainStartRun.idx) && Number(r.idx) < Number(chainEndRunForClean.idx))
+    .some((r) => Number(r.move || 0) >= Math.max(firstMove * 0.18, alignedRange * 0.075, Number(tol || 0) * 2.0));
+  if (strongContraryInside) return null;
+
+  // Si después del P aparece otro tramo del mismo grupo que vuelve a M/G antes de la alarma,
+  // la reducción ya se anuló visualmente. Esto bloquea casos tipo G→M→P→M.
+  const endRunArrayIndex = Number(chainSecond.index || 0) + 1;
+  const pMove = Number(chainEndRunForClean.move || 0);
+  const mMove = Number(chainMiddleRun.move || 0);
+  const expansionAfterP = primaryRuns
+    .filter((r, idx) => idx > endRunArrayIndex && Number(r.startMs || 0) <= Number(evalMs || CONSTRUCTIVE_FLOATING_WINDOW_MS))
+    .some((r) => Number(r.move || 0) >= Math.max(pMove * 1.35, mMove * 0.72, alignedRange * 0.095, Number(tol || 0) * 2.2));
+  if (expansionAfterP) return null;
+
+  const symmetryInfo = analyzeDominantVisualSymmetry(primaryMoves.slice(0, endRunArrayIndex + 1), labels.slice(0, endRunArrayIndex + 1));
   if (symmetryInfo.block) return null;
 
   const net = yEnd - y0;
@@ -21990,10 +22042,11 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
 
   // No queremos una lectura totalmente lateral: debe haber intención inicial del grupo que reduce,
   // pero no exigimos que cierre pegado al extremo porque los ejemplos pueden terminar en transferencia.
-  if (dominantAdvance < Math.max(alignedRange * 0.42, Number(tol || 0) * 3.6)) return null;
+  if (dominantAdvance < Math.max(alignedRange * 0.52, Number(tol || 0) * 4.4)) return null;
   // Si el precio vuelve demasiado contra el movimiento dominante antes de completar la lectura,
   // visualmente ya no es una reducción limpia sino ruido/lateralidad.
-  if (oppositeDip > dominantAdvance * 0.62) return null;
+  if (oppositeDip > dominantAdvance * 0.46) return null;
+  if (efficiency < 0.18) return null;
 
   const firstReduction = chainFirst;
   const secondReduction = chainSecond;
@@ -22053,6 +22106,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     visualDisplacementEfficiency: efficiency,
     dominantAdvance,
     oppositeDip,
+    acceptedChainRuns: [chainStartRun, chainMiddleRun, chainEndRunForClean].map((r) => ({ ...r })),
+    acceptedChainLabels: [chainStartLabel, chainMiddleLabel, chainEndLabel],
+    acceptedChainPattern: [chainStartLabel, chainMiddleLabel, chainEndLabel].join("→"),
     subtype,
   };
 }
@@ -22089,9 +22145,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const mainPatternText = best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
+  const mainPatternText = best.acceptedChainPattern || best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
   const status = `🧩 Reducción constructiva MUY CLARA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V108.2 MUY ESTRICTA: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
+  const logicText = `Reducción Constructiva V108.4 LECTURA MATCH: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
 
   return {
     direction: best.signalDirection,
@@ -22127,12 +22183,14 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       visualReductionSubtype: best.subtype,
       visualReductionGroup: best.groupText,
       visualReductionContraryGroup: best.contraryText,
-      visualReductionPattern: best.pattern,
-      visualReductionLabels: best.labels,
-      visualReductionMoves: best.primaryMoves,
+      visualReductionPattern: best.acceptedChainPattern || best.pattern,
+      visualReductionLabels: Array.isArray(best.acceptedChainLabels) && best.acceptedChainLabels.length ? best.acceptedChainLabels : best.labels,
+      visualReductionMoves: Array.isArray(best.acceptedChainRuns) && best.acceptedChainRuns.length ? best.acceptedChainRuns.map((r) => Number(r.move || 0)) : best.primaryMoves,
       visualReductionRuns: best.runs,
-      visualReductionPrimaryRuns: best.primaryRuns,
-      visualReductionContraryRuns: best.contraryRuns,
+      visualReductionPrimaryRuns: Array.isArray(best.acceptedChainRuns) && best.acceptedChainRuns.length ? best.acceptedChainRuns : best.primaryRuns,
+      visualReductionContraryRuns: [],
+      visualReductionAllPrimaryRuns: best.primaryRuns,
+      visualReductionAllContraryRuns: best.contraryRuns,
       constructiveReductionPairs: best.reductionPairs,
       constructiveReductionConsecutive: !!best.consecutivePair,
       constructiveAnchorOffsetMs: best.anchorOffsetMs,
@@ -22141,9 +22199,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v108_2_reduccion_constructiva_visual_muy_clara",
+      movementFilter: "v108_4_lectura_match",
       priority: "ALTA",
-      stage: "reduccion_constructiva_visual_muy_clara_v108_2",
+      stage: "reduccion_constructiva_lectura_match_v108_4",
       logic: logicText,
       status,
     },
