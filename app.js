@@ -1,3 +1,4 @@
+// v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
 // v108.6: FIX crítico gráfico flotante LIVE: nunca mezcla ticks anclados de la formación con minuteData del minuto calendario.
@@ -9694,7 +9695,29 @@ function buildVisualReadFromItem(item) {
   let primaryRuns = primaryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
     .filter(Boolean);
-  // V108.8: en Constructiva mostramos las dos reducciones completas, no solo los primeros 3 tramos.
+
+  // V108.9: identificar a qué reducción pertenece cada movimiento aceptado.
+  // Así Lectura ON puede mostrar 1·G, 1·M, 2·G, 2·P (o hasta 6 tramos)
+  // y no confundir una sola cadena con las dos reducciones distintas.
+  if (isConstructiveRead && primaryRuns.length) {
+    const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks : [];
+    let cursor = 0;
+    for (let blockIndex = 0; blockIndex < Math.min(2, blocks.length); blockIndex++) {
+      const block = blocks[blockIndex] || {};
+      const count = Math.max(
+        Array.isArray(block.runs) ? block.runs.length : 0,
+        Array.isArray(block.labels) ? block.labels.length : 0
+      );
+      for (let j = 0; j < count && cursor < primaryRuns.length; j++, cursor++) {
+        primaryRuns[cursor].reductionNo = blockIndex + 1;
+      }
+    }
+    while (cursor < primaryRuns.length) {
+      primaryRuns[cursor].reductionNo = cursor < Math.ceil(primaryRuns.length / 2) ? 1 : 2;
+      cursor++;
+    }
+  }
+  // V108.9: en Constructiva mostramos las dos reducciones completas, no solo los primeros 3 tramos.
   const contraryRuns = contraryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
     .filter(Boolean);
@@ -9930,7 +9953,9 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   const sellCol = "rgba(248,113,113,.55)";
   const buyFill = "rgba(22,163,74,.38)";
   const sellFill = "rgba(185,28,28,.38)";
-  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 3) : (read.primaryRuns || []);
+  // V108.9: no recortar a 3. Dibujar todos los movimientos de las dos reducciones aceptadas.
+  // Combinaciones posibles: 2+2, 3+2, 2+3 o 3+3 movimientos.
+  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 6) : (read.primaryRuns || []);
   const contraryRuns = isConstructive ? [] : (read.contraryRuns || []);
 
   const drawRun = (r, prefix, idx) => {
@@ -9968,7 +9993,8 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     const midP = path[Math.floor(path.length / 2)] || { x: (path[0].x + lastP.x) / 2, y: Math.min(path[0].y, lastP.y) };
     const my = Math.min(...path.map((p) => p.y));
     const sideLetter = isBuyer ? "C" : "V";
-    drawRoundedLabel(ctx, midP.x, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+    const reductionPrefix = isConstructive && Number(r.reductionNo) > 0 ? `${Number(r.reductionNo)}·` : "";
+    drawRoundedLabel(ctx, midP.x, my, `${reductionPrefix}${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
   };
   primaryRuns.forEach((r, i) => drawRun(r, "", i));
   contraryRuns.forEach((r, i) => drawRun(r, "", i));

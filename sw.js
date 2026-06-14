@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v108.8.0-two-distinct-reductions (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v108.9.0-lectura-dos-reducciones-completas (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v108-8-two-distinct-reductions";
+const CACHE = "deriv-assets-v108-9-lectura-two-reductions";
 
 const ASSETS = [
   "./",
