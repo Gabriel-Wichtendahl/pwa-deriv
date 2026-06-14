@@ -1,3 +1,4 @@
+// v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
 // v109.0: Resultado 60s desde la alarma para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
@@ -140,6 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V109_2_EXACT_FLOATING_TIMELINE";
 
 /* =========================
    Trade account config
@@ -407,7 +409,7 @@ async function getStudyCapture(id) {
 function getStudyCaptureIdFromItem(item) {
   if (!item) return "";
   const jid = item.journal_id || makeJournalIdFromSignal(item);
-  return jid ? `CAP::${String(jid)}`.slice(0, 230) : "";
+  return jid ? `CAPV1092::${String(jid)}`.slice(0, 230) : "";
 }
 function getStudyCaptureTradeResult(item) {
   const b = String(item?.trade?.badge || "").toUpperCase();
@@ -421,22 +423,148 @@ function getStudyCaptureLevelMeta(item) {
   if (meta && typeof meta === "object") return meta;
   return null;
 }
-async function getStudyCaptureNextTicks(item) {
-  if (!item?.symbol || !Number.isFinite(Number(item.minute))) return [];
-  try {
-    const next = await fetchFullMinuteTicks(item.symbol, Number(item.minute) + 1);
-    return Array.isArray(next) ? next.map((p) => ({ ms: Number(p.ms) + 60000, quote: Number(p.quote) })) : [];
-  } catch {}
-  return [];
+function studyFiniteNumber(value, fallback = null) {
+  if (value === null || value === undefined || value === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 }
-function normalizeStudyTicks(item, nextTicks = []) {
-  const sig = (Array.isArray(item?.ticks) ? item.ticks : [])
-    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
-    .map((p) => ({ ms: Math.max(0, Math.min(60000, Number(p.ms))), quote: Number(p.quote) }));
-  const nxt = (Array.isArray(nextTicks) ? nextTicks : [])
-    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
-    .map((p) => ({ ms: Math.max(60000, Math.min(120000, Number(p.ms))), quote: Number(p.quote) }));
-  return sig.concat(nxt).sort((a, b) => a.ms - b.ms);
+function studyEpochMs(value) {
+  const n = studyFiniteNumber(value, null);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1e12 ? n * 1000 : n;
+}
+function studyFormatUtc(epochMs, withDate = false) {
+  const n = studyFiniteNumber(epochMs, null);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  try {
+    const iso = new Date(n).toISOString();
+    return withDate ? iso.replace("T", " ").replace(".000Z", " UTC") : `${iso.slice(11, 19)} UTC`;
+  } catch {
+    return "—";
+  }
+}
+function getStudyCaptureAnchorEpochMs(item) {
+  const floating = studyFiniteNumber(item?.signalAnchorEpochMs, null);
+  if (Number.isFinite(floating) && floating > 0) return floating;
+  const minute = studyFiniteNumber(item?.minute, null);
+  if (Number.isFinite(minute)) return minute * 60000;
+  return 0;
+}
+function getStudyCaptureTimeline(item) {
+  const anchorEpochMs = getStudyCaptureAnchorEpochMs(item);
+  const trade = item?.trade || {};
+  const meta = getStudyCaptureLevelMeta(item);
+  let alarmEpochMs = studyFiniteNumber(
+    item?.signalResult60?.startEpochMs ?? item?.signalDetectedEpochMs ?? item?.signalCreatedEpochMs,
+    null
+  );
+  if (!Number.isFinite(alarmEpochMs) && anchorEpochMs > 0) {
+    const inferredAlarmMs = studyFiniteNumber(
+      meta?.secondReductionConfirmedAtMs ?? meta?.constructiveFormedAtMs ??
+      (Number.isFinite(Number(item?.signalPrealertAtSec)) ? Number(item.signalPrealertAtSec) * 1000 : null),
+      null
+    );
+    if (Number.isFinite(inferredAlarmMs)) alarmEpochMs = anchorEpochMs + inferredAlarmMs;
+  }
+
+  let entryEpochMs = studyEpochMs(
+    trade.entry_spot_time ?? trade.start_time ?? trade.purchase_time ?? trade.buy_time
+  );
+  if (!Number.isFinite(entryEpochMs) && anchorEpochMs > 0) {
+    const relativeEntry = studyFiniteNumber(item?.signalAutoEntry?.ms ?? trade.entry_ms, SIGNAL_AUTO_ENTRY_MS);
+    entryEpochMs = anchorEpochMs + Math.max(0, relativeEntry);
+  }
+
+  let exitEpochMs = studyEpochMs(
+    trade.exit_spot_time ?? trade.expiry_time ?? trade.sold_time ?? trade.sell_time
+  );
+  if (!Number.isFinite(exitEpochMs) && Number.isFinite(entryEpochMs)) {
+    const plannedSec = studyFiniteNumber(trade.planned_duration_sec, 60);
+    exitEpochMs = entryEpochMs + Math.max(1, plannedSec) * 1000;
+  }
+
+  const alarmMs = Number.isFinite(alarmEpochMs) && anchorEpochMs > 0 ? alarmEpochMs - anchorEpochMs : null;
+  const entryMs = Number.isFinite(entryEpochMs) && anchorEpochMs > 0 ? entryEpochMs - anchorEpochMs : SIGNAL_AUTO_ENTRY_MS;
+  const exitMs = Number.isFinite(exitEpochMs) && anchorEpochMs > 0 ? exitEpochMs - anchorEpochMs : entryMs + 60000;
+  const alarmEndMs = Number.isFinite(alarmMs) ? alarmMs + SIGNAL_RESULT_60_DURATION_MS : 0;
+  const rawEndMs = Math.max(120000, exitMs + 1500, alarmEndMs + 1000);
+  const windowEndMs = Math.min(180000, Math.max(120000, Math.ceil(rawEndMs / 15000) * 15000));
+
+  return {
+    anchorEpochMs,
+    formationEndMs: 60000,
+    alarmEpochMs,
+    alarmMs,
+    entryEpochMs,
+    entryMs,
+    exitEpochMs,
+    exitMs,
+    entryQuote: studyFiniteNumber(trade.entry_spot, null),
+    exitQuote: studyFiniteNumber(trade.exit_spot, null),
+    windowEndMs,
+    contractDurationMs: Number.isFinite(entryMs) && Number.isFinite(exitMs) ? Math.max(0, exitMs - entryMs) : null,
+  };
+}
+function normalizeStudyExactTicks(item, fetchedTicks = [], timeline = getStudyCaptureTimeline(item)) {
+  const maxMs = Number(timeline?.windowEndMs || 120000);
+  const authoritative = (Array.isArray(fetchedTicks) ? fetchedTicks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= maxMs);
+
+  const savedFormation = (Array.isArray(item?.ticks) ? item.ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 60000);
+
+  const base = authoritative.length >= 3 ? authoritative : savedFormation;
+  const map = new Map();
+  for (const p of base) map.set(Math.round(p.ms), { ms: Number(p.ms), quote: Number(p.quote) });
+
+  // Si la API no devolvió el tick exacto del ancla, conserva únicamente el punto inicial real guardado.
+  const savedStart = savedFormation.find((p) => p.ms >= 0 && p.ms <= 500);
+  if (savedStart && !Array.from(map.values()).some((p) => p.ms <= 500)) {
+    map.set(0, { ms: 0, quote: savedStart.quote });
+  }
+
+  // Los spots contractuales son la fuente definitiva para entrada y cierre.
+  if (Number.isFinite(Number(timeline?.entryMs)) && Number.isFinite(Number(timeline?.entryQuote))) {
+    map.set(Math.round(Number(timeline.entryMs)), { ms: Number(timeline.entryMs), quote: Number(timeline.entryQuote), contractual: "entry" });
+  }
+  if (Number.isFinite(Number(timeline?.exitMs)) && Number.isFinite(Number(timeline?.exitQuote))) {
+    map.set(Math.round(Number(timeline.exitMs)), { ms: Number(timeline.exitMs), quote: Number(timeline.exitQuote), contractual: "exit" });
+  }
+
+  return Array.from(map.values()).sort((a, b) => Number(a.ms) - Number(b.ms));
+}
+async function fetchStudyCaptureExactTicks(item, timeline = getStudyCaptureTimeline(item)) {
+  const symbol = String(item?.symbol || "");
+  const anchorMs = Number(timeline?.anchorEpochMs || 0);
+  const windowEndMs = Number(timeline?.windowEndMs || 120000);
+  if (!symbol || !Number.isFinite(anchorMs) || anchorMs <= 0) return [];
+
+  try {
+    const start = Math.floor((anchorMs - 1000) / 1000);
+    const end = Math.ceil((anchorMs + windowEndMs + 2000) / 1000);
+    const res = await wsRequest({
+      ticks_history: symbol,
+      start,
+      end,
+      style: "ticks",
+      count: getHistoryCountMax(),
+      adjust_start_time: 1,
+    });
+    const h = res?.history;
+    if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return [];
+    const out = [];
+    for (let i = 0; i < Math.min(h.times.length, h.prices.length); i++) {
+      const ms = Number(h.times[i]) * 1000 - anchorMs;
+      const quote = Number(h.prices[i]);
+      if (!Number.isFinite(ms) || !Number.isFinite(quote) || ms < 0 || ms > windowEndMs) continue;
+      out.push({ ms, quote });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 function studyRoundRect(ctx, x, y, w, h, r = 12, fill = true, stroke = false, strokeColor = "rgba(255,255,255,.18)") {
   r = Math.max(0, Math.min(r, w / 2, h / 2));
@@ -456,49 +584,75 @@ function studyHexToRgba(hex, a = 1) {
   const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
   return `rgba(${r},${g},${b},${a})`;
 }
-function studyDrawPill(ctx, x, y, w, h, text, color, textColor = "#f8fbff") {
+function studyDrawPill(ctx, x, y, w, h, text, color, textColor = "#f8fbff", fontSize = 14) {
   ctx.fillStyle = color.startsWith("#") ? studyHexToRgba(color, .18) : color;
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
   studyRoundRect(ctx, x, y, w, h, h / 2, true, true, color);
   ctx.fillStyle = textColor;
-  ctx.font = "700 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  const tw = ctx.measureText(text).width;
-  ctx.fillText(text, x + (w - tw) / 2, y + h / 2 + 5);
+  ctx.font = `700 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
+  let label = String(text || "");
+  while (label.length > 3 && ctx.measureText(label).width > w - 18) label = label.slice(0, -2).trimEnd() + "…";
+  const tw = ctx.measureText(label).width;
+  ctx.fillText(label, x + (w - tw) / 2, y + h / 2 + fontSize * 0.34);
 }
-function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
+function studyDrawFittedText(ctx, text, x, y, maxWidth, font = "600 16px system-ui, -apple-system, Segoe UI, sans-serif", color = "#e5edf9") {
+  ctx.font = font;
+  ctx.fillStyle = color;
+  let label = String(text || "");
+  while (label.length > 4 && ctx.measureText(label).width > maxWidth) label = label.slice(0, -2).trimEnd() + "…";
+  ctx.fillText(label, x, y);
+}
+function shouldDrawStudyLevel(meta) {
+  const mode = String(meta?.levelMode || "").toLowerCase();
+  if (!mode || mode.includes("reduccion_constructiva")) return false;
+  return mode.includes("snr") || mode.includes("polar") || mode.includes("dinam") || mode.includes("nivel") || mode.includes("support") || mode.includes("resistance");
+}
+function getStudyPatternText(item, meta) {
+  return String(
+    meta?.acceptedReductionPatternText ||
+    meta?.acceptedChainPattern ||
+    meta?.visualReductionPattern ||
+    item?.pattern ||
+    ""
+  ).trim();
+}
+function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput = null) {
   const ctx = canvas.getContext("2d");
   const W = canvas.width;
   const H = canvas.height;
+  const timeline = timelineInput || getStudyCaptureTimeline(item);
   const dir = String(item?.direction || "PUT").toUpperCase() === "CALL" ? "CALL" : "PUT";
   const result = getStudyCaptureTradeResult(item) || "PEND";
   const isCall = dir === "CALL";
   const isItm = result === "ITM";
   const isOtm = result === "OTM";
   const tradeColor = isItm ? "#22c55e" : isOtm ? "#ef4444" : "#f59e0b";
-  const tradeSoft = isItm ? "rgba(34,197,94,.13)" : isOtm ? "rgba(239,68,68,.13)" : "rgba(245,158,11,.16)";
+  const tradeSoft = isItm ? "rgba(34,197,94,.10)" : isOtm ? "rgba(239,68,68,.10)" : "rgba(245,158,11,.12)";
   const tradeGlow = isItm ? "rgba(34,197,94,.32)" : isOtm ? "rgba(239,68,68,.32)" : "rgba(245,158,11,.32)";
-  const allTicks = normalizeStudyTicks(item, nextTicks);
-  const signalTicks = allTicks.filter((p) => p.ms <= 60000);
+  const allTicks = normalizeStudyExactTicks(item, exactTicks, timeline);
   const meta = getStudyCaptureLevelMeta(item);
+  const patternText = getStudyPatternText(item, meta);
+  const windowEndMs = Number(timeline.windowEndMs || 120000);
 
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#0f172a");
+  bg.addColorStop(0, "#091321");
   bg.addColorStop(1, "#111827");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = "rgba(13,22,42,.92)";
-  studyRoundRect(ctx, 24, 18, W - 48, 72, 22, true, false);
+  ctx.fillStyle = "rgba(13,22,42,.95)";
+  studyRoundRect(ctx, 24, 18, W - 48, 88, 22, true, false);
   ctx.fillStyle = "#e5edf9";
-  ctx.font = "800 25px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Captura de estudio PWA", 52, 48);
-  ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillStyle = "rgba(220,235,255,.76)";
-  ctx.fillText(`${item?.symbol || "—"} · ${dir === "CALL" ? "COMPRA / CALL" : "VENTA / PUT"} · Entrada ${SIGNAL_AUTO_ENTRY_SEC}s · ${item?.time || ""}`, 52, 72);
-  studyDrawPill(ctx, W - 255, 32, 205, 38, `Resultado: ${result}`, tradeColor);
+  ctx.font = "800 27px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText("Captura de estudio · cronología real", 52, 52);
+  ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillStyle = "rgba(220,235,255,.78)";
+  const headerLine = `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} → cierre ${studyFormatUtc(timeline.exitEpochMs)}`;
+  studyDrawFittedText(ctx, headerLine, 52, 80, W - 360, "600 15px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(220,235,255,.78)");
+  studyDrawPill(ctx, W - 270, 36, 220, 42, `Resultado real: ${result}`, tradeColor, "#f8fafc", 15);
 
-  const x0 = 54, y0 = 116, x1 = W - 54, y1 = H - 118;
+  const x0 = 54, y0 = 128, x1 = W - 54, y1 = H - 190;
   studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 24, false, true, "rgba(75,95,135,.65)");
   ctx.save();
   ctx.beginPath();
@@ -507,9 +661,17 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
   ctx.fillStyle = "#151a24";
   ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
-  const chartPad = { l: 54, r: 42, t: 34, b: 44 };
+  const chartPad = { l: 58, r: 46, t: 46, b: 48 };
   const cx0 = x0 + chartPad.l, cy0 = y0 + chartPad.t, cx1 = x1 - chartPad.r, cy1 = y1 - chartPad.b;
-  const midX = cx0 + ((cx1 - cx0) * 60) / 120;
+  const xOf = (ms) => cx0 + ((cx1 - cx0) * Math.max(0, Math.min(windowEndMs, Number(ms)))) / windowEndMs;
+
+  // Zonas temporales: formación flotante exacta y operación contractual exacta.
+  ctx.fillStyle = "rgba(34,211,238,.055)";
+  ctx.fillRect(xOf(0), cy0, Math.max(0, xOf(60000) - xOf(0)), cy1 - cy0);
+  if (Number.isFinite(Number(timeline.entryMs)) && Number.isFinite(Number(timeline.exitMs))) {
+    ctx.fillStyle = tradeSoft;
+    ctx.fillRect(xOf(timeline.entryMs), cy0, Math.max(2, xOf(timeline.exitMs) - xOf(timeline.entryMs)), cy1 - cy0);
+  }
 
   for (let i = 1; i <= 5; i++) {
     const y = cy0 + ((cy1 - cy0) * i) / 6;
@@ -517,46 +679,72 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(cx0, y); ctx.lineTo(cx1, y); ctx.stroke();
   }
-  for (let sec = 0; sec <= 120; sec += 15) {
-    const x = cx0 + ((cx1 - cx0) * sec) / 120;
-    ctx.strokeStyle = sec === 60 ? "rgba(148,163,184,.28)" : "rgba(148,163,184,.10)";
-    ctx.lineWidth = sec === 60 ? 2 : 1;
+  for (let ms = 0; ms <= windowEndMs; ms += 15000) {
+    const x = xOf(ms);
+    const formationBoundary = ms === 60000;
+    ctx.strokeStyle = formationBoundary ? "rgba(34,211,238,.55)" : "rgba(148,163,184,.12)";
+    ctx.lineWidth = formationBoundary ? 2.2 : 1;
+    ctx.setLineDash(formationBoundary ? [7, 7] : []);
     ctx.beginPath(); ctx.moveTo(x, cy0); ctx.lineTo(x, cy1); ctx.stroke();
-    let labelSec = sec;
-    if (sec > 60) labelSec = sec - 60;
-    if (sec === 60) labelSec = 0;
-    ctx.fillStyle = "rgba(203,213,225,.68)";
+    ctx.setLineDash([]);
+    const sec = Math.round(ms / 1000);
+    const label = sec <= 60 ? `${sec}s` : `+${sec - 60}s`;
+    ctx.fillStyle = formationBoundary ? "#67e8f9" : "rgba(203,213,225,.70)";
     ctx.font = "12px system-ui, -apple-system, Segoe UI, sans-serif";
-    ctx.fillText(`${labelSec}s`, x - 10, cy1 + 25);
+    ctx.fillText(label, x - 12, cy1 + 26);
   }
 
+  studyDrawPill(ctx, cx0 + 8, cy0 + 8, 210, 29, "Formación anclada 0–60s", "rgba(34,211,238,.42)", "#cffafe", 13);
+  const operationLabel = Number.isFinite(Number(timeline.contractDurationMs))
+    ? `Operación real ${Math.round(timeline.contractDurationMs / 1000)}s`
+    : "Operación real";
+  studyDrawPill(ctx, Math.min(cx1 - 190, Math.max(cx0 + 230, xOf(timeline.entryMs) + 8)), cy0 + 8, 180, 29, operationLabel, tradeColor, "#f8fafc", 13);
+
   if (allTicks.length >= 2) {
-    const qs = allTicks.map((p) => p.quote);
+    const qs = allTicks.map((p) => Number(p.quote)).filter(Number.isFinite);
+    if (Number.isFinite(Number(timeline.entryQuote))) qs.push(Number(timeline.entryQuote));
+    if (Number.isFinite(Number(timeline.exitQuote))) qs.push(Number(timeline.exitQuote));
     let min = Math.min(...qs), max = Math.max(...qs);
     let range = max - min;
-    if (!Number.isFinite(range) || range < 1e-9) range = 1;
-    min -= range * 0.08; max += range * 0.08;
-    const xOf = (ms) => cx0 + ((cx1 - cx0) * ms) / 120000;
-    const yOf = (q) => cy1 - ((q - min) / (max - min)) * (cy1 - cy0);
+    if (!Number.isFinite(range) || range < 1e-9) range = Math.max(Math.abs(max || 1) * 0.000001, 1);
+    min -= range * 0.09; max += range * 0.09;
+    const yOf = (q) => cy1 - ((Number(q) - min) / Math.max(max - min, 1e-9)) * (cy1 - cy0);
 
-    // Etiquetas de bloques sin superposición
-    studyDrawPill(ctx, cx0 + 8, cy0 + 6, 118, 26, "Señal 0-60s", "rgba(148,163,184,.28)", "#dbe7ff");
-    studyDrawPill(ctx, midX + 12, cy0 + 6, 142, 26, "Resultado 0-60s", "rgba(148,163,184,.28)", "#dbe7ff");
+    // Dos reducciones aceptadas: se muestran como bloques, sin deformar la línea real.
+    const blocks = Array.isArray(meta?.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 2) : [];
+    blocks.forEach((block, index) => {
+      const startMs = studyFiniteNumber(block?.startMs, null);
+      const endMs = studyFiniteNumber(block?.endMs, null);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return;
+      const bx0 = xOf(startMs), bx1 = xOf(endMs);
+      ctx.fillStyle = index === 0 ? "rgba(34,197,94,.07)" : "rgba(168,85,247,.07)";
+      ctx.fillRect(bx0, cy0 + 42, Math.max(3, bx1 - bx0), cy1 - cy0 - 42);
+      studyDrawPill(
+        ctx,
+        Math.max(cx0 + 6, Math.min(bx0 + 4, cx1 - 150)),
+        cy0 + 44 + index * 34,
+        144,
+        27,
+        `${index + 1}ª ${String(block?.pattern || "reducción")}`,
+        index === 0 ? "rgba(34,197,94,.52)" : "rgba(168,85,247,.52)",
+        "#f8fafc",
+        12
+      );
+    });
 
-    const level = Number(meta?.level);
-    if (Number.isFinite(level)) {
-      const ly = yOf(level);
-      const levelColor = isCall ? "rgba(34,197,94,.58)" : "rgba(244,63,94,.58)";
-      ctx.strokeStyle = levelColor;
-      ctx.lineWidth = 1.6;
-      ctx.beginPath(); ctx.moveTo(cx0, ly); ctx.lineTo(cx1, ly); ctx.stroke();
-      ctx.fillStyle = isCall ? "rgba(34,197,94,.10)" : "rgba(244,63,94,.10)";
-      studyRoundRect(ctx, cx0 + 10, ly - 18, 200, 32, 12, true, false);
-      ctx.fillStyle = "#f8fafc";
-      ctx.font = "800 13px system-ui, -apple-system, Segoe UI, sans-serif";
-      ctx.fillText(isCall ? "NIVEL: SOPORTE" : "NIVEL: RESISTENCIA", cx0 + 20, ly + 3);
+    if (shouldDrawStudyLevel(meta)) {
+      const level = Number(meta?.level);
+      if (Number.isFinite(level)) {
+        const ly = yOf(level);
+        const levelColor = isCall ? "rgba(34,197,94,.58)" : "rgba(244,63,94,.58)";
+        ctx.strokeStyle = levelColor;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(cx0, ly); ctx.lineTo(cx1, ly); ctx.stroke();
+        studyDrawPill(ctx, cx0 + 10, Math.max(cy0 + 84, ly - 16), 190, 29, isCall ? "NIVEL SOPORTE" : "NIVEL RESISTENCIA", levelColor, "#f8fafc", 12);
+      }
     }
 
+    // Área y línea: usa únicamente ticks del intervalo absoluto exacto.
     ctx.beginPath();
     allTicks.forEach((p, i) => {
       const x = xOf(p.ms), y = yOf(p.quote);
@@ -565,11 +753,11 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     ctx.lineTo(xOf(allTicks[allTicks.length - 1].ms), cy1);
     ctx.lineTo(xOf(allTicks[0].ms), cy1);
     ctx.closePath();
-    ctx.fillStyle = "rgba(229,231,235,.15)";
+    ctx.fillStyle = "rgba(229,231,235,.12)";
     ctx.fill();
 
     ctx.strokeStyle = "#f1f5f9";
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 3.2;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
@@ -579,157 +767,156 @@ function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
     });
     ctx.stroke();
 
-    const entryMs = Number(item?.trade?.entry_ms || item?.signalAutoEntry?.ms || SIGNAL_AUTO_ENTRY_MS);
-    const safeEntryMs = Math.min(60000, Math.max(0, entryMs));
-    const entryQuote = Number(getPriceAtMs(signalTicks.length ? signalTicks : item.ticks, safeEntryMs));
-    const ex = xOf(safeEntryMs);
-    const ey = Number.isFinite(entryQuote) ? yOf(entryQuote) : cy0 + (cy1 - cy0) / 2;
-
-    const closeTick = allTicks[allTicks.length - 1] || { ms: 120000, quote: entryQuote };
-    const closeQuote = Number(closeTick.quote);
-    const resultX = cx1 - 58;
-    const closeY = Number.isFinite(closeQuote) ? yOf(closeQuote) : ey;
-
-    // Punto de entrada visual
-    ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 8;
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.arc(ex, ey, 15, 0, Math.PI * 2); ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#0b1220";
-    ctx.beginPath(); ctx.arc(ex, ey, 11, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = tradeColor;
-    ctx.beginPath(); ctx.arc(ex, ey, 6, 0, Math.PI * 2); ctx.fill();
-
-    // Pin más limpio y chico
-    const pinX = ex;
-    const pinY = ey - 60;
-    ctx.save();
-    ctx.translate(pinX, pinY);
-    ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 8;
-    ctx.fillStyle = tradeColor;
-    ctx.beginPath();
-    ctx.moveTo(0, 34);
-    ctx.bezierCurveTo(-16, 14, -14, -18, 0, -18);
-    ctx.bezierCurveTo(14, -18, 16, 14, 0, 34);
-    ctx.closePath();
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#0b1220";
-    ctx.beginPath(); ctx.arc(0, -2, 5.5, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-
-    const entryTag = isItm ? `T ${SIGNAL_AUTO_ENTRY_SEC}s` : isOtm ? `TM ${SIGNAL_AUTO_ENTRY_SEC}s` : `${dir} ${SIGNAL_AUTO_ENTRY_SEC}s`;
-    studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(ex - 18, cx1 - 108)), Math.max(cy0 + 12, pinY - 4), 96, 32, entryTag, tradeColor, "#07120d");
-
-    // Línea horizontal de operación menos gruesa
-    ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 6;
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(resultX, ey); ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Bandera más adentro
-    const mastX = resultX;
-    const flagW = 54, flagH = 32;
-    const mastTopY = Math.max(cy0 + 40, ey - 62);
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(mastX, ey); ctx.lineTo(mastX, mastTopY); ctx.stroke();
-    ctx.fillStyle = tradeSoft;
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.rect(mastX, mastTopY, flagW, flagH); ctx.fill(); ctx.stroke();
-    const cols = 4, rows = 2;
-    const cw = flagW / cols, ch = flagH / rows;
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        if ((r + c) % 2 === 0) {
-          ctx.fillStyle = tradeColor;
-          ctx.fillRect(mastX + c * cw, mastTopY + r * ch, cw, ch);
-        }
-      }
+    // Momento exacto de la alarma, separado de la entrada contractual.
+    if (Number.isFinite(Number(timeline.alarmMs)) && timeline.alarmMs >= 0 && timeline.alarmMs <= windowEndMs) {
+      const ax = xOf(timeline.alarmMs);
+      ctx.strokeStyle = "rgba(250,204,21,.88)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 6]);
+      ctx.beginPath(); ctx.moveTo(ax, cy0); ctx.lineTo(ax, cy1); ctx.stroke();
+      ctx.setLineDash([]);
+      studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ax - 62, cx1 - 126)), cy1 - 36, 124, 27, `ALARMA ${Math.round(timeline.alarmMs / 1000)}s`, "rgba(250,204,21,.72)", "#fff7c2", 12);
     }
 
-    // Línea punteada y cierre
+    const entryMs = Math.max(0, Math.min(windowEndMs, Number(timeline.entryMs || SIGNAL_AUTO_ENTRY_MS)));
+    const exitMs = Math.max(entryMs, Math.min(windowEndMs, Number(timeline.exitMs || entryMs + 60000)));
+    const entryQuote = Number.isFinite(Number(timeline.entryQuote)) ? Number(timeline.entryQuote) : Number(getPriceAtMs(allTicks, entryMs));
+    const exitQuote = Number.isFinite(Number(timeline.exitQuote)) ? Number(timeline.exitQuote) : Number(getPriceAtMs(allTicks, exitMs));
+    const ex = xOf(entryMs), ey = Number.isFinite(entryQuote) ? yOf(entryQuote) : cy0 + (cy1 - cy0) / 2;
+    const closeX = xOf(exitMs), closeY = Number.isFinite(exitQuote) ? yOf(exitQuote) : ey;
+
+    // Entrada real.
+    ctx.shadowColor = tradeGlow;
+    ctx.shadowBlur = 9;
+    ctx.strokeStyle = tradeColor;
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#0b1220";
+    ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = tradeColor;
+    ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
+    studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA REAL", tradeColor, "#f8fafc", 12);
+
+    // Nivel contractual y cierre exacto.
     ctx.strokeStyle = tradeColor;
     ctx.lineWidth = 3.5;
-    ctx.setLineDash([9, 7]);
-    ctx.beginPath(); ctx.moveTo(resultX, ey); ctx.lineTo(resultX, closeY); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
+    ctx.setLineDash([8, 7]);
+    ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
     ctx.setLineDash([]);
 
     ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 7;
+    ctx.shadowBlur = 8;
     ctx.fillStyle = tradeColor;
-    ctx.beginPath(); ctx.arc(resultX, closeY, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
-
-    // Badge de resultado más cerca del cierre
-    const pillW = result === "PEND" ? 108 : 92;
-    const pillX = Math.max(cx0 + 8, Math.min(resultX - 46, cx1 - pillW - 8));
-    const pillY = Math.max(cy0 + 38, closeY - 54);
-    studyDrawPill(ctx, pillX, pillY, pillW, 32, result, tradeColor, "#07120d");
+    ctx.fillStyle = "#07120d";
+    ctx.font = "900 12px system-ui, -apple-system, Segoe UI, sans-serif";
+    const resultWidth = result === "PEND" ? 110 : 92;
+    studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
   }
 
   ctx.restore();
 
-  ctx.fillStyle = "rgba(15,23,42,.92)";
-  studyRoundRect(ctx, 54, H - 92, W - 108, 58, 18, true, true, "rgba(75,95,135,.5)");
+  // Resumen útil para auditar la captura contra Deriv.
+  const footerY = H - 166;
+  ctx.fillStyle = "rgba(15,23,42,.94)";
+  studyRoundRect(ctx, 54, footerY, W - 108, 132, 18, true, true, "rgba(75,95,135,.5)");
   ctx.fillStyle = "#eaf2ff";
-  ctx.font = "800 15px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Resumen:", 82, H - 58);
+  ctx.font = "800 16px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText("Lectura:", 82, footerY + 32);
+  const group = String(meta?.visualReductionGroup || "").trim();
+  const signalText = `${group ? group + " " : ""}${patternText || "formación"} → ${isCall ? "COMPRA" : "VENTA"}`;
+  studyDrawFittedText(ctx, signalText, 172, footerY + 32, W - 255, "700 16px system-ui, -apple-system, Segoe UI, sans-serif", "#f8fafc");
+
+  ctx.fillStyle = "rgba(220,235,255,.78)";
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillStyle = "rgba(220,235,255,.84)";
-  const actionLabel = isItm ? "T" : isOtm ? "TM" : dir;
-  const note = `${isCall ? "Soporte" : "Resistencia"} respetad${isCall ? "o" : "a"} · entrada ${actionLabel} ${SIGNAL_AUTO_ENTRY_SEC}s · pin, línea, cierre y bandera en ${isItm ? "verde" : isOtm ? "rojo" : "amarillo"}`;
-  ctx.fillText(note, 170, H - 58);
+  const entrySpotTxt = Number.isFinite(Number(timeline.entryQuote)) ? Number(timeline.entryQuote).toFixed(6) : "—";
+  const exitSpotTxt = Number.isFinite(Number(timeline.exitQuote)) ? Number(timeline.exitQuote).toFixed(6) : "—";
+  studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
+  studyDrawFittedText(ctx, `Cierre ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · línea blanca: ticks_history del intervalo absoluto exacto`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
+  studyDrawFittedText(ctx, `Ancla flotante ${studyFormatUtc(timeline.anchorEpochMs)} · separación real formación/operación · sin minuto calendario desplazado`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
 }
 
 async function generateAndSaveStudyCaptureForSignal(item, { force = false } = {}) {
-  if (!isStudyCaptureReadyItem(item)) return null;
-  const captureId = getStudyCaptureIdFromItem(item);
+  const liveItem = item?.id ? findHistoryItemById(String(item.id)) : null;
+  const sourceItem = liveItem
+    ? {
+        ...item,
+        ...liveItem,
+        journal_id: item?.journal_id || liveItem?.journal_id || "",
+        trade: { ...(liveItem?.trade || {}), ...(item?.trade || {}) },
+        signalResult60: item?.signalResult60 || liveItem?.signalResult60 || null,
+      }
+    : item;
+  if (!isStudyCaptureReadyItem(sourceItem)) return null;
+  const captureId = getStudyCaptureIdFromItem(sourceItem);
   if (!captureId) return null;
   if (!force) {
     try {
       const existing = await getStudyCapture(captureId);
-      if (existing?.dataUrl) return existing;
+      if (existing?.dataUrl && existing?.render_version === STUDY_CAPTURE_RENDER_VERSION) return existing;
     } catch {}
   }
-  const nextTicks = await getStudyCaptureNextTicks(item);
+
+  const timeline = getStudyCaptureTimeline(sourceItem);
+  const exactTicks = await fetchStudyCaptureExactTicks(sourceItem, timeline);
   const canvas = document.createElement("canvas");
-  canvas.width = 1400;
-  canvas.height = 820;
-  drawStudyCaptureToCanvas(canvas, item, nextTicks);
-  const dataUrl = canvas.toDataURL("image/png", 0.92);
+  canvas.width = 1600;
+  canvas.height = 960;
+  drawStudyCaptureToCanvas(canvas, sourceItem, exactTicks, timeline);
+  const dataUrl = canvas.toDataURL("image/png", 0.94);
   const record = {
     id: captureId,
-    journal_id: makeJournalIdFromSignal(item),
-    signal_id: String(item.id || ""),
-    symbol: String(item.symbol || ""),
-    direction: String(item.direction || ""),
-    result: getStudyCaptureTradeResult(item),
+    render_version: STUDY_CAPTURE_RENDER_VERSION,
+    journal_id: makeJournalIdFromSignal(sourceItem),
+    signal_id: String(sourceItem.id || ""),
+    symbol: String(sourceItem.symbol || ""),
+    direction: String(sourceItem.direction || ""),
+    result: getStudyCaptureTradeResult(sourceItem),
     created_at: Date.now(),
+    timeline: {
+      anchor_epoch_ms: timeline.anchorEpochMs,
+      alarm_epoch_ms: timeline.alarmEpochMs,
+      entry_epoch_ms: timeline.entryEpochMs,
+      exit_epoch_ms: timeline.exitEpochMs,
+      entry_quote: timeline.entryQuote,
+      exit_quote: timeline.exitQuote,
+      window_end_ms: timeline.windowEndMs,
+      exact_tick_count: exactTicks.length,
+    },
     dataUrl,
   };
   await putStudyCapture(record);
-  item.trade ||= {};
-  item.trade.study_capture_id = captureId;
+  sourceItem.trade ||= {};
+  sourceItem.trade.study_capture_id = captureId;
+  sourceItem.trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
+  if (liveItem) {
+    liveItem.trade ||= {};
+    liveItem.trade.study_capture_id = captureId;
+    liveItem.trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
+  }
+  if (item && item !== liveItem) {
+    item.trade ||= {};
+    item.trade.study_capture_id = captureId;
+    item.trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
+  }
   try { saveHistory(history); } catch {}
   try {
-    const jid = makeJournalIdFromSignal(item);
+    const jid = makeJournalIdFromSignal(sourceItem);
     const idx = tradesJournal.findIndex((x) => x && x.journal_id === jid);
     if (idx >= 0) {
       tradesJournal[idx].study_capture_id = captureId;
       tradesJournal[idx].trade ||= {};
       tradesJournal[idx].trade.study_capture_id = captureId;
+      tradesJournal[idx].trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
       saveTradesJournal(tradesJournal);
     }
   } catch {}
   return record;
 }
+
 function ensureStudyCaptureModal() {
   let modal = document.getElementById("studyCaptureModal");
   if (modal) return modal;
@@ -788,8 +975,11 @@ async function showStudyCaptureForItem(item) {
   img.removeAttribute("src");
   img.alt = "Generando captura…";
   try {
-    let rec = await getStudyCapture(item?.trade?.study_capture_id || item?.study_capture_id || getStudyCaptureIdFromItem(item));
-    if (!rec?.dataUrl) rec = await generateAndSaveStudyCaptureForSignal(item, { force: true });
+    const currentCaptureId = getStudyCaptureIdFromItem(item);
+    let rec = await getStudyCapture(currentCaptureId);
+    if (!rec?.dataUrl || rec?.render_version !== STUDY_CAPTURE_RENDER_VERSION) {
+      rec = await generateAndSaveStudyCaptureForSignal(item, { force: true });
+    }
     if (!rec?.dataUrl) { toast("⚠️ No pude generar la captura todavía", 1800); return; }
     img.src = rec.dataUrl;
     img.alt = `Captura ${item.symbol || ""} ${item.direction || ""}`;
@@ -12417,6 +12607,47 @@ function normalizeSNRLevelMeta(meta) {
     stage: s(meta.stage),
     status: s(meta.status),
     logic: s(meta.logic),
+
+    // V109.2: conservar la lectura constructiva necesaria para que la captura
+    // pueda mostrar exactamente las dos reducciones también desde Trades/exportes.
+    visualReductionGroup: s(meta.visualReductionGroup),
+    visualReductionContraryGroup: s(meta.visualReductionContraryGroup),
+    visualReductionPattern: s(meta.visualReductionPattern),
+    acceptedChainPattern: s(meta.acceptedChainPattern),
+    acceptedReductionPatternText: s(meta.acceptedReductionPatternText),
+    signalFromSec: n(meta.signalFromSec),
+    constructiveFormedAtMs: n(meta.constructiveFormedAtMs),
+    secondReductionConfirmedAtMs: n(meta.secondReductionConfirmedAtMs),
+    firstConstructiveReduction: meta.firstConstructiveReduction && typeof meta.firstConstructiveReduction === "object"
+      ? {
+          pattern: s(meta.firstConstructiveReduction.pattern),
+          startMs: n(meta.firstConstructiveReduction.startMs),
+          endMs: n(meta.firstConstructiveReduction.endMs),
+        }
+      : null,
+    secondConstructiveReduction: meta.secondConstructiveReduction && typeof meta.secondConstructiveReduction === "object"
+      ? {
+          pattern: s(meta.secondConstructiveReduction.pattern),
+          startMs: n(meta.secondConstructiveReduction.startMs),
+          endMs: n(meta.secondConstructiveReduction.endMs),
+        }
+      : null,
+    acceptedReductionBlocks: Array.isArray(meta.acceptedReductionBlocks)
+      ? meta.acceptedReductionBlocks.slice(0, 2).map((block) => ({
+          pattern: s(block?.pattern),
+          startMs: n(block?.startMs),
+          endMs: n(block?.endMs),
+          labels: Array.isArray(block?.labels) ? block.labels.map((x) => s(x)).slice(0, 3) : [],
+          runs: Array.isArray(block?.runs)
+            ? block.runs.slice(0, 3).map((run) => ({
+                startMs: n(run?.startMs),
+                endMs: n(run?.endMs),
+                move: n(run?.move),
+                side: n(run?.side),
+              }))
+            : [],
+        }))
+      : [],
   };
 }
 function getSignalLevelMeta(item) {
