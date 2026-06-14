@@ -1,3 +1,4 @@
+// v109.0: Resultado 60s desde la alarma para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
@@ -900,7 +901,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_FLOATING_CALENDAR_ISOLATION_FIX_V108_7_20260614";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_TWO_REDUCTIONS_RESULT_60S_V109_0_20260614";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -1609,6 +1610,10 @@ function upsertTradeJournalFromSignal(it) {
 
     nextOutcome: it.nextOutcome || "",
     minuteComplete: !!it.minuteComplete,
+    signalFloatingWindow: !!it.signalFloatingWindow,
+    signalAnchorEpochMs: it.signalAnchorEpochMs || null,
+    signalDetectedEpochMs: it.signalDetectedEpochMs || null,
+    signalResult60: it.signalResult60 && typeof it.signalResult60 === "object" ? { ...it.signalResult60 } : null,
 
     // snapshot trade
     trade: { ...(it.trade || {}) },
@@ -2084,6 +2089,9 @@ const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
 const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 7000;
 const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
 const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 90000;
+const SIGNAL_RESULT_60_DURATION_MS = 60000;
+const SIGNAL_RESULT_60_LIVE_GRACE_MS = 10000;
+const signalResult60HydrationPending = new Set();
 let constructiveRollingTicksBySymbol = Object.create(null);
 let constructiveLastSignalBySymbol = Object.create(null);
 
@@ -2181,14 +2189,20 @@ function setCompactModalHeader(item, ticksCount = null) {
     const mode = formatCompactModeLabel(item.mode || "NORMAL");
     const n = ticksCount == null ? (Array.isArray(item.ticks) ? item.ticks.length : 0) : Number(ticksCount) || 0;
     const live = modalLive && isItemLiveMinute(item) ? " · LIVE" : "";
-    const outcomeValue = getItemNextOutcomeValue(item);
     let signalOrResultTxt = "";
-    if (item?.signalFloatingWindow && !item?.minuteComplete) {
-      signalOrResultTxt = formatNextCandleDirectionLabel(item.direction).replace("PROX VELA", "SEÑAL");
-    } else if (item?.minuteComplete && outcomeValue) {
-      signalOrResultTxt = formatNextCandleOutcomeLabel(item, true).replace("PROX VELA", "RESULTADO");
+    if (isFloatingSignalItem(item)) {
+      const result60 = ensureSignalResult60(item);
+      if (result60 && isSignalResult60Resolved(item)) {
+        signalOrResultTxt = getSignalResult60DirectionText(item);
+      } else if (result60) {
+        signalOrResultTxt = `RESULTADO 60s ⏳ ${getSignalResult60RemainingSec(item)}s`;
+      } else {
+        signalOrResultTxt = formatNextCandleDirectionLabel(item.direction).replace("PROX VELA", "SEÑAL");
+      }
     } else {
-      signalOrResultTxt = formatNextCandleDirectionLabel(item.direction);
+      const outcomeValue = getItemNextOutcomeValue(item);
+      if (item?.minuteComplete && outcomeValue) signalOrResultTxt = formatNextCandleOutcomeLabel(item, true).replace("PROX VELA", "RESULTADO");
+      else signalOrResultTxt = formatNextCandleDirectionLabel(item.direction);
     }
     modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${signalOrResultTxt ? " · " + signalOrResultTxt : ""}${live}`;
   }
@@ -4692,6 +4706,10 @@ function startUiTimers() {
     // ✅ FIX AUTO 58 DEMO/REAL:
     // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 58.
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
+    if (modalCurrentItem && isFloatingSignalItem(modalCurrentItem)) {
+      setCompactModalHeader(modalCurrentItem);
+      updateModalFooterReadingUI();
+    }
     updateModalCandleStatusUI();
     refreshOpenSignalStageBadges();
     scanSignalAutoPreProposals();
@@ -10492,7 +10510,18 @@ function updateModalFooterReadingUI() {
       }
     }
     if (modalSequenceDetail) {
-      modalSequenceDetail.textContent = getModalVisualSequenceSummary(modalCurrentItem);
+      const baseDetail = getModalVisualSequenceSummary(modalCurrentItem);
+      if (isFloatingSignalItem(modalCurrentItem)) {
+        const r = ensureSignalResult60(modalCurrentItem);
+        const resultDetail = r
+          ? (isSignalResult60Resolved(modalCurrentItem)
+              ? `${getSignalResult60DirectionText(modalCurrentItem)} · inicio ${Number(r.startQuote).toFixed(6)} · final ${Number(r.endQuote).toFixed(6)}`
+              : `Resultado 60s pendiente · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s desde la alarma`)
+          : "";
+        modalSequenceDetail.textContent = resultDetail ? `${baseDetail} · ${resultDetail}` : baseDetail;
+      } else {
+        modalSequenceDetail.textContent = baseDetail;
+      }
     }
   } else {
     if (modalSequenceText) modalSequenceText.textContent = '—';
@@ -11414,17 +11443,42 @@ function updateModalCandleStatusUI() {
     }
     const enabled = getSignalEnabledTradeSide(modalCurrentItem);
     const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
-    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    const result60 = isFloatingSignalItem(modalCurrentItem) ? ensureSignalResult60(modalCurrentItem) : null;
+    const resultTxt = result60
+      ? (isSignalResult60Resolved(modalCurrentItem)
+          ? ` · ${getSignalResult60DirectionText(modalCurrentItem)}`
+          : ` · resultado 60s en ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
+      : "";
+    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${resultTxt}`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.14)";
     bar.style.borderColor = "rgba(34,197,94,.28)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.05) inset";
   } else {
-    bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
-    bar.style.color = "rgba(229,231,235,.92)";
-    bar.style.background = "rgba(107,114,128,.16)";
-    bar.style.borderColor = "rgba(156,163,175,.22)";
-    bar.style.boxShadow = "none";
+    const result60 = isFloatingSignalItem(modalCurrentItem) ? ensureSignalResult60(modalCurrentItem) : null;
+    if (result60 && !isSignalResult60Resolved(modalCurrentItem)) {
+      const remain60 = getSignalResult60RemainingSec(modalCurrentItem);
+      bar.textContent = `⏳ Resultado 60s · faltan ${remain60}s desde la alarma`;
+      bar.style.color = "#fef3c7";
+      bar.style.background = "rgba(202,138,4,.14)";
+      bar.style.borderColor = "rgba(250,204,21,.30)";
+      bar.style.boxShadow = "0 0 0 1px rgba(250,204,21,.05) inset";
+      if (remain60 === 0) scheduleSignalResult60Hydration(modalCurrentItem);
+    } else if (result60 && isSignalResult60Resolved(modalCurrentItem)) {
+      const correctness = getSignalResult60Correctness(modalCurrentItem);
+      const correctnessTxt = correctness === "correct" ? " · ✅ lectura correcta" : correctness === "incorrect" ? " · ❌ lectura incorrecta" : "";
+      bar.textContent = `${getSignalResult60DirectionText(modalCurrentItem)}${correctnessTxt}`;
+      bar.style.color = correctness === "incorrect" ? "#fecaca" : correctness === "correct" ? "#dcfce7" : "rgba(229,231,235,.92)";
+      bar.style.background = correctness === "incorrect" ? "rgba(127,29,29,.22)" : correctness === "correct" ? "rgba(22,163,74,.16)" : "rgba(107,114,128,.16)";
+      bar.style.borderColor = correctness === "incorrect" ? "rgba(248,113,113,.34)" : correctness === "correct" ? "rgba(34,197,94,.30)" : "rgba(156,163,175,.22)";
+      bar.style.boxShadow = "none";
+    } else {
+      bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
+      bar.style.color = "rgba(229,231,235,.92)";
+      bar.style.background = "rgba(107,114,128,.16)";
+      bar.style.borderColor = "rgba(156,163,175,.22)";
+      bar.style.boxShadow = "none";
+    }
   }
 
 
@@ -13303,6 +13357,10 @@ function buildModalItemFromTradeEntry(entry) {
     ticks,
     nextOutcome: entry.nextOutcome || live?.nextOutcome || "",
     minuteComplete: entry.minuteComplete !== false,
+    signalFloatingWindow: !!(entry.signalFloatingWindow || live?.signalFloatingWindow),
+    signalAnchorEpochMs: entry.signalAnchorEpochMs || live?.signalAnchorEpochMs || null,
+    signalDetectedEpochMs: entry.signalDetectedEpochMs || live?.signalDetectedEpochMs || null,
+    signalResult60: entry.signalResult60 || live?.signalResult60 || null,
     trade: entry.trade || live?.trade || null,
     study_capture_id: entry.study_capture_id || entry?.trade?.study_capture_id || live?.study_capture_id || live?.trade?.study_capture_id || "",
     manualGiro: normalizeManualGiroState(entry.manualGiro || live?.manualGiro),
@@ -13672,26 +13730,26 @@ function updateRowNextArrowOnRow(row, item) {
   if (!row) return;
   const el = row.querySelector(".nextArrow");
   if (!el) return;
+  const floating = isFloatingSignalItem(item);
 
   if (item.nextOutcome === "up") {
     el.textContent = "⬆️";
     el.className = "nextArrow up";
-    el.title = "Próxima vela: cerró arriba del cierre de la vela de señal";
+    el.title = floating ? "Resultado 60s desde la alarma: ALCISTA" : "Próxima vela: cerró arriba del cierre de la vela de señal";
   } else if (item.nextOutcome === "down") {
     el.textContent = "⬇️";
     el.className = "nextArrow down";
-    el.title = "Próxima vela: cerró abajo del cierre de la vela de señal";
+    el.title = floating ? "Resultado 60s desde la alarma: BAJISTA" : "Próxima vela: cerró abajo del cierre de la vela de señal";
   } else if (item.nextOutcome === "flat") {
     el.textContent = "➖";
     el.className = "nextArrow flat";
-    el.title = "Próxima vela: cerró igual que la vela de señal";
+    el.title = floating ? "Resultado 60s desde la alarma: NEUTRO" : "Próxima vela: cerró igual que la vela de señal";
   } else {
     el.textContent = "⏳";
     el.className = "nextArrow pending";
-    el.title = "Próxima vela: esperando…";
+    el.title = floating ? `Resultado 60s: esperando${getSignalResult60RemainingSec(item) ? ` (${getSignalResult60RemainingSec(item)}s)` : ""}` : "Próxima vela: esperando…";
   }
 }
-
 function animateFailShake(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -13947,6 +14005,27 @@ function getSignalLifecycleStageInfo(item) {
   const status = String(item?.signalAutoEntry?.status || "");
 
   const dynamicMode = isDynamicLineMode(item.mode);
+
+  if (isFloatingSignalItem(item)) {
+    const result60 = ensureSignalResult60(item);
+    if (result60 && isSignalResult60Resolved(item)) {
+      const out = normalizeSignalResult60Outcome(result60.outcome);
+      const correctness = getSignalResult60Correctness(item);
+      const directionTxt = out === "up" ? "ALCISTA" : out === "down" ? "BAJISTA" : "NEUTRO";
+      return {
+        key: `result60_${out || "pending"}`,
+        label: `${correctness === "correct" ? "✅" : correctness === "incorrect" ? "❌" : "➖"} ${directionTxt} 60s`,
+        title: `${getSignalResult60DirectionText(item)}${correctness === "correct" ? " · lectura correcta" : correctness === "incorrect" ? " · lectura incorrecta" : ""}`,
+      };
+    }
+    if (result60 && item.minuteComplete) {
+      return {
+        key: "result60_pending",
+        label: `⏳ RESULT. ${getSignalResult60RemainingSec(item)}s`,
+        title: `Esperando el resultado 60 segundos desde la alarma. Faltan ${getSignalResult60RemainingSec(item)}s.`,
+      };
+    }
+  }
 
   if (item.minuteComplete) {
     if (hasTrade || attempted) {
@@ -15170,6 +15249,161 @@ function normalizeTicksForMinute(minute, times, prices) {
   }
   return out;
 }
+function normalizeSignalResult60Outcome(value) {
+  const v = String(value || "").toLowerCase().trim();
+  if (v === "up" || v === "alcista") return "up";
+  if (v === "down" || v === "bajista") return "down";
+  if (v === "flat" || v === "equal" || v === "neutral" || v === "neutro") return "flat";
+  return "";
+}
+function inferSignalResult60StartEpochMs(item) {
+  const direct = Number(item?.signalResult60?.startEpochMs || item?.signalDetectedEpochMs || item?.signalCreatedEpochMs || 0);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const anchor = Number(item?.signalAnchorEpochMs || 0);
+  const sec = Number(item?.signalPrealertAtSec);
+  if (Number.isFinite(anchor) && anchor > 0 && Number.isFinite(sec) && sec >= 0) return anchor + sec * 1000;
+  return 0;
+}
+function ensureSignalResult60(item, opts = {}) {
+  if (!item || !isFloatingSignalItem(item)) return null;
+  const existing = item.signalResult60 && typeof item.signalResult60 === "object" ? item.signalResult60 : {};
+  const startEpochMs = Number(opts.startEpochMs || existing.startEpochMs || inferSignalResult60StartEpochMs(item) || 0);
+  if (!Number.isFinite(startEpochMs) || startEpochMs <= 0) return null;
+  const finiteOrNull = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  };
+  const startQuote = finiteOrNull(opts.startQuote ?? existing.startQuote);
+  const deadlineEpochMs = Number(existing.deadlineEpochMs || (startEpochMs + SIGNAL_RESULT_60_DURATION_MS));
+  const outcome = normalizeSignalResult60Outcome(existing.outcome || "");
+  item.signalResult60 = {
+    startEpochMs,
+    deadlineEpochMs,
+    startQuote,
+    status: outcome ? "resolved" : String(existing.status || "pending"),
+    outcome,
+    endEpochMs: finiteOrNull(existing.endEpochMs),
+    endQuote: finiteOrNull(existing.endQuote),
+    delta: finiteOrNull(existing.delta),
+    source: String(existing.source || opts.source || "live"),
+    resolvedAt: finiteOrNull(existing.resolvedAt),
+  };
+  return item.signalResult60;
+}
+function getSignalResult60(item) {
+  return ensureSignalResult60(item);
+}
+function isSignalResult60Resolved(item) {
+  return normalizeSignalResult60Outcome(item?.signalResult60?.outcome) !== "";
+}
+function getSignalResult60RemainingSec(item) {
+  const r = getSignalResult60(item);
+  if (!r || isSignalResult60Resolved(item)) return 0;
+  return Math.max(0, Math.ceil((Number(r.deadlineEpochMs) - serverNowMs()) / 1000));
+}
+function getSignalResult60DirectionText(item, pendingText = "RESULTADO 60s ⏳") {
+  const out = normalizeSignalResult60Outcome(item?.signalResult60?.outcome);
+  if (out === "up") return "RESULTADO 60s ALCISTA";
+  if (out === "down") return "RESULTADO 60s BAJISTA";
+  if (out === "flat") return "RESULTADO 60s NEUTRO";
+  return pendingText;
+}
+function getSignalResult60Correctness(item) {
+  const out = normalizeSignalResult60Outcome(item?.signalResult60?.outcome);
+  const dir = normalizeSignalConfirmationSide(item?.direction);
+  if (!out || out === "flat" || !dir) return "neutral";
+  if ((dir === "CALL" && out === "up") || (dir === "PUT" && out === "down")) return "correct";
+  return "incorrect";
+}
+function resolveSignalResult60(item, endEpochMs, endQuote, source = "live") {
+  if (!item) return false;
+  const r = ensureSignalResult60(item);
+  const q0 = Number(r?.startQuote);
+  const q1 = Number(endQuote);
+  if (!r || !Number.isFinite(q0) || !Number.isFinite(q1)) return false;
+  const outcome = q1 > q0 ? "up" : q1 < q0 ? "down" : "flat";
+  r.status = "resolved";
+  r.outcome = outcome;
+  r.endEpochMs = Number(endEpochMs) || Number(r.deadlineEpochMs);
+  r.endQuote = q1;
+  r.delta = q1 - q0;
+  r.source = String(source || "live");
+  r.resolvedAt = Date.now();
+  item.signalResult60 = r;
+  setNextOutcome(item, outcome);
+  updateRowNextArrow(item);
+  updateRowChartBtn(item);
+  if (modalCurrentItem && String(modalCurrentItem.id || "") === String(item.id || "")) {
+    modalCurrentItem.signalResult60 = { ...r };
+    setCompactModalHeader(modalCurrentItem);
+    updateModalCandleStatusUI();
+    updateModalFooterReadingUI();
+    requestModalDraw(true);
+  }
+  return true;
+}
+function pickSignalResult60EndTick(times, prices, deadlineEpochMs) {
+  const targetSec = Number(deadlineEpochMs) / 1000;
+  let after = null;
+  let before = null;
+  for (let i = 0; i < Math.min(times?.length || 0, prices?.length || 0); i++) {
+    const sec = Number(times[i]);
+    const quote = Number(prices[i]);
+    if (!Number.isFinite(sec) || !Number.isFinite(quote)) continue;
+    const row = { epochMs: sec * 1000, quote };
+    if (sec >= targetSec) {
+      after = row;
+      break;
+    }
+    before = row;
+  }
+  return after || before;
+}
+async function hydrateSignalResult60FromDerivHistory(item) {
+  const liveItem = item?.id ? findHistoryItemById(String(item.id)) : null;
+  if (liveItem) item = liveItem;
+  const r = ensureSignalResult60(item);
+  if (!r || isSignalResult60Resolved(item)) return false;
+  if (serverNowMs() < Number(r.deadlineEpochMs)) return false;
+  const key = String(item?.id || "");
+  if (key && signalResult60HydrationPending.has(key)) return false;
+  if (key) signalResult60HydrationPending.add(key);
+  try {
+    const symbol = String(item?.symbol || "");
+    if (!symbol) return false;
+    const start = Math.floor(Number(r.startEpochMs) / 1000);
+    const end = Math.ceil((Number(r.deadlineEpochMs) + 5000) / 1000);
+    const res = await wsRequest({
+      ticks_history: symbol,
+      start,
+      end,
+      style: "ticks",
+      count: getHistoryCountMax(),
+      adjust_start_time: 1,
+    });
+    const h = res?.history;
+    if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return false;
+    if (!Number.isFinite(Number(r.startQuote))) {
+      const firstQ = Number(h.prices[0]);
+      if (Number.isFinite(firstQ)) r.startQuote = firstQ;
+    }
+    const endTick = pickSignalResult60EndTick(h.times, h.prices, r.deadlineEpochMs);
+    if (!endTick) return false;
+    return resolveSignalResult60(item, endTick.epochMs, endTick.quote, "ticks_history");
+  } catch {
+    return false;
+  } finally {
+    if (key) signalResult60HydrationPending.delete(key);
+  }
+}
+function scheduleSignalResult60Hydration(item) {
+  if (!item || isSignalResult60Resolved(item)) return;
+  const target = item?.id ? (findHistoryItemById(String(item.id)) || item) : item;
+  const key = String(target.id || "");
+  if (key && signalResult60HydrationPending.has(key)) return;
+  setTimeout(() => { hydrateSignalResult60FromDerivHistory(target).catch(() => {}); }, 0);
+}
 function isFloatingSignalItem(item) {
   return !!item?.signalFloatingWindow || Number.isFinite(Number(item?.signalAnchorEpochMs || 0));
 }
@@ -15234,12 +15468,11 @@ async function hydrateFloatingSignalFromDerivHistory(item) {
     const full = await fetchFullFloatingSignalTicks(item);
     if (Array.isArray(full) && full.length >= 2) item.ticks = full.slice();
     item.minuteComplete = true;
-    const first = Number(item.ticks?.[0]?.quote);
-    const last = Number((item.ticks || []).slice(-1)[0]?.quote);
-    const out = compareConsecutiveCloses(first, last);
-    if (out) item.nextOutcome = out;
-    updateRowNextArrow(item);
     updateRowChartBtn(item);
+    const r = ensureSignalResult60(item);
+    if (r && serverNowMs() >= Number(r.deadlineEpochMs) && !isSignalResult60Resolved(item)) {
+      await hydrateSignalResult60FromDerivHistory(item);
+    }
     return true;
   } catch {
     return false;
@@ -15422,6 +15655,13 @@ async function rehydrateHistoryOnBoot() {
   }
 
   try {
+    const recentFloating = slice.filter((it) => isFloatingSignalItem(it));
+    for (const it of recentFloating) {
+      const r = ensureSignalResult60(it);
+      if (r && !isSignalResult60Resolved(it) && serverNowMs() >= Number(r.deadlineEpochMs)) {
+        await hydrateSignalResult60FromDerivHistory(it);
+      }
+    }
     for (const it of history) {
       updateRowNextArrow(it);
       updateRowChartBtn(it);
@@ -22082,33 +22322,52 @@ function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
     const q = Number(quote);
     if (!sym || !Number.isFinite(ep) || !Number.isFinite(q) || !Array.isArray(history)) return;
     let changed = false;
-    for (const it of history.slice(-40)) {
+    for (const it of history.slice(-60)) {
       if (!it || !it.signalFloatingWindow || String(it.symbol || "") !== sym) continue;
-      if (it.trade?.badge) continue;
+
+      // Resultado independiente: empieza exactamente cuando salió la alarma y dura 60s.
+      const result60 = ensureSignalResult60(it);
+      if (result60 && !isSignalResult60Resolved(it)) {
+        const deadline = Number(result60.deadlineEpochMs);
+        if (ep >= deadline) {
+          if (ep - deadline <= SIGNAL_RESULT_60_LIVE_GRACE_MS) {
+            resolveSignalResult60(it, ep, q, "live_tick");
+            changed = true;
+          } else {
+            result60.status = "recovering";
+            changed = true;
+            scheduleSignalResult60Hydration(it);
+          }
+        }
+      }
+
+      // El gráfico flotante de la formación conserva su ventana propia de 60s desde el ancla.
       const anchor = Number(it.signalAnchorEpochMs || 0);
       if (!Number.isFinite(anchor) || anchor <= 0) continue;
       const ms = ep - anchor;
-      if (ms < -250 || ms > 61000) continue;
-      it.ticks ||= [];
-      if (ms >= 0 && ms <= 60000) {
-        const last = it.ticks[it.ticks.length - 1];
-        const point = { ms: Math.max(0, Math.min(60000, ms)), quote: q };
-        if (last && Math.round(Number(last.ms)) === Math.round(point.ms)) it.ticks[it.ticks.length - 1] = point;
-        else it.ticks.push(point);
-        changed = true;
+      if (ms >= -250 && ms <= 61000 && !it.trade?.badge) {
+        it.ticks ||= [];
+        if (ms >= 0 && ms <= 60000) {
+          const last = it.ticks[it.ticks.length - 1];
+          const point = { ms: Math.max(0, Math.min(60000, ms)), quote: q };
+          if (last && Math.round(Number(last.ms)) === Math.round(point.ms)) it.ticks[it.ticks.length - 1] = point;
+          else it.ticks.push(point);
+          changed = true;
+        }
+        if (ms >= 60000 && !it.minuteComplete) {
+          it.minuteComplete = true;
+          changed = true;
+          updateRowChartBtn(it);
+        }
       }
-      if (ms >= 60000 && !it.minuteComplete) {
-        it.minuteComplete = true;
-        const first = Number(it.ticks?.[0]?.quote);
-        const lastQ = Number((it.ticks || []).slice(-1)[0]?.quote);
-        const out = compareConsecutiveCloses(first, lastQ);
-        if (out) it.nextOutcome = out;
-        changed = true;
-        updateRowNextArrow(it);
-        updateRowChartBtn(it);
-      }
+
       if (modalCurrentItem && modalCurrentItem.id === it.id) {
         modalCurrentItem.ticks = Array.isArray(it.ticks) ? it.ticks.slice() : [];
+        modalCurrentItem.minuteComplete = !!it.minuteComplete;
+        modalCurrentItem.signalResult60 = it.signalResult60 ? { ...it.signalResult60 } : null;
+        setCompactModalHeader(modalCurrentItem);
+        updateModalCandleStatusUI();
+        updateModalFooterReadingUI();
         requestModalDraw(false);
       }
     }
@@ -22549,6 +22808,20 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
       signalFloatingWindow: true,
       signalAnchorEpochMs: anchorEpochMs,
       signalAnchorSecond: Number(((anchorEpochMs % 60000) + 60000) % 60000) / 1000,
+      signalDetectedEpochMs: now,
+      signalCreatedEpochMs: now,
+      signalResult60: {
+        startEpochMs: now,
+        deadlineEpochMs: now + SIGNAL_RESULT_60_DURATION_MS,
+        startQuote: Number(absTicks[absTicks.length - 1]?.quote),
+        status: "pending",
+        outcome: "",
+        endEpochMs: null,
+        endQuote: null,
+        delta: null,
+        source: "live",
+        resolvedAt: null,
+      },
       constructiveSignalKey: signalKey,
       minuteComplete: false,
     });
