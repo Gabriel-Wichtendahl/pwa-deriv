@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v108.6.0-floating-sync (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v108.7.0-floating-calendar-isolation (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v108-6-floating-live-source-fix";
+const CACHE = "deriv-assets-v108-7-floating-calendar-isolation-fix";
 
 const ASSETS = [
   "./",

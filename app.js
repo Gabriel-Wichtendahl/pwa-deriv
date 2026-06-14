@@ -1,4 +1,5 @@
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
 // v108.6: FIX crítico gráfico flotante LIVE: nunca mezcla ticks anclados de la formación con minuteData del minuto calendario.
 // v108.5: corrige modo flotante: ahora/estado usan el ancla real, el gráfico vivo no muestra futuro y Lectura ON se dibuja desde los ticks reales del mismo gráfico.
 // v108.4: corrige Lectura ON para que coincida con el gráfico: overlay dibuja la polilínea real de ticks y en Constructiva muestra solo la cadena aceptada G→M→P.
@@ -898,7 +899,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_FLOATING_LIVE_SOURCE_FIX_V108_6_20260614";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_FLOATING_CALENDAR_ISOLATION_FIX_V108_7_20260614";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -12204,7 +12205,7 @@ function requestModalDraw(force = false) {
     const it = modalCurrentItem;
     if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
 
-    // V108.6: una señal flotante usa un eje propio que empieza en signalAnchorEpochMs.
+    // V108.7: una señal flotante usa un eje propio que empieza en signalAnchorEpochMs.
     // Nunca debe reemplazarse por minuteData[it.minute], porque esa colección usa
     // milisegundos relativos al minuto calendario de Deriv. Mezclar ambas fuentes
     // hacía que el tramo posterior a la formación mostrara un recorrido ajeno.
@@ -15138,6 +15139,82 @@ function normalizeTicksForMinute(minute, times, prices) {
   }
   return out;
 }
+function isFloatingSignalItem(item) {
+  return !!item?.signalFloatingWindow || Number.isFinite(Number(item?.signalAnchorEpochMs || 0));
+}
+function normalizeTicksForFloatingAnchor(anchorEpochMs, times, prices, existingTicks = []) {
+  const anchorMs = Number(anchorEpochMs);
+  if (!Number.isFinite(anchorMs) || anchorMs <= 0) return [];
+
+  // ticks_history del intervalo anclado es la fuente canónica. No mezclamos acá
+  // todos los ticks guardados, porque una versión anterior pudo haberlos pisado
+  // con el minuto calendario y volvería a introducir el zigzag falso.
+  const fetched = [];
+  for (let i = 0; i < Math.min(times?.length || 0, prices?.length || 0); i++) {
+    const ms = Number(times[i]) * 1000 - anchorMs;
+    const quote = Number(prices[i]);
+    if (!Number.isFinite(ms) || !Number.isFinite(quote) || ms < 0 || ms > 60000) continue;
+    fetched.push({ ms, quote });
+  }
+  fetched.sort((a, b) => a.ms - b.ms);
+
+  const out = [];
+  for (const p of fetched) {
+    const last = out[out.length - 1];
+    if (last && Math.round(Number(last.ms)) === Math.round(Number(p.ms))) out[out.length - 1] = p;
+    else out.push(p);
+  }
+
+  // Solo conserva el punto inicial ya guardado cuando la API no devolvió el tick
+  // exacto del ancla. Nunca incorpora el resto de una serie potencialmente corrupta.
+  const savedStart = (Array.isArray(existingTicks) ? existingTicks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .find((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 500);
+  if (savedStart && (!out.length || Number(out[0].ms) > 500)) out.unshift({ ms: 0, quote: savedStart.quote });
+
+  return out;
+}
+async function fetchFullFloatingSignalTicks(item) {
+  const anchorMs = Number(item?.signalAnchorEpochMs || 0);
+  const symbol = String(item?.symbol || '');
+  if (!symbol || !Number.isFinite(anchorMs) || anchorMs <= 0) return null;
+
+  const start = Math.floor(anchorMs / 1000);
+  const end = Math.ceil((anchorMs + 60000) / 1000);
+  const res = await wsRequest({
+    ticks_history: symbol,
+    start,
+    end,
+    style: 'ticks',
+    count: getHistoryCountMax(),
+    adjust_start_time: 1,
+  });
+  const h = res?.history;
+  if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
+  return normalizeTicksForFloatingAnchor(anchorMs, h.times, h.prices, item?.ticks);
+}
+async function hydrateFloatingSignalFromDerivHistory(item) {
+  if (!isFloatingSignalItem(item)) return false;
+  const anchorMs = Number(item?.signalAnchorEpochMs || 0);
+  if (!Number.isFinite(anchorMs) || anchorMs <= 0) return false;
+  if (serverNowMs() < anchorMs + 60000) return false;
+
+  try {
+    const full = await fetchFullFloatingSignalTicks(item);
+    if (Array.isArray(full) && full.length >= 2) item.ticks = full.slice();
+    item.minuteComplete = true;
+    const first = Number(item.ticks?.[0]?.quote);
+    const last = Number((item.ticks || []).slice(-1)[0]?.quote);
+    const out = compareConsecutiveCloses(first, last);
+    if (out) item.nextOutcome = out;
+    updateRowNextArrow(item);
+    updateRowChartBtn(item);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchFullMinuteTicks(symbol, minute) {
   const start = minuteToEpochSec(minute);
   const end = minuteToEpochSec(minute + 1);
@@ -15160,8 +15237,16 @@ async function hydrateSignalsFromDerivHistory(minute) {
   if (!items.length) return false;
 
   let any = false;
+
+  // Las señales flotantes tienen su propio eje de 60s desde signalAnchorEpochMs.
+  // Nunca se reemplazan con el minuto calendario completo.
+  for (const it of items.filter(isFloatingSignalItem)) {
+    if (await hydrateFloatingSignalFromDerivHistory(it)) any = true;
+  }
+
+  const normalItems = items.filter((it) => !isFloatingSignalItem(it));
   const bySym = new Map();
-  for (const it of items) {
+  for (const it of normalItems) {
     if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
     bySym.get(it.symbol).push(it);
   }
@@ -15273,7 +15358,7 @@ async function rehydrateHistoryOnBoot() {
       let anyMark = false;
       for (const it of history) {
         if (it.minute === m) {
-          if (!it.minuteComplete) {
+          if (!isFloatingSignalItem(it) && !it.minuteComplete) {
             it.minuteComplete = true;
             anyMark = true;
           }
@@ -15289,7 +15374,7 @@ async function rehydrateHistoryOnBoot() {
   }
 
   // ✅ Recalcula NEXT aunque ya exista, así corrige históricos guardados con la lógica vieja
-  const settledOutcomes = slice.filter((it) => it.minute + 1 < nowMin);
+  const settledOutcomes = slice.filter((it) => !isFloatingSignalItem(it) && it.minute + 1 < nowMin);
   const totalB = settledOutcomes.length || 1;
   let doneB = 0;
 
@@ -15352,7 +15437,7 @@ function finalizeMinute(minute) {
 
   // Aplica a TODAS las señales de prevMinute (NORMAL + GIRO) si todavía no tienen nextOutcome
   for (const it of history) {
-    if (!it || it.nextOutcome) continue;
+    if (!it || it.nextOutcome || isFloatingSignalItem(it)) continue;
     if (it.minute !== prevMinute) continue;
 
     const sym = it.symbol;
@@ -15369,7 +15454,7 @@ function finalizeMinute(minute) {
       const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
 
       for (const it of history) {
-        if (!it || it.nextOutcome) continue;
+        if (!it || it.nextOutcome || isFloatingSignalItem(it)) continue;
         if (it.minute !== prevMinute) continue;
 
         const sym = it.symbol;
@@ -15394,7 +15479,7 @@ function finalizeMinute(minute) {
 
     let changed = ticksChanged;
     for (const it of history) {
-      if (it.minute === minute && !it.minuteComplete) {
+      if (it.minute === minute && !isFloatingSignalItem(it) && !it.minuteComplete) {
         it.minuteComplete = true;
         changed = true;
         updateRowChartBtn(it);
@@ -15403,7 +15488,7 @@ function finalizeMinute(minute) {
     if (changed) saveHistory(history);
     purgeClosedSignalsOutsideSNRCloseZone("finalize_minute_complete");
 
-    if (modalCurrentItem && modalCurrentItem.minute === minute) {
+    if (modalCurrentItem && modalCurrentItem.minute === minute && !isFloatingSignalItem(modalCurrentItem)) {
       modalLive = false;
       updateModalLiveUI();
       requestModalDraw(true);
@@ -22230,7 +22315,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
   const status = `🧩 Reducción constructiva MUY CLARA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V108.6 FLOATING LIVE SOURCE FIX: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
+  const logicText = `Reducción Constructiva V108.7 FLOATING CALENDAR ISOLATION FIX: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
 
   return {
     direction: best.signalDirection,
@@ -22285,9 +22370,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v108_6_floating_live_source_fix",
+      movementFilter: "v108_7_floating_calendar_isolation_fix",
       priority: "ALTA",
-      stage: "reduccion_constructiva_floating_live_source_fix_v108_6",
+      stage: "reduccion_constructiva_floating_calendar_isolation_fix_v108_7",
       logic: logicText,
       status,
     },
