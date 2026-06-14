@@ -1,4 +1,5 @@
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
+// v108.6: FIX crítico gráfico flotante LIVE: nunca mezcla ticks anclados de la formación con minuteData del minuto calendario.
 // v108.5: corrige modo flotante: ahora/estado usan el ancla real, el gráfico vivo no muestra futuro y Lectura ON se dibuja desde los ticks reales del mismo gráfico.
 // v108.4: corrige Lectura ON para que coincida con el gráfico: overlay dibuja la polilínea real de ticks y en Constructiva muestra solo la cadena aceptada G→M→P.
 // v108.2: endurece Reducción Constructiva visual: solo reducciones MUY claras, consecutivas y con menos ruido.
@@ -897,7 +898,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_FLOATING_SYNC_V108_5_20260612";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_FLOATING_LIVE_SOURCE_FIX_V108_6_20260614";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -12203,8 +12204,13 @@ function requestModalDraw(force = false) {
     const it = modalCurrentItem;
     if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
 
-    let ticks = it.ticks || [];
-    if (modalLive && isItemLiveMinute(it)) {
+    // V108.6: una señal flotante usa un eje propio que empieza en signalAnchorEpochMs.
+    // Nunca debe reemplazarse por minuteData[it.minute], porque esa colección usa
+    // milisegundos relativos al minuto calendario de Deriv. Mezclar ambas fuentes
+    // hacía que el tramo posterior a la formación mostrara un recorrido ajeno.
+    const isFloatingSignal = !!it.signalFloatingWindow || Number.isFinite(Number(it.signalAnchorEpochMs || 0));
+    let ticks = Array.isArray(it.ticks) ? it.ticks : [];
+    if (modalLive && isItemLiveMinute(it) && !isFloatingSignal) {
       const liveTicks = minuteData?.[it.minute]?.[it.symbol];
       if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
     }
@@ -22224,7 +22230,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || best.reductionPairs.slice(0, 2).map((p) => p.pattern).join(" + ");
   const status = `🧩 Reducción constructiva MUY CLARA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V108.5 FLOATING SYNC: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
+  const logicText = `Reducción Constructiva V108.6 FLOATING LIVE SOURCE FIX: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones consecutivas y visualmente muy claras antes de 30s: ${best.reasons.join(", ")}. Formación detectada en ${(best.formedAtMs / 1000).toFixed(1)}s desde el inicio real.`;
 
   return {
     direction: best.signalDirection,
@@ -22279,9 +22285,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v108_5_floating_sync",
+      movementFilter: "v108_6_floating_live_source_fix",
       priority: "ALTA",
-      stage: "reduccion_constructiva_floating_sync_v108_5",
+      stage: "reduccion_constructiva_floating_live_source_fix_v108_6",
       logic: logicText,
       status,
     },
