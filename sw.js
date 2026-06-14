@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v109.0.0-resultado-60s-desde-alarma (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v109.1-confirmacion-ultimo-movimiento (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v109-0-signal-result-60s";
+const CACHE = "deriv-assets-v109-1-second-reduction-confirmed";
 
 const ASSETS = [
   "./",

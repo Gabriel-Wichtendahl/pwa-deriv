@@ -1,3 +1,4 @@
+// v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
 // v109.0: Resultado 60s desde la alarma para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
@@ -901,7 +902,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_TWO_REDUCTIONS_RESULT_60S_V109_0_20260614";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_SECOND_REDUCTION_CONFIRMED_V109_1_20260614";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -2089,6 +2090,13 @@ const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
 const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 7000;
 const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
 const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 90000;
+// V109.1: el último tramo de la segunda reducción es provisional hasta que
+// una respuesta contraria real confirme que terminó. Un micro-diente no alcanza.
+const CONSTRUCTIVE_CLOSE_RETRACE_RATIO = 0.24;
+const CONSTRUCTIVE_CLOSE_RANGE_RATIO = 0.050;
+const CONSTRUCTIVE_CLOSE_TOL_MULT = 1.80;
+const CONSTRUCTIVE_CLOSE_MIN_OPPOSITE_STEPS = 2;
+const CONSTRUCTIVE_CLOSE_MIN_DURATION_MS = 250;
 const SIGNAL_RESULT_60_DURATION_MS = 60000;
 const SIGNAL_RESULT_60_LIVE_GRACE_MS = 10000;
 const signalResult60HydrationPending = new Set();
@@ -15361,8 +15369,6 @@ function pickSignalResult60EndTick(times, prices, deadlineEpochMs) {
   return after || before;
 }
 async function hydrateSignalResult60FromDerivHistory(item) {
-  const liveItem = item?.id ? findHistoryItemById(String(item.id)) : null;
-  if (liveItem) item = liveItem;
   const r = ensureSignalResult60(item);
   if (!r || isSignalResult60Resolved(item)) return false;
   if (serverNowMs() < Number(r.deadlineEpochMs)) return false;
@@ -15399,10 +15405,9 @@ async function hydrateSignalResult60FromDerivHistory(item) {
 }
 function scheduleSignalResult60Hydration(item) {
   if (!item || isSignalResult60Resolved(item)) return;
-  const target = item?.id ? (findHistoryItemById(String(item.id)) || item) : item;
-  const key = String(target.id || "");
+  const key = String(item.id || "");
   if (key && signalResult60HydrationPending.has(key)) return;
-  setTimeout(() => { hydrateSignalResult60FromDerivHistory(target).catch(() => {}); }, 0);
+  setTimeout(() => { hydrateSignalResult60FromDerivHistory(item).catch(() => {}); }, 0);
 }
 function isFloatingSignalItem(item) {
   return !!item?.signalFloatingWindow || Number.isFinite(Number(item?.signalAnchorEpochMs || 0));
@@ -22452,6 +22457,60 @@ function buildConstructiveReductionBlocks(primaryRuns, labels, reductionPairs) {
   return blocks;
 }
 
+// V109.1: confirma que el último movimiento de la SEGUNDA reducción realmente cerró.
+// Se toma únicamente la primera respuesta direccional posterior:
+// - si continúa el mismo grupo, el movimiento seguía extendiéndose;
+// - si aparece una respuesta contraria pequeña, todavía queda provisional;
+// - solo una respuesta contraria >=24% + ruido mínimo y con 2 pasos confirma el cierre.
+function getConstructiveSecondReductionConfirmation(runs, secondBlock, alignedRange, tol) {
+  const allRuns = Array.isArray(runs) ? runs : [];
+  const blockRuns = Array.isArray(secondBlock?.runs) ? secondBlock.runs : [];
+  const lastPrimary = blockRuns[blockRuns.length - 1] || null;
+  const lastIdx = Number(lastPrimary?.idx);
+  const lastMove = Number(lastPrimary?.move || 0);
+  if (!lastPrimary || !Number.isFinite(lastIdx) || !(lastMove > 0)) return null;
+
+  let response = null;
+  for (let i = lastIdx + 1; i < allRuns.length; i++) {
+    const r = allRuns[i];
+    const sign = Number(r?.sign || 0);
+    if (sign === 0) continue;
+    // La primera continuación del mismo lado demuestra que el último tramo no había terminado.
+    if (sign > 0) return null;
+    response = { ...r, idx: Number.isFinite(Number(r?.idx)) ? Number(r.idx) : i };
+    break;
+  }
+  if (!response) return null;
+
+  const responseMove = Number(response.move || 0);
+  const threshold = Math.max(
+    lastMove * CONSTRUCTIVE_CLOSE_RETRACE_RATIO,
+    Number(alignedRange || 0) * CONSTRUCTIVE_CLOSE_RANGE_RATIO,
+    Number(tol || 0) * CONSTRUCTIVE_CLOSE_TOL_MULT,
+    1e-9
+  );
+  const pointCount = Array.isArray(response.points) ? response.points.length : 0;
+  const oppositeSteps = Math.max(0, pointCount - 1);
+  const durationMs = Math.max(0, Number(response.durationMs || 0));
+
+  if (responseMove < threshold) return null;
+  if (oppositeSteps < CONSTRUCTIVE_CLOSE_MIN_OPPOSITE_STEPS) return null;
+  if (durationMs < CONSTRUCTIVE_CLOSE_MIN_DURATION_MS) return null;
+
+  return {
+    confirmed: true,
+    lastPrimaryIdx: lastIdx,
+    lastPrimaryMove: lastMove,
+    responseRun: response,
+    responseMove,
+    retraceRatio: responseMove / Math.max(lastMove, 1e-9),
+    threshold,
+    oppositeSteps,
+    durationMs,
+    confirmedAtMs: Number(response.endMs || response.startMs || 0),
+  };
+}
+
 function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, localRange) {
   const groupText = side > 0 ? "comprador" : "vendedor";
   const contraryText = side > 0 ? "vendedor" : "comprador";
@@ -22514,7 +22573,11 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     for (const second of blocks) {
       if (Number(second.startIndex) !== Number(first.endIndex) + 1) continue;
       const anchorMs = Number(first.startMs || 0);
-      const formedAtMs = Number(second.endMs || 0);
+      // El último movimiento de la segunda reducción sigue EN CURSO hasta que
+      // una respuesta contraria real lo cierre. Sin esta confirmación no hay alarma.
+      const secondConfirmation = getConstructiveSecondReductionConfirmation(runs, second, alignedRange, tol);
+      if (!secondConfirmation) continue;
+      const formedAtMs = Number(secondConfirmation.confirmedAtMs || 0);
       const elapsed = formedAtMs - anchorMs;
       if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
 
@@ -22529,7 +22592,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         (first.pattern === "G→M→P" ? 8 : 0) +
         (second.pattern === "G→M→P" ? 8 : 0) -
         Math.max(0, elapsed - 22000) / 650;
-      if (!selected || score > selected.score) selected = { first, second, anchorMs, formedAtMs, elapsed, score };
+      if (!selected || score > selected.score) selected = { first, second, anchorMs, formedAtMs, elapsed, score, secondConfirmation };
     }
   }
   if (!selected) return null;
@@ -22540,7 +22603,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const acceptedLabels = [...firstReduction.labels, ...secondReduction.labels];
   const acceptedPatternText = `${firstReduction.pattern} + ${secondReduction.pattern}`;
 
-  const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= selected.formedAtMs);
+  // La forma G/M/P se mide hasta el final del segundo bloque. La respuesta
+  // contraria posterior solo confirma el cierre y no altera el tamaño clasificado.
+  const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Number(secondReduction.endMs || selected.formedAtMs));
   if (acceptedPts.length < 5) return null;
   const y0 = Number(acceptedPts[0].y);
   const yEnd = Number(acceptedPts[acceptedPts.length - 1].y);
@@ -22556,9 +22621,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   if (efficiency < 0.09) return null;
 
   const firstRunMove = Number(firstReduction.runs?.[0]?.move || 0);
-  const secondEndRawIdx = Number(secondReduction.runs?.[secondReduction.runs.length - 1]?.idx || 0);
-  const contraryAfterSecond = contraryRuns.filter((r) => Number(r.idx) > secondEndRawIdx);
-  const contraryStrong = contraryAfterSecond.some((r) => Number(r.move || 0) >= Math.max(alignedRange * 0.12, firstRunMove * 0.27, Number(tol || 0) * 2.0));
+  const secondConfirmation = selected.secondConfirmation;
+  if (!secondConfirmation?.confirmed) return null;
+  const contraryStrong = true;
 
   let cutsBetween = 0;
   for (let i = 0; i < acceptedRuns.length - 1; i++) {
@@ -22572,10 +22637,10 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   points += 8; reasons.push(`2ª reducción clara y distinta: ${secondReduction.pattern}`);
   points += 5; reasons.push("la segunda reducción comienza después de terminar la primera");
   if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales entre movimientos"); }
-  if (contraryStrong) { points += 2; reasons.push(`${contraryText} aparece después de la segunda reducción`); }
+  points += 3; reasons.push(`último movimiento confirmado: ${contraryText} retrocede ${Math.round(Number(secondConfirmation.retraceRatio || 0) * 100)}% con ${Number(secondConfirmation.oppositeSteps || 0)} pasos`);
   if (points < 24) return null;
 
-  const quality = points * 12 + 42 + Math.min(16, cutsBetween * 3) + (contraryStrong ? 12 : 0) - Math.max(0, selected.elapsed - 25000) / 700;
+  const quality = points * 12 + 42 + Math.min(16, cutsBetween * 3) + 12 - Math.max(0, selected.elapsed - 25000) / 700;
   const subtype = "2 reducciones separadas y claras";
 
   return {
@@ -22605,6 +22670,16 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     secondReduction,
     cutsBetween,
     contraryStrong,
+    secondReductionConfirmation: {
+      confirmedAtMs: Number(secondConfirmation.confirmedAtMs || 0),
+      responseMove: Number(secondConfirmation.responseMove || 0),
+      lastPrimaryMove: Number(secondConfirmation.lastPrimaryMove || 0),
+      retraceRatio: Number(secondConfirmation.retraceRatio || 0),
+      threshold: Number(secondConfirmation.threshold || 0),
+      oppositeSteps: Number(secondConfirmation.oppositeSteps || 0),
+      durationMs: Number(secondConfirmation.durationMs || 0),
+      responseRun: secondConfirmation.responseRun ? { ...secondConfirmation.responseRun } : null,
+    },
     visualDisplacementEfficiency: efficiency,
     dominantAdvance,
     oppositeDip,
@@ -22657,8 +22732,8 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
-  const status = `🧩 Reducción constructiva MUY CLARA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V108.8 TWO DISTINCT REDUCTIONS: ventana flotante no atada al minuto. La ventana empieza en el primer movimiento de la primera reducción. Requiere 2 reducciones DISTINTAS y no superpuestas dentro de 30s desde el primer movimiento de la primera: ${best.reasons.join(", ")}. Formación detectada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento de la primera reducción.`;
+  const status = `🧩 Reducción constructiva CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Último movimiento cerrado por respuesta ${best.contraryText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción Constructiva V109.1: ventana flotante no atada al minuto. Requiere 2 reducciones DISTINTAS y no superpuestas dentro de 30s. El último movimiento de la segunda reducción permanece provisional y la alarma solo sale cuando una respuesta contraria real (mínimo 24%, sobre ruido y al menos 2 pasos) confirma que terminó: ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento de la primera reducción.`;
 
   return {
     direction: best.signalDirection,
@@ -22718,10 +22793,15 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       constructiveFloatingWindow: true,
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
+      secondReductionConfirmed: true,
+      secondReductionConfirmation: best.secondReductionConfirmation,
+      secondReductionConfirmedAtMs: Number(best.secondReductionConfirmation?.confirmedAtMs || best.formedAtMs || 0),
+      secondReductionRetraceRatio: Number(best.secondReductionConfirmation?.retraceRatio || 0),
+      secondReductionOppositeSteps: Number(best.secondReductionConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v108_8_two_distinct_reductions",
+      movementFilter: "v109_1_second_reduction_last_move_confirmed",
       priority: "ALTA",
-      stage: "reduccion_constructiva_dos_reducciones_distintas_v108_8",
+      stage: "reduccion_constructiva_segunda_reduccion_confirmada_v109_1",
       logic: logicText,
       status,
     },
@@ -22827,7 +22907,7 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
     });
     if (added) {
       constructiveLastSignalBySymbol[sym] = { epochMs: now, key: signalKey };
-      toast(`🧩 ${sym}: 2 reducciones MUY claras`, 1800);
+      toast(`🧩 ${sym}: 2 reducciones confirmadas`, 1800);
       return true;
     }
   } catch (e) {
