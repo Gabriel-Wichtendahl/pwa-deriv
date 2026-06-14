@@ -2228,6 +2228,139 @@ let tradeWsConnectPromise = null;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
+// V109.3: audio robusto para Chrome/PWA.
+// Usa alert.mp3 si está disponible y cae a un tono Web Audio interno si el archivo
+// no carga, está cacheado incorrectamente o Chrome rechaza HTMLAudio.
+let alertAudioContext = null;
+let alertAudioUnlockPromise = null;
+
+function getAlertAudioContext() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    if (!alertAudioContext || alertAudioContext.state === "closed") {
+      alertAudioContext = new AudioCtx();
+    }
+    return alertAudioContext;
+  } catch {
+    return null;
+  }
+}
+
+function playInternalAlertTone({ test = false } = {}) {
+  try {
+    const ctx = getAlertAudioContext();
+    if (!ctx || ctx.state !== "running") return false;
+
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+
+    osc1.type = "sine";
+    osc2.type = "sine";
+    osc1.frequency.setValueAtTime(test ? 740 : 660, now);
+    osc2.frequency.setValueAtTime(test ? 988 : 880, now + 0.10);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(test ? 0.16 : 0.24, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + (test ? 0.24 : 0.42));
+
+    osc1.connect(gain);
+    osc2.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc1.start(now);
+    osc1.stop(now + (test ? 0.12 : 0.20));
+    osc2.start(now + 0.10);
+    osc2.stop(now + (test ? 0.24 : 0.42));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function unlockAlertAudio() {
+  if (alertAudioUnlockPromise) return alertAudioUnlockPromise;
+  alertAudioUnlockPromise = (async () => {
+    let internalOk = false;
+    let fileOk = false;
+    let fileError = null;
+
+    const ctx = getAlertAudioContext();
+    if (ctx) {
+      try {
+        if (ctx.state === "suspended") await ctx.resume();
+        internalOk = ctx.state === "running";
+        if (internalOk) playInternalAlertTone({ test: true });
+      } catch {}
+    }
+
+    if (sound) {
+      try {
+        sound.muted = false;
+        sound.volume = 0.55;
+        sound.currentTime = 0;
+        sound.load();
+        await sound.play();
+        fileOk = true;
+        setTimeout(() => {
+          try {
+            sound.pause();
+            sound.currentTime = 0;
+            sound.volume = 1;
+          } catch {}
+        }, 240);
+      } catch (err) {
+        fileError = err;
+      }
+    }
+
+    if (!internalOk && !fileOk) {
+      const detail = fileError?.name || fileError?.message || "audio no disponible";
+      throw new Error(String(detail));
+    }
+
+    return { internalOk, fileOk, usingFallback: !fileOk && internalOk };
+  })();
+
+  try {
+    return await alertAudioUnlockPromise;
+  } finally {
+    alertAudioUnlockPromise = null;
+  }
+}
+
+function playSignalAlertSound() {
+  if (!soundEnabled) return;
+
+  const fallback = () => {
+    try {
+      const ctx = getAlertAudioContext();
+      if (ctx?.state === "suspended") {
+        ctx.resume().then(() => playInternalAlertTone()).catch(() => {});
+      } else {
+        playInternalAlertTone();
+      }
+    } catch {}
+  };
+
+  if (!sound) {
+    fallback();
+    return;
+  }
+
+  try {
+    sound.muted = false;
+    sound.volume = 1;
+    sound.currentTime = 0;
+    const promise = sound.play();
+    if (promise && typeof promise.catch === "function") promise.catch(fallback);
+  } catch {
+    fallback();
+  }
+}
+
 let EVAL_SEC = 45;
 let PRACTICE_EVAL_SEC = 45;
 
@@ -9458,18 +9591,22 @@ function applyTheme(theme) {
 
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
+      soundBtn.disabled = true;
       try {
-        sound.muted = false;
-        sound.volume = 1;
-        sound.currentTime = 0;
-        await sound.play();
-        sound.pause();
+        const result = await unlockAlertAudio();
         soundEnabled = true;
         saveBool("soundEnabled", true);
         setBtnActive(soundBtn, true);
         soundBtn.textContent = "🔊 Sonido ON";
-      } catch {
-        alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
+        toast(result.usingFallback ? "🔊 Sonido ON · tono interno" : "🔊 Sonido ON", 1800);
+      } catch (err) {
+        soundEnabled = false;
+        saveBool("soundEnabled", false);
+        setBtnActive(soundBtn, false);
+        soundBtn.textContent = "🔇 Sonido OFF";
+        alert(`⚠️ No pude iniciar ningún audio. Error: ${err?.message || "desconocido"}.`);
+      } finally {
+        soundBtn.disabled = false;
       }
       return;
     }
@@ -9478,6 +9615,16 @@ function applyTheme(theme) {
     setBtnActive(soundBtn, false);
     soundBtn.textContent = "🔇 Sonido OFF";
   };
+
+  // Si Sonido quedó guardado en ON al reabrir la PWA, el primer toque del usuario
+  // vuelve a habilitar el AudioContext sin mostrar mensajes ni reproducir una alarma.
+  document.addEventListener("pointerdown", () => {
+    if (!soundEnabled) return;
+    try {
+      const ctx = getAlertAudioContext();
+      if (ctx?.state === "suspended") ctx.resume().catch(() => {});
+    } catch {}
+  }, { passive: true, capture: true });
 })();
 
 /* =========================
@@ -24046,10 +24193,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   const fatigueTriggered = registerSignalForFatigueGuard(item);
   if (fatigueTriggered) return item;
 
-  if (soundEnabled && sound) {
-    sound.currentTime = 0;
-    sound.play().catch(() => {});
-  }
+  if (soundEnabled) playSignalAlertSound();
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel, item);

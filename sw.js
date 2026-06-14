@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v109.2-captura-estudio-cronologia-real (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v109.3-audio-robusto (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v109-2-study-capture-exact-timeline";
+const CACHE = "deriv-assets-v109-3-audio-robusto";
 
 const ASSETS = [
   "./",
