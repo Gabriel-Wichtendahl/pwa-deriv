@@ -1,16 +1,3 @@
-// v109.5: modo único DOBLE REDUCCIÓN; elimina SNR/modos viejos de la operación y captura bajo demanda.
-// v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
-// v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
-// v109.0: Resultado 60s desde la alarma para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
-// v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
-// v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
-// v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
-// v108.6: FIX crítico gráfico flotante LIVE: nunca mezcla ticks anclados de la formación con minuteData del minuto calendario.
-// v108.5: corrige modo flotante: ahora/estado usan el ancla real, el gráfico vivo no muestra futuro y Lectura ON se dibuja desde los ticks reales del mismo gráfico.
-// v108.4: corrige Lectura ON para que coincida con el gráfico: overlay dibuja la polilínea real de ticks y en Constructiva muestra solo la cadena aceptada G→M→P.
-// v108.2: endurece Reducción Constructiva visual: solo reducciones MUY claras, consecutivas y con menos ruido.
-// v108.1: agrega Reducción Constructiva como modo separado sobre v107.1, sin reemplazar el modo 2 reducciones 30s.
-// v108: nuevo modo Reducción Constructiva continua: dos reducciones consecutivas en ventana flotante, no atada al minuto.
 // v106.9.3 CLEAN SAME-UI: Reducción visual 25s con macro impulsos y micro retrocesos comprimidos.
 // v106.8.3: Reducción visual 25s con lectura visual en modal, overlay G/M/P y corrección rápida.
 // v106.8.2: Reducción visual 25s con calidad A/B, contradicción, comparación comprador/vendedor y motivos visibles.
@@ -92,7 +79,7 @@
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
-const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V107_PROCESO_DISCIPLINA_20260608";
+const BASE_CONFIG_RESTAURADA_VERSION = "BASE_V106_3_API_NUEVA_PROPOSAL_COMPAT_20260604";
 
 /*
   Mapa rápido de módulos:
@@ -142,7 +129,6 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V109_2_EXACT_FLOATING_TIMELINE";
 
 /* =========================
    Trade account config
@@ -410,162 +396,36 @@ async function getStudyCapture(id) {
 function getStudyCaptureIdFromItem(item) {
   if (!item) return "";
   const jid = item.journal_id || makeJournalIdFromSignal(item);
-  return jid ? `CAPV1095::${String(jid)}`.slice(0, 230) : "";
+  return jid ? `CAP::${String(jid)}`.slice(0, 230) : "";
 }
 function getStudyCaptureTradeResult(item) {
   const b = String(item?.trade?.badge || "").toUpperCase();
   return b === "ITM" || b === "OTM" ? b : "";
 }
 function isStudyCaptureReadyItem(item) {
-  return Array.isArray(item?.ticks) && item.ticks.length >= 2;
+  return !!getStudyCaptureTradeResult(item) && Array.isArray(item?.ticks) && item.ticks.length >= 2;
 }
 function getStudyCaptureLevelMeta(item) {
-  const meta = item?.doubleReduction || item?.giroPolaridad || item?.giroNivelMeta || item?.giroDobleRechazo || item?.levelMeta || null;
+  const meta = item?.giroPolaridad || item?.giroNivelMeta || item?.giroDobleRechazo || item?.levelMeta || null;
   if (meta && typeof meta === "object") return meta;
   return null;
 }
-function studyFiniteNumber(value, fallback = null) {
-  if (value === null || value === undefined || value === "") return fallback;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-function studyEpochMs(value) {
-  const n = studyFiniteNumber(value, null);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n < 1e12 ? n * 1000 : n;
-}
-function studyFormatUtc(epochMs, withDate = false) {
-  const n = studyFiniteNumber(epochMs, null);
-  if (!Number.isFinite(n) || n <= 0) return "—";
+async function getStudyCaptureNextTicks(item) {
+  if (!item?.symbol || !Number.isFinite(Number(item.minute))) return [];
   try {
-    const iso = new Date(n).toISOString();
-    return withDate ? iso.replace("T", " ").replace(".000Z", " UTC") : `${iso.slice(11, 19)} UTC`;
-  } catch {
-    return "—";
-  }
+    const next = await fetchFullMinuteTicks(item.symbol, Number(item.minute) + 1);
+    return Array.isArray(next) ? next.map((p) => ({ ms: Number(p.ms) + 60000, quote: Number(p.quote) })) : [];
+  } catch {}
+  return [];
 }
-function getStudyCaptureAnchorEpochMs(item) {
-  const floating = studyFiniteNumber(item?.signalAnchorEpochMs, null);
-  if (Number.isFinite(floating) && floating > 0) return floating;
-  const minute = studyFiniteNumber(item?.minute, null);
-  if (Number.isFinite(minute)) return minute * 60000;
-  return 0;
-}
-function getStudyCaptureTimeline(item) {
-  const anchorEpochMs = getStudyCaptureAnchorEpochMs(item);
-  const trade = item?.trade || {};
-  const meta = getStudyCaptureLevelMeta(item);
-  let alarmEpochMs = studyFiniteNumber(
-    item?.signalResult60?.startEpochMs ?? item?.signalDetectedEpochMs ?? item?.signalCreatedEpochMs,
-    null
-  );
-  if (!Number.isFinite(alarmEpochMs) && anchorEpochMs > 0) {
-    const inferredAlarmMs = studyFiniteNumber(
-      meta?.secondReductionConfirmedAtMs ?? meta?.constructiveFormedAtMs ??
-      (Number.isFinite(Number(item?.signalPrealertAtSec)) ? Number(item.signalPrealertAtSec) * 1000 : null),
-      null
-    );
-    if (Number.isFinite(inferredAlarmMs)) alarmEpochMs = anchorEpochMs + inferredAlarmMs;
-  }
-
-  let entryEpochMs = studyEpochMs(
-    trade.entry_spot_time ?? trade.start_time ?? trade.purchase_time ?? trade.buy_time
-  );
-  if (!Number.isFinite(entryEpochMs) && anchorEpochMs > 0) {
-    const relativeEntry = studyFiniteNumber(item?.signalAutoEntry?.ms ?? trade.entry_ms, SIGNAL_AUTO_ENTRY_MS);
-    entryEpochMs = anchorEpochMs + Math.max(0, relativeEntry);
-  }
-
-  let exitEpochMs = studyEpochMs(
-    trade.exit_spot_time ?? trade.expiry_time ?? trade.sold_time ?? trade.sell_time
-  );
-  if (!Number.isFinite(exitEpochMs) && Number.isFinite(entryEpochMs)) {
-    const plannedSec = studyFiniteNumber(trade.planned_duration_sec, 60);
-    exitEpochMs = entryEpochMs + Math.max(1, plannedSec) * 1000;
-  }
-
-  const alarmMs = Number.isFinite(alarmEpochMs) && anchorEpochMs > 0 ? alarmEpochMs - anchorEpochMs : null;
-  const entryMs = Number.isFinite(entryEpochMs) && anchorEpochMs > 0 ? entryEpochMs - anchorEpochMs : SIGNAL_AUTO_ENTRY_MS;
-  const exitMs = Number.isFinite(exitEpochMs) && anchorEpochMs > 0 ? exitEpochMs - anchorEpochMs : entryMs + 60000;
-  const alarmEndMs = Number.isFinite(alarmMs) ? alarmMs + SIGNAL_RESULT_60_DURATION_MS : 0;
-  const rawEndMs = Math.max(120000, exitMs + 1500, alarmEndMs + 1000);
-  const windowEndMs = Math.min(180000, Math.max(120000, Math.ceil(rawEndMs / 15000) * 15000));
-
-  return {
-    anchorEpochMs,
-    formationEndMs: 60000,
-    alarmEpochMs,
-    alarmMs,
-    entryEpochMs,
-    entryMs,
-    exitEpochMs,
-    exitMs,
-    entryQuote: studyFiniteNumber(trade.entry_spot, null),
-    exitQuote: studyFiniteNumber(trade.exit_spot, null),
-    windowEndMs,
-    contractDurationMs: Number.isFinite(entryMs) && Number.isFinite(exitMs) ? Math.max(0, exitMs - entryMs) : null,
-  };
-}
-function normalizeStudyExactTicks(item, fetchedTicks = [], timeline = getStudyCaptureTimeline(item)) {
-  const maxMs = Number(timeline?.windowEndMs || 120000);
-  const authoritative = (Array.isArray(fetchedTicks) ? fetchedTicks : [])
-    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= maxMs);
-
-  const savedFormation = (Array.isArray(item?.ticks) ? item.ticks : [])
-    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 60000);
-
-  const base = authoritative.length >= 3 ? authoritative : savedFormation;
-  const map = new Map();
-  for (const p of base) map.set(Math.round(p.ms), { ms: Number(p.ms), quote: Number(p.quote) });
-
-  // Si la API no devolvió el tick exacto del ancla, conserva únicamente el punto inicial real guardado.
-  const savedStart = savedFormation.find((p) => p.ms >= 0 && p.ms <= 500);
-  if (savedStart && !Array.from(map.values()).some((p) => p.ms <= 500)) {
-    map.set(0, { ms: 0, quote: savedStart.quote });
-  }
-
-  // Los spots contractuales son la fuente definitiva para entrada y cierre.
-  if (Number.isFinite(Number(timeline?.entryMs)) && Number.isFinite(Number(timeline?.entryQuote))) {
-    map.set(Math.round(Number(timeline.entryMs)), { ms: Number(timeline.entryMs), quote: Number(timeline.entryQuote), contractual: "entry" });
-  }
-  if (Number.isFinite(Number(timeline?.exitMs)) && Number.isFinite(Number(timeline?.exitQuote))) {
-    map.set(Math.round(Number(timeline.exitMs)), { ms: Number(timeline.exitMs), quote: Number(timeline.exitQuote), contractual: "exit" });
-  }
-
-  return Array.from(map.values()).sort((a, b) => Number(a.ms) - Number(b.ms));
-}
-async function fetchStudyCaptureExactTicks(item, timeline = getStudyCaptureTimeline(item)) {
-  const symbol = String(item?.symbol || "");
-  const anchorMs = Number(timeline?.anchorEpochMs || 0);
-  const windowEndMs = Number(timeline?.windowEndMs || 120000);
-  if (!symbol || !Number.isFinite(anchorMs) || anchorMs <= 0) return [];
-
-  try {
-    const start = Math.floor((anchorMs - 1000) / 1000);
-    const end = Math.ceil((anchorMs + windowEndMs + 2000) / 1000);
-    const res = await wsRequest({
-      ticks_history: symbol,
-      start,
-      end,
-      style: "ticks",
-      count: getHistoryCountMax(),
-      adjust_start_time: 1,
-    });
-    const h = res?.history;
-    if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return [];
-    const out = [];
-    for (let i = 0; i < Math.min(h.times.length, h.prices.length); i++) {
-      const ms = Number(h.times[i]) * 1000 - anchorMs;
-      const quote = Number(h.prices[i]);
-      if (!Number.isFinite(ms) || !Number.isFinite(quote) || ms < 0 || ms > windowEndMs) continue;
-      out.push({ ms, quote });
-    }
-    return out;
-  } catch {
-    return [];
-  }
+function normalizeStudyTicks(item, nextTicks = []) {
+  const sig = (Array.isArray(item?.ticks) ? item.ticks : [])
+    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
+    .map((p) => ({ ms: Math.max(0, Math.min(60000, Number(p.ms))), quote: Number(p.quote) }));
+  const nxt = (Array.isArray(nextTicks) ? nextTicks : [])
+    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
+    .map((p) => ({ ms: Math.max(60000, Math.min(120000, Number(p.ms))), quote: Number(p.quote) }));
+  return sig.concat(nxt).sort((a, b) => a.ms - b.ms);
 }
 function studyRoundRect(ctx, x, y, w, h, r = 12, fill = true, stroke = false, strokeColor = "rgba(255,255,255,.18)") {
   r = Math.max(0, Math.min(r, w / 2, h / 2));
@@ -585,75 +445,49 @@ function studyHexToRgba(hex, a = 1) {
   const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
   return `rgba(${r},${g},${b},${a})`;
 }
-function studyDrawPill(ctx, x, y, w, h, text, color, textColor = "#f8fbff", fontSize = 14) {
+function studyDrawPill(ctx, x, y, w, h, text, color, textColor = "#f8fbff") {
   ctx.fillStyle = color.startsWith("#") ? studyHexToRgba(color, .18) : color;
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
   studyRoundRect(ctx, x, y, w, h, h / 2, true, true, color);
   ctx.fillStyle = textColor;
-  ctx.font = `700 ${fontSize}px system-ui, -apple-system, Segoe UI, sans-serif`;
-  let label = String(text || "");
-  while (label.length > 3 && ctx.measureText(label).width > w - 18) label = label.slice(0, -2).trimEnd() + "…";
-  const tw = ctx.measureText(label).width;
-  ctx.fillText(label, x + (w - tw) / 2, y + h / 2 + fontSize * 0.34);
+  ctx.font = "700 14px system-ui, -apple-system, Segoe UI, sans-serif";
+  const tw = ctx.measureText(text).width;
+  ctx.fillText(text, x + (w - tw) / 2, y + h / 2 + 5);
 }
-function studyDrawFittedText(ctx, text, x, y, maxWidth, font = "600 16px system-ui, -apple-system, Segoe UI, sans-serif", color = "#e5edf9") {
-  ctx.font = font;
-  ctx.fillStyle = color;
-  let label = String(text || "");
-  while (label.length > 4 && ctx.measureText(label).width > maxWidth) label = label.slice(0, -2).trimEnd() + "…";
-  ctx.fillText(label, x, y);
-}
-function shouldDrawStudyLevel(meta) {
-  const mode = String(meta?.levelMode || "").toLowerCase();
-  if (!mode || mode.includes("reduccion_constructiva")) return false;
-  return mode.includes("snr") || mode.includes("polar") || mode.includes("dinam") || mode.includes("nivel") || mode.includes("support") || mode.includes("resistance");
-}
-function getStudyPatternText(item, meta) {
-  return String(
-    meta?.acceptedReductionPatternText ||
-    meta?.acceptedChainPattern ||
-    meta?.visualReductionPattern ||
-    item?.pattern ||
-    ""
-  ).trim();
-}
-function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput = null) {
+function drawStudyCaptureToCanvas(canvas, item, nextTicks = []) {
   const ctx = canvas.getContext("2d");
   const W = canvas.width;
   const H = canvas.height;
-  const timeline = timelineInput || getStudyCaptureTimeline(item);
   const dir = String(item?.direction || "PUT").toUpperCase() === "CALL" ? "CALL" : "PUT";
   const result = getStudyCaptureTradeResult(item) || "PEND";
   const isCall = dir === "CALL";
   const isItm = result === "ITM";
   const isOtm = result === "OTM";
   const tradeColor = isItm ? "#22c55e" : isOtm ? "#ef4444" : "#f59e0b";
-  const tradeSoft = isItm ? "rgba(34,197,94,.10)" : isOtm ? "rgba(239,68,68,.10)" : "rgba(245,158,11,.12)";
+  const tradeSoft = isItm ? "rgba(34,197,94,.13)" : isOtm ? "rgba(239,68,68,.13)" : "rgba(245,158,11,.16)";
   const tradeGlow = isItm ? "rgba(34,197,94,.32)" : isOtm ? "rgba(239,68,68,.32)" : "rgba(245,158,11,.32)";
-  const allTicks = normalizeStudyExactTicks(item, exactTicks, timeline);
+  const allTicks = normalizeStudyTicks(item, nextTicks);
+  const signalTicks = allTicks.filter((p) => p.ms <= 60000);
   const meta = getStudyCaptureLevelMeta(item);
-  const patternText = getStudyPatternText(item, meta);
-  const windowEndMs = Number(timeline.windowEndMs || 120000);
 
   const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#091321");
+  bg.addColorStop(0, "#0f172a");
   bg.addColorStop(1, "#111827");
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = "rgba(13,22,42,.95)";
-  studyRoundRect(ctx, 24, 18, W - 48, 88, 22, true, false);
+  ctx.fillStyle = "rgba(13,22,42,.92)";
+  studyRoundRect(ctx, 24, 18, W - 48, 72, 22, true, false);
   ctx.fillStyle = "#e5edf9";
-  ctx.font = "800 27px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Captura de estudio · cronología real", 52, 52);
-  ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillStyle = "rgba(220,235,255,.78)";
-  const headerLine = `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} → cierre ${studyFormatUtc(timeline.exitEpochMs)}`;
-  studyDrawFittedText(ctx, headerLine, 52, 80, W - 360, "600 15px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(220,235,255,.78)");
-  studyDrawPill(ctx, W - 270, 36, 220, 42, `Resultado real: ${result}`, tradeColor, "#f8fafc", 15);
+  ctx.font = "800 25px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText("Captura de estudio PWA", 52, 48);
+  ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillStyle = "rgba(220,235,255,.76)";
+  ctx.fillText(`${item?.symbol || "—"} · ${dir === "CALL" ? "COMPRA / CALL" : "VENTA / PUT"} · Entrada ${SIGNAL_AUTO_ENTRY_SEC}s · ${item?.time || ""}`, 52, 72);
+  studyDrawPill(ctx, W - 255, 32, 205, 38, `Resultado: ${result}`, tradeColor);
 
-  const x0 = 54, y0 = 128, x1 = W - 54, y1 = H - 190;
+  const x0 = 54, y0 = 116, x1 = W - 54, y1 = H - 118;
   studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 24, false, true, "rgba(75,95,135,.65)");
   ctx.save();
   ctx.beginPath();
@@ -662,17 +496,9 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   ctx.fillStyle = "#151a24";
   ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
-  const chartPad = { l: 58, r: 46, t: 46, b: 48 };
+  const chartPad = { l: 54, r: 42, t: 34, b: 44 };
   const cx0 = x0 + chartPad.l, cy0 = y0 + chartPad.t, cx1 = x1 - chartPad.r, cy1 = y1 - chartPad.b;
-  const xOf = (ms) => cx0 + ((cx1 - cx0) * Math.max(0, Math.min(windowEndMs, Number(ms)))) / windowEndMs;
-
-  // Zonas temporales: formación flotante exacta y operación contractual exacta.
-  ctx.fillStyle = "rgba(34,211,238,.055)";
-  ctx.fillRect(xOf(0), cy0, Math.max(0, xOf(60000) - xOf(0)), cy1 - cy0);
-  if (Number.isFinite(Number(timeline.entryMs)) && Number.isFinite(Number(timeline.exitMs))) {
-    ctx.fillStyle = tradeSoft;
-    ctx.fillRect(xOf(timeline.entryMs), cy0, Math.max(2, xOf(timeline.exitMs) - xOf(timeline.entryMs)), cy1 - cy0);
-  }
+  const midX = cx0 + ((cx1 - cx0) * 60) / 120;
 
   for (let i = 1; i <= 5; i++) {
     const y = cy0 + ((cy1 - cy0) * i) / 6;
@@ -680,72 +506,46 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(cx0, y); ctx.lineTo(cx1, y); ctx.stroke();
   }
-  for (let ms = 0; ms <= windowEndMs; ms += 15000) {
-    const x = xOf(ms);
-    const formationBoundary = ms === 60000;
-    ctx.strokeStyle = formationBoundary ? "rgba(34,211,238,.55)" : "rgba(148,163,184,.12)";
-    ctx.lineWidth = formationBoundary ? 2.2 : 1;
-    ctx.setLineDash(formationBoundary ? [7, 7] : []);
+  for (let sec = 0; sec <= 120; sec += 15) {
+    const x = cx0 + ((cx1 - cx0) * sec) / 120;
+    ctx.strokeStyle = sec === 60 ? "rgba(148,163,184,.28)" : "rgba(148,163,184,.10)";
+    ctx.lineWidth = sec === 60 ? 2 : 1;
     ctx.beginPath(); ctx.moveTo(x, cy0); ctx.lineTo(x, cy1); ctx.stroke();
-    ctx.setLineDash([]);
-    const sec = Math.round(ms / 1000);
-    const label = sec <= 60 ? `${sec}s` : `+${sec - 60}s`;
-    ctx.fillStyle = formationBoundary ? "#67e8f9" : "rgba(203,213,225,.70)";
+    let labelSec = sec;
+    if (sec > 60) labelSec = sec - 60;
+    if (sec === 60) labelSec = 0;
+    ctx.fillStyle = "rgba(203,213,225,.68)";
     ctx.font = "12px system-ui, -apple-system, Segoe UI, sans-serif";
-    ctx.fillText(label, x - 12, cy1 + 26);
+    ctx.fillText(`${labelSec}s`, x - 10, cy1 + 25);
   }
 
-  studyDrawPill(ctx, cx0 + 8, cy0 + 8, 210, 29, "Formación anclada 0–60s", "rgba(34,211,238,.42)", "#cffafe", 13);
-  const operationLabel = Number.isFinite(Number(timeline.contractDurationMs))
-    ? `Operación real ${Math.round(timeline.contractDurationMs / 1000)}s`
-    : "Operación real";
-  studyDrawPill(ctx, Math.min(cx1 - 190, Math.max(cx0 + 230, xOf(timeline.entryMs) + 8)), cy0 + 8, 180, 29, operationLabel, tradeColor, "#f8fafc", 13);
-
   if (allTicks.length >= 2) {
-    const qs = allTicks.map((p) => Number(p.quote)).filter(Number.isFinite);
-    if (Number.isFinite(Number(timeline.entryQuote))) qs.push(Number(timeline.entryQuote));
-    if (Number.isFinite(Number(timeline.exitQuote))) qs.push(Number(timeline.exitQuote));
+    const qs = allTicks.map((p) => p.quote);
     let min = Math.min(...qs), max = Math.max(...qs);
     let range = max - min;
-    if (!Number.isFinite(range) || range < 1e-9) range = Math.max(Math.abs(max || 1) * 0.000001, 1);
-    min -= range * 0.09; max += range * 0.09;
-    const yOf = (q) => cy1 - ((Number(q) - min) / Math.max(max - min, 1e-9)) * (cy1 - cy0);
+    if (!Number.isFinite(range) || range < 1e-9) range = 1;
+    min -= range * 0.08; max += range * 0.08;
+    const xOf = (ms) => cx0 + ((cx1 - cx0) * ms) / 120000;
+    const yOf = (q) => cy1 - ((q - min) / (max - min)) * (cy1 - cy0);
 
-    // Dos reducciones aceptadas: se muestran como bloques, sin deformar la línea real.
-    const blocks = Array.isArray(meta?.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 2) : [];
-    blocks.forEach((block, index) => {
-      const startMs = studyFiniteNumber(block?.startMs, null);
-      const endMs = studyFiniteNumber(block?.endMs, null);
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return;
-      const bx0 = xOf(startMs), bx1 = xOf(endMs);
-      ctx.fillStyle = index === 0 ? "rgba(34,197,94,.07)" : "rgba(168,85,247,.07)";
-      ctx.fillRect(bx0, cy0 + 42, Math.max(3, bx1 - bx0), cy1 - cy0 - 42);
-      studyDrawPill(
-        ctx,
-        Math.max(cx0 + 6, Math.min(bx0 + 4, cx1 - 150)),
-        cy0 + 44 + index * 34,
-        144,
-        27,
-        `${index + 1}ª ${String(block?.pattern || "reducción")}`,
-        index === 0 ? "rgba(34,197,94,.52)" : "rgba(168,85,247,.52)",
-        "#f8fafc",
-        12
-      );
-    });
+    // Etiquetas de bloques sin superposición
+    studyDrawPill(ctx, cx0 + 8, cy0 + 6, 118, 26, "Señal 0-60s", "rgba(148,163,184,.28)", "#dbe7ff");
+    studyDrawPill(ctx, midX + 12, cy0 + 6, 142, 26, "Resultado 0-60s", "rgba(148,163,184,.28)", "#dbe7ff");
 
-    if (shouldDrawStudyLevel(meta)) {
-      const level = Number(meta?.level);
-      if (Number.isFinite(level)) {
-        const ly = yOf(level);
-        const levelColor = isCall ? "rgba(34,197,94,.58)" : "rgba(244,63,94,.58)";
-        ctx.strokeStyle = levelColor;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath(); ctx.moveTo(cx0, ly); ctx.lineTo(cx1, ly); ctx.stroke();
-        studyDrawPill(ctx, cx0 + 10, Math.max(cy0 + 84, ly - 16), 190, 29, isCall ? "NIVEL SOPORTE" : "NIVEL RESISTENCIA", levelColor, "#f8fafc", 12);
-      }
+    const level = Number(meta?.level);
+    if (Number.isFinite(level)) {
+      const ly = yOf(level);
+      const levelColor = isCall ? "rgba(34,197,94,.58)" : "rgba(244,63,94,.58)";
+      ctx.strokeStyle = levelColor;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(cx0, ly); ctx.lineTo(cx1, ly); ctx.stroke();
+      ctx.fillStyle = isCall ? "rgba(34,197,94,.10)" : "rgba(244,63,94,.10)";
+      studyRoundRect(ctx, cx0 + 10, ly - 18, 200, 32, 12, true, false);
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "800 13px system-ui, -apple-system, Segoe UI, sans-serif";
+      ctx.fillText(isCall ? "NIVEL: SOPORTE" : "NIVEL: RESISTENCIA", cx0 + 20, ly + 3);
     }
 
-    // Área y línea: usa únicamente ticks del intervalo absoluto exacto.
     ctx.beginPath();
     allTicks.forEach((p, i) => {
       const x = xOf(p.ms), y = yOf(p.quote);
@@ -754,11 +554,11 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     ctx.lineTo(xOf(allTicks[allTicks.length - 1].ms), cy1);
     ctx.lineTo(xOf(allTicks[0].ms), cy1);
     ctx.closePath();
-    ctx.fillStyle = "rgba(229,231,235,.12)";
+    ctx.fillStyle = "rgba(229,231,235,.15)";
     ctx.fill();
 
     ctx.strokeStyle = "#f1f5f9";
-    ctx.lineWidth = 3.2;
+    ctx.lineWidth = 3;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
@@ -768,156 +568,157 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     });
     ctx.stroke();
 
-    // Momento exacto de la alarma, separado de la entrada contractual.
-    if (Number.isFinite(Number(timeline.alarmMs)) && timeline.alarmMs >= 0 && timeline.alarmMs <= windowEndMs) {
-      const ax = xOf(timeline.alarmMs);
-      ctx.strokeStyle = "rgba(250,204,21,.88)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 6]);
-      ctx.beginPath(); ctx.moveTo(ax, cy0); ctx.lineTo(ax, cy1); ctx.stroke();
-      ctx.setLineDash([]);
-      studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ax - 62, cx1 - 126)), cy1 - 36, 124, 27, `ALARMA ${Math.round(timeline.alarmMs / 1000)}s`, "rgba(250,204,21,.72)", "#fff7c2", 12);
-    }
+    const entryMs = Number(item?.trade?.entry_ms || item?.signalAutoEntry?.ms || SIGNAL_AUTO_ENTRY_MS);
+    const safeEntryMs = Math.min(60000, Math.max(0, entryMs));
+    const entryQuote = Number(getPriceAtMs(signalTicks.length ? signalTicks : item.ticks, safeEntryMs));
+    const ex = xOf(safeEntryMs);
+    const ey = Number.isFinite(entryQuote) ? yOf(entryQuote) : cy0 + (cy1 - cy0) / 2;
 
-    const entryMs = Math.max(0, Math.min(windowEndMs, Number(timeline.entryMs || SIGNAL_AUTO_ENTRY_MS)));
-    const exitMs = Math.max(entryMs, Math.min(windowEndMs, Number(timeline.exitMs || entryMs + 60000)));
-    const entryQuote = Number.isFinite(Number(timeline.entryQuote)) ? Number(timeline.entryQuote) : Number(getPriceAtMs(allTicks, entryMs));
-    const exitQuote = Number.isFinite(Number(timeline.exitQuote)) ? Number(timeline.exitQuote) : Number(getPriceAtMs(allTicks, exitMs));
-    const ex = xOf(entryMs), ey = Number.isFinite(entryQuote) ? yOf(entryQuote) : cy0 + (cy1 - cy0) / 2;
-    const closeX = xOf(exitMs), closeY = Number.isFinite(exitQuote) ? yOf(exitQuote) : ey;
+    const closeTick = allTicks[allTicks.length - 1] || { ms: 120000, quote: entryQuote };
+    const closeQuote = Number(closeTick.quote);
+    const resultX = cx1 - 58;
+    const closeY = Number.isFinite(closeQuote) ? yOf(closeQuote) : ey;
 
-    // Entrada real.
+    // Punto de entrada visual
     ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 9;
+    ctx.shadowBlur = 8;
     ctx.strokeStyle = tradeColor;
     ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ex, ey, 15, 0, Math.PI * 2); ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.fillStyle = "#0b1220";
-    ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(ex, ey, 11, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = tradeColor;
-    ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
-    studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA REAL", tradeColor, "#f8fafc", 12);
+    ctx.beginPath(); ctx.arc(ex, ey, 6, 0, Math.PI * 2); ctx.fill();
 
-    // Nivel contractual y cierre exacto.
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 3.5;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
-    ctx.setLineDash([8, 7]);
-    ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
-    ctx.setLineDash([]);
-
+    // Pin más limpio y chico
+    const pinX = ex;
+    const pinY = ey - 60;
+    ctx.save();
+    ctx.translate(pinX, pinY);
     ctx.shadowColor = tradeGlow;
     ctx.shadowBlur = 8;
     ctx.fillStyle = tradeColor;
-    ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(0, 34);
+    ctx.bezierCurveTo(-16, 14, -14, -18, 0, -18);
+    ctx.bezierCurveTo(14, -18, 16, 14, 0, 34);
+    ctx.closePath();
+    ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.fillStyle = "#07120d";
-    ctx.font = "900 12px system-ui, -apple-system, Segoe UI, sans-serif";
-    const resultWidth = result === "PEND" ? 110 : 92;
-    studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
+    ctx.fillStyle = "#0b1220";
+    ctx.beginPath(); ctx.arc(0, -2, 5.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    const entryTag = isItm ? `T ${SIGNAL_AUTO_ENTRY_SEC}s` : isOtm ? `TM ${SIGNAL_AUTO_ENTRY_SEC}s` : `${dir} ${SIGNAL_AUTO_ENTRY_SEC}s`;
+    studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(ex - 18, cx1 - 108)), Math.max(cy0 + 12, pinY - 4), 96, 32, entryTag, tradeColor, "#07120d");
+
+    // Línea horizontal de operación menos gruesa
+    ctx.shadowColor = tradeGlow;
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = tradeColor;
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(resultX, ey); ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Bandera más adentro
+    const mastX = resultX;
+    const flagW = 54, flagH = 32;
+    const mastTopY = Math.max(cy0 + 40, ey - 62);
+    ctx.strokeStyle = tradeColor;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(mastX, ey); ctx.lineTo(mastX, mastTopY); ctx.stroke();
+    ctx.fillStyle = tradeSoft;
+    ctx.strokeStyle = tradeColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.rect(mastX, mastTopY, flagW, flagH); ctx.fill(); ctx.stroke();
+    const cols = 4, rows = 2;
+    const cw = flagW / cols, ch = flagH / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if ((r + c) % 2 === 0) {
+          ctx.fillStyle = tradeColor;
+          ctx.fillRect(mastX + c * cw, mastTopY + r * ch, cw, ch);
+        }
+      }
+    }
+
+    // Línea punteada y cierre
+    ctx.strokeStyle = tradeColor;
+    ctx.lineWidth = 3.5;
+    ctx.setLineDash([9, 7]);
+    ctx.beginPath(); ctx.moveTo(resultX, ey); ctx.lineTo(resultX, closeY); ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.shadowColor = tradeGlow;
+    ctx.shadowBlur = 7;
+    ctx.fillStyle = tradeColor;
+    ctx.beginPath(); ctx.arc(resultX, closeY, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Badge de resultado más cerca del cierre
+    const pillW = result === "PEND" ? 108 : 92;
+    const pillX = Math.max(cx0 + 8, Math.min(resultX - 46, cx1 - pillW - 8));
+    const pillY = Math.max(cy0 + 38, closeY - 54);
+    studyDrawPill(ctx, pillX, pillY, pillW, 32, result, tradeColor, "#07120d");
   }
 
   ctx.restore();
 
-  // Resumen útil para auditar la captura contra Deriv.
-  const footerY = H - 166;
-  ctx.fillStyle = "rgba(15,23,42,.94)";
-  studyRoundRect(ctx, 54, footerY, W - 108, 132, 18, true, true, "rgba(75,95,135,.5)");
+  ctx.fillStyle = "rgba(15,23,42,.92)";
+  studyRoundRect(ctx, 54, H - 92, W - 108, 58, 18, true, true, "rgba(75,95,135,.5)");
   ctx.fillStyle = "#eaf2ff";
-  ctx.font = "800 16px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Lectura:", 82, footerY + 32);
-  const group = String(meta?.visualReductionGroup || "").trim();
-  const signalText = `${group ? group + " " : ""}${patternText || "formación"} → ${isCall ? "COMPRA" : "VENTA"}`;
-  studyDrawFittedText(ctx, signalText, 172, footerY + 32, W - 255, "700 16px system-ui, -apple-system, Segoe UI, sans-serif", "#f8fafc");
-
-  ctx.fillStyle = "rgba(220,235,255,.78)";
+  ctx.font = "800 15px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText("Resumen:", 82, H - 58);
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  const entrySpotTxt = Number.isFinite(Number(timeline.entryQuote)) ? Number(timeline.entryQuote).toFixed(6) : "—";
-  const exitSpotTxt = Number.isFinite(Number(timeline.exitQuote)) ? Number(timeline.exitQuote).toFixed(6) : "—";
-  studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
-  studyDrawFittedText(ctx, `Cierre ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · línea blanca: ticks_history del intervalo absoluto exacto`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
-  studyDrawFittedText(ctx, `Ancla flotante ${studyFormatUtc(timeline.anchorEpochMs)} · separación real formación/operación · sin minuto calendario desplazado`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
+  ctx.fillStyle = "rgba(220,235,255,.84)";
+  const actionLabel = isItm ? "T" : isOtm ? "TM" : dir;
+  const note = `${isCall ? "Soporte" : "Resistencia"} respetad${isCall ? "o" : "a"} · entrada ${actionLabel} ${SIGNAL_AUTO_ENTRY_SEC}s · pin, línea, cierre y bandera en ${isItm ? "verde" : isOtm ? "rojo" : "amarillo"}`;
+  ctx.fillText(note, 170, H - 58);
 }
 
 async function generateAndSaveStudyCaptureForSignal(item, { force = false } = {}) {
-  const liveItem = item?.id ? findHistoryItemById(String(item.id)) : null;
-  const sourceItem = liveItem
-    ? {
-        ...item,
-        ...liveItem,
-        journal_id: item?.journal_id || liveItem?.journal_id || "",
-        trade: { ...(liveItem?.trade || {}), ...(item?.trade || {}) },
-        signalResult60: item?.signalResult60 || liveItem?.signalResult60 || null,
-      }
-    : item;
-  if (!isStudyCaptureReadyItem(sourceItem)) return null;
-  const captureId = getStudyCaptureIdFromItem(sourceItem);
+  if (!isStudyCaptureReadyItem(item)) return null;
+  const captureId = getStudyCaptureIdFromItem(item);
   if (!captureId) return null;
   if (!force) {
     try {
       const existing = await getStudyCapture(captureId);
-      if (existing?.dataUrl && existing?.render_version === STUDY_CAPTURE_RENDER_VERSION) return existing;
+      if (existing?.dataUrl) return existing;
     } catch {}
   }
-
-  const timeline = getStudyCaptureTimeline(sourceItem);
-  const exactTicks = await fetchStudyCaptureExactTicks(sourceItem, timeline);
+  const nextTicks = await getStudyCaptureNextTicks(item);
   const canvas = document.createElement("canvas");
-  canvas.width = 1600;
-  canvas.height = 960;
-  drawStudyCaptureToCanvas(canvas, sourceItem, exactTicks, timeline);
-  const dataUrl = canvas.toDataURL("image/png", 0.94);
+  canvas.width = 1400;
+  canvas.height = 820;
+  drawStudyCaptureToCanvas(canvas, item, nextTicks);
+  const dataUrl = canvas.toDataURL("image/png", 0.92);
   const record = {
     id: captureId,
-    render_version: STUDY_CAPTURE_RENDER_VERSION,
-    journal_id: makeJournalIdFromSignal(sourceItem),
-    signal_id: String(sourceItem.id || ""),
-    symbol: String(sourceItem.symbol || ""),
-    direction: String(sourceItem.direction || ""),
-    result: getStudyCaptureTradeResult(sourceItem),
+    journal_id: makeJournalIdFromSignal(item),
+    signal_id: String(item.id || ""),
+    symbol: String(item.symbol || ""),
+    direction: String(item.direction || ""),
+    result: getStudyCaptureTradeResult(item),
     created_at: Date.now(),
-    timeline: {
-      anchor_epoch_ms: timeline.anchorEpochMs,
-      alarm_epoch_ms: timeline.alarmEpochMs,
-      entry_epoch_ms: timeline.entryEpochMs,
-      exit_epoch_ms: timeline.exitEpochMs,
-      entry_quote: timeline.entryQuote,
-      exit_quote: timeline.exitQuote,
-      window_end_ms: timeline.windowEndMs,
-      exact_tick_count: exactTicks.length,
-    },
     dataUrl,
   };
   await putStudyCapture(record);
-  sourceItem.trade ||= {};
-  sourceItem.trade.study_capture_id = captureId;
-  sourceItem.trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
-  if (liveItem) {
-    liveItem.trade ||= {};
-    liveItem.trade.study_capture_id = captureId;
-    liveItem.trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
-  }
-  if (item && item !== liveItem) {
-    item.trade ||= {};
-    item.trade.study_capture_id = captureId;
-    item.trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
-  }
+  item.trade ||= {};
+  item.trade.study_capture_id = captureId;
   try { saveHistory(history); } catch {}
   try {
-    const jid = makeJournalIdFromSignal(sourceItem);
+    const jid = makeJournalIdFromSignal(item);
     const idx = tradesJournal.findIndex((x) => x && x.journal_id === jid);
     if (idx >= 0) {
       tradesJournal[idx].study_capture_id = captureId;
       tradesJournal[idx].trade ||= {};
       tradesJournal[idx].trade.study_capture_id = captureId;
-      tradesJournal[idx].trade.study_capture_render_version = STUDY_CAPTURE_RENDER_VERSION;
       saveTradesJournal(tradesJournal);
     }
   } catch {}
   return record;
 }
-
 function ensureStudyCaptureModal() {
   let modal = document.getElementById("studyCaptureModal");
   if (modal) return modal;
@@ -976,11 +777,8 @@ async function showStudyCaptureForItem(item) {
   img.removeAttribute("src");
   img.alt = "Generando captura…";
   try {
-    const currentCaptureId = getStudyCaptureIdFromItem(item);
-    let rec = await getStudyCapture(currentCaptureId);
-    if (!rec?.dataUrl || rec?.render_version !== STUDY_CAPTURE_RENDER_VERSION) {
-      rec = await generateAndSaveStudyCaptureForSignal(item, { force: true });
-    }
+    let rec = await getStudyCapture(item?.trade?.study_capture_id || item?.study_capture_id || getStudyCaptureIdFromItem(item));
+    if (!rec?.dataUrl) rec = await generateAndSaveStudyCaptureForSignal(item, { force: true });
     if (!rec?.dataUrl) { toast("⚠️ No pude generar la captura todavía", 1800); return; }
     img.src = rec.dataUrl;
     img.alt = `Captura ${item.symbol || ""} ${item.direction || ""}`;
@@ -1043,10 +841,10 @@ function getTradeJournalAccountMode(entry) {
 function getTradeJournalVisibleList() {
   const scope = getCurrentAccountScope();
   return (tradesJournal || []).filter((entry) => {
-    const accountMode = getTradeJournalAccountMode(entry);
-    const correctAccount = accountMode ? accountMode === scope : scope === ACCOUNT_MODE_DEMO;
-    const doubleReduction = isReduccionConstructivaContinuaMode(entry?.mode) || !!entry?.signalFloatingWindow || Number.isFinite(Number(entry?.signalAnchorEpochMs || 0));
-    return correctAccount && doubleReduction;
+    const m = getTradeJournalAccountMode(entry);
+    // Registros viejos sin cuenta: se muestran solo en DEMO para no contaminar REAL.
+    // Desde v99 todos los trades nuevos quedan separados correctamente.
+    return m ? m === scope : scope === ACCOUNT_MODE_DEMO;
   });
 }
 function getTradeJournalVisibleCount() {
@@ -1076,7 +874,6 @@ const MODE_RUPTURA_DEBIL_GIRO = "RUPTURA DÉBIL GIRO";
 const MODE_ALCISTA_IRREGULAR_25S = "ALCISTA IRREGULAR QUIEBRES 30S";
 const MODE_ALCISTA_REDUCCION_30S = "ALCISTA REDUCCIÓN 30S";
 const MODE_REDUCCION_VISUAL_25S = "REDUCCIÓN VISUAL 25S";
-const MODE_REDUCCION_CONSTRUCTIVA_CONTINUA = "DOBLE REDUCCIÓN";
 const ANALYSIS_MODE_KEY = "analysisMode_v1";
 
 const GIRO_LOGIC_VERSION = "GIRO_RAMA_REEMPLAZO_20260421";
@@ -1092,8 +889,7 @@ const GIRO_POLARIDAD_LOGIC_VERSION = "GIRO_POLARIDAD_REAL_RUPTURA_RETEST_2026050
 const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S_V78_20260529";
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
-const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_CONSTRUCTIVA_SECOND_REDUCTION_CONFIRMED_V109_1_20260614";
+const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_GMP_ESTRICTO_V106_9_4_14_20260608";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -1103,7 +899,6 @@ const GIRO_APRENDIZAJE_MAX_EXAMPLES = 600;
 function normalizeSignalMode(mode) {
   const raw = String(mode || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   if (raw.includes("LINEA") || raw.includes("DINAMICA")) return MODE_LINEA_DINAMICA;
-  if ((raw.includes("CONSTRUCTIVA") || raw.includes("CONSTRUCTIVO")) || (raw.includes("REDUCCION") && raw.includes("CONTINUA"))) return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
   if ((raw.includes("REDUCCION") || raw.includes("REDUCCIÓN")) && (raw.includes("VISUAL") || raw.includes("VISUAL") || raw.includes("25S") || raw.includes("25 S") || raw.includes("GMP") || raw.includes("G-M-P") || raw.includes("G-P") || raw.includes("P-G"))) return MODE_REDUCCION_VISUAL_25S;
   if (raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL") || raw.includes("REDUCCION_VISUAL") || raw.includes("REDUCCION VISUAL") || raw.includes("REDUCCIÓN VISUAL")) return MODE_REDUCCION_VISUAL_25S;
   if ((raw.includes("ALCISTA") && (raw.includes("REDUCCION") || raw.includes("REDUCCIÓN"))) || raw.includes("ALCISTA_REDUCCION") || raw.includes("ALCISTA REDUCCION")) return MODE_ALCISTA_REDUCCION_30S;
@@ -1111,7 +906,7 @@ function normalizeSignalMode(mode) {
   if ((raw.includes("RUPTURA") && raw.includes("DEBIL")) || raw.includes("BREAK WEAK") || raw === "RUPTURA_DEBIL_GIRO") return MODE_RUPTURA_DEBIL_GIRO;
   if ((raw.includes("SNR") && raw.includes("POLAR")) || raw === "SNR_POLARIDAD") return MODE_SNR_POLARIDAD;
   if (raw.includes("SNR") || raw.includes("INTERACCION")) return MODE_SNR_SEGUNDO_TOQUE;
-  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  return MODE_REDUCCION_VISUAL_25S;
 }
 function isDynamicLineMode(mode) {
   return normalizeSignalMode(mode) === MODE_LINEA_DINAMICA;
@@ -1135,9 +930,6 @@ function isAlcistaReduccion30sMode(mode) {
 function isReduccionExacta25sMode(mode) {
   return normalizeSignalMode(mode) === MODE_REDUCCION_VISUAL_25S;
 }
-function isReduccionConstructivaContinuaMode(mode) {
-  return normalizeSignalMode(mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-}
 function isGiroFamilyMode(mode) {
   const m = normalizeSignalMode(mode);
   return m === MODE_SNR_SEGUNDO_TOQUE || m === MODE_SNR_POLARIDAD || m === MODE_LINEA_DINAMICA || m === MODE_GIRO_NIVEL || m === MODE_GIRO_POLARIDAD;
@@ -1148,31 +940,40 @@ function getModeVersion(mode) {
   if (m === MODE_RUPTURA_DEBIL_GIRO) return RUPTURA_DEBIL_GIRO_LOGIC_VERSION;
   if (m === MODE_ALCISTA_IRREGULAR_25S) return ALCISTA_IRREGULAR_25S_LOGIC_VERSION;
   if (m === MODE_ALCISTA_REDUCCION_30S) return ALCISTA_REDUCCION_30S_LOGIC_VERSION;
-  if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) return REDUCCION_CONSTRUCTIVA_LOGIC_VERSION;
   if (m === MODE_REDUCCION_VISUAL_25S) return REDUCCION_VISUAL_25S_LOGIC_VERSION;
   if (m === MODE_SNR_POLARIDAD) return SNR_POLARIDAD_LOGIC_VERSION;
-  return REDUCCION_CONSTRUCTIVA_LOGIC_VERSION;
+  return GIRO_NIVEL_LOGIC_VERSION;
 }
 function loadAnalysisMode() {
+  // V106.9.2 CLEAN: modo único. Siempre Reducción visual 25s.
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_VISUAL_25S);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
-  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  return MODE_REDUCCION_VISUAL_25S;
 }
-function saveAnalysisMode() {
+function saveAnalysisMode(mode) {
+  // V106.9.2 CLEAN: ignoramos cambios de modo; queda fijo en Reducción visual 25s.
   try {
-    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
+    localStorage.setItem(ANALYSIS_MODE_KEY, MODE_REDUCCION_VISUAL_25S);
     localStorage.setItem("giroMode", "false");
     localStorage.setItem("strongMode", "false");
   } catch {}
 }
-function getModeBtnLabel() {
-  return "🧩 Doble reducción";
+function getModeBtnLabel(mode) {
+  const m = normalizeSignalMode(mode);
+  if (m === MODE_LINEA_DINAMICA) return "📐 Línea dinámica";
+  if (m === MODE_RUPTURA_DEBIL_GIRO) return "🔁 Ruptura Débil Giro";
+  if (m === MODE_ALCISTA_IRREGULAR_25S) return "🧩 Alcista quiebres 30s";
+  if (m === MODE_ALCISTA_REDUCCION_30S) return "🟢 Alcista reducción 30s";
+  if (m === MODE_REDUCCION_VISUAL_25S) return "🎯 GMP estricto 30s";
+  if (m === MODE_SNR_POLARIDAD) return "🧲 SNR polaridad";
+  return "🎯 SNR interacción";
 }
-function nextSignalMode() {
-  return MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+function nextSignalMode(mode) {
+  // V106.9.2 CLEAN: modo único.
+  return MODE_REDUCCION_VISUAL_25S;
 }
 
 const PRACTICE_SAVED_STORE_KEY = "practiceSavedSignals_v1";
@@ -1782,17 +1583,17 @@ function upsertTradeJournalFromSignal(it) {
 
     nextOutcome: it.nextOutcome || "",
     minuteComplete: !!it.minuteComplete,
-    signalFloatingWindow: !!it.signalFloatingWindow,
-    signalAnchorEpochMs: it.signalAnchorEpochMs || null,
-    signalDetectedEpochMs: it.signalDetectedEpochMs || null,
-    signalResult60: it.signalResult60 && typeof it.signalResult60 === "object" ? { ...it.signalResult60 } : null,
 
     // snapshot trade
     trade: { ...(it.trade || {}) },
     study_capture_id: it?.trade?.study_capture_id || getStudyCaptureIdFromItem(it),
 
-    // Lectura del único motor activo: Doble Reducción.
-    doubleReduction: getSignalLevelMeta(it),
+    // nivel SNR / polaridad detectado en la señal
+    giroPolaridad: getSignalLevelMeta(it),
+    snrLevel: getSignalLevelMeta(it),
+
+    // capa manual antiengaño
+    manualGiro: normalizeManualGiroState(it.manualGiro),
 
     // para estudio
     ticks: Array.isArray(it.ticks) ? it.ticks : [],
@@ -1855,9 +1656,22 @@ function setTradeBadge(item, badge /* 'PENDING'|'ITM'|'OTM'|'' */, extra = {}) {
   saveHistory(history);
   updateRowTradeBadge(item);
 
-  // Guarda/actualiza el journal. La captura se genera únicamente al tocar 📸.
+  // si cerró ITM/OTM, guardar en journal y generar captura de estudio
   try {
     upsertTradeJournalFromSignal(item);
+  } catch {}
+
+  try {
+    if (badge === "ITM" || badge === "OTM") {
+      setTimeout(() => {
+        generateAndSaveStudyCaptureForSignal(item).then(() => {
+          try {
+            const av = localStorage.getItem("activeView") || "signals";
+            if (av === "trades") renderTradesView();
+          } catch {}
+        }).catch(() => {});
+      }, 250);
+    }
   } catch {}
 
   // si estás mirando Trades, refrescar
@@ -1914,8 +1728,6 @@ const practice45Btn = $("practice45Btn");
 const practiceCallBtn = $("practiceCallBtn");
 const practicePutBtn = $("practicePutBtn");
 const practicePassBtn = $("practicePassBtn");
-const processView = $("processView");
-const processAppEl = $("processApp");
 
 const evalBtns = qsAll(".evalBtn");
 const modeBtn = $("modeBtn");
@@ -2192,139 +2004,6 @@ let tradeWsConnectPromise = null;
 let soundEnabled = false;
 let vibrateEnabled = true;
 
-// V109.3: audio robusto para Chrome/PWA.
-// Usa alert.mp3 si está disponible y cae a un tono Web Audio interno si el archivo
-// no carga, está cacheado incorrectamente o Chrome rechaza HTMLAudio.
-let alertAudioContext = null;
-let alertAudioUnlockPromise = null;
-
-function getAlertAudioContext() {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return null;
-    if (!alertAudioContext || alertAudioContext.state === "closed") {
-      alertAudioContext = new AudioCtx();
-    }
-    return alertAudioContext;
-  } catch {
-    return null;
-  }
-}
-
-function playInternalAlertTone({ test = false } = {}) {
-  try {
-    const ctx = getAlertAudioContext();
-    if (!ctx || ctx.state !== "running") return false;
-
-    const now = ctx.currentTime;
-    const gain = ctx.createGain();
-    const osc1 = ctx.createOscillator();
-    const osc2 = ctx.createOscillator();
-
-    osc1.type = "sine";
-    osc2.type = "sine";
-    osc1.frequency.setValueAtTime(test ? 740 : 660, now);
-    osc2.frequency.setValueAtTime(test ? 988 : 880, now + 0.10);
-
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(test ? 0.16 : 0.24, now + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + (test ? 0.24 : 0.42));
-
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc1.start(now);
-    osc1.stop(now + (test ? 0.12 : 0.20));
-    osc2.start(now + 0.10);
-    osc2.stop(now + (test ? 0.24 : 0.42));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function unlockAlertAudio() {
-  if (alertAudioUnlockPromise) return alertAudioUnlockPromise;
-  alertAudioUnlockPromise = (async () => {
-    let internalOk = false;
-    let fileOk = false;
-    let fileError = null;
-
-    const ctx = getAlertAudioContext();
-    if (ctx) {
-      try {
-        if (ctx.state === "suspended") await ctx.resume();
-        internalOk = ctx.state === "running";
-        if (internalOk) playInternalAlertTone({ test: true });
-      } catch {}
-    }
-
-    if (sound) {
-      try {
-        sound.muted = false;
-        sound.volume = 0.55;
-        sound.currentTime = 0;
-        sound.load();
-        await sound.play();
-        fileOk = true;
-        setTimeout(() => {
-          try {
-            sound.pause();
-            sound.currentTime = 0;
-            sound.volume = 1;
-          } catch {}
-        }, 240);
-      } catch (err) {
-        fileError = err;
-      }
-    }
-
-    if (!internalOk && !fileOk) {
-      const detail = fileError?.name || fileError?.message || "audio no disponible";
-      throw new Error(String(detail));
-    }
-
-    return { internalOk, fileOk, usingFallback: !fileOk && internalOk };
-  })();
-
-  try {
-    return await alertAudioUnlockPromise;
-  } finally {
-    alertAudioUnlockPromise = null;
-  }
-}
-
-function playSignalAlertSound() {
-  if (!soundEnabled) return;
-
-  const fallback = () => {
-    try {
-      const ctx = getAlertAudioContext();
-      if (ctx?.state === "suspended") {
-        ctx.resume().then(() => playInternalAlertTone()).catch(() => {});
-      } else {
-        playInternalAlertTone();
-      }
-    } catch {}
-  };
-
-  if (!sound) {
-    fallback();
-    return;
-  }
-
-  try {
-    sound.muted = false;
-    sound.volume = 1;
-    sound.currentTime = 0;
-    const promise = sound.play();
-    if (promise && typeof promise.catch === "function") promise.catch(fallback);
-  } catch {
-    fallback();
-  }
-}
-
 let EVAL_SEC = 45;
 let PRACTICE_EVAL_SEC = 45;
 
@@ -2333,7 +2012,7 @@ let PRACTICE_EVAL_SEC = 45;
 const SNR_RADAR_START_SEC = 35;
 
 // Estado principal: NORMAL vs GIRO vs GIRO FLEX
-let signalMode = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+let signalMode = MODE_NORMAL;
 
 let history = loadHistory();
 migrateHistoryModesToGiro();
@@ -2372,24 +2051,6 @@ let liveAutoEntryState = { minuteKey: "", attempted: false, status: "idle", side
 const autoPreProposalInFlight = new Set();
 const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
-const CONSTRUCTIVE_FLOATING_WINDOW_MS = 30000;
-const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
-const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 7000;
-const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
-const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 90000;
-// V109.1: el último tramo de la segunda reducción es provisional hasta que
-// una respuesta contraria real confirme que terminó. Un micro-diente no alcanza.
-const CONSTRUCTIVE_CLOSE_RETRACE_RATIO = 0.24;
-const CONSTRUCTIVE_CLOSE_RANGE_RATIO = 0.050;
-const CONSTRUCTIVE_CLOSE_TOL_MULT = 1.80;
-const CONSTRUCTIVE_CLOSE_MIN_OPPOSITE_STEPS = 2;
-const CONSTRUCTIVE_CLOSE_MIN_DURATION_MS = 250;
-const SIGNAL_RESULT_60_DURATION_MS = 60000;
-const SIGNAL_RESULT_60_LIVE_GRACE_MS = 10000;
-const signalResult60HydrationPending = new Set();
-let constructiveRollingTicksBySymbol = Object.create(null);
-let constructiveLastSignalBySymbol = Object.create(null);
-
 
 // V32: caché específica para la vista Velas 1m del modal.
 // La vista debe usar OHLC reales de Deriv y no velas inventadas/rellenadas.
@@ -2484,22 +2145,8 @@ function setCompactModalHeader(item, ticksCount = null) {
     const mode = formatCompactModeLabel(item.mode || "NORMAL");
     const n = ticksCount == null ? (Array.isArray(item.ticks) ? item.ticks.length : 0) : Number(ticksCount) || 0;
     const live = modalLive && isItemLiveMinute(item) ? " · LIVE" : "";
-    let signalOrResultTxt = "";
-    if (isFloatingSignalItem(item)) {
-      const result60 = ensureSignalResult60(item);
-      if (result60 && isSignalResult60Resolved(item)) {
-        signalOrResultTxt = getSignalResult60DirectionText(item);
-      } else if (result60) {
-        signalOrResultTxt = `RESULTADO 60s ⏳ ${getSignalResult60RemainingSec(item)}s`;
-      } else {
-        signalOrResultTxt = formatNextCandleDirectionLabel(item.direction).replace("PROX VELA", "SEÑAL");
-      }
-    } else {
-      const outcomeValue = getItemNextOutcomeValue(item);
-      if (item?.minuteComplete && outcomeValue) signalOrResultTxt = formatNextCandleOutcomeLabel(item, true).replace("PROX VELA", "RESULTADO");
-      else signalOrResultTxt = formatNextCandleDirectionLabel(item.direction);
-    }
-    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${signalOrResultTxt ? " · " + signalOrResultTxt : ""}${live}`;
+    const nextOutcomeTxt = formatNextCandleOutcomeLabel(item, true);
+    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${nextOutcomeTxt ? " · " + nextOutcomeTxt : ""}${live}`;
   }
 }
 
@@ -3423,13 +3070,9 @@ function getEntryTimingShortText() {
   return visualOn ? "AUTO prearmado · cierre visual (vela) 58s" : "AUTO prearmado · cierre 60s";
 }
 function buildNextCandleTimingPlan(item = null) {
-  const anchorMs = Number(item?.signalAnchorEpochMs || 0);
-  const hasFloatingAnchor = Number.isFinite(anchorMs) && anchorMs > 0;
   const itemMinute = Number(item?.minute);
-  const baseMinute = hasFloatingAnchor
-    ? Math.floor(anchorMs / 60000)
-    : (Number.isFinite(itemMinute) && itemMinute > 0 ? itemMinute : currentServerMinute());
-  const currentStartEpochSec = hasFloatingAnchor ? Math.floor(anchorMs / 1000) : baseMinute * 60;
+  const baseMinute = Number.isFinite(itemMinute) && itemMinute > 0 ? itemMinute : currentServerMinute();
+  const currentStartEpochSec = baseMinute * 60;
   const nextStartEpochSec = currentStartEpochSec + 60;
   const visual58 = isEntryTimingVisual58();
   const nextExpiryEpochSec = nextStartEpochSec + (visual58 ? 58 : 60);
@@ -3445,8 +3088,6 @@ function buildNextCandleTimingPlan(item = null) {
     visual_candle_sync: visual58,
     visual_candle_expiry_second: visual58 ? 58 : 60,
     expected_contract_duration_if_bought_at_58: visual58 ? 60 : 62,
-    floating_anchor: hasFloatingAnchor,
-    anchor_epoch_ms: hasFloatingAnchor ? anchorMs : null,
   };
 }
 const RISE_FALL_ALLOW_EQUALS_ENABLED = true;
@@ -3908,7 +3549,7 @@ function scanSignalAutoPreProposals() {
     const nowMinute = currentServerMinute();
     let started = false;
     const candidates = (history || [])
-      .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
       .filter((it) => getSignalEnabledTradeSide(it))
       .filter((it) => isAutoPreProposalWindow(it));
     for (const it of candidates) {
@@ -5001,10 +4642,6 @@ function startUiTimers() {
     // ✅ FIX AUTO 58 DEMO/REAL:
     // La autoentrada no debe depender de que el gráfico se redibuje justo en el segundo 58.
     // Este timer mantiene viva la barra del modal y además revisa señales habilitadas.
-    if (modalCurrentItem && isFloatingSignalItem(modalCurrentItem)) {
-      setCompactModalHeader(modalCurrentItem);
-      updateModalFooterReadingUI();
-    }
     updateModalCandleStatusUI();
     refreshOpenSignalStageBadges();
     scanSignalAutoPreProposals();
@@ -5276,7 +4913,7 @@ function ensureLiveAnalysisPauseButton() {
 }
 
 function isCleanVisualModeItem(it) {
-  return isReduccionConstructivaContinuaMode(it?.mode) || !!it?.signalFloatingWindow || Number.isFinite(Number(it?.signalAnchorEpochMs || 0));
+  return normalizeSignalMode(it?.mode || MODE_REDUCCION_VISUAL_25S) === MODE_REDUCCION_VISUAL_25S;
 }
 function getCleanVisualHistory() {
   return (history || []).filter(isCleanVisualModeItem);
@@ -5299,10 +4936,6 @@ function updateCounter(viewName = null) {
   if (!counterEl) return;
   if (activeView === "trades") {
     counterEl.textContent = `Trades ${getTradingAccountLabel()}: ${getTradeJournalVisibleCount()}`;
-    return;
-  }
-  if (activeView === "process") {
-    counterEl.textContent = `Proceso: ${getBrainProcessTodayScore()} pts`;
     return;
   }
   if (activeView === "practice") {
@@ -5716,423 +5349,6 @@ function renderTradesView() {
   } catch {}
 }
 
-
-/* =========================
-   🧠 Proceso — puntos, premios y bloqueo emocional
-========================= */
-const BRAIN_PROCESS_STORE_KEY = "brainProcessEvents_v1";
-const BRAIN_PROCESS_DAILY_GOAL = 50;
-const BRAIN_PROCESS_WEEKLY_GOAL = 100;
-const BRAIN_PROCESS_MAX_EVENTS = 700;
-
-const BRAIN_PROCESS_ACTIONS = {
-  good_analysis: {
-    label: "Análisis bien hecho",
-    points: 3,
-    icon: "🎯",
-    message: "Buen análisis. Premiaste el proceso, no el resultado.",
-  },
-  avoided_missing_points: {
-    label: "No entré: faltaban puntos",
-    points: 2,
-    icon: "🛡️",
-    message: "Protegiste la cuenta. No operar también es operar bien.",
-  },
-  avoided_doubt: {
-    label: "No entré: duda real",
-    points: 2,
-    icon: "⏭️",
-    message: "Pasaste una vela dudosa. La claridad vale más que la urgencia.",
-  },
-  avoided_forcing: {
-    label: "No entré: estaba forzando",
-    points: 5,
-    icon: "🧠",
-    message: "Detectaste el impulso antes de obedecerlo.",
-    blockTrade: true,
-    blockReason: "Estoy forzando",
-  },
-  avoided_revenge: {
-    label: "Evité revancha",
-    points: 5,
-    icon: "🔥",
-    message: "Hoy le ganaste al impulso, no al mercado.",
-    blockTrade: true,
-    blockReason: "Revancha / recuperar",
-  },
-  good_otm: {
-    label: "OTM bien ejecutado",
-    points: 3,
-    icon: "✅",
-    message: "Resultado negativo, proceso correcto. No se cambia el sistema.",
-  },
-  good_itm: {
-    label: "ITM bien ejecutado",
-    points: 3,
-    icon: "✅",
-    message: "Buena ejecución. Sin euforia, seguimos igual.",
-  },
-  respected_block: {
-    label: "Respeté bloqueo",
-    points: 5,
-    icon: "🔒",
-    message: "Cortaste el patrón antes de que el patrón te controle.",
-  },
-  closed_disciplined: {
-    label: "Cerré sesión disciplinado",
-    points: 5,
-    icon: "🏁",
-    message: "Terminaste respetando el sistema. Eso también es ganar.",
-  },
-};
-
-const BRAIN_PROCESS_REWARDS = [
-  { points: 10, title: "Descanso de 3 minutos", text: "Alejate del gráfico. Respirá. Volvé solo si estás neutral." },
-  { points: 20, title: "Mate/café tranquilo", text: "Premio por respetar el sistema, no por ganar una vela." },
-  { points: 30, title: "Música 10 minutos", text: "Bajá tensión. El objetivo es claridad, no impulso." },
-  { points: 50, title: "Sesión disciplinada", text: "Podés cerrar la sesión con logro completo." },
-  { points: 100, title: "Premio semanal", text: "Elegí un premio personal por sostener disciplina." },
-];
-
-let brainProcessEvents = loadBrainProcessEvents();
-let processMiniPanelEl = null;
-let processMiniBlockedNoteEl = null;
-
-function loadBrainProcessEvents() {
-  try {
-    const raw = localStorage.getItem(BRAIN_PROCESS_STORE_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter(Boolean).slice(-BRAIN_PROCESS_MAX_EVENTS) : [];
-  } catch {
-    return [];
-  }
-}
-function saveBrainProcessEvents() {
-  try {
-    brainProcessEvents = (Array.isArray(brainProcessEvents) ? brainProcessEvents : []).filter(Boolean).slice(-BRAIN_PROCESS_MAX_EVENTS);
-    localStorage.setItem(BRAIN_PROCESS_STORE_KEY, JSON.stringify(brainProcessEvents));
-  } catch {}
-}
-function getBrainProcessDayKey(ts = Date.now()) {
-  const d = new Date(Number(ts) || Date.now());
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-function getBrainProcessTodayEvents() {
-  const key = getBrainProcessDayKey();
-  return (brainProcessEvents || []).filter((ev) => ev && ev.day === key);
-}
-function getBrainProcessTodayScore() {
-  return getBrainProcessTodayEvents().reduce((acc, ev) => acc + (Number(ev.points) || 0), 0);
-}
-function getBrainProcessWeekEvents() {
-  const start = Date.now() - 6 * 24 * 60 * 60 * 1000;
-  return (brainProcessEvents || []).filter((ev) => Number(ev?.ts || 0) >= start);
-}
-function getBrainProcessWeekScore() {
-  return getBrainProcessWeekEvents().reduce((acc, ev) => acc + (Number(ev.points) || 0), 0);
-}
-function getBrainProcessLevel(score = getBrainProcessTodayScore()) {
-  if (score >= 80) return "Mente blindada";
-  if (score >= 50) return "Proceso completo";
-  if (score >= 30) return "En control";
-  if (score >= 15) return "Calmando impulso";
-  return "Entrenando";
-}
-function getBrainProcessStreak() {
-  const today = getBrainProcessTodayEvents().filter((ev) => Number(ev.points) > 0);
-  let streak = 0;
-  for (let i = today.length - 1; i >= 0; i--) {
-    const type = String(today[i]?.type || "");
-    if (type.includes("avoided") || type.includes("good") || type === "respected_block" || type === "closed_disciplined") streak += 1;
-    else break;
-  }
-  return streak;
-}
-function isBrainRewardClaimedToday(rewardPoints) {
-  const key = getBrainProcessDayKey();
-  return (brainProcessEvents || []).some((ev) => ev?.day === key && ev?.type === "reward_claimed" && Number(ev.rewardPoints) === Number(rewardPoints));
-}
-function getBrainProcessNextReward(score = getBrainProcessTodayScore()) {
-  return BRAIN_PROCESS_REWARDS.find((r) => Number(r.points) > Number(score)) || null;
-}
-function getBrainProcessUnlockedRewards(score = getBrainProcessTodayScore()) {
-  return BRAIN_PROCESS_REWARDS.filter((r) => Number(r.points) <= Number(score));
-}
-function makeBrainProcessEvent(actionKey, extra = {}) {
-  const action = BRAIN_PROCESS_ACTIONS[actionKey] || {};
-  const ts = Date.now();
-  return {
-    id: `process_${ts}_${Math.random().toString(36).slice(2, 8)}`,
-    type: String(actionKey || extra.type || "custom"),
-    label: extra.label || action.label || "Proceso",
-    points: Number(extra.points ?? action.points ?? 0),
-    icon: extra.icon || action.icon || "🧠",
-    message: extra.message || action.message || "Proceso registrado.",
-    ts,
-    day: getBrainProcessDayKey(ts),
-    source: extra.source || (modalCurrentItem ? "modal" : "process_tab"),
-    relatedSignalId: extra.relatedSignalId || String(modalCurrentItem?.id || ""),
-    relatedTradeId: extra.relatedTradeId || String(modalCurrentItem?.trade?.contract_id || ""),
-    blockedTrade: !!(extra.blockedTrade ?? action.blockTrade),
-    blockReason: extra.blockReason || action.blockReason || "",
-  };
-}
-function addBrainProcessEvent(actionKey, extra = {}) {
-  const ev = makeBrainProcessEvent(actionKey, extra);
-  brainProcessEvents.unshift(ev);
-  saveBrainProcessEvents();
-
-  if (ev.blockedTrade && modalCurrentItem) {
-    markBrainProcessTradeBlocked(modalCurrentItem, ev.blockReason || ev.label, ev);
-  }
-
-  renderProcessView();
-  updateProcessMiniPanelUI();
-  updateCounter(getActiveViewName());
-  try { updateModalCandleStatusUI(); } catch {}
-  toast(`${ev.icon} +${ev.points} Proceso · ${ev.label}`, 1700);
-  return ev;
-}
-function claimBrainProcessReward(rewardPoints) {
-  const reward = BRAIN_PROCESS_REWARDS.find((r) => Number(r.points) === Number(rewardPoints));
-  if (!reward) return;
-  if (getBrainProcessTodayScore() < reward.points) {
-    toast(`Faltan ${reward.points - getBrainProcessTodayScore()} puntos para ese premio`, 1400);
-    return;
-  }
-  if (isBrainRewardClaimedToday(reward.points)) {
-    toast("🎁 Ese premio ya fue tomado hoy", 1300);
-    return;
-  }
-  const ev = makeBrainProcessEvent("reward_claimed", {
-    type: "reward_claimed",
-    label: `Premio tomado: ${reward.title}`,
-    points: 0,
-    icon: "🎁",
-    message: reward.text,
-    rewardPoints: reward.points,
-    source: "process_tab",
-  });
-  ev.rewardPoints = reward.points;
-  brainProcessEvents.unshift(ev);
-  saveBrainProcessEvents();
-  renderProcessView();
-  updateProcessMiniPanelUI();
-  toast(`🎁 Premio: ${reward.title}`, 2200);
-}
-function resetBrainProcessToday() {
-  if (!confirm("¿Resetear solo los puntos de Proceso de hoy?")) return;
-  const key = getBrainProcessDayKey();
-  brainProcessEvents = (brainProcessEvents || []).filter((ev) => ev?.day !== key);
-  saveBrainProcessEvents();
-  renderProcessView();
-  updateProcessMiniPanelUI();
-  updateCounter(getActiveViewName());
-  toast("↺ Proceso de hoy reseteado", 1500);
-}
-function getBrainProcessHistoryHtml() {
-  const events = getBrainProcessTodayEvents().slice(0, 12);
-  if (!events.length) return `<div class="processEmpty">Todavía no registraste decisiones de proceso hoy.</div>`;
-  return events.map((ev) => `
-    <div class="processHistoryItem">
-      <div class="processHistoryMain">
-        <div class="processHistoryLabel">${escapeHtml(ev.icon || "🧠")} ${escapeHtml(ev.label || "Proceso")}</div>
-        <div class="processHistoryMsg">${escapeHtml(ev.message || "")}</div>
-      </div>
-      <div class="processHistoryPts">${Number(ev.points) > 0 ? "+" : ""}${Number(ev.points) || 0}</div>
-    </div>
-  `).join("");
-}
-function getBrainProcessRewardsHtml() {
-  const score = getBrainProcessTodayScore();
-  return BRAIN_PROCESS_REWARDS.map((r) => {
-    const unlocked = score >= r.points;
-    const claimed = isBrainRewardClaimedToday(r.points);
-    const right = unlocked
-      ? (claimed ? `<div class="processRewardBadge">Tomado</div>` : `<button class="processRewardClaimBtn" type="button" data-process-reward="${r.points}">🎁 Tomar</button>`)
-      : `<div class="processRewardBadge">Faltan ${r.points - score}</div>`;
-    return `
-      <div class="processRewardRow">
-        <div class="processRewardMain">
-          <div class="processRewardTitle">${unlocked ? "🎁" : "🔒"} ${r.points} pts · ${escapeHtml(r.title)}</div>
-          <div class="processRewardText">${escapeHtml(r.text)}</div>
-        </div>
-        ${right}
-      </div>
-    `;
-  }).join("");
-}
-function renderProcessView() {
-  const host = processAppEl || document.getElementById("processApp");
-  if (!host) return;
-
-  const todayScore = getBrainProcessTodayScore();
-  const weekScore = getBrainProcessWeekScore();
-  const pct = Math.max(0, Math.min(100, (todayScore / BRAIN_PROCESS_DAILY_GOAL) * 100));
-  const nextReward = getBrainProcessNextReward(todayScore);
-  const unlocked = getBrainProcessUnlockedRewards(todayScore).length;
-  const actionsHtml = Object.entries(BRAIN_PROCESS_ACTIONS).map(([key, action]) => `
-    <button class="processActionBtn ${action.blockTrade ? "blocking" : ""}" type="button" data-process-action="${escapeHtml(key)}">
-      <strong>${escapeHtml(action.icon)} ${escapeHtml(action.label)}</strong>
-      <span>+${Number(action.points) || 0} pts</span>
-    </button>
-  `).join("");
-
-  host.innerHTML = `
-    <div class="processHero">
-      <div class="processHeroTop">
-        <div>
-          <div class="processEyebrow">🧠 Proceso</div>
-          <div class="processTitle">Disciplina de hoy</div>
-        </div>
-        <div class="processScore">
-          <div class="processScoreNum">${todayScore}</div>
-          <div class="processScoreLabel">puntos</div>
-        </div>
-      </div>
-      <div class="processProgressOuter" aria-label="Progreso diario"><div class="processProgressInner" style="width:${pct.toFixed(0)}%"></div></div>
-      <div class="processMetaGrid">
-        <div class="processMetaCard"><div class="processMetaLabel">Nivel</div><div class="processMetaValue">${escapeHtml(getBrainProcessLevel(todayScore))}</div></div>
-        <div class="processMetaCard"><div class="processMetaLabel">Racha limpia</div><div class="processMetaValue">${getBrainProcessStreak()} decisiones</div></div>
-        <div class="processMetaCard"><div class="processMetaLabel">Semana</div><div class="processMetaValue">${weekScore}/${BRAIN_PROCESS_WEEKLY_GOAL} pts</div></div>
-      </div>
-      <div class="processQuote">No necesitás ganar esta vela. Necesitás ganar el hábito correcto.</div>
-    </div>
-
-    <div class="processCard">
-      <div class="processCardHead">
-        <div>
-          <div class="processCardTitle">Acción correcta</div>
-          <div class="processCardSub">Sumá puntos por conducta correcta, no por resultado.</div>
-        </div>
-      </div>
-      <div class="processActionGrid">${actionsHtml}</div>
-    </div>
-
-    <div class="processCard">
-      <div class="processCardHead">
-        <div>
-          <div class="processCardTitle">Premios</div>
-          <div class="processCardSub">Desbloqueados: ${unlocked}. ${nextReward ? `Próximo: ${escapeHtml(nextReward.title)} en ${nextReward.points - todayScore} pts.` : "Meta diaria completa."}</div>
-        </div>
-      </div>
-      <div class="processRewardList">${getBrainProcessRewardsHtml()}</div>
-    </div>
-
-    <div class="processCard">
-      <div class="processCardHead">
-        <div>
-          <div class="processCardTitle">Historial mental de hoy</div>
-          <div class="processCardSub">Esto entrena al cerebro a premiar esperar, frenar y ejecutar bien.</div>
-        </div>
-      </div>
-      <div class="processHistoryList">${getBrainProcessHistoryHtml()}</div>
-      <div class="processTools">
-        <button id="processResetTodayBtn" class="btn btnGhost" type="button">↺ Reset hoy</button>
-      </div>
-    </div>
-  `;
-
-  host.querySelectorAll("[data-process-action]").forEach((btn) => {
-    btn.onclick = () => addBrainProcessEvent(btn.dataset.processAction, { source: "process_tab" });
-  });
-  host.querySelectorAll("[data-process-reward]").forEach((btn) => {
-    btn.onclick = () => claimBrainProcessReward(Number(btn.dataset.processReward));
-  });
-  const resetBtn = host.querySelector("#processResetTodayBtn");
-  if (resetBtn) resetBtn.onclick = resetBrainProcessToday;
-}
-function initProcessView() {
-  renderProcessView();
-}
-function markBrainProcessTradeBlocked(item, reason = "Bloqueo de Proceso", ev = null) {
-  if (!item) return;
-  const block = {
-    blocked: true,
-    reason: String(reason || "Bloqueo de Proceso"),
-    label: String(ev?.label || reason || "Bloqueo de Proceso"),
-    eventId: String(ev?.id || ""),
-    at: Date.now(),
-  };
-  item.brainProcess = { ...(item.brainProcess || {}), ...block };
-  try {
-    const live = item.id ? findHistoryItemById(String(item.id)) : null;
-    if (live && live !== item) {
-      live.brainProcess = { ...(live.brainProcess || {}), ...block };
-      saveHistory(history);
-    } else if (history && history.includes(item)) {
-      saveHistory(history);
-    }
-  } catch {}
-}
-function isBrainProcessTradeBlocked(item = modalCurrentItem) {
-  return !!(item && item.brainProcess && item.brainProcess.blocked);
-}
-function getBrainProcessBlockReason(item = modalCurrentItem) {
-  return String(item?.brainProcess?.reason || item?.brainProcess?.label || "Bloqueado por Proceso");
-}
-function assertBrainProcessCanTrade(item = modalCurrentItem) {
-  if (isBrainProcessTradeBlocked(item)) {
-    throw new Error(`Proceso bloqueó esta entrada: ${getBrainProcessBlockReason(item)}`);
-  }
-}
-function ensureProcessMiniPanel() {
-  if (processMiniPanelEl && processMiniPanelEl.isConnected) return processMiniPanelEl;
-  const host = modalFooterVoteSlot || document.querySelector("#chartModal .modalReadingActionsCard") || document.querySelector("#chartModal .modalFooter");
-  if (!host) return null;
-  const panel = document.createElement("div");
-  panel.id = "processMiniPanel";
-  panel.className = "processMiniPanel";
-  panel.innerHTML = `
-    <div class="processMiniTitle"><span>🧠 Proceso rápido</span><span id="processMiniPts">${getBrainProcessTodayScore()} pts</span></div>
-    <div class="processMiniBtns">
-      <button class="btn btnGhost" type="button" data-process-modal="avoided_missing_points">🛡️ Faltaban pts</button>
-      <button class="btn btnGhost" type="button" data-process-modal="avoided_doubt">⏭️ Duda real</button>
-      <button class="btn btnGhost" type="button" data-process-modal="avoided_forcing">🧠 Estoy forzando</button>
-      <button class="btn btnGhost" type="button" data-process-modal="avoided_revenge">🔥 Revancha</button>
-      <button class="btn btnGhost" type="button" data-process-modal="good_analysis">🎯 Buen análisis</button>
-      <button class="btn btnGhost" type="button" data-process-modal="good_otm">✅ OTM bien</button>
-    </div>
-    <div id="processMiniBlockedNote" class="processBlockedNote hidden"></div>
-  `;
-  if (host === modalFooterVoteSlot) host.appendChild(panel);
-  else host.appendChild(panel);
-  panel.querySelectorAll("[data-process-modal]").forEach((btn) => {
-    btn.onclick = () => addBrainProcessEvent(btn.dataset.processModal, { source: "signal_modal" });
-  });
-  processMiniPanelEl = panel;
-  processMiniBlockedNoteEl = panel.querySelector("#processMiniBlockedNote");
-  updateProcessMiniPanelUI();
-  return panel;
-}
-function updateProcessMiniPanelUI() {
-  const panel = ensureProcessMiniPanel();
-  if (!panel) return;
-  const pts = panel.querySelector("#processMiniPts");
-  if (pts) pts.textContent = `${getBrainProcessTodayScore()} pts`;
-  const blocked = isBrainProcessTradeBlocked(modalCurrentItem);
-  const note = processMiniBlockedNoteEl || panel.querySelector("#processMiniBlockedNote");
-  if (note) {
-    note.classList.toggle("hidden", !blocked);
-    note.textContent = blocked ? `Entrada bloqueada: ${getBrainProcessBlockReason(modalCurrentItem)}.` : "";
-  }
-}
-function setProcessMiniPanelVisible(show) {
-  const panel = ensureProcessMiniPanel();
-  if (panel) panel.style.display = show ? "block" : "none";
-}
-function applyBrainProcessTradeGate(locked = false, candleClosed = false) {
-  if (!modalCurrentItem || locked || candleClosed) return;
-  if (!isBrainProcessTradeBlocked(modalCurrentItem)) return;
-  const msg = `Proceso bloqueó esta entrada: ${getBrainProcessBlockReason(modalCurrentItem)}.`;
-  paintGiroOnlyButtonState(modalBuyCallBtn, false, msg);
-  paintGiroOnlyButtonState(modalBuyPutBtn, false, msg);
-}
-
 /* =========================
    Tabs: Señales | Trades | Feedback
 ========================= */
@@ -6303,9 +5519,9 @@ function buildSignalsAnalysisExport() {
 
   return {
     exported_at: new Date().toISOString(),
-    export_scope: "analisis_dos_reducciones_visual_signals_all_ticks",
+    export_scope: "analisis_reduccion_visual_signals_all_ticks",
     app_version: "v106.9.4.15_history_1000_visible_200",
-    description: "Export para analizar patrones de dos reducciones claras antes del segundo 30: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
+    description: "Export para analizar patrones de los primeros 25/30s: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
       signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
@@ -6343,7 +5559,7 @@ async function copyTextToClipboard(text) {
 function buildSignalsAnalysisFileName(data) {
   const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
   const count = Number(data?.counts?.signals_total || 0);
-  return `analisis-dos-reducciones-visual-${count}-senales-${ts}.json`;
+  return `analisis-reduccion-visual-${count}-senales-${ts}.json`;
 }
 function buildSignalsAnalysisText() {
   const data = buildSignalsAnalysisExport();
@@ -7180,12 +6396,10 @@ function ensureInlineClearButtons() {
 }
 
 function setActiveView(name) {
-  if (name === "practice") name = "process";
   const isSignals = name === "signals";
   const isLive = name === "live";
   const isTrades = name === "trades";
   const isPractice = name === "practice";
-  const isProcess = name === "process";
 
   const tv = ensureTradesView();
 
@@ -7193,7 +6407,6 @@ function setActiveView(name) {
   if (liveView) liveView.classList.toggle("hidden", !isLive);
   if (tv) tv.classList.toggle("hidden", !isTrades);
   if (practiceView) practiceView.classList.toggle("hidden", !isPractice);
-  if (processView) processView.classList.toggle("hidden", !isProcess);
 
   qsAll(".tab[data-view]").forEach((t) => {
     const active = t.dataset.view === name;
@@ -7205,7 +6418,6 @@ function setActiveView(name) {
 
   if (isTrades) renderTradesView();
   if (isPractice) ensurePracticeReady();
-  if (isProcess) renderProcessView();
   if (isLive) {
     startLiveReplayLoop();
     setLiveTradeStatus("Modo en vivo activo: señales pausadas solo en esta pestaña. Volvé a Señales para reanudar análisis.");
@@ -7223,20 +6435,17 @@ function initTabs() {
   ensureTradesTab();
   ensureTradesView();
 
-  // V107 Proceso: se mantienen En vivo y se reemplaza Práctica por 🧠 Proceso.
-  qsAll('.tab[data-view="live"], .tab[data-view="process"]').forEach((el) => { el.style.display = ""; });
-  qsAll('.tab[data-view="practice"]').forEach((el) => { el.style.display = "none"; });
+  // V106.9.2 CLEAN: se mantienen las pestañas En vivo y Práctica.
+  qsAll('.tab[data-view="live"], .tab[data-view="practice"]').forEach((el) => { el.style.display = ""; });
   if (liveView) liveView.style.display = "";
-  if (practiceView) practiceView.style.display = "none";
-  if (processView) processView.style.display = "";
+  if (practiceView) practiceView.style.display = "";
 
   qsAll(".tab[data-view]").forEach((t) => {
     t.onclick = () => setActiveView(t.dataset.view);
   });
 
-  const savedRaw = localStorage.getItem("activeView") || "signals";
-  const saved = savedRaw === "practice" ? "process" : savedRaw;
-  const initial = ["signals", "live", "trades", "process"].includes(saved) ? saved : "signals";
+  const saved = localStorage.getItem("activeView") || "signals";
+  const initial = ["signals", "live", "trades", "practice"].includes(saved) ? saved : "signals";
   setActiveView(initial);
 }
 
@@ -9116,51 +8325,99 @@ function ensureExportButton() {
 ========================= */
 function buildExportPayloadTrades() {
   try { syncTradesFeedbackFromOpenRows(); } catch {}
+  const selectedPractice = getPracticeExportSavedList();
   const journalForExport = getTradesJournalExportList();
-  const markedTrades = (journalForExport || []).filter((x) => x && (x.vote || x.comment) && (isReduccionConstructivaContinuaMode(x.mode) || x.signalFloatingWindow || Number.isFinite(Number(x.signalAnchorEpochMs || 0))));
-  const markedSignals = (history || []).filter((x) => x && (x.vote || x.comment) && isCleanVisualModeItem(x));
-  const mapItem = (it) => ({
-    id: it.id || "",
-    journal_id: it.journal_id || "",
-    saved_at: it.saved_at || 0,
-    time: it.time || "",
-    symbol: it.symbol || "",
-    direction: it.direction || "",
-    mode: MODE_REDUCCION_CONSTRUCTIVA_CONTINUA,
-    mode_version: it.mode_version || REDUCCION_CONSTRUCTIVA_LOGIC_VERSION,
-    vote: it.vote || "",
-    comment: it.comment || "",
-    result_60s: it.signalResult60 || null,
-    trade: it.trade || null,
-    signalAutoEntry: it.signalAutoEntry || null,
-    double_reduction: getSignalLevelMeta(it),
-    ticks: Array.isArray(it.ticks) ? it.ticks : [],
-  });
+  const markedTrades = (journalForExport || []).filter((x) => x && (x.vote || x.comment));
+  const markedSignals = (history || []).filter((x) => x && (x.vote || x.comment));
+  const aprendizaje = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples : [];
+  const aprendizajeStats = getGiroAprendizajeStats();
   return {
     exported_at: new Date().toISOString(),
-    export_scope: "double_reduction_feedback",
+    export_scope: "trades_feedback_practice_clear_and_giro_aprendizaje",
     count_trades_total: (journalForExport || []).length,
     count_marked_trades: markedTrades.length,
     count_marked_signals: markedSignals.length,
-    description: "Incluye únicamente señales y trades marcados del motor Doble Reducción.",
-    signals_marked: markedSignals.map(mapItem),
-    trades_marked: markedTrades.map(mapItem),
+    count_practice_selected: selectedPractice.length,
+    count_clear_formations: selectedPractice.length,
+    count_giro_aprendizaje_examples: aprendizaje.length,
+    giro_aprendizaje_stats: aprendizajeStats,
+    description: "Incluye señales marcadas con like/dislike, trades marcados, niveles SNR detectados, formaciones claras de Práctica y ejemplos de Giro + Aprendizaje.",
+
+    // Señales marcadas desde la pestaña Señales. Incluye el nivel SNR si la señal lo trae.
+    signals_marked: markedSignals.map((it) => ({
+      id: it.id || "",
+      minute: it.minute || 0,
+      time: it.time || "",
+      symbol: it.symbol || "",
+      direction: it.direction || "",
+      mode: it.mode || MODE_SNR_SEGUNDO_TOQUE,
+      mode_version: it.mode_version || getModeVersion(it.mode || MODE_SNR_SEGUNDO_TOQUE) || "",
+      vote: it.vote || "",
+      comment: it.comment || "",
+      nextOutcome: it.nextOutcome || "",
+      minuteComplete: !!it.minuteComplete,
+      trade: it.trade || null,
+      signalAutoEntry: it.signalAutoEntry || null,
+      giroPolaridad: getSignalLevelMeta(it),
+      snrLevel: getSignalLevelMeta(it),
+      manualGiro: normalizeManualGiroState(it.manualGiro),
+      ticks: Array.isArray(it.ticks) ? it.ticks : [],
+    })),
+
+    // Operaciones marcadas desde la pestaña Trades para mostrar qué formaciones buscás/evitás.
+    trades_marked: markedTrades.map((x) => ({
+      journal_id: x.journal_id || "",
+      saved_at: x.saved_at || 0,
+      feedback_at: x.feedback_at || 0,
+      feedback_source: x.feedback_source || "trades_tab",
+      vote: x.vote || "",
+      comment: x.comment || "",
+      id: x.id || "",
+      minute: x.minute || 0,
+      time: x.time || "",
+      symbol: x.symbol || "",
+      direction: x.direction || "",
+      mode: x.mode || "NORMAL",
+      mode_version: x.mode_version || getModeVersion(x.mode || "NORMAL") || "",
+      nextOutcome: x.nextOutcome || "",
+      minuteComplete: !!x.minuteComplete,
+      trade: x.trade || null,
+      giroPolaridad: getSignalLevelMeta(x),
+      snrLevel: getSignalLevelMeta(x),
+      manualGiro: normalizeManualGiroState(x.manualGiro),
+      ticks: Array.isArray(x.ticks) ? x.ticks : [],
+    })),
+
+    // Formaciones marcadas con 💾 Guardar formación clara en Modo Práctica.
+    practice_selected: selectedPractice.map((x) => ({
+      ...x,
+      ticks: Array.isArray(x?.ticks) ? x.ticks : [],
+      confirmations: Array.isArray(x?.confirmations) ? x.confirmations : [],
+    })),
+
+    giro_aprendizaje_examples: aprendizaje.map((x) => ({
+      ...x,
+      ticks: Array.isArray(x?.ticks) ? x.ticks : [],
+    })),
   };
 }
 async function exportTradesJournal() {
   const payload = buildExportPayloadTrades();
   const json = JSON.stringify(payload, null, 2);
-  if (!payload.count_marked_signals && !payload.count_marked_trades) {
-    alert("No hay señales ni trades marcados para exportar todavía.");
+
+  if (!payload.count_marked_signals && !payload.count_marked_trades && !payload.count_practice_selected && !payload.count_giro_aprendizaje_examples) {
+    alert("No hay señales/trades marcados, formaciones claras ni ejemplos de Giro + Aprendizaje para exportar todavía.");
     return;
   }
+
   try {
     await navigator.clipboard.writeText(json);
-    alert(`✅ Exportado: ${payload.count_marked_signals} señales + ${payload.count_marked_trades} trades de Doble Reducción.`);
+    alert(`✅ Exportado al portapapeles: ${payload.count_marked_signals} señales + ${payload.count_marked_trades} trades + ${payload.count_practice_selected} claras + ${payload.count_giro_aprendizaje_examples} aprendizaje. Pegalo acá en el chat.`);
+    return;
   } catch {
     const ts = new Date().toISOString().replaceAll(":", "-");
-    downloadTextFile(`doble-reduccion-estudio-${ts}.json`, json);
-    alert(`📥 Descargado: ${payload.count_marked_signals} señales + ${payload.count_marked_trades} trades.`);
+    downloadTextFile(`deriv-trades-feedback-estudio-${ts}.json`, json);
+    alert(`📥 Descargado JSON: ${payload.count_marked_trades} trades marcados + ${payload.count_practice_selected} claras + ${payload.count_giro_aprendizaje_examples} aprendizaje.`);
   }
 }
 function ensureExportTradesButton() {
@@ -9186,17 +8443,21 @@ function ensureExportTradesButton() {
 function updateExportTradesButtonUI() {
   const btn = document.getElementById("exportTradesBtn");
   if (!btn) return;
+  const claras = getPracticeExportSavedList().length;
   try { syncTradesFeedbackFromOpenRows(); } catch {}
   const senales = (history || []).filter((x) => x && (x.vote || x.comment)).length;
   const marcados = getTradesJournalExportList().filter((x) => x && (x.vote || x.comment)).length;
-  const total = senales + marcados;
-  btn.textContent = total ? `📤 Exportar Doble Reducción (${senales}S/${marcados}T)` : "📤 Exportar Doble Reducción";
-  btn.title = "Exporta señales y trades marcados del único motor activo: Doble Reducción.";
+  const aprendizaje = Array.isArray(giroAprendizajeExamples) ? giroAprendizajeExamples.length : 0;
+  const total = senales + claras + marcados + aprendizaje;
+  btn.textContent = total ? `📤 Exportar estudio (${senales}S/${marcados}T/${claras}C/${aprendizaje}A)` : "📤 Exportar estudio";
+  btn.title = total
+    ? `Exporta ${senales} señal${senales === 1 ? " marcada" : "es marcadas"}, ${marcados} trade${marcados === 1 ? " marcado" : "s marcados"}, ${claras} formación${claras === 1 ? " clara" : "es claras"} y ${aprendizaje} ejemplo${aprendizaje === 1 ? "" : "s"} de Giro + Aprendizaje.`
+    : "Exporta señales marcadas, trades marcados, niveles SNR, formaciones claras y ejemplos de Giro + Aprendizaje.";
 }
 
 function getExportMarksCount() {
-  const signals = (history || []).filter((x) => x && (x.vote || x.comment) && isCleanVisualModeItem(x)).length;
-  const trades = (tradesJournal || []).filter((x) => x && (x.vote || x.comment || x.feedback_at || x.feedback_source) && (isReduccionConstructivaContinuaMode(x.mode) || x.signalFloatingWindow || Number.isFinite(Number(x.signalAnchorEpochMs || 0)))).length;
+  const signals = (history || []).filter((x) => x && (x.vote || x.comment)).length;
+  const trades = (tradesJournal || []).filter((x) => x && (x.vote || x.comment || x.feedback_at || x.feedback_source)).length;
   return { signals, trades, total: signals + trades };
 }
 function clearExportMarksOnly() {
@@ -9205,7 +8466,7 @@ function clearExportMarksOnly() {
     toast("No hay marcas de export para limpiar", 1500);
     return;
   }
-  const msg = `¿Limpiar marcas de export?\n\nSeñales marcadas: ${counts.signals}\nTrades marcados: ${counts.trades}\n\nNo borra señales, trades ni capturas. Solo quita 👍/👎 y comentarios.`;
+  const msg = `¿Limpiar marcas de export?\n\nSeñales marcadas: ${counts.signals}\nTrades marcados: ${counts.trades}\n\nNo borra señales, trades, niveles SNR, capturas, práctica ni aprendizaje. Solo quita 👍/👎 y comentarios.`;
   if (!confirm(msg)) return;
 
   let changedHistory = false;
@@ -9465,30 +8726,22 @@ function applyTheme(theme) {
 
   signalMode = loadAnalysisMode();
 
-  const getModeTitle = () => {
-    const m = normalizeSignalMode(signalMode);
-    if (m === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA) {
-      return "Modo nuevo: Reducción constructiva con DOS reducciones distintas. No está atado al minuto Deriv. La ventana empieza en el primer movimiento de la primera reducción; después espera una segunda reducción no superpuesta. Cada una puede ser G→M→P, G→M, G→P o M→P, combinadas entre sí, y ambas deben completarse dentro de 30s.";
-    }
-    return "Modo base v107.1: Reducción visual 30s. Exige dos reducciones claras antes del segundo 30 del minuto Deriv: G-M-P / G-M / G-P / M-P repetidas.";
-  };
-
   const paintMode = () => {
     if (!modeBtn) return;
     signalMode = normalizeSignalMode(signalMode);
     modeBtn.textContent = getModeBtnLabel(signalMode);
     modeBtn.classList.remove("active-strong");
     modeBtn.classList.add("active");
-    modeBtn.title = getModeTitle();
+    modeBtn.title = "Modo único: Reducción visual 25s. Analiza 0-30s, marca G/M/P y permite corrección visual.";
   };
   paintMode();
 
   if (modeBtn)
     modeBtn.onclick = () => {
-      signalMode = nextSignalMode(signalMode);
+      signalMode = MODE_REDUCCION_VISUAL_25S;
       saveAnalysisMode(signalMode);
       paintMode();
-      toast(`Modo: ${getModeBtnLabel(signalMode)}`, 1500);
+      toast("🎯 Modo único: Reducción visual 25s", 1400);
     };
 })();
 
@@ -9503,22 +8756,18 @@ function applyTheme(theme) {
 
   soundBtn.onclick = async () => {
     if (!soundEnabled) {
-      soundBtn.disabled = true;
       try {
-        const result = await unlockAlertAudio();
+        sound.muted = false;
+        sound.volume = 1;
+        sound.currentTime = 0;
+        await sound.play();
+        sound.pause();
         soundEnabled = true;
         saveBool("soundEnabled", true);
         setBtnActive(soundBtn, true);
         soundBtn.textContent = "🔊 Sonido ON";
-        toast(result.usingFallback ? "🔊 Sonido ON · tono interno" : "🔊 Sonido ON", 1800);
-      } catch (err) {
-        soundEnabled = false;
-        saveBool("soundEnabled", false);
-        setBtnActive(soundBtn, false);
-        soundBtn.textContent = "🔇 Sonido OFF";
-        alert(`⚠️ No pude iniciar ningún audio. Error: ${err?.message || "desconocido"}.`);
-      } finally {
-        soundBtn.disabled = false;
+      } catch {
+        alert("⚠️ El navegador bloqueó el audio. Tocá nuevamente.");
       }
       return;
     }
@@ -9527,16 +8776,6 @@ function applyTheme(theme) {
     setBtnActive(soundBtn, false);
     soundBtn.textContent = "🔇 Sonido OFF";
   };
-
-  // Si Sonido quedó guardado en ON al reabrir la PWA, el primer toque del usuario
-  // vuelve a habilitar el AudioContext sin mostrar mensajes ni reproducir una alarma.
-  document.addEventListener("pointerdown", () => {
-    if (!soundEnabled) return;
-    try {
-      const ctx = getAlertAudioContext();
-      if (ctx?.state === "suspended") ctx.resume().catch(() => {});
-    } catch {}
-  }, { passive: true, capture: true });
 })();
 
 /* =========================
@@ -9910,7 +9149,7 @@ let visualReadReasonWrapEl = null;
 function isVisualReductionItem(item) {
   const mode = normalizeSignalMode(item?.mode || item?.giroPolaridad?.levelMode || item?.snrLevel?.levelMode || "");
   const meta = item?.giroPolaridad || item?.snrLevel || {};
-  return mode === MODE_REDUCCION_VISUAL_25S || mode === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA || !!meta.visualReductionMode || !!meta.constructiveReductionMode || String(meta.levelMode || "") === "reduccion_visual_25s" || String(meta.levelMode || "") === "reduccion_constructiva_continua";
+  return mode === MODE_REDUCCION_VISUAL_25S || !!meta.visualReductionMode || String(meta.levelMode || "") === "reduccion_visual_25s";
 }
 function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
   if (!run || typeof run !== "object") return null;
@@ -9919,11 +9158,6 @@ function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
   const startQuote = Number(run.startQuote);
   const endQuote = Number(run.endQuote);
   if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return null;
-  const points = Array.isArray(run.points)
-    ? run.points
-        .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-        .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    : [];
   return {
     startMs,
     endMs,
@@ -9934,7 +9168,6 @@ function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
     side: fallbackSide,
     label: label || "",
     idx: Number(run.idx || 0),
-    points,
   };
 }
 function getVisualReadPatternText(labels) {
@@ -9951,48 +9184,15 @@ function buildVisualReadFromItem(item) {
   const direction = normalizeSignalConfirmationSide(meta.direction || item.direction) || "";
   const dominant = String(meta.visualReductionGroup || "").toLowerCase().includes("vendedor") ? "vendedor" : "comprador";
   const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
-  const isConstructiveRead = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-  let primaryLabels = Array.isArray(meta.visualReductionLabels)
+  const primaryLabels = Array.isArray(meta.visualReductionLabels)
     ? meta.visualReductionLabels.filter(Boolean)
     : splitPatternText(meta.visualReductionPattern);
-  if (isConstructiveRead) {
-    const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks : [];
-    if (blocks.length >= 2) {
-      primaryLabels = blocks.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
-    } else {
-      const patLabels = splitPatternText(meta.visualReductionPattern || meta.acceptedChainPattern || "G→M");
-      primaryLabels = patLabels.length ? patLabels : primaryLabels;
-    }
-  }
   const contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
   const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
   const contraryRunsRaw = Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : [];
-  let primaryRuns = primaryRunsRaw
+  const primaryRuns = primaryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
     .filter(Boolean);
-
-  // V108.9: identificar a qué reducción pertenece cada movimiento aceptado.
-  // Así Lectura ON puede mostrar 1·G, 1·M, 2·G, 2·P (o hasta 6 tramos)
-  // y no confundir una sola cadena con las dos reducciones distintas.
-  if (isConstructiveRead && primaryRuns.length) {
-    const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks : [];
-    let cursor = 0;
-    for (let blockIndex = 0; blockIndex < Math.min(2, blocks.length); blockIndex++) {
-      const block = blocks[blockIndex] || {};
-      const count = Math.max(
-        Array.isArray(block.runs) ? block.runs.length : 0,
-        Array.isArray(block.labels) ? block.labels.length : 0
-      );
-      for (let j = 0; j < count && cursor < primaryRuns.length; j++, cursor++) {
-        primaryRuns[cursor].reductionNo = blockIndex + 1;
-      }
-    }
-    while (cursor < primaryRuns.length) {
-      primaryRuns[cursor].reductionNo = cursor < Math.ceil(primaryRuns.length / 2) ? 1 : 2;
-      cursor++;
-    }
-  }
-  // V108.9: en Constructiva mostramos las dos reducciones completas, no solo los primeros 3 tramos.
   const contraryRuns = contraryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
     .filter(Boolean);
@@ -10005,10 +9205,10 @@ function buildVisualReadFromItem(item) {
     : [];
   const subtype = String(meta.visualReductionSubtype || "reducción visual");
   const quality = String(meta.visualReductionQuality || "").toUpperCase() || "—";
-  const primaryPattern = isConstructiveRead && meta.acceptedReductionPatternText ? String(meta.acceptedReductionPatternText) : getVisualReadPatternText(primaryLabels);
+  const primaryPattern = getVisualReadPatternText(primaryLabels);
   const contraryPattern = getVisualReadPatternText(contraryLabels);
   return {
-    mode: isConstructiveRead ? MODE_REDUCCION_CONSTRUCTIVA_CONTINUA : MODE_REDUCCION_VISUAL_25S,
+    mode: MODE_REDUCCION_VISUAL_25S,
     direction,
     dominant,
     contrary,
@@ -10038,6 +9238,12 @@ function getVisualReadText(read) {
   parts.push(`→ ${dir}`);
   return parts.join(" · ");
 }
+function shouldUseLegacyLevelOverlay(item) {
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  const levelMode = String(meta.levelMode || item?.mode || '').toLowerCase();
+  return levelMode === 'snr_body' || levelMode === 'snr_polaridad' || levelMode === 'linea_dinamica';
+}
+
 function ensureVisualReadPanel() {
   if (visualReadPanelEl && visualReadPanelEl.isConnected) return visualReadPanelEl;
   const footer = document.querySelector("#chartModal .modalFooter") || (chartModal ? chartModal.querySelector(".modalFooter") : null);
@@ -10176,42 +9382,12 @@ function drawRoundedLabel(ctx, x, y, text, fill, stroke = "rgba(255,255,255,.22)
   ctx.fillText(String(text), xx + w / 2, yy + h / 2 + 0.5);
   ctx.restore();
 }
-function getVisualReadRunPathFromTicks(item, run) {
-  const startMs = Number(run?.startMs);
-  const endMs = Number(run?.endMs);
-  const startQuote = Number(run?.startQuote);
-  const endQuote = Number(run?.endQuote);
-  if (![startMs, endMs, startQuote, endQuote].every(Number.isFinite)) return [];
-  const a = Math.min(startMs, endMs);
-  const b = Math.max(startMs, endMs);
-  const raw = Array.isArray(item?.ticks) ? item.ticks : [];
-  const inside = raw
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= a && p.ms <= b)
-    .sort((p1, p2) => Number(p1.ms) - Number(p2.ms));
-
-  const out = [];
-  out.push({ ms: startMs, quote: startQuote, boundary: true });
-  for (const p of inside) {
-    if (Math.abs(Number(p.ms) - startMs) < 0.5 || Math.abs(Number(p.ms) - endMs) < 0.5) continue;
-    out.push(p);
-  }
-  out.push({ ms: endMs, quote: endQuote, boundary: true });
-  return out
-    .filter((p) => Number.isFinite(Number(p.ms)) && Number.isFinite(Number(p.quote)))
-    .sort((p1, p2) => Number(p1.ms) - Number(p2.ms));
-}
 function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   if (!ctx || !item || !visualReadOverlayEnabled || !isVisualReductionItem(item)) return;
   const read = buildVisualReadFromItem(item);
   if (!read) return;
-
-  const meta = item.giroPolaridad || item.snrLevel || {};
-  const isConstructive = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-  const formedMs = Number(meta.constructiveFormedAtMs || meta.signalFromSec * 1000 || read.evalMs || 25000);
-  const evalMs = Math.max(1000, Math.min(60000, isConstructive && Number.isFinite(formedMs) ? formedMs : Number(read.evalMs || 25000)));
+  const evalMs = Math.max(1000, Math.min(60000, Number(read.evalMs || 25000)));
   const x0 = xOf(0), xEval = xOf(evalMs);
-
   ctx.save();
   ctx.fillStyle = "rgba(250,204,21,.032)";
   ctx.fillRect(x0, 8, Math.max(0, xEval - x0), h - 30);
@@ -10222,72 +9398,52 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   ctx.setLineDash([]);
   ctx.font = "900 11px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(254,240,138,.64)";
-  ctx.fillText(`${Math.round(evalMs / 1000)}s lectura`, Math.min(w - 82, xEval + 4), 19);
+  ctx.fillText("25s lectura", Math.min(w - 82, xEval + 4), 19);
 
-  const buyCol = "rgba(34,197,94,.55)";
-  const sellCol = "rgba(248,113,113,.55)";
-  const buyFill = "rgba(22,163,74,.38)";
-  const sellFill = "rgba(185,28,28,.38)";
-  // V108.9: no recortar a 3. Dibujar todos los movimientos de las dos reducciones aceptadas.
-  // Combinaciones posibles: 2+2, 3+2, 2+3 o 3+3 movimientos.
-  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 6) : (read.primaryRuns || []);
-  const contraryRuns = isConstructive ? [] : (read.contraryRuns || []);
-
+  const buyCol = "rgba(34,197,94,.48)";
+  const sellCol = "rgba(248,113,113,.48)";
+  const buyFill = "rgba(22,163,74,.34)";
+  const sellFill = "rgba(185,28,28,.34)";
   const drawRun = (r, prefix, idx) => {
     const isBuyer = String(r.side || "") === "comprador";
     const col = isBuyer ? buyCol : sellCol;
     const fill = isBuyer ? buyFill : sellFill;
-    const realPath = getVisualReadRunPathFromTicks(item, r);
-    const fallbackPts = Array.isArray(r.points) && r.points.length >= 2
-      ? r.points.map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) })).filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-      : [];
-    const path = (realPath.length >= 2 ? realPath : fallbackPts.length >= 2 ? fallbackPts : [
-      { ms: Number(r.startMs), quote: Number(r.startQuote) },
-      { ms: Number(r.endMs), quote: Number(r.endQuote) },
-    ]).map((p) => ({ x: xOf(Number(p.ms)), y: yOf(Number(p.quote)), ms: Number(p.ms), quote: Number(p.quote) }))
-      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
-    if (path.length < 2) return;
-
+    const x1 = xOf(r.startMs), y1 = yOf(r.startQuote);
+    const x2 = xOf(r.endMs), y2 = yOf(r.endQuote);
+    if (![x1, y1, x2, y2].every(Number.isFinite)) return;
     ctx.save();
     ctx.shadowColor = col;
     ctx.shadowBlur = 3;
     ctx.strokeStyle = col;
-    ctx.lineWidth = 2.45;
+    ctx.lineWidth = 2.35;
     ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    path.forEach((p, i) => { if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     ctx.shadowBlur = 0;
     ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(path[0].x, path[0].y, 2.5, 0, Math.PI * 2); ctx.fill();
-    const lastP = path[path.length - 1];
-    ctx.beginPath(); ctx.arc(lastP.x, lastP.y, 3.1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x1, y1, 2.4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x2, y2, 3.0, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
-
-    const midP = path[Math.floor(path.length / 2)] || { x: (path[0].x + lastP.x) / 2, y: Math.min(path[0].y, lastP.y) };
-    const my = Math.min(...path.map((p) => p.y));
+    const mx = (x1 + x2) / 2;
+    const my = Math.min(y1, y2);
     const sideLetter = isBuyer ? "C" : "V";
-    const reductionPrefix = isConstructive && Number(r.reductionNo) > 0 ? `${Number(r.reductionNo)}·` : "";
-    drawRoundedLabel(ctx, midP.x, my, `${reductionPrefix}${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+    drawRoundedLabel(ctx, mx, my, `${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
   };
-  primaryRuns.forEach((r, i) => drawRun(r, "", i));
-  contraryRuns.forEach((r, i) => drawRun(r, "", i));
+  (read.primaryRuns || []).forEach((r, i) => drawRun(r, "", i));
+  (read.contraryRuns || []).forEach((r, i) => drawRun(r, "", i));
 
-  if (!isConstructive) {
-    for (const c of read.cuts || []) {
-      const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
-      if (!Number.isFinite(ms)) continue;
-      const x = xOf(ms);
-      ctx.save();
-      ctx.setLineDash([2, 5]);
-      ctx.strokeStyle = "rgba(255,255,255,.24)";
-      ctx.lineWidth = 0.85;
-      ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
-      ctx.restore();
-    }
+  for (const c of read.cuts || []) {
+    const ms = Number.isFinite(c.startMs) && Number.isFinite(c.endMs) ? (c.startMs + c.endMs) / 2 : Number(c.startMs || c.endMs);
+    if (!Number.isFinite(ms)) continue;
+    const x = xOf(ms);
+    ctx.save();
+    ctx.setLineDash([2, 5]);
+    ctx.strokeStyle = "rgba(255,255,255,.24)";
+    ctx.lineWidth = 0.85;
+    ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, h - 28); ctx.stroke();
+    ctx.restore();
   }
 
+  // Resumen textual movido abajo del gráfico para no tapar la lectura visual.
   ctx.restore();
 }
 
@@ -10314,17 +9470,18 @@ function drawDerivLikeChart(canvas, ticks) {
 
   if (!ticks || ticks.length < 2) return;
 
-  const pts = getItemVisibleTicksForModal(modalCurrentItem, ticks);
-  if (!pts || pts.length < 2) return;
+  const pts = [...ticks].sort((a, b) => a.ms - b.ms);
 
   const quotes = pts.map((p) => p.quote);
   let min = Math.min(...quotes);
   let max = Math.max(...quotes);
-  // V109.5: el modal queda limpio; no dibuja niveles, SNR, polaridad ni líneas de modos viejos.
-  const modalPolarityLevel = null;
-  const modalDynamicLine = null;
-  const modalSNRNearArea = null;
-  if (Number.isFinite(Number(modalPolarityLevel))) {
+  const useLegacyLevelOverlay = shouldUseLegacyLevelOverlay(modalCurrentItem);
+  const modalPolarityLevel = useLegacyLevelOverlay ? modalCurrentItem?.giroPolaridad?.level : null;
+  const modalDynamicLine = useLegacyLevelOverlay ? getSignalDynamicLineMeta(modalCurrentItem) : null;
+  const modalSNRNearArea = (useLegacyLevelOverlay && modalCurrentItem?.giroPolaridad)
+    ? buildSNRNearAreaMetaFromLevel(modalCurrentItem.giroPolaridad)
+    : null;
+  if (useLegacyLevelOverlay && Number.isFinite(Number(modalPolarityLevel))) {
     min = Math.min(min, Number(modalPolarityLevel));
     max = Math.max(max, Number(modalPolarityLevel));
   }
@@ -10342,7 +9499,7 @@ function drawDerivLikeChart(canvas, ticks) {
   const msNowForSupports = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
     ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
     : null;
-  const liveStructuralSupportMarkers = [];
+  const liveStructuralSupportMarkers = getRecentStructuralSupportMarkers(pts, modalCurrentItem, msNowForSupports);
   if (liveStructuralSupportMarkers.length) {
     for (const m of liveStructuralSupportMarkers) {
       if (Number.isFinite(Number(m.level))) {
@@ -10361,7 +9518,7 @@ function drawDerivLikeChart(canvas, ticks) {
   const yOf = (q) => (1 - (q - min) / (max - min)) * (h - 30) + 10;
 
   const msNow = modalCurrentItem && modalLive && isItemLiveMinute(modalCurrentItem)
-    ? getItemElapsedMs(modalCurrentItem)
+    ? Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs))
     : null;
 
   const segments = [
@@ -10422,7 +9579,7 @@ function drawDerivLikeChart(canvas, ticks) {
   }
 
   // Nivel de polaridad / SNR en el modal (si la señal lo trae)
-  if (modalCurrentItem?.giroPolaridad && Number.isFinite(Number(modalCurrentItem.giroPolaridad.level))) {
+  if (useLegacyLevelOverlay && modalCurrentItem?.giroPolaridad && Number.isFinite(Number(modalCurrentItem.giroPolaridad.level))) {
     const pol = modalCurrentItem.giroPolaridad;
     const level = Number(pol.level);
     const yLevel = yOf(level);
@@ -10612,45 +9769,7 @@ function currentServerMinute() {
 }
 function isItemLiveMinute(item) {
   if (!item) return false;
-  const anchorMs = Number(item.signalAnchorEpochMs || 0);
-  if (Number.isFinite(anchorMs) && anchorMs > 0) {
-    const elapsed = serverNowMs() - anchorMs;
-    return elapsed >= 0 && elapsed < 60000;
-  }
   return item.minute === currentServerMinute();
-}
-function getItemElapsedMs(item) {
-  if (!item) return null;
-  const anchorMs = Number(item.signalAnchorEpochMs || 0);
-  if (Number.isFinite(anchorMs) && anchorMs > 0) {
-    return Math.max(0, Math.min(60000, serverNowMs() - anchorMs));
-  }
-  if (Number.isFinite(currentMinuteStartMs) && currentMinuteStartMs) {
-    return Math.max(0, Math.min(60000, serverNowMs() - currentMinuteStartMs));
-  }
-  const m = Number(item.minute);
-  if (Number.isFinite(m) && m > 0) {
-    return Math.max(0, Math.min(60000, serverNowMs() - m * 60000));
-  }
-  return null;
-}
-function getItemRemainingSec(item) {
-  const elapsed = getItemElapsedMs(item);
-  if (!Number.isFinite(Number(elapsed))) return getCurrentMinuteRemainingSec();
-  return Math.max(0, 60 - Math.max(0, Math.min(59, Math.floor(Number(elapsed) / 1000))));
-}
-function getItemVisibleTicksForModal(item, ticks) {
-  const arr = (Array.isArray(ticks) ? ticks : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => Number(a.ms) - Number(b.ms));
-
-  if (!item?.signalFloatingWindow || !isItemLiveMinute(item)) return arr;
-
-  const elapsed = getItemElapsedMs(item);
-  if (!Number.isFinite(Number(elapsed))) return arr;
-  const maxMs = Math.max(0, Math.min(60000, Number(elapsed) + 350));
-  return arr.filter((p) => Number(p.ms) <= maxMs);
 }
 
 function getCurrentMinuteRemainingSec() {
@@ -10766,18 +9885,7 @@ function updateModalFooterReadingUI() {
       }
     }
     if (modalSequenceDetail) {
-      const baseDetail = getModalVisualSequenceSummary(modalCurrentItem);
-      if (isFloatingSignalItem(modalCurrentItem)) {
-        const r = ensureSignalResult60(modalCurrentItem);
-        const resultDetail = r
-          ? (isSignalResult60Resolved(modalCurrentItem)
-              ? `${getSignalResult60DirectionText(modalCurrentItem)} · inicio ${Number(r.startQuote).toFixed(6)} · final ${Number(r.endQuote).toFixed(6)}`
-              : `Resultado 60s pendiente · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s desde la alarma`)
-          : "";
-        modalSequenceDetail.textContent = resultDetail ? `${baseDetail} · ${resultDetail}` : baseDetail;
-      } else {
-        modalSequenceDetail.textContent = baseDetail;
-      }
+      modalSequenceDetail.textContent = getModalVisualSequenceSummary(modalCurrentItem);
     }
   } else {
     if (modalSequenceText) modalSequenceText.textContent = '—';
@@ -10983,10 +10091,6 @@ function ensureSignalConfirmationControls() {
 function getSignalConfirmationMs(item = modalCurrentItem) {
   if (!item) return 0;
   const now = serverNowMs();
-  const anchorMs = Number(item.signalAnchorEpochMs || 0);
-  if (Number.isFinite(anchorMs) && anchorMs > 0) {
-    return Math.max(0, Math.min(60000, now - anchorMs));
-  }
   const itemMinute = Number(item.minute);
   const minuteStart = Number.isFinite(itemMinute) && itemMinute > 0
     ? itemMinute * 60000
@@ -11000,11 +10104,6 @@ function getSignalLastTickMsInMinute(item = modalCurrentItem) {
   const minute = Number(item.minute);
   const sym = String(item.symbol || "");
   let ticks = [];
-
-  if (Number.isFinite(Number(item.signalAnchorEpochMs || 0)) && Array.isArray(item.ticks) && item.ticks.length) {
-    const cleanFloating = item.ticks.map((p) => Number(p?.ms)).filter((ms) => Number.isFinite(ms));
-    return cleanFloating.length ? Math.max(...cleanFloating) : 0;
-  }
 
   const liveTicks = Number.isFinite(minute) && sym ? minuteData?.[minute]?.[sym] : null;
   if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
@@ -11115,10 +10214,10 @@ function updateSignalConfirmationUI() {
     const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
     const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
     if (enabled === "CALL") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · DOBLE REDUCCIÓN${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
-      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · DOBLE REDUCCIÓN${scope ? " · " + scope : ""}`;
+      signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#fecaca");
     } else {
       const score = getSignalConfirmationScore(modalCurrentItem);
@@ -11355,14 +10454,84 @@ function signalHasProtectedTrade(item) {
 function hasSignalTradeAssociated(item) {
   return signalHasProtectedTrade(item);
 }
-function shouldRemoveSignalBecauseClosedAwayFromSNR() {
-  return false;
+function shouldRemoveSignalBecauseClosedAwayFromSNR(item) {
+  // No purgar señales que ya ejecutaron o están ejecutando un trade.
+  // Si se borra una señal con contrato, se pierde el vínculo para actualizar Trades.
+  if (signalHasProtectedTrade(item)) return false;
+  const gate = getSignalCloseSNREntryGate(item);
+  if (!gate) return false;
+  item.closeSnrGate = {
+    ok: !!gate.ok,
+    reason: gate.reason,
+    price: gate.price,
+    zoneLow: gate.zoneLow,
+    zoneHigh: gate.zoneHigh,
+    nearBuffer: gate.nearBuffer,
+    distance: gate.distance,
+    checked_ms: SIGNAL_CLOSE_SNR_FILTER_MS,
+    keptByTestMode: keepClosedAwaySignals && !gate.ok,
+  };
+
+  // V45: modo test. Si está activo, las señales que cierran fuera de zona se conservan
+  // en Señales para que el usuario pueda revisarlas, marcarlas y exportarlas.
+  if (keepClosedAwaySignals && !gate.ok) {
+    item.keepClosedAwayByUser = true;
+    item.keepClosedAwaySavedAt = Date.now();
+    return false;
+  }
+
+  return !gate.ok;
 }
-function purgeClosedSignalsOutsideSNRCloseZone() {
-  return 0;
+function purgeClosedSignalsOutsideSNRCloseZone(reason = "") {
+  if (!Array.isArray(history) || !history.length) return 0;
+  const removedIds = new Set();
+  const before = history.length;
+  let keptOutsideChanged = false;
+  history = history.filter((it) => {
+    const prevKept = !!it?.keepClosedAwayByUser;
+    if (shouldRemoveSignalBecauseClosedAwayFromSNR(it)) {
+      if (it && it.id) removedIds.add(String(it.id));
+      return false;
+    }
+    if (!prevKept && !!it?.keepClosedAwayByUser) keptOutsideChanged = true;
+    return true;
+  });
+  const removed = before - history.length;
+  if (!removed) {
+    if (keptOutsideChanged) {
+      try { saveHistory(history); } catch {}
+      try { renderHistory(); } catch {}
+    }
+    return 0;
+  }
+
+  try { saveHistory(history); } catch {}
+  try {
+    for (const id of removedIds) {
+      const row = document.querySelector(`.row[data-id="${cssEscape(id)}"]`);
+      if (row && row.parentElement) row.parentElement.removeChild(row);
+    }
+  } catch {}
+
+  if (
+    modalCurrentItem &&
+    modalOpenContext?.source !== "trades" &&
+    removedIds.has(String(modalCurrentItem.id || ""))
+  ) {
+    try { closeChartModal(); } catch {}
+  }
+
+  updateCounter(localStorage.getItem("activeView") || "signals");
+  if ((localStorage.getItem("activeView") || "signals") === "signals") {
+    try { renderHistory(); } catch {}
+  }
+  return removed;
 }
-function assertDoubleReductionEntryGateAt58(side = null, item = modalCurrentItem) {
+function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
   if (!item) return null;
+
+  // V48: operaciones manuales desde la pestaña En vivo son independientes de señales/SNR/AUTO 58.
+  // Se registran como estudio, pero no se bloquean por zona ni por segundo 58.
   if (item?.liveManualTrade) {
     const sym = item.symbol || liveReplaySymbol || "";
     const ticks = Array.isArray(item.ticks) ? item.ticks : getLiveReplayTicks(sym);
@@ -11372,21 +10541,56 @@ function assertDoubleReductionEntryGateAt58(side = null, item = modalCurrentItem
       pending: false,
       reason: "live_manual_trade",
       side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: Math.round(getLiveReplayMsInMinute(sym)),
+      check_sec: Math.round(getLiveReplayMsInMinute(sym) / 1000),
       price: Number.isFinite(last) ? last : null,
-      message: "Trade manual desde En vivo.",
+      message: "Trade manual desde pestaña En vivo; señales/SNR pausadas y no bloquean esta entrada.",
     };
   }
+
   const ms = getSignalConfirmationMs(item);
-  if (ms < SIGNAL_AUTO_ENTRY_MS) throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
-  return {
+  if (ms < SIGNAL_AUTO_ENTRY_MS) {
+    throw new Error(`La autoentrada se valida recién en ${SIGNAL_AUTO_ENTRY_SEC}s.`);
+  }
+
+  // Modo Línea dinámica: acá la línea sí valida la entrada.
+  // Soporte dinámico => CALL solo si el precio respeta arriba.
+  // Resistencia dinámica => PUT solo si el precio respeta abajo.
+  if (isDynamicLineMode(item.mode)) {
+    const gate = buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS);
+    if (gate?.pending) throw new Error(gate.message || "Línea dinámica pendiente");
+    if (!gate?.ok) throw new Error(gate?.message || "La vela no respeta la línea dinámica");
+    return gate;
+  }
+
+  // V46: en modos SNR/SNR polaridad NO se exige que la vela cierre dentro del SNR
+  // ni se bloquea la autoentrada por estar lejos de la zona al check de 58s.
+  // La operación se decide por: vela viva + 4 puntos netos + disciplina OK.
+  // Igual calculamos el gate SNR para registrar si el precio estaba dentro/cerca/lejos,
+  // pero no lo usamos como bloqueo operativo.
+  const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+  if (gate?.pending) {
+    return {
+      ok: true,
+      pending: false,
+      reason: "auto58_4pts_snr_sin_cierre_zona",
+      side: normalizeSignalConfirmationSide(side) || "",
+      check_ms: SIGNAL_AUTO_SNR_CHECK_MS,
+      check_sec: SIGNAL_AUTO_ENTRY_SEC,
+      message: "AUTO 58 habilitado por 4 puntos; cierre/zona SNR no bloquean la entrada.",
+      original_gate: gate,
+    };
+  }
+  return Object.assign({}, gate || {}, {
     ok: true,
     pending: false,
-    reason: "doble_reduccion_4_puntos",
-    side: normalizeSignalConfirmationSide(side) || normalizeTradeDirection(item.direction) || "",
-    check_ms: SIGNAL_AUTO_ENTRY_MS,
-    check_sec: SIGNAL_AUTO_ENTRY_SEC,
-    message: `AUTO ${SIGNAL_AUTO_ENTRY_SEC} habilitado por Doble Reducción + ${SIGNAL_CONFIRM_MIN} puntos netos.`,
-  };
+    reason: gate?.reason ? `auto58_4pts_sin_bloqueo_${gate.reason}` : "auto58_4pts_sin_cierre_zona",
+    original_ok: !!gate?.ok,
+    original_reason: gate?.reason || "sin_snr_gate",
+    message: gate?.ok
+      ? (gate.message || "AUTO 58 por 4 puntos; precio dentro/cerca del SNR.")
+      : `AUTO 58 por 4 puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
+  });
 }
 
 function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
@@ -11434,9 +10638,9 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
 
   let gate = null;
   try {
-    gate = assertDoubleReductionEntryGateAt58(side, item);
+    gate = assertSignalSNREntryGateAt57(side, item);
   } catch (err) {
-    const msg = err?.message || "La entrada de Doble Reducción no está habilitada";
+    const msg = err?.message || (isDynamicLineMode(item.mode) ? "La línea dinámica no habilita la entrada" : "La entrada SNR no está habilitada");
     if (!itemOverride || (modalCurrentItem && modalCurrentItem.id === item.id)) toast(`⛔ ${msg}`, 1500);
     return false;
   }
@@ -11452,7 +10656,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     reason: String(reason || "AUTO_58"),
     at: Date.now(),
     confirmation_status: getSignalConfirmationStatusText(item),
-    entry_gate: gate,
+    snr_entry_gate: gate,
     post58_readiness: post58,
   };
   saveHistory(history);
@@ -11496,7 +10700,7 @@ function scanSignalAutoEntriesAt57() {
     if (tradeInFlight) return false;
     const nowMinute = currentServerMinute();
     const candidates = (history || [])
-      .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => it && it.minute === nowMinute && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
       .filter((it) => getSignalEnabledTradeSide(it));
 
     for (const it of candidates) {
@@ -11563,7 +10767,6 @@ function updateModalCandleStatusUI() {
   const locked = isTradeLockedNow();
   const remain = locked ? Math.max(0, disciplineLockUntilMs - Date.now()) : 0;
   const candleClosed = !isOpen;
-  const brainBlocked = isBrainProcessTradeBlocked(modalCurrentItem);
 
   if (locked) {
     bar.textContent = `🔒 DEMO bloqueada · ${getDisciplineCounterText()} · falta ${fmtRemaining(remain)}`;
@@ -11571,14 +10774,8 @@ function updateModalCandleStatusUI() {
     bar.style.background = "linear-gradient(180deg, rgba(127,29,29,.78), rgba(69,10,10,.78))";
     bar.style.borderColor = "rgba(248,113,113,.50)";
     bar.style.boxShadow = "0 0 0 1px rgba(248,113,113,.10) inset, 0 0 12px rgba(239,68,68,.12)";
-  } else if (brainBlocked) {
-    bar.textContent = `🧠 Proceso bloqueó esta entrada · ${getBrainProcessBlockReason(modalCurrentItem)}`;
-    bar.style.color = "#fed7aa";
-    bar.style.background = "linear-gradient(180deg, rgba(120,53,15,.42), rgba(69,26,3,.32))";
-    bar.style.borderColor = "rgba(251,146,60,.48)";
-    bar.style.boxShadow = "0 0 0 1px rgba(251,146,60,.08) inset, 0 0 12px rgba(251,146,60,.12)";
   } else if (isOpen) {
-    const sec = String(getItemRemainingSec(modalCurrentItem)).padStart(2, "0");
+    const sec = String(getCurrentMinuteRemainingSec()).padStart(2, "0");
     const autoTxt = shouldUseAutoHighLowExecution()
       ? ` | AUTO HL C:${formatExecutionPlanMini(callPlan)} V:${formatExecutionPlanMini(putPlan)}`
       : "";
@@ -11594,42 +10791,17 @@ function updateModalCandleStatusUI() {
     }
     const enabled = getSignalEnabledTradeSide(modalCurrentItem);
     const sideTxt = enabled === "CALL" ? "COMPRA lista" : enabled === "PUT" ? "VENTA lista" : getSignalConfirmationStatusText(modalCurrentItem);
-    const result60 = isFloatingSignalItem(modalCurrentItem) ? ensureSignalResult60(modalCurrentItem) : null;
-    const resultTxt = result60
-      ? (isSignalResult60Resolved(modalCurrentItem)
-          ? ` · ${getSignalResult60DirectionText(modalCurrentItem)}`
-          : ` · resultado 60s en ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
-      : "";
-    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${resultTxt}`;
+    bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s`;
     bar.style.color = "#dcfce7";
     bar.style.background = "rgba(22,163,74,.14)";
     bar.style.borderColor = "rgba(34,197,94,.28)";
     bar.style.boxShadow = "0 0 0 1px rgba(34,197,94,.05) inset";
   } else {
-    const result60 = isFloatingSignalItem(modalCurrentItem) ? ensureSignalResult60(modalCurrentItem) : null;
-    if (result60 && !isSignalResult60Resolved(modalCurrentItem)) {
-      const remain60 = getSignalResult60RemainingSec(modalCurrentItem);
-      bar.textContent = `⏳ Resultado 60s · faltan ${remain60}s desde la alarma`;
-      bar.style.color = "#fef3c7";
-      bar.style.background = "rgba(202,138,4,.14)";
-      bar.style.borderColor = "rgba(250,204,21,.30)";
-      bar.style.boxShadow = "0 0 0 1px rgba(250,204,21,.05) inset";
-      if (remain60 === 0) scheduleSignalResult60Hydration(modalCurrentItem);
-    } else if (result60 && isSignalResult60Resolved(modalCurrentItem)) {
-      const correctness = getSignalResult60Correctness(modalCurrentItem);
-      const correctnessTxt = correctness === "correct" ? " · ✅ lectura correcta" : correctness === "incorrect" ? " · ❌ lectura incorrecta" : "";
-      bar.textContent = `${getSignalResult60DirectionText(modalCurrentItem)}${correctnessTxt}`;
-      bar.style.color = correctness === "incorrect" ? "#fecaca" : correctness === "correct" ? "#dcfce7" : "rgba(229,231,235,.92)";
-      bar.style.background = correctness === "incorrect" ? "rgba(127,29,29,.22)" : correctness === "correct" ? "rgba(22,163,74,.16)" : "rgba(107,114,128,.16)";
-      bar.style.borderColor = correctness === "incorrect" ? "rgba(248,113,113,.34)" : correctness === "correct" ? "rgba(34,197,94,.30)" : "rgba(156,163,175,.22)";
-      bar.style.boxShadow = "none";
-    } else {
-      bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
-      bar.style.color = "rgba(229,231,235,.92)";
-      bar.style.background = "rgba(107,114,128,.16)";
-      bar.style.borderColor = "rgba(156,163,175,.22)";
-      bar.style.boxShadow = "none";
-    }
+    bar.textContent = `${formatCompactScopeLabel()} · Vela cerrada`;
+    bar.style.color = "rgba(229,231,235,.92)";
+    bar.style.background = "rgba(107,114,128,.16)";
+    bar.style.borderColor = "rgba(156,163,175,.22)";
+    bar.style.boxShadow = "none";
   }
 
 
@@ -11639,7 +10811,6 @@ function updateModalCandleStatusUI() {
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
-  updateProcessMiniPanelUI();
   updateModalNavVoteUI();
   updateModalFooterReadingUI();
 
@@ -11647,11 +10818,10 @@ function updateModalCandleStatusUI() {
   applyGiroOnlyTradeButtons(modalCurrentItem, locked, candleClosed);
   applySignalConfirmationTradeGate(locked, candleClosed);
   applyC100TradeGate(locked, candleClosed);
-  applyBrainProcessTradeGate(locked, candleClosed);
   updateVisualReadPanelUI();
 
   // Auto-entrada real: igual que práctica, al segundo 58 si ya hay 4 puntos netos.
-  if (!locked && !candleClosed && !brainBlocked) trySignalAutoEntryAt57("TIMER_58");
+  if (!locked && !candleClosed) trySignalAutoEntryAt57("TIMER_58");
 }
 
 
@@ -12441,13 +11611,8 @@ function requestModalDraw(force = false) {
     const it = modalCurrentItem;
     if (!it) return; // ✅ FIX: si se cerró el modal entre frames, evita leer it.ticks
 
-    // V108.8: una señal flotante usa un eje propio que empieza en signalAnchorEpochMs.
-    // Nunca debe reemplazarse por minuteData[it.minute], porque esa colección usa
-    // milisegundos relativos al minuto calendario de Deriv. Mezclar ambas fuentes
-    // hacía que el tramo posterior a la formación mostrara un recorrido ajeno.
-    const isFloatingSignal = !!it.signalFloatingWindow || Number.isFinite(Number(it.signalAnchorEpochMs || 0));
-    let ticks = Array.isArray(it.ticks) ? it.ticks : [];
-    if (modalLive && isItemLiveMinute(it) && !isFloatingSignal) {
+    let ticks = it.ticks || [];
+    if (modalLive && isItemLiveMinute(it)) {
       const liveTicks = minuteData?.[it.minute]?.[it.symbol];
       if (Array.isArray(liveTicks) && liveTicks.length) ticks = liveTicks;
     }
@@ -12560,51 +11725,10 @@ function normalizeSNRLevelMeta(meta) {
     stage: s(meta.stage),
     status: s(meta.status),
     logic: s(meta.logic),
-
-    // V109.2: conservar la lectura constructiva necesaria para que la captura
-    // pueda mostrar exactamente las dos reducciones también desde Trades/exportes.
-    visualReductionGroup: s(meta.visualReductionGroup),
-    visualReductionContraryGroup: s(meta.visualReductionContraryGroup),
-    visualReductionPattern: s(meta.visualReductionPattern),
-    acceptedChainPattern: s(meta.acceptedChainPattern),
-    acceptedReductionPatternText: s(meta.acceptedReductionPatternText),
-    signalFromSec: n(meta.signalFromSec),
-    constructiveFormedAtMs: n(meta.constructiveFormedAtMs),
-    secondReductionConfirmedAtMs: n(meta.secondReductionConfirmedAtMs),
-    firstConstructiveReduction: meta.firstConstructiveReduction && typeof meta.firstConstructiveReduction === "object"
-      ? {
-          pattern: s(meta.firstConstructiveReduction.pattern),
-          startMs: n(meta.firstConstructiveReduction.startMs),
-          endMs: n(meta.firstConstructiveReduction.endMs),
-        }
-      : null,
-    secondConstructiveReduction: meta.secondConstructiveReduction && typeof meta.secondConstructiveReduction === "object"
-      ? {
-          pattern: s(meta.secondConstructiveReduction.pattern),
-          startMs: n(meta.secondConstructiveReduction.startMs),
-          endMs: n(meta.secondConstructiveReduction.endMs),
-        }
-      : null,
-    acceptedReductionBlocks: Array.isArray(meta.acceptedReductionBlocks)
-      ? meta.acceptedReductionBlocks.slice(0, 2).map((block) => ({
-          pattern: s(block?.pattern),
-          startMs: n(block?.startMs),
-          endMs: n(block?.endMs),
-          labels: Array.isArray(block?.labels) ? block.labels.map((x) => s(x)).slice(0, 3) : [],
-          runs: Array.isArray(block?.runs)
-            ? block.runs.slice(0, 3).map((run) => ({
-                startMs: n(run?.startMs),
-                endMs: n(run?.endMs),
-                move: n(run?.move),
-                side: n(run?.side),
-              }))
-            : [],
-        }))
-      : [],
   };
 }
 function getSignalLevelMeta(item) {
-  return normalizeSNRLevelMeta(item?.doubleReduction || item?.giroPolaridad || item?.polarityLevel || item?.giroNivelMeta || item?.levelMeta || null);
+  return normalizeSNRLevelMeta(item?.giroPolaridad || item?.polarityLevel || item?.giroNivelMeta || item?.levelMeta || null);
 }
 function getManualGiroStatusText(status) {
   const s = String(status || "NONE");
@@ -13549,10 +12673,6 @@ function buildModalItemFromTradeEntry(entry) {
     ticks,
     nextOutcome: entry.nextOutcome || live?.nextOutcome || "",
     minuteComplete: entry.minuteComplete !== false,
-    signalFloatingWindow: !!(entry.signalFloatingWindow || live?.signalFloatingWindow),
-    signalAnchorEpochMs: entry.signalAnchorEpochMs || live?.signalAnchorEpochMs || null,
-    signalDetectedEpochMs: entry.signalDetectedEpochMs || live?.signalDetectedEpochMs || null,
-    signalResult60: entry.signalResult60 || live?.signalResult60 || null,
     trade: entry.trade || live?.trade || null,
     study_capture_id: entry.study_capture_id || entry?.trade?.study_capture_id || live?.study_capture_id || live?.trade?.study_capture_id || "",
     manualGiro: normalizeManualGiroState(entry.manualGiro || live?.manualGiro),
@@ -13764,8 +12884,6 @@ updateModalFooterReadingUI();
   setGiroAprendizajeControlsVisible(true);
   updateSignalConfirmationUI();
   updateGiroAprendizajeControlsUI();
-  setProcessMiniPanelVisible(true);
-  updateProcessMiniPanelUI();
   if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(modalCurrentItem);
   updateDisciplineLockUI(false);
   updateModalCandleStatusUI();
@@ -13789,7 +12907,6 @@ function closeChartModal() {
   if (modalNavVoteBar) modalNavVoteBar.style.display = "none";
   setSignalConfirmationControlsVisible(false);
   setGiroAprendizajeControlsVisible(false);
-  setProcessMiniPanelVisible(false);
   if (visualReadPanelEl) visualReadPanelEl.style.display = "none";
   updateDisciplineLockUI(false);
 }
@@ -13922,26 +13039,26 @@ function updateRowNextArrowOnRow(row, item) {
   if (!row) return;
   const el = row.querySelector(".nextArrow");
   if (!el) return;
-  const floating = isFloatingSignalItem(item);
 
   if (item.nextOutcome === "up") {
     el.textContent = "⬆️";
     el.className = "nextArrow up";
-    el.title = floating ? "Resultado 60s desde la alarma: ALCISTA" : "Próxima vela: cerró arriba del cierre de la vela de señal";
+    el.title = "Próxima vela: cerró arriba del cierre de la vela de señal";
   } else if (item.nextOutcome === "down") {
     el.textContent = "⬇️";
     el.className = "nextArrow down";
-    el.title = floating ? "Resultado 60s desde la alarma: BAJISTA" : "Próxima vela: cerró abajo del cierre de la vela de señal";
+    el.title = "Próxima vela: cerró abajo del cierre de la vela de señal";
   } else if (item.nextOutcome === "flat") {
     el.textContent = "➖";
     el.className = "nextArrow flat";
-    el.title = floating ? "Resultado 60s desde la alarma: NEUTRO" : "Próxima vela: cerró igual que la vela de señal";
+    el.title = "Próxima vela: cerró igual que la vela de señal";
   } else {
     el.textContent = "⏳";
     el.className = "nextArrow pending";
-    el.title = floating ? `Resultado 60s: esperando${getSignalResult60RemainingSec(item) ? ` (${getSignalResult60RemainingSec(item)}s)` : ""}` : "Próxima vela: esperando…";
+    el.title = "Próxima vela: esperando…";
   }
 }
+
 function animateFailShake(item) {
   const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
   if (!row) return;
@@ -14190,49 +13307,82 @@ function applyVoteButtonsVisual(row, vote = "", { lock = false } = {}) {
 function getSignalLifecycleStageInfo(item) {
   if (!item) return { key: "", label: "", title: "" };
   const autoSec = Number(item.signalAutoEntrySec || SIGNAL_AUTO_ENTRY_SEC || 58);
+  const preSec = Number(item.signalPrealertAtSec || item?.giroPolaridad?.evalSec || EVAL_SEC || 45);
   const pointsTxt = getSignalConfirmationStatusText(item);
   const hasTrade = hasSignalTradeAssociated(item);
   const attempted = !!item?.signalAutoEntry?.attempted;
   const status = String(item?.signalAutoEntry?.status || "");
 
-  if (isFloatingSignalItem(item)) {
-    const result60 = ensureSignalResult60(item);
-    if (result60 && isSignalResult60Resolved(item)) {
-      const out = normalizeSignalResult60Outcome(result60.outcome);
-      const correctness = getSignalResult60Correctness(item);
-      const directionTxt = out === "up" ? "ALCISTA" : out === "down" ? "BAJISTA" : "NEUTRO";
-      return {
-        key: `result60_${out || "pending"}`,
-        label: `${correctness === "correct" ? "✅" : correctness === "incorrect" ? "❌" : "➖"} ${directionTxt} 60s`,
-        title: `${getSignalResult60DirectionText(item)}${correctness === "correct" ? " · lectura correcta" : correctness === "incorrect" ? " · lectura incorrecta" : ""}`,
-      };
-    }
-    if (result60 && item.minuteComplete) {
-      return {
-        key: "result60_pending",
-        label: `⏳ RESULT. ${getSignalResult60RemainingSec(item)}s`,
-        title: `Esperando resultado 60 segundos desde la alarma. Faltan ${getSignalResult60RemainingSec(item)}s.`,
-      };
-    }
-  }
+  const dynamicMode = isDynamicLineMode(item.mode);
 
   if (item.minuteComplete) {
     if (hasTrade || attempted) {
       const badge = item?.trade?.badge ? String(item.trade.badge) : status === "sent" ? "TRADE" : "AUTO";
-      return { key: "trade", label: `📌 ${badge}`, title: `Operación asociada · ${pointsTxt}` };
+      return {
+        key: "trade",
+        label: `📌 ${badge}`,
+        title: `Operación asociada. No se elimina por filtro de cierre. ${pointsTxt}`,
+      };
     }
-    return { key: "closed_double_reduction", label: "✅ DOBLE REDUCCIÓN", title: `Formación finalizada · ${pointsTxt}` };
+    if (dynamicMode) {
+      const gate = buildSignalDynamicLineEntryGate(item, item.direction || "", 60000);
+      return gate?.ok
+        ? { key: "closed_line_ok", label: "✅ RESPETA LÍNEA", title: `La vela cerró respetando la línea dinámica. ${pointsTxt}` }
+        : { key: "closed_line_break", label: "❌ ROMPE LÍNEA", title: `La vela cerró del lado inválido de la línea dinámica. ${pointsTxt}` };
+    }
+    const gate = getSignalCloseSNREntryGate(item);
+    if (gate?.ok) {
+      return {
+        key: "closed_ok",
+        label: "✅ CERRÓ SNR",
+        title: `La vela cerró dentro/cerca del SNR. ${pointsTxt}`,
+      };
+    }
+    return {
+      key: "closed_far",
+      label: keepClosedAwaySignals || item.keepClosedAwayByUser ? "🧪 FUERA SNR" : "❌ FUERA SNR",
+      title: `${keepClosedAwaySignals || item.keepClosedAwayByUser ? "Cierre fuera del SNR/amarilla conservado para testeo." : "Cierre fuera del SNR/amarilla. Si no hay trade, se descarta."} ${pointsTxt}`,
+    };
   }
 
   const ms = getSignalConfirmationMs(item);
   if (ms >= SIGNAL_AUTO_ENTRY_MS) {
-    if (getSignalEnabledTradeSide(item)) {
-      return { key: "auto_ready", label: `🟢 AUTO ${autoSec}s`, title: `Doble Reducción confirmada + ${SIGNAL_CONFIRM_MIN} puntos netos. ${pointsTxt}` };
+    const side = getSignalEnabledTradeSide(item) || item.direction || "";
+    const gate = dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
+    if (dynamicMode) {
+      if (gate?.ok && getSignalEnabledTradeSide(item)) {
+        return { key: "auto_ready_line", label: `🟢 AUTO ${autoSec}s`, title: `Listo: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos + línea dinámica respetada. ${pointsTxt}` };
+      }
+      return { key: "auto_wait_line", label: gate?.ok ? `🟢 LÍNEA ${autoSec}s` : `⛔ LÍNEA ${autoSec}s`, title: `${gate?.message || "Línea dinámica pendiente"}. ${pointsTxt}` };
     }
-    return { key: "auto_points", label: `🟡 ${autoSec}s · 4 PTS`, title: `Doble Reducción confirmada. Para operar faltan ${SIGNAL_CONFIRM_MIN} puntos netos. ${pointsTxt}` };
+    if (gate?.ok && getSignalEnabledTradeSide(item)) {
+      return {
+        key: "auto_ready",
+        label: `🟢 AUTO ${autoSec}s`,
+        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos completos + precio dentro de zona azul/amarilla. ${pointsTxt}`,
+      };
+    }
+    if (gate?.ok) {
+      return {
+        key: "auto_zone",
+        label: `🟢 ZONA ${autoSec}s`,
+        title: `Precio dentro/cerca del SNR como referencia. Para operar faltan 4 puntos. ${pointsTxt}`,
+      };
+    }
+    return {
+      key: "auto_wait",
+      label: `🟠 ${autoSec}s`,
+      title: `En ${autoSec}s el SNR queda solo como referencia. Para operar importan los 4 puntos. ${pointsTxt}`,
+    };
   }
 
-  return { key: "prealert", label: "🧩 DOBLE REDUCCIÓN", title: `Dos reducciones confirmadas. Auto en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos. ${pointsTxt}` };
+  return {
+    key: "prealert",
+    label: dynamicMode ? "🟡 PREALERTA LÍNEA" : "🟡 PREALERTA",
+    title: dynamicMode
+      ? `Prealerta de línea dinámica: revisá si respeta soporte/resistencia. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y línea respetada. ${pointsTxt}`
+      : `Prealerta SNR en ${Math.round(preSec)}s: tenés tiempo para analizar. Auto solo en ${autoSec}s con ${SIGNAL_CONFIRM_MIN} puntos netos y precio dentro de zona azul/amarilla. ${pointsTxt}`,
+  };
 }
 
 function updateRowSignalStageOnRow(row, item) {
@@ -14268,7 +13418,7 @@ function updateRowSignalStageOnRow(row, item) {
     el.style.borderColor = "rgba(251,146,60,.40)";
     el.style.background = "rgba(251,146,60,.10)";
     el.style.color = "#ffedd5";
-  } else if (st.key === "closed_double_reduction" || st.key === "auto_points") {
+  } else if (st.key === "closed_far") {
     el.style.borderColor = "rgba(239,68,68,.40)";
     el.style.background = "rgba(239,68,68,.10)";
     el.style.color = "#fee2e2";
@@ -14306,6 +13456,7 @@ function buildRow(item, opts = {}) {
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = item.mode || "NORMAL";
 
+  const savedForPractice = isSignalSavedForPractice(item.id);
   // En Señales también se puede destildar/cambiar 👍 👎. Solo se bloquea si una llamada futura pide voteLocked explícito.
   const voteIsLocked = !!opts.voteLocked && !!item.vote && !opts.allowVoteChange;
   const commentPlaceholder = opts.source === "trades" ? "por qué" : "comentario";
@@ -14316,7 +13467,8 @@ function buildRow(item, opts = {}) {
     <div class="row-actions">
       <button class="voteBtn" data-v="like" type="button" ${voteIsLocked ? "disabled" : ""} title="Me gusta / operación que quiero buscar">👍</button>
       <button class="voteBtn" data-v="dislike" type="button" ${voteIsLocked ? "disabled" : ""} title="No me gusta / operación que quiero evitar">👎</button>
-      <button class="studyCaptureBtn" type="button" title="Generar / ver captura de estudio">📸</button>
+      <button class="savePracticeBtn ${savedForPractice ? "selected" : ""}" type="button" title="${savedForPractice ? "Quitar del pool de práctica" : "Guardar en práctica Giro Doble Rechazo"}">💾</button>
+      ${opts.source === "trades" && (item?.trade?.badge === "ITM" || item?.trade?.badge === "OTM") ? `<button class="studyCaptureBtn" type="button" title="Ver captura de estudio">📸</button>` : ""}
       <input class="row-comment" style="${commentStyle}" placeholder="${commentPlaceholder}" value="${escapeHtml(item.comment || "")}">
     </div>
   `;
@@ -14402,22 +13554,63 @@ function buildRow(item, opts = {}) {
       };
     });
 
+    const savePracticeBtn = row.querySelector(".savePracticeBtn");
+    if (savePracticeBtn) {
+      const refreshSaveBtn = (saved) => {
+        savePracticeBtn.classList.toggle("selected", !!saved);
+        savePracticeBtn.title = saved
+          ? `Ya guardada en práctica Giro Doble Rechazo`
+          : `Guardar en práctica Giro Doble Rechazo`;
+
+        savePracticeBtn.style.transition = "box-shadow .18s ease, border-color .18s ease, background .18s ease, transform .18s ease, opacity .18s ease";
+        savePracticeBtn.style.borderRadius = "12px";
+        savePracticeBtn.style.minWidth = "40px";
+        savePracticeBtn.style.fontWeight = "900";
+
+        if (saved) {
+          savePracticeBtn.style.opacity = "1";
+          savePracticeBtn.style.color = "#ecfeff";
+          savePracticeBtn.style.borderColor = "rgba(34,211,238,.92)";
+          savePracticeBtn.style.background = "linear-gradient(180deg, rgba(20,184,166,.28), rgba(34,197,94,.18))";
+          savePracticeBtn.style.boxShadow = "0 0 0 1px rgba(34,211,238,.22) inset, 0 0 14px rgba(34,211,238,.50), 0 0 24px rgba(34,197,94,.26)";
+          savePracticeBtn.style.transform = "translateY(-1px)";
+          savePracticeBtn.setAttribute("aria-pressed", "true");
+        } else {
+          savePracticeBtn.style.opacity = "0.92";
+          savePracticeBtn.style.color = "";
+          savePracticeBtn.style.borderColor = "";
+          savePracticeBtn.style.background = "";
+          savePracticeBtn.style.boxShadow = "";
+          savePracticeBtn.style.transform = "";
+          savePracticeBtn.setAttribute("aria-pressed", "false");
+        }
+      };
+      refreshSaveBtn(savedForPractice);
+
+      savePracticeBtn.onclick = (e) => {
+        e.stopPropagation();
+        const saved = togglePracticeSavedSignal(item);
+        refreshSaveBtn(saved);
+        ensurePracticeQueue();
+        updatePracticePoolLabel();
+        if ((localStorage.getItem("activeView") || "signals") === "practice") ensurePracticeReady();
+        toast(
+          saved
+            ? `💾 Guardada para práctica Giro Doble Rechazo`
+            : "🗑️ Quitada del pool de práctica",
+          1700
+        );
+      };
+    }
+
     const studyCaptureBtn = row.querySelector(".studyCaptureBtn");
     if (studyCaptureBtn) {
       studyCaptureBtn.style.borderRadius = "12px";
       studyCaptureBtn.style.minWidth = "40px";
       studyCaptureBtn.style.fontWeight = "900";
-      studyCaptureBtn.onclick = async (e) => {
+      studyCaptureBtn.onclick = (e) => {
         e.stopPropagation();
-        if (studyCaptureBtn.disabled) return;
-        studyCaptureBtn.disabled = true;
-        const prev = studyCaptureBtn.textContent;
-        studyCaptureBtn.textContent = "⏳";
-        try { await showStudyCaptureForItem(item); }
-        finally {
-          studyCaptureBtn.disabled = false;
-          studyCaptureBtn.textContent = prev || "📸";
-        }
+        showStudyCaptureForItem(item);
       };
     }
 
@@ -14989,10 +14182,11 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   const itemCtx = itemOverride || modalCurrentItem;
   assertCanTrade();
   assertEntryWindowOpen(itemCtx);
-  assertBrainProcessCanTrade(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
-  // Único filtro operativo: Doble Reducción + 4 puntos + ventana AUTO 58.
-  const entryGate = assertDoubleReductionEntryGateAt58(side, itemCtx);
+  // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 58.
+  // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
+  // En Línea dinámica se mantiene su validación específica.
+  const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
   assertC100CanTrade();
 
   if (tradeInFlight) throw new Error("Operación en curso");
@@ -15022,7 +14216,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       ? getValidAutoPreProposal(itemCtx, side, symbol, stake)
       : null;
     const isStrictAutoPrearmedEntry = !!(SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT && isNextCandleExpiryTiming() && !shouldUseAutoHighLowExecution() && itemCtx?.signalAutoEntry?.attempted);
-    if (entryGate) tradeExtra.entry_gate = entryGate;
+    if (snrEntryGate) tradeExtra.entry_gate = snrEntryGate;
+    if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
+    else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
 
     if (shouldUseAutoHighLowExecution() && itemCtx?.id) {
       ensureSignalAutoPrecalc(itemCtx);
@@ -15340,233 +14536,6 @@ function normalizeTicksForMinute(minute, times, prices) {
   }
   return out;
 }
-function normalizeSignalResult60Outcome(value) {
-  const v = String(value || "").toLowerCase().trim();
-  if (v === "up" || v === "alcista") return "up";
-  if (v === "down" || v === "bajista") return "down";
-  if (v === "flat" || v === "equal" || v === "neutral" || v === "neutro") return "flat";
-  return "";
-}
-function inferSignalResult60StartEpochMs(item) {
-  const direct = Number(item?.signalResult60?.startEpochMs || item?.signalDetectedEpochMs || item?.signalCreatedEpochMs || 0);
-  if (Number.isFinite(direct) && direct > 0) return direct;
-  const anchor = Number(item?.signalAnchorEpochMs || 0);
-  const sec = Number(item?.signalPrealertAtSec);
-  if (Number.isFinite(anchor) && anchor > 0 && Number.isFinite(sec) && sec >= 0) return anchor + sec * 1000;
-  return 0;
-}
-function ensureSignalResult60(item, opts = {}) {
-  if (!item || !isFloatingSignalItem(item)) return null;
-  const existing = item.signalResult60 && typeof item.signalResult60 === "object" ? item.signalResult60 : {};
-  const startEpochMs = Number(opts.startEpochMs || existing.startEpochMs || inferSignalResult60StartEpochMs(item) || 0);
-  if (!Number.isFinite(startEpochMs) || startEpochMs <= 0) return null;
-  const finiteOrNull = (value) => {
-    if (value === null || value === undefined || value === "") return null;
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  };
-  const startQuote = finiteOrNull(opts.startQuote ?? existing.startQuote);
-  const deadlineEpochMs = Number(existing.deadlineEpochMs || (startEpochMs + SIGNAL_RESULT_60_DURATION_MS));
-  const outcome = normalizeSignalResult60Outcome(existing.outcome || "");
-  item.signalResult60 = {
-    startEpochMs,
-    deadlineEpochMs,
-    startQuote,
-    status: outcome ? "resolved" : String(existing.status || "pending"),
-    outcome,
-    endEpochMs: finiteOrNull(existing.endEpochMs),
-    endQuote: finiteOrNull(existing.endQuote),
-    delta: finiteOrNull(existing.delta),
-    source: String(existing.source || opts.source || "live"),
-    resolvedAt: finiteOrNull(existing.resolvedAt),
-  };
-  return item.signalResult60;
-}
-function getSignalResult60(item) {
-  return ensureSignalResult60(item);
-}
-function isSignalResult60Resolved(item) {
-  return normalizeSignalResult60Outcome(item?.signalResult60?.outcome) !== "";
-}
-function getSignalResult60RemainingSec(item) {
-  const r = getSignalResult60(item);
-  if (!r || isSignalResult60Resolved(item)) return 0;
-  return Math.max(0, Math.ceil((Number(r.deadlineEpochMs) - serverNowMs()) / 1000));
-}
-function getSignalResult60DirectionText(item, pendingText = "RESULTADO 60s ⏳") {
-  const out = normalizeSignalResult60Outcome(item?.signalResult60?.outcome);
-  if (out === "up") return "RESULTADO 60s ALCISTA";
-  if (out === "down") return "RESULTADO 60s BAJISTA";
-  if (out === "flat") return "RESULTADO 60s NEUTRO";
-  return pendingText;
-}
-function getSignalResult60Correctness(item) {
-  const out = normalizeSignalResult60Outcome(item?.signalResult60?.outcome);
-  const dir = normalizeSignalConfirmationSide(item?.direction);
-  if (!out || out === "flat" || !dir) return "neutral";
-  if ((dir === "CALL" && out === "up") || (dir === "PUT" && out === "down")) return "correct";
-  return "incorrect";
-}
-function resolveSignalResult60(item, endEpochMs, endQuote, source = "live") {
-  if (!item) return false;
-  const r = ensureSignalResult60(item);
-  const q0 = Number(r?.startQuote);
-  const q1 = Number(endQuote);
-  if (!r || !Number.isFinite(q0) || !Number.isFinite(q1)) return false;
-  const outcome = q1 > q0 ? "up" : q1 < q0 ? "down" : "flat";
-  r.status = "resolved";
-  r.outcome = outcome;
-  r.endEpochMs = Number(endEpochMs) || Number(r.deadlineEpochMs);
-  r.endQuote = q1;
-  r.delta = q1 - q0;
-  r.source = String(source || "live");
-  r.resolvedAt = Date.now();
-  item.signalResult60 = r;
-  setNextOutcome(item, outcome);
-  updateRowNextArrow(item);
-  updateRowChartBtn(item);
-  if (modalCurrentItem && String(modalCurrentItem.id || "") === String(item.id || "")) {
-    modalCurrentItem.signalResult60 = { ...r };
-    setCompactModalHeader(modalCurrentItem);
-    updateModalCandleStatusUI();
-    updateModalFooterReadingUI();
-    requestModalDraw(true);
-  }
-  return true;
-}
-function pickSignalResult60EndTick(times, prices, deadlineEpochMs) {
-  const targetSec = Number(deadlineEpochMs) / 1000;
-  let after = null;
-  let before = null;
-  for (let i = 0; i < Math.min(times?.length || 0, prices?.length || 0); i++) {
-    const sec = Number(times[i]);
-    const quote = Number(prices[i]);
-    if (!Number.isFinite(sec) || !Number.isFinite(quote)) continue;
-    const row = { epochMs: sec * 1000, quote };
-    if (sec >= targetSec) {
-      after = row;
-      break;
-    }
-    before = row;
-  }
-  return after || before;
-}
-async function hydrateSignalResult60FromDerivHistory(item) {
-  const r = ensureSignalResult60(item);
-  if (!r || isSignalResult60Resolved(item)) return false;
-  if (serverNowMs() < Number(r.deadlineEpochMs)) return false;
-  const key = String(item?.id || "");
-  if (key && signalResult60HydrationPending.has(key)) return false;
-  if (key) signalResult60HydrationPending.add(key);
-  try {
-    const symbol = String(item?.symbol || "");
-    if (!symbol) return false;
-    const start = Math.floor(Number(r.startEpochMs) / 1000);
-    const end = Math.ceil((Number(r.deadlineEpochMs) + 5000) / 1000);
-    const res = await wsRequest({
-      ticks_history: symbol,
-      start,
-      end,
-      style: "ticks",
-      count: getHistoryCountMax(),
-      adjust_start_time: 1,
-    });
-    const h = res?.history;
-    if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return false;
-    if (!Number.isFinite(Number(r.startQuote))) {
-      const firstQ = Number(h.prices[0]);
-      if (Number.isFinite(firstQ)) r.startQuote = firstQ;
-    }
-    const endTick = pickSignalResult60EndTick(h.times, h.prices, r.deadlineEpochMs);
-    if (!endTick) return false;
-    return resolveSignalResult60(item, endTick.epochMs, endTick.quote, "ticks_history");
-  } catch {
-    return false;
-  } finally {
-    if (key) signalResult60HydrationPending.delete(key);
-  }
-}
-function scheduleSignalResult60Hydration(item) {
-  if (!item || isSignalResult60Resolved(item)) return;
-  const key = String(item.id || "");
-  if (key && signalResult60HydrationPending.has(key)) return;
-  setTimeout(() => { hydrateSignalResult60FromDerivHistory(item).catch(() => {}); }, 0);
-}
-function isFloatingSignalItem(item) {
-  return !!item?.signalFloatingWindow || Number.isFinite(Number(item?.signalAnchorEpochMs || 0));
-}
-function normalizeTicksForFloatingAnchor(anchorEpochMs, times, prices, existingTicks = []) {
-  const anchorMs = Number(anchorEpochMs);
-  if (!Number.isFinite(anchorMs) || anchorMs <= 0) return [];
-
-  // ticks_history del intervalo anclado es la fuente canónica. No mezclamos acá
-  // todos los ticks guardados, porque una versión anterior pudo haberlos pisado
-  // con el minuto calendario y volvería a introducir el zigzag falso.
-  const fetched = [];
-  for (let i = 0; i < Math.min(times?.length || 0, prices?.length || 0); i++) {
-    const ms = Number(times[i]) * 1000 - anchorMs;
-    const quote = Number(prices[i]);
-    if (!Number.isFinite(ms) || !Number.isFinite(quote) || ms < 0 || ms > 60000) continue;
-    fetched.push({ ms, quote });
-  }
-  fetched.sort((a, b) => a.ms - b.ms);
-
-  const out = [];
-  for (const p of fetched) {
-    const last = out[out.length - 1];
-    if (last && Math.round(Number(last.ms)) === Math.round(Number(p.ms))) out[out.length - 1] = p;
-    else out.push(p);
-  }
-
-  // Solo conserva el punto inicial ya guardado cuando la API no devolvió el tick
-  // exacto del ancla. Nunca incorpora el resto de una serie potencialmente corrupta.
-  const savedStart = (Array.isArray(existingTicks) ? existingTicks : [])
-    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .find((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 500);
-  if (savedStart && (!out.length || Number(out[0].ms) > 500)) out.unshift({ ms: 0, quote: savedStart.quote });
-
-  return out;
-}
-async function fetchFullFloatingSignalTicks(item) {
-  const anchorMs = Number(item?.signalAnchorEpochMs || 0);
-  const symbol = String(item?.symbol || '');
-  if (!symbol || !Number.isFinite(anchorMs) || anchorMs <= 0) return null;
-
-  const start = Math.floor(anchorMs / 1000);
-  const end = Math.ceil((anchorMs + 60000) / 1000);
-  const res = await wsRequest({
-    ticks_history: symbol,
-    start,
-    end,
-    style: 'ticks',
-    count: getHistoryCountMax(),
-    adjust_start_time: 1,
-  });
-  const h = res?.history;
-  if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return null;
-  return normalizeTicksForFloatingAnchor(anchorMs, h.times, h.prices, item?.ticks);
-}
-async function hydrateFloatingSignalFromDerivHistory(item) {
-  if (!isFloatingSignalItem(item)) return false;
-  const anchorMs = Number(item?.signalAnchorEpochMs || 0);
-  if (!Number.isFinite(anchorMs) || anchorMs <= 0) return false;
-  if (serverNowMs() < anchorMs + 60000) return false;
-
-  try {
-    const full = await fetchFullFloatingSignalTicks(item);
-    if (Array.isArray(full) && full.length >= 2) item.ticks = full.slice();
-    item.minuteComplete = true;
-    updateRowChartBtn(item);
-    const r = ensureSignalResult60(item);
-    if (r && serverNowMs() >= Number(r.deadlineEpochMs) && !isSignalResult60Resolved(item)) {
-      await hydrateSignalResult60FromDerivHistory(item);
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function fetchFullMinuteTicks(symbol, minute) {
   const start = minuteToEpochSec(minute);
   const end = minuteToEpochSec(minute + 1);
@@ -15589,16 +14558,8 @@ async function hydrateSignalsFromDerivHistory(minute) {
   if (!items.length) return false;
 
   let any = false;
-
-  // Las señales flotantes tienen su propio eje de 60s desde signalAnchorEpochMs.
-  // Nunca se reemplazan con el minuto calendario completo.
-  for (const it of items.filter(isFloatingSignalItem)) {
-    if (await hydrateFloatingSignalFromDerivHistory(it)) any = true;
-  }
-
-  const normalItems = items.filter((it) => !isFloatingSignalItem(it));
   const bySym = new Map();
-  for (const it of normalItems) {
+  for (const it of items) {
     if (!bySym.has(it.symbol)) bySym.set(it.symbol, []);
     bySym.get(it.symbol).push(it);
   }
@@ -15710,7 +14671,7 @@ async function rehydrateHistoryOnBoot() {
       let anyMark = false;
       for (const it of history) {
         if (it.minute === m) {
-          if (!isFloatingSignalItem(it) && !it.minuteComplete) {
+          if (!it.minuteComplete) {
             it.minuteComplete = true;
             anyMark = true;
           }
@@ -15726,7 +14687,7 @@ async function rehydrateHistoryOnBoot() {
   }
 
   // ✅ Recalcula NEXT aunque ya exista, así corrige históricos guardados con la lógica vieja
-  const settledOutcomes = slice.filter((it) => !isFloatingSignalItem(it) && it.minute + 1 < nowMin);
+  const settledOutcomes = slice.filter((it) => it.minute + 1 < nowMin);
   const totalB = settledOutcomes.length || 1;
   let doneB = 0;
 
@@ -15743,13 +14704,6 @@ async function rehydrateHistoryOnBoot() {
   }
 
   try {
-    const recentFloating = slice.filter((it) => isFloatingSignalItem(it));
-    for (const it of recentFloating) {
-      const r = ensureSignalResult60(it);
-      if (r && !isSignalResult60Resolved(it) && serverNowMs() >= Number(r.deadlineEpochMs)) {
-        await hydrateSignalResult60FromDerivHistory(it);
-      }
-    }
     for (const it of history) {
       updateRowNextArrow(it);
       updateRowChartBtn(it);
@@ -15796,7 +14750,7 @@ function finalizeMinute(minute) {
 
   // Aplica a TODAS las señales de prevMinute (NORMAL + GIRO) si todavía no tienen nextOutcome
   for (const it of history) {
-    if (!it || it.nextOutcome || isFloatingSignalItem(it)) continue;
+    if (!it || it.nextOutcome) continue;
     if (it.minute !== prevMinute) continue;
 
     const sym = it.symbol;
@@ -15813,7 +14767,7 @@ function finalizeMinute(minute) {
       const cache = new Map(); // key: `${sym}:${prevMinute}` -> outcome|null
 
       for (const it of history) {
-        if (!it || it.nextOutcome || isFloatingSignalItem(it)) continue;
+        if (!it || it.nextOutcome) continue;
         if (it.minute !== prevMinute) continue;
 
         const sym = it.symbol;
@@ -15838,7 +14792,7 @@ function finalizeMinute(minute) {
 
     let changed = ticksChanged;
     for (const it of history) {
-      if (it.minute === minute && !isFloatingSignalItem(it) && !it.minuteComplete) {
+      if (it.minute === minute && !it.minuteComplete) {
         it.minuteComplete = true;
         changed = true;
         updateRowChartBtn(it);
@@ -15847,7 +14801,7 @@ function finalizeMinute(minute) {
     if (changed) saveHistory(history);
     purgeClosedSignalsOutsideSNRCloseZone("finalize_minute_complete");
 
-    if (modalCurrentItem && modalCurrentItem.minute === minute && !isFloatingSignalItem(modalCurrentItem)) {
+    if (modalCurrentItem && modalCurrentItem.minute === minute) {
       modalLive = false;
       updateModalLiveUI();
       requestModalDraw(true);
@@ -15885,8 +14839,6 @@ function onTick(tick) {
 
   const prevLast = lastQuoteBySymbol[symbol];
   lastQuoteBySymbol[symbol] = tick.quote;
-  rememberConstructiveRollingTick(symbol, epochMs, tick.quote);
-  updateConstructiveFloatingSignalsOnTick(symbol, epochMs, tick.quote);
 
   if (lastMinuteSeenBySymbol[symbol] !== minute) {
     lastMinuteSeenBySymbol[symbol] = minute;
@@ -15936,15 +14888,10 @@ function onTick(tick) {
     modalLive &&
     chartModal &&
     !chartModal.classList.contains("hidden") &&
-    modalCurrentItem.symbol === symbol &&
-    (modalCurrentItem.minute === minute || (Number.isFinite(Number(modalCurrentItem.signalAnchorEpochMs || 0)) && isItemLiveMinute(modalCurrentItem)))
+    modalCurrentItem.minute === minute &&
+    modalCurrentItem.symbol === symbol
   ) {
-    if (Number.isFinite(Number(modalCurrentItem.signalAnchorEpochMs || 0))) {
-      const liveItem = findHistoryItemById(modalCurrentItem.id);
-      if (liveItem?.ticks) modalCurrentItem.ticks = liveItem.ticks.slice();
-    } else {
-      modalCurrentItem.ticks = minuteData[minute][symbol].slice();
-    }
+    modalCurrentItem.ticks = minuteData[minute][symbol].slice();
     requestModalDraw(false);
   }
 
@@ -15962,39 +14909,25 @@ function onTick(tick) {
   if (!areSignalsPaused()) scanSignalAutoEntriesAt57();
 
   if (!areSignalsPaused()) {
-    const activeModeForTick = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+    const activeModeForTick = normalizeSignalMode(signalMode);
 
-    if (isReduccionConstructivaContinuaMode(activeModeForTick)) {
-      // V108: modo flotante. No espera al segundo 30 del minuto Deriv.
-      // Escanea cada tick y crea la señal cuando se completan 2 reducciones claras
-      // antes de 30s desde el inicio real del primer movimiento.
-      scanConstructiveReductionContinuousOnTick(symbol, epochMs);
-    } else if (isReduccionExacta25sMode(activeModeForTick)) {
-      // V107.1 Dos reducciones claras:
-      // puede disparar apenas aparezcan 2 reducciones claras, pero nunca usa datos
-      // posteriores al segundo 30. Si a los 30 no apareció, la vela queda descartada.
-      const visualEvalStartSec = 15;
-      const visualEvalEndSec = 30;
-      const visualEvalLateSec = 33; // tolerancia por ticks tardíos; evalúa la FOTO de 30s.
-      if (sec >= visualEvalStartSec && sec <= visualEvalEndSec && lastEvaluatedMinute !== minute) {
-        const evalMsNow = Math.max(visualEvalStartSec * 1000, Math.min(msInMinute, visualEvalEndSec * 1000));
-        const ok = evaluateMinute(minute, {
-          evalMs: evalMsNow,
-          evalSec: Math.min(sec, visualEvalEndSec),
-          radar: true,
-          radarStartSec: 0,
-          radarEndSec: Math.min(sec, visualEvalEndSec),
-        });
-        if (ok || sec >= visualEvalEndSec) lastEvaluatedMinute = minute;
-      } else if (sec > visualEvalEndSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
+    if (isReduccionExacta25sMode(activeModeForTick)) {
+      // V106.9.4.9 Reducción + aumento simple:
+      // NO dispara temprano. Espera a tener la ventana completa 0-30s y recién ahí
+      // confirma: dominante reduce + contrario aumenta + anti-zigzag.
+      const visualEvalSec = 30;
+      const visualEvalLateSec = 33;
+      if (sec >= visualEvalSec && sec <= visualEvalLateSec && lastEvaluatedMinute !== minute) {
         evaluateMinute(minute, {
-          evalMs: visualEvalEndSec * 1000,
-          evalSec: visualEvalEndSec,
+          evalMs: visualEvalSec * 1000,
+          evalSec: visualEvalSec,
           radar: true,
           radarStartSec: 0,
-          radarEndSec: visualEvalEndSec,
+          radarEndSec: visualEvalSec,
           forceFullWindow30s: true,
         });
+        // En este modo se evalúa una sola vez por vela. Si no hay transferencia válida a los 30s,
+        // la vela queda descartada aunque después haga algo parecido.
         lastEvaluatedMinute = minute;
       } else if (sec > visualEvalLateSec && lastEvaluatedMinute !== minute) {
         lastEvaluatedMinute = minute;
@@ -21775,113 +20708,6 @@ function findVisualReductionEnd(primaryMoves) {
   return { ok: false, endPos: -1, pattern: "", type: "" };
 }
 
-
-function detectTwoClearVisualReductions(primaryMoves, labels = []) {
-  const moves = (Array.isArray(primaryMoves) ? primaryMoves : [])
-    .map(Number)
-    .filter((v) => Number.isFinite(v) && v > 0);
-  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "").toUpperCase()) : summarizeVisualMoves(moves).labels;
-  const max = Math.max(...moves, 1e-9);
-  if (moves.length < 3) {
-    return {
-      ok: false,
-      pairCount: 0,
-      groupCount: 0,
-      pairs: [],
-      groups: [],
-      pattern: summarizeVisualMoves(moves).pattern,
-      reason: "menos de 3 impulsos dominantes; no hay dos reducciones",
-    };
-  }
-
-  const pairAllowed = (i) => {
-    const a = Number(moves[i] || 0);
-    const b = Number(moves[i + 1] || 0);
-    const la = labs[i] || classifyVisualReductionLabel(a, max);
-    const lb = labs[i + 1] || classifyVisualReductionLabel(b, max);
-    if (!(a > 0 && b > 0)) return null;
-
-    const ratio = a / Math.max(b, 1e-9);
-    const labelPattern = `${la}→${lb}`;
-    const isAllowedLabel = labelPattern === "G→M" || labelPattern === "G→P" || labelPattern === "M→P";
-
-    // Umbrales por lectura visual:
-    // G→M puede ser una reducción moderada, G→P debe ser fuerte y M→P debe terminar pequeño.
-    const numericOk =
-      (labelPattern === "G→M" && ratio >= 1.08) ||
-      (labelPattern === "G→P" && ratio >= 1.22 && b <= max * 0.48) ||
-      (labelPattern === "M→P" && ratio >= 1.08 && b <= max * 0.48) ||
-      // fallback: si el clasificador deja dos tramos como M/M pero numéricamente redujo claro.
-      (!isAllowedLabel && ratio >= 1.22 && b <= a * 0.82 && b <= max * 0.62);
-
-    if (!numericOk) return null;
-    return {
-      start: i,
-      end: i + 1,
-      pattern: isAllowedLabel ? labelPattern : `${la}→${lb}`,
-      a,
-      b,
-      ratio,
-      la,
-      lb,
-    };
-  };
-
-  const pairs = [];
-  for (let i = 0; i < moves.length - 1; i++) {
-    const p = pairAllowed(i);
-    if (p) pairs.push(p);
-  }
-
-  const groups = [];
-  for (let i = 0; i < moves.length - 2; i++) {
-    const p1 = pairAllowed(i);
-    const p2 = pairAllowed(i + 1);
-    if (p1 && p2) {
-      const pat = `${p1.la}→${p1.lb}→${p2.lb}`;
-      const isGmp = p1.la === "G" && p1.lb === "M" && p2.lb === "P";
-      groups.push({
-        start: i,
-        end: i + 2,
-        pattern: isGmp ? "G→M→P" : pat,
-        pairs: [p1, p2],
-        isGmp,
-      });
-    }
-  }
-
-  // Regla del usuario: antes de 30s deben existir dos reducciones claras.
-  // Pueden estar encadenadas (G→M→P) o repetidas separadas (G→M ... G→P / M→P, etc.).
-  const hasTwoPairs = pairs.length >= 2;
-  const hasGmpGroup = groups.some((g) => g.isGmp);
-  const first = pairs[0] || null;
-  const second = pairs.find((p) => first && p.start > first.start) || null;
-  const ok = hasTwoPairs || hasGmpGroup;
-
-  return {
-    ok,
-    pairCount: pairs.length,
-    groupCount: groups.length,
-    pairs,
-    groups,
-    firstPair: first,
-    secondPair: second,
-    firstPattern: first?.pattern || "",
-    secondPattern: second?.pattern || "",
-    pattern: summarizeVisualMoves(moves).pattern,
-    acceptedPattern: ok
-      ? (hasGmpGroup ? "G→M→P" : `${first?.pattern || "?"} + ${second?.pattern || "?"}`)
-      : "",
-    hasGmp: hasGmpGroup,
-    hasGM: pairs.some((p) => p.pattern === "G→M"),
-    hasGP: pairs.some((p) => p.pattern === "G→P"),
-    hasMP: pairs.some((p) => p.pattern === "M→P"),
-    reason: ok
-      ? `dos reducciones claras antes de 30s: ${hasGmpGroup ? "G→M→P" : `${first?.pattern || "?"} y ${second?.pattern || "?"}`}`
-      : `solo ${pairs.length} reducción clara; se requieren 2 antes de 30s`,
-  };
-}
-
 function findContraryIncreaseAfterReduction(contraryRuns, afterRunIdx, alignedRange, firstMove, tol = 0) {
   const runs = (Array.isArray(contraryRuns) ? contraryRuns : [])
     .filter((r) => r && Number(r.idx) > Number(afterRunIdx))
@@ -21952,14 +20778,13 @@ function getReduccionVisualQualityLabel(score) {
   const hasContraryStrong = !!score?.contraryStrong;
   const hasGmp = !!score?.gmp;
   const hasGToP = !!score?.gToP;
-  const hasTwoClearReductions = !!score?.twoClearReductions;
   const dominantDisparejo = !!score?.dominantDisparejo;
   const hasContradiction = !!score?.contradictionStrong;
   // V106.9.4.11: lo obligatorio es el dominante disparejo con desplazamiento.
   // El contrario P→G suma para A; entrada grande aislada suma; sin contrario puede ser B si el dominante es muy claro.
-  if (p >= 20 && dominantDisparejo && hasTwoClearReductions && hasContraryPG && (hasGmp || hasGToP || hasTwoClearReductions) && !hasContradiction) return "A";
-  if (p >= 17 && dominantDisparejo && hasTwoClearReductions && (hasContraryPG || hasContraryStrong) && !hasContradiction) return "A";
-  if (p >= 14 && dominantDisparejo && hasTwoClearReductions && !hasContradiction) return "B";
+  if (p >= 20 && dominantDisparejo && hasContraryPG && (hasGmp || hasGToP) && !hasContradiction) return "A";
+  if (p >= 17 && dominantDisparejo && (hasContraryPG || hasContraryStrong) && !hasContradiction) return "A";
+  if (p >= 14 && dominantDisparejo && !hasContradiction) return "B";
   return "C";
 }
 
@@ -22056,28 +20881,37 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   const m2 = primaryMoves[2] || 0;
   const m3 = primaryMoves[3] || 0;
 
-  // V107.1: regla central nueva del usuario.
-  // El motor puede mirar hasta el segundo 30 y recién ahí decidir, pero NO alcanza
-  // una reducción aislada. Antes de 30s deben verse DOS reducciones claras del dominante.
-  // Cada reducción válida puede ser G→M, G→P o M→P; G→M→P cuenta porque contiene
-  // dos reducciones encadenadas. También acepta repeticiones separadas como G→M ... G→P.
-  const twoReductionInfo = detectTwoClearVisualReductions(primaryMoves, labels);
-  const gmp = !!twoReductionInfo.hasGmp;
-  const gToP = !!twoReductionInfo.hasGP;
+  // V106.9.4.14: regla estadística estricta.
+  // Del análisis de 198 señales válidas, lo mejor fue G→M→P. G→M quedó flojo.
+  // Por eso ahora:
+  // - G→M→P necesita reducción final real hacia P/pequeño.
+  // - G→P se acepta solo si es muy limpio, con desplazamiento eficiente.
+  // - G→M sin P queda bloqueado.
+  const gmp = primaryMoves.length >= 3
+    && m0 >= m1 * 1.10
+    && m1 >= m2 * 1.12
+    && m2 <= m0 * 0.56
+    && cutsBetween >= 1;
+  const gToP = primaryMoves.length >= 2
+    && m0 >= m1 * 1.55
+    && m1 <= m0 * 0.48
+    && directionalEfficiency >= 0.52
+    && closePosition01 >= 0.60;
+  const onlyGM = primaryMoves.length === 2 && m0 > m1 && !gToP;
+  const gmWithoutFinalP = primaryMoves.length >= 2 && m0 >= m1 * 1.05 && !gmp && !gToP && !labels.includes("P");
+  if (onlyGM || gmWithoutFinalP) return null;
   const reduceIncreaseReduce = false;
-  const repeatedReduction = Number(twoReductionInfo.pairCount || primaryShape.repeatedReduction || 0);
-  const lateReduceAgain = repeatedReduction >= 2;
-  const templateOk = !!twoReductionInfo.ok;
+  const repeatedReduction = primaryShape.repeatedReduction;
+  const lateReduceAgain = false;
+  const templateOk = gmp || gToP;
   if (!templateOk) return null;
 
-  const reductionInfo = {
-    ok: true,
-    endPos: Number(twoReductionInfo.secondPair?.end ?? twoReductionInfo.groups?.[0]?.end ?? Math.min(primaryMoves.length - 1, 2)),
-    pattern: twoReductionInfo.acceptedPattern || twoReductionInfo.pattern || "2 reducciones",
-    type: "TWO_CLEAR_REDUCTIONS",
-    detail: twoReductionInfo,
-  };
-  const dominantDisparejo = true;
+  // V106.9.4.14: regla central.
+  // Lo obligatorio es un dominante que reduzca de verdad: G→M→P fuerte o G→P muy limpio.
+  // El contrario suma calidad si aparece, pero no compensa un dominante G→M.
+  const reductionInfo = findVisualReductionEnd(primaryMoves);
+  if (!reductionInfo.ok) return null;
+  const dominantDisparejo = gmp || gToP;
   if (!dominantDisparejo) return null;
   const reductionEndRunIdx = Number(primaryRuns[reductionInfo.endPos]?.idx ?? primaryRuns[Math.min(primaryRuns.length - 1, 1)]?.idx ?? -1);
   const takeover = findContraryIncreaseAfterReduction(contraryRuns, reductionEndRunIdx, alignedRange, firstMove, tol);
@@ -22109,17 +20943,16 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
   let points = 0;
   const reasons = [];
   const rejectHints = [];
-  reasons.push(twoReductionInfo.reason || "dos reducciones claras antes de 30s");
-  if (gmp) reasons.push("patrón fuerte: G→M→P");
-  if (gToP && !gmp) reasons.push("incluye reducción G→P");
+  if (gmp) reasons.push("patrón estadístico fuerte: G→M→P");
+  if (gToP && !gmp) reasons.push("patrón medio: G→P limpio");
   points += 4; reasons.push(`${groupText} entra grande`);
   points += 3; reasons.push("desplazamiento visual 0-30s");
   if (netDisplacementRatio >= 0.42 || closePosition01 >= 0.70) { points += 1; reasons.push("cierre cerca del extremo del desplazamiento"); }
   if (cutsBetween > 0) { points += 2; reasons.push("hay pausa/quiebre visual"); }
-  if (gmp) { points += 7; reasons.push(`${groupText} reduce G→M→P`); }
+  if (gmp) { points += 6; reasons.push(`${groupText} reduce G→M→P`); }
   else if (reduceIncreaseReduce) { points += 6; reasons.push(`${groupText} reduce, aumenta un poco y vuelve a reducir`); }
-  else { points += 6; reasons.push(`${groupText} hace 2 reducciones: ${twoReductionInfo.acceptedPattern || reductionInfo.pattern}`); }
-  if (repeatedReduction >= 2) { points += 3; reasons.push("reducción repetida obligatoria"); }
+  else if (gToP) { points += 5; reasons.push(`${groupText} reduce ${reductionInfo.pattern || "G→P"}`); }
+  if (repeatedReduction >= 2) { points += 2; reasons.push("reducción repetida"); }
   if (contraryPG) { points += 7; reasons.push(`${contraryText} aumenta ${contraryPattern || "P→G"}`); }
   else if (contraryStrong) { points += 4; reasons.push(`${contraryText} entra grande después de la reducción`); }
   else { reasons.push("sin entrada contraria clara; manda el dominante disparejo"); }
@@ -22141,7 +20974,6 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     (contraryPG ? 36 : 0) +
     (!contraryPG && contraryStrong ? 18 : 0) +
     (dominantDisparejo ? 12 : 0) +
-    (twoReductionInfo.ok ? 18 : 0) +
     (weakReturn.ok ? 10 : 0) +
     Math.min(10, cutsBetween * 4) -
     (contradictionSoft ? 22 : 0) -
@@ -22153,7 +20985,6 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     gmp,
     gToP,
     dominantDisparejo,
-    twoClearReductions: twoReductionInfo.ok,
     repeatedReduction,
     contraryPG,
     contraryStrong,
@@ -22198,8 +21029,6 @@ function scoreReduccionVisual25sSide(clean, side, evalMs, tol, localRange) {
     gmp,
     reduceIncreaseReduce,
     repeatedReduction,
-    twoClearReductions: twoReductionInfo.ok,
-    twoClearReductionInfo: twoReductionInfo,
     dominantDisparejo,
     contraryPG,
     contraryStrong,
@@ -22235,11 +21064,11 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   if (ticks.length < 5) return null;
   const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
   const optEvalMs = Number(opts?.evalMs);
-  // V107.1: puede decidir antes de 30s si ya aparecen dos reducciones claras.
-  // Nunca usa datos posteriores a 30s: la última foto válida es 0-30s.
-  const evalMs = Math.max(12000, Math.min(30000, Number.isFinite(optEvalMs) ? optEvalMs : lastMs));
-  if (evalMs < 12000 || evalMs > 30000) return null;
-  if (lastMs < evalMs - 700 && !opts?.forceFullWindow30s) return null;
+  // V106.9.4.9: este modo decide con la ventana completa 0-30s.
+  // Si alguien lo llama antes, no devuelve señal para evitar alertas tempranas.
+  const evalMs = 30000;
+  if (Number.isFinite(optEvalMs) && optEvalMs < 29500) return null;
+  if (lastMs < 28000 && !opts?.forceFullWindow30s) return null;
 
   const clean = ensureTicksWithBoundary(ticks, evalMs)
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
@@ -22271,25 +21100,26 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
   const sameQualityAmbiguous = second && qualityGap < 18 && relativeGap < 0.16 && !best.contraryPG;
   if (sameQualityAmbiguous) return null;
 
-  // V107.1: R_75 sigue con cuidado, pero ya no bloquea G→M si aparece la segunda reducción.
-  // La regla base para todos los pares es la misma: dos reducciones claras antes de 30s.
+  // V106.9.4.14: R_75 fue el símbolo más flojo en el análisis, así que queda más estricto.
+  // Solo permite G→M→P claro, o G→P limpio con contrario real y buena eficiencia.
   const symbolStrict = String(candidate?.symbol || candidate?.underlying || "").trim().toUpperCase();
   if (symbolStrict === "R_75") {
-    const r75Ok = !!best.twoClearReductions && Number(best.visualDisplacementEfficiency || 0) >= 0.55;
+    const r75Ok = (best.gmp && Number(best.visualDisplacementEfficiency || 0) >= 0.55)
+      || (best.gToP && (best.contraryPG || best.contraryStrong) && Number(best.visualDisplacementEfficiency || 0) >= 0.58);
     if (!r75Ok) return null;
   }
 
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const subtype = "2 reducciones claras 30s";
+  const subtype = "GMP estricto 30s";
   const displacementText = best.visualDisplacementNetRatio >= 0.42 || best.visualDisplacementClosePosition >= 0.70 ? "desplazamiento alto" : "desplazamiento válido";
   const contraryTxt = best.contraryPG
     ? ` + contrario ${best.contraryText} aumenta ${best.contraryPattern || "P→G"}`
     : (best.contraryStrong ? ` + contrario ${best.contraryText} entra grande` : " + sin contrario claro");
-  const mainPatternText = best.twoClearReductionInfo?.acceptedPattern || (best.gmp ? "G→M→P" : (best.gToP ? "G→P repetido" : (best.transferReductionInfo?.pattern || best.pattern || "2 reducciones")));
+  const mainPatternText = best.gmp ? "G→M→P" : (best.gToP ? "G→P limpio" : (best.transferReductionInfo?.pattern || best.pattern || "G→P"));
   const status = `🎯 Reducción visual ${best.qualityLabel} · ${subtype} · ${displacementText}: dominante ${best.groupText} ${mainPatternText}${contraryTxt}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `2 reducciones claras 30s V107.1: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag: no acepta estancado/lateral. Regla nueva: antes del segundo 30 deben existir DOS reducciones claras del dominante; cada una puede ser G→M, G→P o M→P. G→M ya no queda bloqueado si luego aparece otra reducción clara. El contrario puede sumar, pero no reemplaza la obligación de las dos reducciones. Bloquea simetría/fuerza si el dominante vuelve a tomar fuerza sin reducir.`;
+  const logicText = `GMP estricto 30s V106.9.4.14: ${best.reasons.join(", ")}${best.rejectHints?.length ? `; advertencias: ${best.rejectHints.join(", ")}` : ""}. Calidad ${best.qualityLabel}. Comparación comprador/vendedor: mejor=${best.groupText}, diferencia=${Number.isFinite(qualityGap) ? qualityGap.toFixed(1) : "∞"}. Desplazamiento visual: neto=${Math.round((best.visualDisplacementNetRatio || 0) * 100)}%, dominante=${Math.round((best.visualDisplacementDominantRatio || 0) * 100)}%, eficiencia=${Math.round((best.visualDisplacementEfficiency || 0) * 100)}%. Filtro anti-zigzag estricto: no acepta estancado/lateral. Regla estricta por estadística: dentro de 0-30s el dominante debe formar G→M→P claro o G→P muy limpio. G→M queda bloqueado porque mostró baja efectividad. El contrario puede sumar, pero no compensa una reducción incompleta. Bloquea simetría/fuerza: dos movimientos medianos/grandes consecutivos y similares descartan la señal si no aparece una reducción fuerte posterior.`;
 
   return {
     direction: best.signalDirection,
@@ -22305,7 +21135,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       zoneLow: level - zone * 0.45,
       zoneHigh: level + zone * 0.45,
       points: best.points,
-      maxPoints: 30,
+      maxPoints: 28,
       reasons: best.reasons,
       p0: open,
       pE: current,
@@ -22316,7 +21146,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       analysisWindowMs: evalMs,
       irregularityWindow: "0-30s",
       maxAnalysisSec: 30,
-      signalFromSec: Math.round(evalMs / 1000),
+      signalFromSec: 30,
       motorIndependiente: true,
       visualReductionMode: true,
       visualReductionScore: best.points,
@@ -22340,10 +21170,6 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       visualReductionMacroContraryMin: best.macroContraryMin,
       visualReductionContraryPattern: best.contraryPattern,
       visualReductionTransferRequired: true,
-      visualReductionTwoClearRequired: true,
-      visualReductionTwoClearInfo: best.twoClearReductionInfo || null,
-      visualReductionTwoClearPairs: best.twoClearReductionInfo?.pairs || [],
-      visualReductionTwoClearGroups: best.twoClearReductionInfo?.groups || [],
       visualReductionTransferReductionInfo: best.transferReductionInfo || null,
       visualReductionTransferContraryTakeover: best.transferContraryTakeover || null,
       visualReductionTransferWeakReturn: best.transferWeakReturn || null,
@@ -22368,636 +21194,13 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       cleanMomentumBlocked: best.cleanMomentum,
       lastDominatesTooMuchBlocked: best.lastDominatesTooMuch,
       tooSymmetricBlocked: best.tooSymmetric,
-      movementFilter: "v107_1_dos_reducciones_claras_30s",
-      priority: best.contraryPG || best.gmp || best.twoClearReductions ? "ALTA" : "NORMAL",
-      stage: "reduccion_visual_30s_dos_reducciones_claras_v107_1",
+      movementFilter: "v106_9_4_14_gmp_estricto_30s",
+      priority: best.contraryPG || best.gmp || best.reduceIncreaseReduce ? "ALTA" : "NORMAL",
+      stage: "reduccion_visual_30s_gmp_estricto_v106_9_4_14",
       logic: logicText,
       status,
     },
   };
-}
-
-
-/* =========================
-   V108 — Reducción Constructiva continua
-   - No está atada al minuto Deriv.
-   - Escanea una ventana flotante: el "minuto" de estudio empieza donde arranca
-     el primer movimiento de la primera reducción.
-   - Señal cuando hay 2 reducciones claras/consecutivas antes de 30s.
-========================= */
-function rememberConstructiveRollingTick(symbol, epochMs, quote) {
-  try {
-    const sym = String(symbol || "");
-    const ep = Number(epochMs);
-    const q = Number(quote);
-    if (!sym || !Number.isFinite(ep) || !Number.isFinite(q)) return;
-    constructiveRollingTicksBySymbol[sym] ||= [];
-    const arr = constructiveRollingTicksBySymbol[sym];
-    const last = arr[arr.length - 1];
-    if (last && Math.round(Number(last.epochMs)) === Math.round(ep)) {
-      last.quote = q;
-    } else {
-      arr.push({ epochMs: ep, quote: q });
-    }
-    const minEpoch = ep - CONSTRUCTIVE_ROLLING_KEEP_MS;
-    while (arr.length && Number(arr[0].epochMs) < minEpoch) arr.shift();
-  } catch {}
-}
-function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
-  try {
-    const sym = String(symbol || "");
-    const ep = Number(epochMs);
-    const q = Number(quote);
-    if (!sym || !Number.isFinite(ep) || !Number.isFinite(q) || !Array.isArray(history)) return;
-    let changed = false;
-    for (const it of history.slice(-60)) {
-      if (!it || !it.signalFloatingWindow || String(it.symbol || "") !== sym) continue;
-
-      // Resultado independiente: empieza exactamente cuando salió la alarma y dura 60s.
-      const result60 = ensureSignalResult60(it);
-      if (result60 && !isSignalResult60Resolved(it)) {
-        const deadline = Number(result60.deadlineEpochMs);
-        if (ep >= deadline) {
-          if (ep - deadline <= SIGNAL_RESULT_60_LIVE_GRACE_MS) {
-            resolveSignalResult60(it, ep, q, "live_tick");
-            changed = true;
-          } else {
-            result60.status = "recovering";
-            changed = true;
-            scheduleSignalResult60Hydration(it);
-          }
-        }
-      }
-
-      // El gráfico flotante de la formación conserva su ventana propia de 60s desde el ancla.
-      const anchor = Number(it.signalAnchorEpochMs || 0);
-      if (!Number.isFinite(anchor) || anchor <= 0) continue;
-      const ms = ep - anchor;
-      if (ms >= -250 && ms <= 61000 && !it.trade?.badge) {
-        it.ticks ||= [];
-        if (ms >= 0 && ms <= 60000) {
-          const last = it.ticks[it.ticks.length - 1];
-          const point = { ms: Math.max(0, Math.min(60000, ms)), quote: q };
-          if (last && Math.round(Number(last.ms)) === Math.round(point.ms)) it.ticks[it.ticks.length - 1] = point;
-          else it.ticks.push(point);
-          changed = true;
-        }
-        if (ms >= 60000 && !it.minuteComplete) {
-          it.minuteComplete = true;
-          changed = true;
-          updateRowChartBtn(it);
-        }
-      }
-
-      if (modalCurrentItem && modalCurrentItem.id === it.id) {
-        modalCurrentItem.ticks = Array.isArray(it.ticks) ? it.ticks.slice() : [];
-        modalCurrentItem.minuteComplete = !!it.minuteComplete;
-        modalCurrentItem.signalResult60 = it.signalResult60 ? { ...it.signalResult60 } : null;
-        setCompactModalHeader(modalCurrentItem);
-        updateModalCandleStatusUI();
-        updateModalFooterReadingUI();
-        requestModalDraw(false);
-      }
-    }
-    if (changed) saveHistory(history);
-  } catch {}
-}
-function getConstructiveLabelRank(label) {
-  const l = String(label || "").toUpperCase();
-  if (l === "G") return 3;
-  if (l === "M") return 2;
-  if (l === "P") return 1;
-  return 0;
-}
-function buildConstructiveReductionPairs(moves, labels) {
-  const arr = (Array.isArray(moves) ? moves : []).map(Number).filter((v) => Number.isFinite(v) && v > 0);
-  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "").toUpperCase()) : [];
-  const pairs = [];
-  for (let i = 0; i < arr.length - 1; i++) {
-    const a = arr[i];
-    const b = arr[i + 1];
-    const la = labs[i] || classifyVisualReductionLabel(a, Math.max(...arr));
-    const lb = labs[i + 1] || classifyVisualReductionLabel(b, Math.max(...arr));
-    const rankDrop = getConstructiveLabelRank(la) > getConstructiveLabelRank(lb);
-    const ratio = a / Math.max(b, 1e-9);
-    // V108.2: modo MUY visual. No aceptamos reducciones apenas matemáticas.
-    // Tiene que verse una caída clara de tamaño: G→M, G→P o M→P con margen real.
-    const minRatio = la === "G" && lb === "P" ? 1.75 : la === "M" && lb === "P" ? 1.35 : 1.28;
-    const validLabel = (la === "G" && (lb === "M" || lb === "P")) || (la === "M" && lb === "P");
-    const absoluteDropOk = (a - b) >= Math.max(a * 0.18, b * 0.22, Math.max(...arr) * 0.06, 1e-9);
-    if (validLabel && rankDrop && ratio >= minRatio && absoluteDropOk) {
-      pairs.push({ index: i, from: la, to: lb, a, b, ratio, pattern: `${la}→${lb}` });
-    }
-  }
-  return pairs;
-}
-function buildConstructiveReductionBlocks(primaryRuns, labels, reductionPairs) {
-  const runs = Array.isArray(primaryRuns) ? primaryRuns : [];
-  const labs = Array.isArray(labels) ? labels.map((x) => String(x || "").toUpperCase()) : [];
-  const pairByIndex = new Map((Array.isArray(reductionPairs) ? reductionPairs : []).map((p) => [Number(p.index), p]));
-  const blocks = [];
-
-  for (let i = 0; i < runs.length - 1; i++) {
-    const firstPair = pairByIndex.get(i);
-    if (!firstPair) continue;
-
-    // Una secuencia G→M→P completa cuenta como UNA sola reducción, no como dos.
-    const secondPair = pairByIndex.get(i + 1);
-    if (
-      secondPair &&
-      labs[i] === "G" && labs[i + 1] === "M" && labs[i + 2] === "P"
-    ) {
-      blocks.push({
-        startIndex: i,
-        endIndex: i + 2,
-        pattern: "G→M→P",
-        pairCount: 2,
-        pairs: [firstPair, secondPair],
-        runs: [runs[i], runs[i + 1], runs[i + 2]],
-        labels: ["G", "M", "P"],
-        startMs: Number(runs[i]?.startMs || 0),
-        endMs: Number(runs[i + 2]?.endMs || 0),
-        strength: Number(firstPair.ratio || 0) + Number(secondPair.ratio || 0) + 0.7,
-      });
-    }
-
-    // Cada par claro también puede constituir por sí solo una reducción válida:
-    // G→M, G→P o M→P.
-    blocks.push({
-      startIndex: i,
-      endIndex: i + 1,
-      pattern: String(firstPair.pattern || `${labs[i]}→${labs[i + 1]}`),
-      pairCount: 1,
-      pairs: [firstPair],
-      runs: [runs[i], runs[i + 1]],
-      labels: [labs[i], labs[i + 1]],
-      startMs: Number(runs[i]?.startMs || 0),
-      endMs: Number(runs[i + 1]?.endMs || 0),
-      strength: Number(firstPair.ratio || 0),
-    });
-  }
-
-  return blocks;
-}
-
-// V109.1: confirma que el último movimiento de la SEGUNDA reducción realmente cerró.
-// Se toma únicamente la primera respuesta direccional posterior:
-// - si continúa el mismo grupo, el movimiento seguía extendiéndose;
-// - si aparece una respuesta contraria pequeña, todavía queda provisional;
-// - solo una respuesta contraria >=24% + ruido mínimo y con 2 pasos confirma el cierre.
-function getConstructiveSecondReductionConfirmation(runs, secondBlock, alignedRange, tol) {
-  const allRuns = Array.isArray(runs) ? runs : [];
-  const blockRuns = Array.isArray(secondBlock?.runs) ? secondBlock.runs : [];
-  const lastPrimary = blockRuns[blockRuns.length - 1] || null;
-  const lastIdx = Number(lastPrimary?.idx);
-  const lastMove = Number(lastPrimary?.move || 0);
-  if (!lastPrimary || !Number.isFinite(lastIdx) || !(lastMove > 0)) return null;
-
-  let response = null;
-  for (let i = lastIdx + 1; i < allRuns.length; i++) {
-    const r = allRuns[i];
-    const sign = Number(r?.sign || 0);
-    if (sign === 0) continue;
-    // La primera continuación del mismo lado demuestra que el último tramo no había terminado.
-    if (sign > 0) return null;
-    response = { ...r, idx: Number.isFinite(Number(r?.idx)) ? Number(r.idx) : i };
-    break;
-  }
-  if (!response) return null;
-
-  const responseMove = Number(response.move || 0);
-  const threshold = Math.max(
-    lastMove * CONSTRUCTIVE_CLOSE_RETRACE_RATIO,
-    Number(alignedRange || 0) * CONSTRUCTIVE_CLOSE_RANGE_RATIO,
-    Number(tol || 0) * CONSTRUCTIVE_CLOSE_TOL_MULT,
-    1e-9
-  );
-  const pointCount = Array.isArray(response.points) ? response.points.length : 0;
-  const oppositeSteps = Math.max(0, pointCount - 1);
-  const durationMs = Math.max(0, Number(response.durationMs || 0));
-
-  if (responseMove < threshold) return null;
-  if (oppositeSteps < CONSTRUCTIVE_CLOSE_MIN_OPPOSITE_STEPS) return null;
-  if (durationMs < CONSTRUCTIVE_CLOSE_MIN_DURATION_MS) return null;
-
-  return {
-    confirmed: true,
-    lastPrimaryIdx: lastIdx,
-    lastPrimaryMove: lastMove,
-    responseRun: response,
-    responseMove,
-    retraceRatio: responseMove / Math.max(lastMove, 1e-9),
-    threshold,
-    oppositeSteps,
-    durationMs,
-    confirmedAtMs: Number(response.endMs || response.startMs || 0),
-  };
-}
-
-function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, localRange) {
-  const groupText = side > 0 ? "comprador" : "vendedor";
-  const contraryText = side > 0 ? "vendedor" : "comprador";
-  const signalDirection = side > 0 ? "PUT" : "CALL";
-  const pts = (Array.isArray(clean) ? clean : [])
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || CONSTRUCTIVE_FLOATING_WINDOW_MS))
-    .sort((a, b) => a.ms - b.ms);
-  if (pts.length < 6) return null;
-
-  const yMaxAll = Math.max(...pts.map((p) => p.y));
-  const yMinAll = Math.min(...pts.map((p) => p.y));
-  const alignedRange = Math.max(yMaxAll - yMinAll, Number(localRange || 0), Math.abs(Number(pts[0]?.y || 0)) * 0.000001, 1e-9);
-  const impulseMin = Math.max(alignedRange * 0.080, Number(tol || 0) * 1.90, 1e-9);
-  const cutMin = Math.max(alignedRange * 0.038, Number(tol || 0) * 1.00, 1e-9);
-
-  const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
-  if (runs.length < 5) return null;
-  const macroRuns = classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin);
-  const primaryRuns = macroRuns.primaryRuns || [];
-  const contraryRuns = macroRuns.contraryRuns || [];
-  if (primaryRuns.length < 4) return null; // dos reducciones separadas requieren al menos 4 movimientos del grupo
-
-  const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
-  const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
-  const summary = summarizeVisualMoves(primaryMoves);
-  const labels = summary.labels;
-  const reductionPairs = buildConstructiveReductionPairs(primaryMoves, labels);
-  if (reductionPairs.length < 2) return null;
-
-  const allBlocks = buildConstructiveReductionBlocks(primaryRuns, labels, reductionPairs);
-  if (allBlocks.length < 2) return null;
-
-  const hasStrongContraryInsideBlock = (block) => {
-    const blockRuns = Array.isArray(block?.runs) ? block.runs : [];
-    const firstRun = blockRuns[0];
-    const lastRun = blockRuns[blockRuns.length - 1];
-    if (!firstRun || !lastRun) return true;
-    const baseMove = Math.max(...blockRuns.map((r) => Number(r.move || 0)), 1e-9);
-    return contraryRuns
-      .filter((r) => Number(r.idx) > Number(firstRun.idx) && Number(r.idx) < Number(lastRun.idx))
-      .some((r) => Number(r.move || 0) >= Math.max(baseMove * 0.30, alignedRange * 0.080, Number(tol || 0) * 2.0));
-  };
-
-  const blocks = allBlocks.filter((b) => {
-    if (!b || hasStrongContraryInsideBlock(b)) return false;
-    const first = Number(b.runs?.[0]?.move || 0);
-    const last = Number(b.runs?.[b.runs.length - 1]?.move || 0);
-    if (!(first > last)) return false;
-    const duration = Number(b.endMs || 0) - Number(b.startMs || 0);
-    return duration >= 1800 && duration <= 18000;
-  });
-  if (blocks.length < 2) return null;
-
-  // Elegimos DOS reducciones distintas y no superpuestas.
-  // G→M→P es una sola reducción; la segunda debe comenzar después de que terminó la primera.
-  // Las combinaciones pueden ser cualquiera de: G→M→P, G→M, G→P o M→P.
-  let selected = null;
-  for (const first of blocks) {
-    for (const second of blocks) {
-      if (Number(second.startIndex) !== Number(first.endIndex) + 1) continue;
-      const anchorMs = Number(first.startMs || 0);
-      // El último movimiento de la segunda reducción sigue EN CURSO hasta que
-      // una respuesta contraria real lo cierre. Sin esta confirmación no hay alarma.
-      const secondConfirmation = getConstructiveSecondReductionConfirmation(runs, second, alignedRange, tol);
-      if (!secondConfirmation) continue;
-      const formedAtMs = Number(secondConfirmation.confirmedAtMs || 0);
-      const elapsed = formedAtMs - anchorMs;
-      if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
-
-      const firstStartMove = Number(first.runs?.[0]?.move || 0);
-      const secondStartMove = Number(second.runs?.[0]?.move || 0);
-      const minVisibleStart = Math.max(alignedRange * 0.115, Number(tol || 0) * 2.7, 1e-9);
-      if (firstStartMove < minVisibleStart || secondStartMove < Math.max(alignedRange * 0.075, Number(tol || 0) * 2.0, 1e-9)) continue;
-
-      const score =
-        Number(first.strength || 0) * 18 +
-        Number(second.strength || 0) * 18 +
-        (first.pattern === "G→M→P" ? 8 : 0) +
-        (second.pattern === "G→M→P" ? 8 : 0) -
-        Math.max(0, elapsed - 22000) / 650;
-      if (!selected || score > selected.score) selected = { first, second, anchorMs, formedAtMs, elapsed, score, secondConfirmation };
-    }
-  }
-  if (!selected) return null;
-
-  const firstReduction = selected.first;
-  const secondReduction = selected.second;
-  const acceptedRuns = [...firstReduction.runs, ...secondReduction.runs].map((r) => ({ ...r }));
-  const acceptedLabels = [...firstReduction.labels, ...secondReduction.labels];
-  const acceptedPatternText = `${firstReduction.pattern} + ${secondReduction.pattern}`;
-
-  // La forma G/M/P se mide hasta el final del segundo bloque. La respuesta
-  // contraria posterior solo confirma el cierre y no altera el tamaño clasificado.
-  const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Number(secondReduction.endMs || selected.formedAtMs));
-  if (acceptedPts.length < 5) return null;
-  const y0 = Number(acceptedPts[0].y);
-  const yEnd = Number(acceptedPts[acceptedPts.length - 1].y);
-  const yMax = Math.max(...acceptedPts.map((p) => p.y));
-  const yMin = Math.min(...acceptedPts.map((p) => p.y));
-  const dominantAdvance = yMax - y0;
-  const oppositeDip = Math.max(0, y0 - yMin);
-  const totalPath = acceptedPts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(acceptedPts[i].y)), 0);
-  const efficiency = Math.abs(yEnd - y0) / Math.max(totalPath, 1e-9);
-
-  if (dominantAdvance < Math.max(alignedRange * 0.34, Number(tol || 0) * 4.0)) return null;
-  if (oppositeDip > dominantAdvance * 0.62) return null;
-  if (efficiency < 0.09) return null;
-
-  const firstRunMove = Number(firstReduction.runs?.[0]?.move || 0);
-  const secondConfirmation = selected.secondConfirmation;
-  if (!secondConfirmation?.confirmed) return null;
-  const contraryStrong = true;
-
-  let cutsBetween = 0;
-  for (let i = 0; i < acceptedRuns.length - 1; i++) {
-    if (hasVisualCutBetweenRuns(runs, acceptedRuns[i].idx, acceptedRuns[i + 1].idx, cutMin)) cutsBetween++;
-  }
-
-  let points = 0;
-  const reasons = [];
-  points += 5; reasons.push(`${groupText} inicia el primer movimiento visible`);
-  points += 8; reasons.push(`1ª reducción clara: ${firstReduction.pattern}`);
-  points += 8; reasons.push(`2ª reducción clara y distinta: ${secondReduction.pattern}`);
-  points += 5; reasons.push("la segunda reducción comienza después de terminar la primera");
-  if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales entre movimientos"); }
-  points += 3; reasons.push(`último movimiento confirmado: ${contraryText} retrocede ${Math.round(Number(secondConfirmation.retraceRatio || 0) * 100)}% con ${Number(secondConfirmation.oppositeSteps || 0)} pasos`);
-  if (points < 24) return null;
-
-  const quality = points * 12 + 42 + Math.min(16, cutsBetween * 3) + 12 - Math.max(0, selected.elapsed - 25000) / 700;
-  const subtype = "2 reducciones separadas y claras";
-
-  return {
-    side,
-    signalDirection,
-    groupText,
-    contraryText,
-    points,
-    quality,
-    qualityLabel: quality >= 250 ? "A" : quality >= 190 ? "B" : "C",
-    reasons,
-    evalMs,
-    formedAtMs: selected.formedAtMs,
-    anchorOffsetMs: selected.anchorMs,
-    elapsedFromFirstMovementMs: selected.elapsed,
-    alignedRange,
-    runs: runs.slice(0, 20),
-    primaryRuns: primaryRuns.slice(0, 14),
-    contraryRuns: contraryRuns.slice(0, 12),
-    primaryMoves,
-    contraryMoves,
-    labels,
-    pattern: acceptedPatternText,
-    reductionPairs,
-    reductionBlocks: blocks,
-    firstReduction,
-    secondReduction,
-    cutsBetween,
-    contraryStrong,
-    secondReductionConfirmation: {
-      confirmedAtMs: Number(secondConfirmation.confirmedAtMs || 0),
-      responseMove: Number(secondConfirmation.responseMove || 0),
-      lastPrimaryMove: Number(secondConfirmation.lastPrimaryMove || 0),
-      retraceRatio: Number(secondConfirmation.retraceRatio || 0),
-      threshold: Number(secondConfirmation.threshold || 0),
-      oppositeSteps: Number(secondConfirmation.oppositeSteps || 0),
-      durationMs: Number(secondConfirmation.durationMs || 0),
-      responseRun: secondConfirmation.responseRun ? { ...secondConfirmation.responseRun } : null,
-    },
-    visualDisplacementEfficiency: efficiency,
-    dominantAdvance,
-    oppositeDip,
-    acceptedChainRuns: acceptedRuns,
-    acceptedChainLabels: acceptedLabels,
-    acceptedChainPattern: acceptedPatternText,
-    acceptedReductionBlocks: [firstReduction, secondReduction].map((b) => ({
-      pattern: b.pattern,
-      startIndex: b.startIndex,
-      endIndex: b.endIndex,
-      startMs: b.startMs,
-      endMs: b.endMs,
-      labels: Array.isArray(b.labels) ? b.labels.slice() : [],
-      runs: Array.isArray(b.runs) ? b.runs.map((r) => ({ ...r })) : [],
-    })),
-    subtype,
-  };
-}
-function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
-  const ticks = (candidate?.ticks || []).slice().sort((a, b) => Number(a.ms) - Number(b.ms));
-  if (ticks.length < 6) return null;
-  const lastMs = Number(ticks[ticks.length - 1]?.ms || 0);
-  const evalMs = Math.min(CONSTRUCTIVE_FLOATING_WINDOW_MS, Math.max(CONSTRUCTIVE_SCAN_MIN_WINDOW_MS, Number(opts?.evalMs || lastMs || 0)));
-  if (lastMs < CONSTRUCTIVE_SCAN_MIN_WINDOW_MS) return null;
-
-  const clean = ensureTicksWithBoundary(ticks, evalMs)
-    .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
-    .sort((a, b) => a.ms - b.ms);
-  if (clean.length < 6) return null;
-  const quotes = clean.map((p) => Number(p.quote));
-  const open = Number(quotes[0]);
-  const current = Number(quotes[quotes.length - 1]);
-  const high = Math.max(...quotes);
-  const low = Math.min(...quotes);
-  const localRange = Math.max(high - low, Math.abs(open) * 0.000001, 1e-9);
-  const tol = Math.max(localRange * 0.009, Math.abs(open) * 0.00000005, 1e-9);
-
-  const buyer = scoreConstructiveReductionContinuousSide(clean, 1, evalMs, tol, localRange);
-  const seller = scoreConstructiveReductionContinuousSide(clean, -1, evalMs, tol, localRange);
-  const ordered = [buyer, seller].filter(Boolean).sort((a, b) => Number(b.quality || 0) - Number(a.quality || 0));
-  const best = ordered[0] || null;
-  const second = ordered[1] || null;
-  // V108.2: solo calidad A. Si no se ve muy claro, no avisa.
-  if (!best || best.qualityLabel !== "A") return null;
-  const gap = second ? Number(best.quality || 0) - Number(second.quality || 0) : Infinity;
-  if (second && gap < 34) return null;
-
-  const signalIsPut = best.signalDirection === "PUT";
-  const level = signalIsPut ? high : low;
-  const zone = Math.max(tol * 4, localRange * 0.10);
-  const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
-  const status = `🧩 Reducción constructiva CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Último movimiento cerrado por respuesta ${best.contraryText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V109.1: ventana flotante no atada al minuto. Requiere 2 reducciones DISTINTAS y no superpuestas dentro de 30s. El último movimiento de la segunda reducción permanece provisional y la alarma solo sale cuando una respuesta contraria real (mínimo 24%, sobre ruido y al menos 2 pasos) confirma que terminó: ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento de la primera reducción.`;
-
-  return {
-    direction: best.signalDirection,
-    quality: best.quality,
-    points: best.points,
-    meta: {
-      level,
-      levelMode: "reduccion_constructiva_continua",
-      levelType: signalIsPut ? "buyer_constructive_reduction" : "seller_constructive_reduction",
-      direction: best.signalDirection,
-      tolerance: tol,
-      zone,
-      zoneLow: level - zone * 0.45,
-      zoneHigh: level + zone * 0.45,
-      points: best.points,
-      maxPoints: 28,
-      reasons: best.reasons,
-      p0: open,
-      pE: current,
-      high,
-      low,
-      range: localRange,
-      evalSec: Math.round(best.elapsedFromFirstMovementMs / 1000),
-      analysisWindowMs: evalMs,
-      irregularityWindow: "flotante 0-30s",
-      maxAnalysisSec: 30,
-      signalFromSec: Math.round(best.elapsedFromFirstMovementMs / 1000),
-      motorIndependiente: true,
-      constructiveReductionMode: true,
-      visualReductionMode: true,
-      visualReductionScore: best.points,
-      visualReductionQuality: best.qualityLabel,
-      visualReductionSubtype: best.subtype,
-      visualReductionGroup: best.groupText,
-      visualReductionContraryGroup: best.contraryText,
-      visualReductionPattern: best.acceptedChainPattern || best.pattern,
-      visualReductionLabels: Array.isArray(best.acceptedChainLabels) && best.acceptedChainLabels.length ? best.acceptedChainLabels : best.labels,
-      visualReductionMoves: Array.isArray(best.acceptedChainRuns) && best.acceptedChainRuns.length ? best.acceptedChainRuns.map((r) => Number(r.move || 0)) : best.primaryMoves,
-      visualReductionRuns: best.runs,
-      visualReductionPrimaryRuns: Array.isArray(best.acceptedChainRuns) && best.acceptedChainRuns.length ? best.acceptedChainRuns : best.primaryRuns,
-      acceptedChainPattern: best.acceptedChainPattern,
-      acceptedChainLabels: best.acceptedChainLabels,
-      acceptedChainRuns: best.acceptedChainRuns,
-      acceptedReductionPatternText: best.acceptedChainPattern,
-      acceptedReductionBlocks: best.acceptedReductionBlocks,
-      firstConstructiveReduction: best.firstReduction ? { pattern: best.firstReduction.pattern, startMs: best.firstReduction.startMs, endMs: best.firstReduction.endMs } : null,
-      secondConstructiveReduction: best.secondReduction ? { pattern: best.secondReduction.pattern, startMs: best.secondReduction.startMs, endMs: best.secondReduction.endMs } : null,
-      constructiveElapsedFromFirstMovementMs: best.elapsedFromFirstMovementMs,
-      visualReductionContraryRuns: [],
-      visualReductionAllPrimaryRuns: best.primaryRuns,
-      visualReductionAllContraryRuns: best.contraryRuns,
-      constructiveReductionPairs: best.reductionPairs,
-      constructiveReductionConsecutive: true,
-      constructiveReductionDistinct: true,
-      constructiveAnchorOffsetMs: best.anchorOffsetMs,
-      constructiveFormedAtMs: best.formedAtMs,
-      constructiveFloatingWindow: true,
-      cutsBetween: best.cutsBetween,
-      contraryStrong: best.contraryStrong,
-      secondReductionConfirmed: true,
-      secondReductionConfirmation: best.secondReductionConfirmation,
-      secondReductionConfirmedAtMs: Number(best.secondReductionConfirmation?.confirmedAtMs || best.formedAtMs || 0),
-      secondReductionRetraceRatio: Number(best.secondReductionConfirmation?.retraceRatio || 0),
-      secondReductionOppositeSteps: Number(best.secondReductionConfirmation?.oppositeSteps || 0),
-      visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v109_1_second_reduction_last_move_confirmed",
-      priority: "ALTA",
-      stage: "reduccion_constructiva_segunda_reduccion_confirmada_v109_1",
-      logic: logicText,
-      status,
-    },
-  };
-}
-function normalizeConstructiveAbsWindow(absTicks, anchorEpochMs, nowEpochMs) {
-  const start = Number(anchorEpochMs);
-  const end = Math.min(Number(nowEpochMs), start + CONSTRUCTIVE_FLOATING_WINDOW_MS);
-  return (Array.isArray(absTicks) ? absTicks : [])
-    .filter((p) => Number(p.epochMs) >= start && Number(p.epochMs) <= end)
-    .map((p) => ({ ms: Number(p.epochMs) - start, quote: Number(p.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
-    .sort((a, b) => a.ms - b.ms);
-}
-function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
-  try {
-    if (!isReduccionConstructivaContinuaMode(signalMode)) return false;
-    if (areSignalsPaused()) return false;
-    const sym = String(symbol || "");
-    const now = Number(epochMs);
-    const absTicks = constructiveRollingTicksBySymbol[sym] || [];
-    if (!sym || !Number.isFinite(now) || absTicks.length < 8) return false;
-    const lastSig = constructiveLastSignalBySymbol[sym] || null;
-    if (lastSig && now - Number(lastSig.epochMs || 0) < CONSTRUCTIVE_SIGNAL_COOLDOWN_MS) return false;
-
-    const minStart = now - CONSTRUCTIVE_FLOATING_WINDOW_MS;
-    const starts = [];
-    let lastStart = -Infinity;
-    for (const p of absTicks) {
-      const ep = Number(p.epochMs);
-      if (!Number.isFinite(ep) || ep < minStart || ep > now - CONSTRUCTIVE_SCAN_MIN_WINDOW_MS) continue;
-      if (ep - lastStart >= CONSTRUCTIVE_SCAN_STEP_MS) {
-        starts.push(ep);
-        lastStart = ep;
-      }
-    }
-    if (!starts.length) return false;
-
-    let bestPack = null;
-    for (const start of starts) {
-      const ticks = normalizeConstructiveAbsWindow(absTicks, start, now);
-      if (ticks.length < 6) continue;
-      const match = analyzeConstructiveReductionContinuousCandidate({ symbol: sym, ticks }, { evalMs: Math.min(now - start, CONSTRUCTIVE_FLOATING_WINDOW_MS) });
-      if (!match) continue;
-      const anchorEpochMs = start + Number(match.meta?.constructiveAnchorOffsetMs || 0);
-      if (now - anchorEpochMs > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
-      const anchoredTicks = normalizeConstructiveAbsWindow(absTicks, anchorEpochMs, now);
-      const refined = analyzeConstructiveReductionContinuousCandidate({ symbol: sym, ticks: anchoredTicks }, { evalMs: Math.min(now - anchorEpochMs, CONSTRUCTIVE_FLOATING_WINDOW_MS) }) || match;
-      const q = Number(refined.quality || 0) - Math.max(0, (now - anchorEpochMs) - Number(refined.meta?.constructiveFormedAtMs || 0)) / 2500;
-      if (!bestPack || q > Number(bestPack.rank || 0)) {
-        bestPack = { match: refined, anchorEpochMs, ticks: anchoredTicks, rank: q };
-      }
-    }
-    if (!bestPack?.match) return false;
-
-    const anchorEpochMs = Math.round(Number(bestPack.anchorEpochMs));
-    const direction = String(bestPack.match.direction || "").toUpperCase();
-    const signalKey = `${Math.floor(anchorEpochMs / 1000)}|${sym}|${direction}`;
-    if (lastSig && String(lastSig.key || "") === signalKey) return false;
-    if ((history || []).some((it) => String(it?.constructiveSignalKey || "") === signalKey)) return false;
-
-    const anchorMinute = Math.floor(anchorEpochMs / 60000);
-    const timeTxt = new Date(anchorEpochMs).toISOString().substr(11, 8) + " UTC";
-    const mode = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-    const added = addSignal(anchorMinute, sym, direction, bestPack.ticks, {
-      id: `FLOAT-${Math.floor(anchorEpochMs)}-${sym}-${direction}`,
-      time: timeTxt,
-      mode,
-      mode_version: getModeVersion(mode),
-      giroNivelScore: Math.round(bestPack.match.quality || 0),
-      giroNivelPoints: bestPack.match.points,
-      giroPolaridadScore: Math.round(bestPack.match.quality || 0),
-      giroPolaridadPoints: bestPack.match.points,
-      doubleReduction: bestPack.match.meta,
-      giroPolaridad: bestPack.match.meta,
-      aiLocalMatchSource: "DOBLE_REDUCCION",
-      signalLifecycleStage: "floating_prealert",
-      signalPrealertAtSec: Math.round(Number(bestPack.match.meta?.signalFromSec || 0)),
-      signalRadar: true,
-      signalRadarStartSec: 0,
-      signalRadarEndSec: 30,
-      signalAutoEntrySec: SIGNAL_AUTO_ENTRY_SEC,
-      signalRequiresManualPoints: SIGNAL_CONFIRM_MIN,
-      signalConfirmations: [],
-      signalFloatingWindow: true,
-      signalAnchorEpochMs: anchorEpochMs,
-      signalAnchorSecond: Number(((anchorEpochMs % 60000) + 60000) % 60000) / 1000,
-      signalDetectedEpochMs: now,
-      signalCreatedEpochMs: now,
-      signalResult60: {
-        startEpochMs: now,
-        deadlineEpochMs: now + SIGNAL_RESULT_60_DURATION_MS,
-        startQuote: Number(absTicks[absTicks.length - 1]?.quote),
-        status: "pending",
-        outcome: "",
-        endEpochMs: null,
-        endQuote: null,
-        delta: null,
-        source: "live",
-        resolvedAt: null,
-      },
-      constructiveSignalKey: signalKey,
-      minuteComplete: false,
-    });
-    if (added) {
-      constructiveLastSignalBySymbol[sym] = { epochMs: now, key: signalKey };
-      toast(`🧩 ${sym}: 2 reducciones confirmadas`, 1800);
-      return true;
-    }
-  } catch (e) {
-    try { window.DerivDebug?.log?.("CONSTRUCTIVE_SCAN_ERROR", { error: e?.message || String(e) }); } catch {}
-  }
-  return false;
 }
 
 function analyzeAlcistaQuiebres30sCandidate(candidate, minute, opts = {}) {
@@ -23751,7 +21954,7 @@ function evaluateMinute(minute, opts = {}) {
 
   if (readySymbols < MIN_SYMBOLS_READY || candidates.length === 0) return false;
 
-  const activeMode = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  const activeMode = normalizeSignalMode(signalMode);
   const matches = [];
   for (const c of candidates) {
     let match = null;
@@ -23759,9 +21962,6 @@ function evaluateMinute(minute, opts = {}) {
     if (isDynamicLineMode(activeMode)) {
       match = analyzeDynamicLineCandidate(c, minute);
       matchSource = "LINEA_DINAMICA";
-    } else if (isReduccionConstructivaContinuaMode(activeMode)) {
-      match = analyzeConstructiveReductionContinuousCandidate(c, evalOptions);
-      matchSource = "REDUCCION_CONSTRUCTIVA_CONTINUA";
     } else if (isReduccionExacta25sMode(activeMode)) {
       match = analyzeReduccionVisual25sCandidate(c, minute, evalOptions);
       matchSource = "REDUCCION_VISUAL_25S";
@@ -23811,7 +22011,7 @@ function evaluateMinute(minute, opts = {}) {
 
   if (!matches.length) return false;
   matches.sort((a, b) => {
-    if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode) || isReduccionExacta25sMode(activeMode) || isReduccionConstructivaContinuaMode(activeMode)) {
+    if (isRupturaDebilGiroMode(activeMode) || isAlcistaIrregular25sMode(activeMode) || isReduccionExacta25sMode(activeMode)) {
       const ap = a.giroPolaridadMeta?.strongContrary || a.giroPolaridadMeta?.sellerAfter20 || a.giroPolaridadMeta?.colorFlipAndRetake || Number(a.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(a.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
       const bp = b.giroPolaridadMeta?.strongContrary || b.giroPolaridadMeta?.sellerAfter20 || b.giroPolaridadMeta?.colorFlipAndRetake || Number(b.giroPolaridadMeta?.visualBreakCount || 0) >= 3 || Number(b.giroPolaridadMeta?.visualReductionScore || 0) >= 10 ? 1 : 0;
       if (bp !== ap) return bp - ap;
@@ -23899,7 +22099,10 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   const fatigueTriggered = registerSignalForFatigueGuard(item);
   if (fatigueTriggered) return item;
 
-  if (soundEnabled) playSignalAlertSound();
+  if (soundEnabled && sound) {
+    sound.currentTime = 0;
+    sound.play().catch(() => {});
+  }
   if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
   showNotification(symbol, direction, modeLabel, item);
@@ -24148,31 +22351,28 @@ if (practiceCanvas) {
   practiceCanvas.addEventListener("click", handlePracticeCanvasPick);
 }
 
-function applyDoubleReductionOnlyUI() {
+function applyCleanReduccionVisualUI() {
   try {
-    signalMode = MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-    saveAnalysisMode(MODE_REDUCCION_CONSTRUCTIVA_CONTINUA);
+    signalMode = MODE_REDUCCION_VISUAL_25S;
+    saveAnalysisMode(MODE_REDUCCION_VISUAL_25S);
 
-    // Único motor visible y operativo: Doble Reducción. Se conservan En vivo y Proceso.
+    // Limpiar SOLO controles no funcionales para Reducción visual 25s.
+    // Se conservan En vivo y Práctica.
     const hideSelectors = [
       '.evalBtn',
       '.btnGroup[aria-label="Segundo de evaluación"]',
       '#modeBtn',
       '#keepClosedAwaySignalsBtnWrap',
       '#keepClosedAwaySignalsBtn',
-      '#giroAprendizajePanel',
-      '.savePracticeBtn',
-      '#practiceView'
+      '#giroAprendizajePanel'
     ];
     hideSelectors.forEach((sel) => document.querySelectorAll(sel).forEach((el) => {
       el.style.display = 'none';
     }));
 
-    qsAll('.tab[data-view="live"], .tab[data-view="process"]').forEach((el) => { el.style.display = ''; });
-    qsAll('.tab[data-view="practice"]').forEach((el) => { el.style.display = 'none'; });
+    qsAll('.tab[data-view="live"], .tab[data-view="practice"]').forEach((el) => { el.style.display = ''; });
     if (liveView) liveView.style.display = '';
-    if (practiceView) practiceView.style.display = 'none';
-    if (processView) processView.style.display = '';
+    if (practiceView) practiceView.style.display = '';
   } catch (e) {
     console.warn('[CLEAN_UI]', e);
   }
@@ -24194,6 +22394,7 @@ startPendingContractWatchdog({ immediate: true });
 loadTradeLinks();
 loadExecutionMode();
 loadEntryTimingMode();
+loadKeepClosedAwaySignals();
 
 renderHistory();
 initNotificationOpenRouting();
@@ -24231,12 +22432,15 @@ updateDisciplineLockUI(false);
 seedTradesJournalFromHistory();
 
 initTabs();
-applyDoubleReductionOnlyUI();
+applyCleanReduccionVisualUI();
 paintLiveSymbolButtons();
 ensureInlineClearButtons();
 ensureLiveAnalysisPauseButton();
 applyLiveAnalysisPauseUI();
-initProcessView();
+ensurePracticeFilterButton();
+applyPracticeFilterButtonUI();
+ensurePracticeExportSaveButton();
+updatePracticeExportSaveButtonUI();
 updateExportTradesButtonUI();
 
 connect();

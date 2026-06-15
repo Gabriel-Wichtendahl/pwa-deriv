@@ -35,7 +35,7 @@
         <button class="tab active" type="button" data-view="signals" role="tab" aria-selected="true" aria-controls="signalsView">Señales</button>
         <button class="tab" type="button" data-view="live" role="tab" aria-selected="false" aria-controls="liveView">En vivo</button>
         <button class="tab" type="button" data-view="trades" role="tab" aria-selected="false" aria-controls="tradesView">Trades</button>
-        <button class="tab" type="button" data-view="process" role="tab" aria-selected="false" aria-controls="processView" title="Puntos de disciplina y premios del proceso">🧠 Proceso</button>
+        <button class="tab" type="button" data-view="practice" role="tab" aria-selected="false" aria-controls="practiceView">Práctica</button>
       </div>
 
       <button id="configBtn" class="tabIcon" type="button" aria-label="Configuración">⚙️</button>
@@ -92,9 +92,58 @@
       <div id="tradesList" class="signals"></div>
     </section>
 
-    <section id="processView" class="processView hidden" role="tabpanel" aria-label="Proceso mental y disciplina">
-      <div id="processApp" class="processApp">
-        <div class="processLoading">🧠 Cargando Proceso…</div>
+    <section id="practiceView" class="practice hidden" role="tabpanel">
+      <div class="practiceTop">
+        <div class="practiceModeGroup" aria-label="Segundo de práctica">
+          <button id="practice40Btn" class="btn practiceSecBtn" type="button" data-sec="40">⏱️ 40s</button>
+          <button id="practice45Btn" class="btn practiceSecBtn" type="button" data-sec="45">⏱️ 45s</button>
+        </div>
+      </div>
+
+      <div class="practiceStatsGrid">
+        <div class="practiceStatsCard">
+          <div class="practiceStatsHead">
+            <div class="practiceStatsTitle">Sesión</div>
+            <button id="practiceResetSessionBtn" class="practiceResetBtn" type="button" title="Resetear sesión" aria-label="Resetear sesión">↺</button>
+          </div>
+          <div id="practiceSessionStats" class="practiceStatsText">ITM 0 · OTM 0 · PASAR 0 · % 0 · TOTAL 0</div>
+        </div>
+
+        <div class="practiceStatsCard">
+          <div class="practiceStatsHead">
+            <div class="practiceStatsTitle">Histórico</div>
+            <button id="practiceResetAllBtn" class="practiceResetBtn" type="button" title="Resetear histórico" aria-label="Resetear histórico">↺</button>
+          </div>
+          <div id="practiceAllStats" class="practiceStatsText">ITM 0 · OTM 0 · PASAR 0 · % 0 · TOTAL 0</div>
+        </div>
+      </div>
+
+      <div class="practiceStage">
+        <div class="practiceInfoRow">
+          <div id="practiceRoundLabel" class="pill practicePill">Sin ronda</div>
+          <div id="practicePoolLabel" class="pill practicePill">Pool: 0</div>
+        </div>
+
+        <div id="practiceStatus" class="practiceStatus">Usa tu historial de trades para practicar velocidad de análisis.</div>
+
+        <canvas id="practiceCanvas"></canvas>
+
+        <div id="practiceResult" class="practiceResult">Tocá “SIGUIENTE” para cargar una ronda.</div>
+
+        <div id="practiceSimilarPanel" class="practiceSimilarPanel hidden">
+          <div class="practiceSimilarHead">
+            <div class="practiceSimilarTitle">Formaciones similares</div>
+            <div id="practiceSimilarMeta" class="practiceSimilarMeta">Comparación por similitud</div>
+          </div>
+          <div id="practiceSimilarList" class="practiceSimilarList"></div>
+        </div>
+
+        <div class="practiceDecisionRow">
+          <button id="practiceCallBtn" class="btn practiceDecisionBtn practiceCallBtn" type="button">🟢 COMPRA</button>
+          <button id="practicePutBtn" class="btn practiceDecisionBtn practicePutBtn" type="button">🔴 VENTA</button>
+          <button id="practiceSimilarBtn" class="btn practiceReviewBtn hidden" type="button">🔎 Ver similares</button>
+          <button id="practicePassBtn" class="btn practiceDecisionBtn practicePassBtn" type="button">⏭️ PASAR</button>
+        </div>
       </div>
     </section>
   </main>
