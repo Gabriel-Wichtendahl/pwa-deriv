@@ -1307,7 +1307,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "DOBLE_REDUCCION_CONFIRMADA_V109_8_20260614";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "DOBLE_REDUCCION_AVANCE_ESTRUCTURAL_V110_6_20260615";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -23154,6 +23154,48 @@ function getConstructiveSecondReductionConfirmation(runs, secondBlock, alignedRa
   };
 }
 
+// V110.6: una reducción solo es constructiva si cada impulso menor
+// supera claramente el extremo alcanzado por el impulso anterior del mismo grupo.
+// Si el impulso menor queda por debajo/encima del extremo previo, o apenas lo roza,
+// se considera estancamiento (lower high / higher low) y el bloque no cuenta.
+function getConstructiveBlockStructuralProgress(block, alignedRange, tol) {
+  const runs = Array.isArray(block?.runs) ? block.runs : [];
+  if (runs.length < 2) return { ok: false, reason: "sin_movimientos_suficientes", checks: [] };
+  const checks = [];
+  for (let i = 1; i < runs.length; i++) {
+    const prev = runs[i - 1] || {};
+    const cur = runs[i] || {};
+    const prevExtremeY = Number(prev.endY);
+    const curExtremeY = Number(cur.endY);
+    const curMove = Number(cur.move || 0);
+    if (![prevExtremeY, curExtremeY, curMove].every(Number.isFinite)) {
+      return { ok: false, reason: "extremo_no_disponible", checks };
+    }
+    // En coordenada alineada (y = quote * side), avanzar siempre significa subir.
+    // Exigimos un quiebre visible, no apenas un tick por encima/debajo.
+    const progress = curExtremeY - prevExtremeY;
+    const required = Math.max(
+      Number(alignedRange || 0) * 0.040,
+      Number(tol || 0) * 1.60,
+      curMove * 0.20,
+      1e-9
+    );
+    checks.push({
+      fromIndex: i - 1,
+      toIndex: i,
+      progress,
+      required,
+      prevExtremeY,
+      curExtremeY,
+      ok: progress >= required,
+    });
+    if (progress < required) {
+      return { ok: false, reason: progress <= 0 ? "no_supera_extremo_anterior" : "supera_sin_recorrido_claro", checks };
+    }
+  }
+  return { ok: true, reason: "avance_estructural_claro", checks };
+}
+
 function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, localRange) {
   const groupText = side > 0 ? "comprador" : "vendedor";
   const contraryText = side > 0 ? "vendedor" : "comprador";
@@ -23204,7 +23246,15 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     const last = Number(b.runs?.[b.runs.length - 1]?.move || 0);
     if (!(first > last)) return false;
     const duration = Number(b.endMs || 0) - Number(b.startMs || 0);
-    return duration >= 1800 && duration <= 18000;
+    if (!(duration >= 1800 && duration <= 18000)) return false;
+
+    // Filtro anti-estancamiento V110.6:
+    // el impulso reducido debe seguir haciendo avance estructural y romper
+    // con margen el máximo/mínimo del impulso anterior.
+    const structuralProgress = getConstructiveBlockStructuralProgress(b, alignedRange, tol);
+    if (!structuralProgress.ok) return false;
+    b.structuralProgress = structuralProgress;
+    return true;
   });
   if (blocks.length < 2) return null;
 
@@ -23276,8 +23326,8 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   let points = 0;
   const reasons = [];
   points += 5; reasons.push(`${groupText} inicia el primer movimiento visible`);
-  points += 8; reasons.push(`1ª reducción clara: ${firstReduction.pattern}`);
-  points += 8; reasons.push(`2ª reducción clara y distinta: ${secondReduction.pattern}`);
+  points += 8; reasons.push(`1ª reducción clara con avance estructural: ${firstReduction.pattern}`);
+  points += 8; reasons.push(`2ª reducción clara y distinta con avance estructural: ${secondReduction.pattern}`);
   points += 5; reasons.push("la segunda reducción comienza después de terminar la primera");
   if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales entre movimientos"); }
   points += 3; reasons.push(`último movimiento confirmado: ${contraryText} retrocede ${Math.round(Number(secondConfirmation.retraceRatio || 0) * 100)}% con ${Number(secondConfirmation.oppositeSteps || 0)} pasos`);
@@ -23337,6 +23387,19 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       endMs: b.endMs,
       labels: Array.isArray(b.labels) ? b.labels.slice() : [],
       runs: Array.isArray(b.runs) ? b.runs.map((r) => ({ ...r })) : [],
+      structuralProgress: b.structuralProgress ? {
+        ok: !!b.structuralProgress.ok,
+        reason: String(b.structuralProgress.reason || ""),
+        checks: Array.isArray(b.structuralProgress.checks)
+          ? b.structuralProgress.checks.map((c) => ({
+              fromIndex: Number(c.fromIndex),
+              toIndex: Number(c.toIndex),
+              progress: Number(c.progress),
+              required: Number(c.required),
+              ok: !!c.ok,
+            }))
+          : [],
+      } : null,
     })),
     subtype,
   };
@@ -23376,7 +23439,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
   const status = `🧩 Doble Reducción CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Último movimiento cerrado por respuesta ${best.contraryText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Constructiva V109.1: ventana flotante no atada al minuto. Requiere 2 reducciones DISTINTAS y no superpuestas dentro de 30s. El último movimiento de la segunda reducción permanece provisional y la alarma solo sale cuando una respuesta contraria real (mínimo 24%, sobre ruido y al menos 2 pasos) confirma que terminó: ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento de la primera reducción.`;
+  const logicText = `Doble Reducción V110.6: ventana flotante no atada al minuto. Requiere 2 reducciones DISTINTAS y no superpuestas dentro de 30s. Cada impulso reducido debe superar con recorrido claro el extremo del impulso anterior; si no lo supera o apenas lo roza, se clasifica como estancamiento y no cuenta. El último movimiento de la segunda reducción permanece provisional y la alarma solo sale cuando una respuesta contraria real (mínimo 24%, sobre ruido y al menos 2 pasos) confirma que terminó: ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento de la primera reducción.`;
 
   return {
     direction: best.signalDirection,
@@ -23442,9 +23505,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.secondReductionConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.secondReductionConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v109_1_second_reduction_last_move_confirmed",
+      movementFilter: "v110_6_structural_progress_no_stagnation",
       priority: "ALTA",
-      stage: "reduccion_constructiva_segunda_reduccion_confirmada_v109_1",
+      stage: "doble_reduccion_avance_estructural_v110_6",
       logic: logicText,
       status,
     },
