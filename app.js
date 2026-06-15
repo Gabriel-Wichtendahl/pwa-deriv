@@ -23369,71 +23369,130 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       .some((r) => Number(r.move || 0) >= limit);
   };
 
-  // Confirmación alternativa después de DOS reducciones.
-  // P→G / M→G / P→M→G se leen siempre en el GRUPO CONTRARIO,
-  // porque representan una entrada que gana fuerza contra el grupo debilitado.
-  const findOppositeConfirmation = (secondBlock, primaryReferenceMove) => {
-    const afterIdx = Number(secondBlock?.runs?.[secondBlock.runs.length - 1]?.idx ?? secondBlock?.endIndex ?? -1);
-    const afterMs = Number(secondBlock?.endMs || 0);
-    const candidates = contraryRawRuns
-      .filter((r) => Number(r.idx) > afterIdx && Number(r.startMs || 0) >= afterMs - 1)
+  // Confirmación alternativa para la ruta de DOS reducciones.
+  // V110.9: el ataque del grupo contrario puede aparecer en dos posiciones válidas:
+  // 1) entre la primera y la segunda reducción;
+  // 2) después de la segunda reducción.
+  // Nunca se mezclan movimientos de ambas zonas dentro del mismo ataque.
+  const findOppositeConfirmation = (firstBlock, secondBlock, primaryReferenceMove) => {
+    const firstEndIdx = Number(firstBlock?.runs?.[firstBlock.runs.length - 1]?.idx ?? firstBlock?.endIndex ?? -1);
+    const firstEndMs = Number(firstBlock?.endMs || 0);
+    const secondStartIdx = Number(secondBlock?.runs?.[0]?.idx ?? secondBlock?.startIndex ?? Infinity);
+    const secondStartMs = Number(secondBlock?.startMs || Infinity);
+    const secondEndIdx = Number(secondBlock?.runs?.[secondBlock.runs.length - 1]?.idx ?? secondBlock?.endIndex ?? -1);
+    const secondEndMs = Number(secondBlock?.endMs || 0);
+
+    const betweenCandidates = contraryRawRuns
+      .filter((r) => Number(r.idx) > firstEndIdx && Number(r.idx) < secondStartIdx)
+      .filter((r) => Number(r.startMs || 0) >= firstEndMs - 1 && Number(r.endMs || 0) <= secondStartMs + 1)
       .filter((r) => Number(r.endMs || 0) <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
       .sort((a, b) => Number(a.idx) - Number(b.idx));
-    if (!candidates.length) return null;
 
-    const visibleMin = Math.max(alignedRange * 0.052, Number(tol || 0) * 1.55, 1e-9);
-    const visible = candidates.filter((r) => Number(r.move || 0) >= visibleMin);
-    if (!visible.length) return null;
+    const afterCandidates = contraryRawRuns
+      .filter((r) => Number(r.idx) > secondEndIdx && Number(r.startMs || 0) >= secondEndMs - 1)
+      .filter((r) => Number(r.endMs || 0) <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
+      .sort((a, b) => Number(a.idx) - Number(b.idx));
 
+    const candidateGroups = [
+      { position: "between", candidates: betweenCandidates },
+      { position: "after", candidates: afterCandidates },
+    ];
     const packs = [];
+    const visibleMin = Math.max(alignedRange * 0.052, Number(tol || 0) * 1.55, 1e-9);
 
-    // P→M→G: tres entradas contrarias que aumentan de forma escalonada.
-    for (let i = 0; i + 2 < visible.length; i++) {
-      const seq = visible.slice(i, i + 3);
-      if (!noStrongPrimaryBetween(seq[0], seq[1]) || !noStrongPrimaryBetween(seq[1], seq[2])) continue;
-      const moves = seq.map((r) => Number(r.move || 0));
-      const labs = summarizeVisualMoves(moves).labels;
-      const growing = moves[1] >= moves[0] * 1.18 && moves[2] >= moves[1] * 1.18 && moves[2] >= moves[0] * 1.75;
-      const close = closeOppositeRun(seq[2], true);
-      if (growing && labs.join("→") === "P→M→G" && close) {
-        packs.push({ type: "opposite_growth", label: `${contraryText} P→M→G`, pattern: "P→M→G", runs: seq, formedAtMs: close.confirmedAtMs, close, strength: 36 + moves[2] / Math.max(alignedRange, 1e-9) * 20 });
+    for (const group of candidateGroups) {
+      const visible = group.candidates.filter((r) => Number(r.move || 0) >= visibleMin);
+      if (!visible.length) continue;
+      const positionLabel = group.position === "between" ? "entre reducciones" : "después de la segunda reducción";
+
+      // P→M→G: tres entradas contrarias que aumentan de forma escalonada.
+      for (let i = 0; i + 2 < visible.length; i++) {
+        const seq = visible.slice(i, i + 3);
+        if (!noStrongPrimaryBetween(seq[0], seq[1]) || !noStrongPrimaryBetween(seq[1], seq[2])) continue;
+        const moves = seq.map((r) => Number(r.move || 0));
+        const labs = summarizeVisualMoves(moves).labels;
+        const growing = moves[1] >= moves[0] * 1.18 && moves[2] >= moves[1] * 1.18 && moves[2] >= moves[0] * 1.75;
+        const close = closeOppositeRun(seq[2], true);
+        if (growing && labs.join("→") === "P→M→G" && close) {
+          packs.push({
+            type: "opposite_growth",
+            label: `${contraryText} P→M→G`,
+            pattern: "P→M→G",
+            position: group.position,
+            positionLabel,
+            runs: seq,
+            formedAtMs: close.confirmedAtMs,
+            close,
+            strength: 36 + moves[2] / Math.max(alignedRange, 1e-9) * 20,
+          });
+        }
       }
-    }
 
-    // P→G o M→G.
-    for (let i = 0; i + 1 < visible.length; i++) {
-      const seq = visible.slice(i, i + 2);
-      if (!noStrongPrimaryBetween(seq[0], seq[1])) continue;
-      const moves = seq.map((r) => Number(r.move || 0));
-      const labs = summarizeVisualMoves(moves).labels;
-      const pattern = labs.join("→");
-      const growthOk = moves[1] >= moves[0] * (pattern === "P→G" ? 1.70 : 1.32);
-      const close = closeOppositeRun(seq[1], true);
-      if ((pattern === "P→G" || pattern === "M→G") && growthOk && close) {
-        packs.push({ type: "opposite_growth", label: `${contraryText} ${pattern}`, pattern, runs: seq, formedAtMs: close.confirmedAtMs, close, strength: 30 + moves[1] / Math.max(alignedRange, 1e-9) * 18 });
+      // P→G o M→G.
+      for (let i = 0; i + 1 < visible.length; i++) {
+        const seq = visible.slice(i, i + 2);
+        if (!noStrongPrimaryBetween(seq[0], seq[1])) continue;
+        const moves = seq.map((r) => Number(r.move || 0));
+        const labs = summarizeVisualMoves(moves).labels;
+        const pattern = labs.join("→");
+        const growthOk = moves[1] >= moves[0] * (pattern === "P→G" ? 1.70 : 1.32);
+        const close = closeOppositeRun(seq[1], true);
+        if ((pattern === "P→G" || pattern === "M→G") && growthOk && close) {
+          packs.push({
+            type: "opposite_growth",
+            label: `${contraryText} ${pattern}`,
+            pattern,
+            position: group.position,
+            positionLabel,
+            runs: seq,
+            formedAtMs: close.confirmedAtMs,
+            close,
+            strength: 30 + moves[1] / Math.max(alignedRange, 1e-9) * 18,
+          });
+        }
       }
-    }
 
-    // Entrada simétrica: al menos dos movimientos contrarios parecidos y visibles.
-    for (let i = 0; i + 1 < visible.length; i++) {
-      const seq = visible.slice(i, i + 2);
-      if (!noStrongPrimaryBetween(seq[0], seq[1])) continue;
-      const a = Number(seq[0].move || 0), b = Number(seq[1].move || 0);
-      const similarity = Math.min(a, b) / Math.max(a, b, 1e-9);
-      const combined = a + b;
-      const close = closeOppositeRun(seq[1], true);
-      if (similarity >= 0.80 && combined >= Math.max(alignedRange * 0.18, Number(tol || 0) * 5.0) && close) {
-        packs.push({ type: "opposite_symmetric", label: `${contraryText} simétrica ×2`, pattern: "SIMÉTRICA×2", runs: seq, formedAtMs: close.confirmedAtMs, close, strength: 28 + similarity * 12 + combined / Math.max(alignedRange, 1e-9) * 10 });
+      // Entrada simétrica: al menos dos movimientos contrarios parecidos y visibles.
+      for (let i = 0; i + 1 < visible.length; i++) {
+        const seq = visible.slice(i, i + 2);
+        if (!noStrongPrimaryBetween(seq[0], seq[1])) continue;
+        const a = Number(seq[0].move || 0), b = Number(seq[1].move || 0);
+        const similarity = Math.min(a, b) / Math.max(a, b, 1e-9);
+        const combined = a + b;
+        const close = closeOppositeRun(seq[1], true);
+        if (similarity >= 0.80 && combined >= Math.max(alignedRange * 0.18, Number(tol || 0) * 5.0) && close) {
+          packs.push({
+            type: "opposite_symmetric",
+            label: `${contraryText} simétrica ×2`,
+            pattern: "SIMÉTRICA×2",
+            position: group.position,
+            positionLabel,
+            runs: seq,
+            formedAtMs: close.confirmedAtMs,
+            close,
+            strength: 28 + similarity * 12 + combined / Math.max(alignedRange, 1e-9) * 10,
+          });
+        }
       }
-    }
 
-    // Entrada fuerte aislada del grupo contrario.
-    for (const r of visible) {
-      const move = Number(r.move || 0);
-      const strongThreshold = Math.max(alignedRange * 0.20, Number(primaryReferenceMove || 0) * 0.68, Number(tol || 0) * 4.5, 1e-9);
-      const close = closeOppositeRun(r, true);
-      if (move >= strongThreshold && close) {
-        packs.push({ type: "opposite_strong", label: `${contraryText} fuerte`, pattern: "FUERTE", runs: [r], formedAtMs: close.confirmedAtMs, close, strength: 32 + move / Math.max(strongThreshold, 1e-9) * 10 });
+      // Entrada fuerte aislada del grupo contrario.
+      for (const r of visible) {
+        const move = Number(r.move || 0);
+        const strongThreshold = Math.max(alignedRange * 0.20, Number(primaryReferenceMove || 0) * 0.68, Number(tol || 0) * 4.5, 1e-9);
+        const close = closeOppositeRun(r, true);
+        if (move >= strongThreshold && close) {
+          packs.push({
+            type: "opposite_strong",
+            label: `${contraryText} fuerte`,
+            pattern: "FUERTE",
+            position: group.position,
+            positionLabel,
+            runs: [r],
+            formedAtMs: close.confirmedAtMs,
+            close,
+            strength: 32 + move / Math.max(strongThreshold, 1e-9) * 10,
+          });
+        }
       }
     }
 
@@ -23473,19 +23532,32 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   }
 
   // Ruta B: DOS reducciones + confirmación extra del grupo contrario.
+  // El ataque puede estar ENTRE ambas reducciones o DESPUÉS de la segunda.
   for (const first of blocks) {
     if (!blockVisible(first, true)) continue;
     for (const second of blocks) {
       if (!nonOverlapping(first, second) || !blockVisible(second, false)) continue;
+      const secondFinalConfirmation = getConstructiveSecondReductionConfirmation(runs, second, alignedRange, tol);
+      if (!secondFinalConfirmation) continue;
       const primaryReferenceMove = Math.max(Number(first.runs?.[0]?.move || 0), Number(second.runs?.[0]?.move || 0));
-      const pack = findOppositeConfirmation(second, primaryReferenceMove);
+      const pack = findOppositeConfirmation(first, second, primaryReferenceMove);
       if (!pack) continue;
       const anchorMs = Number(first.startMs || 0);
-      const formedAtMs = Number(pack.formedAtMs || 0);
+      const formedAtMs = Math.max(Number(pack.formedAtMs || 0), Number(secondFinalConfirmation.confirmedAtMs || 0));
       const elapsed = formedAtMs - anchorMs;
       const isolatedGap = Math.max(0, Number(second.startIndex) - Number(first.endIndex) - 1);
-      const score = Number(first.strength || 0) * 17 + Number(second.strength || 0) * 17 + Number(pack.strength || 0) + 28 - isolatedGap * 1.6 - Math.max(0, elapsed - 30000) / 900;
-      consider({ route: "two_plus_confirmation", reductions: [first, second], confirmation: pack.close, anchorMs, formedAtMs, elapsed, score, confirmationPack: pack });
+      const betweenBonus = pack.position === "between" ? 2.5 : 0;
+      const score = Number(first.strength || 0) * 17 + Number(second.strength || 0) * 17 + Number(pack.strength || 0) + 28 + betweenBonus - isolatedGap * 1.6 - Math.max(0, elapsed - 30000) / 900;
+      consider({
+        route: "two_plus_confirmation",
+        reductions: [first, second],
+        confirmation: secondFinalConfirmation,
+        anchorMs,
+        formedAtMs,
+        elapsed,
+        score,
+        confirmationPack: pack,
+      });
     }
   }
   if (!selected) return null;
@@ -23498,7 +23570,11 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const acceptedRuns = reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r }));
   const acceptedLabels = reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
   const reductionText = reductions.map((b) => String(b?.pattern || "—")).join(" + ");
-  const acceptedPatternText = confirmationPack ? `${reductionText} + ${confirmationPack.label}` : reductionText;
+  const acceptedPatternText = confirmationPack
+    ? (confirmationPack.position === "between"
+        ? `${reductions[0]?.pattern || "—"} + ${confirmationPack.label} + ${reductions[1]?.pattern || "—"}`
+        : `${reductionText} + ${confirmationPack.label}`)
+    : reductionText;
 
   const reductionEndMs = Math.max(...reductions.map((b) => Number(b?.endMs || 0)), 0);
   const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Math.max(reductionEndMs, selected.formedAtMs));
@@ -23534,9 +23610,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     reasons.push(`última reducción confirmada por respuesta ${contraryText}`);
   } else {
     points += 9;
-    reasons.push(`confirmación extra: ${confirmationPack.label}`);
+    reasons.push(`confirmación extra ${confirmationPack.positionLabel || "en orden flexible"}: ${confirmationPack.label}`);
     points += 2;
-    reasons.push("la entrada contraria quedó cerrada antes de emitir la alarma");
+    reasons.push("la entrada contraria y la segunda reducción quedaron cerradas antes de emitir la alarma");
   }
   if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales claros entre movimientos"); }
   if (points < 29) return null;
@@ -23544,7 +23620,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const quality = points * 11.5 + 62 + Math.min(16, cutsBetween * 2.5) - Math.max(0, selected.elapsed - 33000) / 750;
   const subtype = selected.route === "three_reductions"
     ? "3 reducciones claras"
-    : `2 reducciones + ${confirmationPack.label}`;
+    : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`;
 
   return {
     side,
@@ -23581,6 +23657,8 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       startMs: Number(confirmationPack.runs?.[0]?.startMs || 0),
       endMs: Number(confirmationPack.runs?.[confirmationPack.runs.length - 1]?.endMs || 0),
       formedAtMs: Number(confirmationPack.formedAtMs || 0),
+      position: String(confirmationPack.position || "after"),
+      positionLabel: String(confirmationPack.positionLabel || "después de la segunda reducción"),
       runs: confirmationPack.runs.map((r) => ({ ...r })),
     } : null,
     cutsBetween,
@@ -23662,7 +23740,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
   const status = `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Reforzada V110.8: ventana flotante no atada al minuto, con alarma hasta 40s. La señal requiere 3 reducciones claras (consecutivas o aisladas), o 2 reducciones más una confirmación del grupo contrario: P→G, M→G, P→M→G, entrada simétrica de al menos 2 movimientos o entrada fuerte. Cada reducción debe conservar avance estructural; el estancamiento no cuenta. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const logicText = `Reducción Reforzada V110.9: ventana flotante no atada al minuto, con alarma hasta 40s. La señal requiere 3 reducciones claras (consecutivas o aisladas), o 2 reducciones más una confirmación del grupo contrario, que puede aparecer entre la primera y la segunda reducción o después de la segunda: P→G, M→G, P→M→G, entrada simétrica de al menos 2 movimientos o entrada fuerte. Cada reducción debe conservar avance estructural; el estancamiento no cuenta. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -23733,9 +23811,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v110_7_three_reductions_or_two_plus_confirmation_40s",
+      movementFilter: "v110_9_flexible_opposite_attack_order_40s",
       priority: "ALTA",
-      stage: "reduccion_reforzada_v110_7",
+      stage: "reduccion_reforzada_v110_9",
       logic: logicText,
       status,
     },
