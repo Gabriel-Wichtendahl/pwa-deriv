@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V109_9_PENDING_ZERO_SPOT_FIX";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_0_SEPARA_SIGNAL_Y_DERIV";
 
 /* =========================
    Trade account config
@@ -415,6 +415,36 @@ function getStudyCaptureTradeResult(item) {
   const b = String(item?.trade?.badge || "").toUpperCase();
   return b === "ITM" || b === "OTM" ? b : "";
 }
+function hasStudyRealContract(item) {
+  const trade = item?.trade || {};
+  const badge = getStudyCaptureTradeResult(item);
+  return !!(
+    trade.contract_id ||
+    badge ||
+    trade.status === "open" ||
+    trade.status === "won" ||
+    trade.status === "lost" ||
+    studyEpochMs(trade.purchase_time ?? trade.start_time ?? trade.entry_spot_time) ||
+    studyEpochMs(trade.expiry_time ?? trade.exit_spot_time ?? trade.sold_time)
+  );
+}
+function getStudySignal60Outcome(item) {
+  return normalizeSignalResult60Outcome(item?.signalResult60?.outcome || item?.nextOutcome || "");
+}
+function getStudySignal60Label(item) {
+  const out = getStudySignal60Outcome(item);
+  if (out === "up") return "ALCISTA";
+  if (out === "down") return "BAJISTA";
+  if (out === "flat") return "NEUTRO";
+  return "PENDIENTE";
+}
+function getStudySignal60Correctness(item) {
+  const out = getStudySignal60Outcome(item);
+  const dir = String(item?.direction || "").toUpperCase();
+  if (!out || out === "flat") return "neutral";
+  if ((dir === "CALL" && out === "up") || (dir === "PUT" && out === "down")) return "correct";
+  return "incorrect";
+}
 function isStudyCaptureReadyItem(item) {
   return Array.isArray(item?.ticks) && item.ticks.length >= 2;
 }
@@ -472,6 +502,8 @@ function getStudyCaptureTimeline(item) {
   const anchorEpochMs = getStudyCaptureAnchorEpochMs(item);
   const trade = item?.trade || {};
   const meta = getStudyCaptureLevelMeta(item);
+  const hasRealContract = hasStudyRealContract(item);
+
   let alarmEpochMs = studyFiniteNumber(
     item?.signalResult60?.startEpochMs ?? item?.signalDetectedEpochMs ?? item?.signalCreatedEpochMs,
     null
@@ -485,27 +517,44 @@ function getStudyCaptureTimeline(item) {
     if (Number.isFinite(inferredAlarmMs)) alarmEpochMs = anchorEpochMs + inferredAlarmMs;
   }
 
-  let entryEpochMs = studyEpochMs(
-    trade.entry_spot_time ?? trade.start_time ?? trade.purchase_time ?? trade.buy_time
-  );
-  if (!Number.isFinite(entryEpochMs) && anchorEpochMs > 0) {
-    const relativeEntry = studyFiniteNumber(item?.signalAutoEntry?.ms ?? trade.entry_ms, SIGNAL_AUTO_ENTRY_MS);
-    entryEpochMs = anchorEpochMs + Math.max(0, relativeEntry);
+  let entryEpochMs = null;
+  let exitEpochMs = null;
+  if (hasRealContract) {
+    entryEpochMs = studyEpochMs(
+      trade.entry_spot_time ?? trade.start_time ?? trade.purchase_time ?? trade.buy_time ?? item?.signalAutoEntry?.sent_at
+    );
+    if (!Number.isFinite(entryEpochMs) && anchorEpochMs > 0) {
+      const relativeEntry = studyFiniteNumber(item?.signalAutoEntry?.ms ?? trade.entry_ms, null);
+      if (Number.isFinite(relativeEntry)) entryEpochMs = anchorEpochMs + Math.max(0, relativeEntry);
+    }
+
+    exitEpochMs = studyEpochMs(
+      trade.exit_spot_time ?? trade.expiry_time ?? trade.sold_time ?? trade.sell_time
+    );
+    if (!Number.isFinite(exitEpochMs) && Number.isFinite(entryEpochMs)) {
+      const plannedSec = studyFiniteNumber(trade.planned_duration_sec, null);
+      if (Number.isFinite(plannedSec)) exitEpochMs = entryEpochMs + Math.max(1, plannedSec) * 1000;
+    }
   }
 
-  let exitEpochMs = studyEpochMs(
-    trade.exit_spot_time ?? trade.expiry_time ?? trade.sold_time ?? trade.sell_time
-  );
-  if (!Number.isFinite(exitEpochMs) && Number.isFinite(entryEpochMs)) {
-    const plannedSec = studyFiniteNumber(trade.planned_duration_sec, 60);
-    exitEpochMs = entryEpochMs + Math.max(1, plannedSec) * 1000;
+  const signalResult = item?.signalResult60 || {};
+  let signalEndEpochMs = studyEpochMs(signalResult.endEpochMs ?? signalResult.deadlineEpochMs);
+  if (!Number.isFinite(signalEndEpochMs) && Number.isFinite(alarmEpochMs)) {
+    signalEndEpochMs = alarmEpochMs + SIGNAL_RESULT_60_DURATION_MS;
   }
 
   const alarmMs = Number.isFinite(alarmEpochMs) && anchorEpochMs > 0 ? alarmEpochMs - anchorEpochMs : null;
-  const entryMs = Number.isFinite(entryEpochMs) && anchorEpochMs > 0 ? entryEpochMs - anchorEpochMs : SIGNAL_AUTO_ENTRY_MS;
-  const exitMs = Number.isFinite(exitEpochMs) && anchorEpochMs > 0 ? exitEpochMs - anchorEpochMs : entryMs + 60000;
-  const alarmEndMs = Number.isFinite(alarmMs) ? alarmMs + SIGNAL_RESULT_60_DURATION_MS : 0;
-  const rawEndMs = Math.max(120000, exitMs + 1500, alarmEndMs + 1000);
+  const signalEndMs = Number.isFinite(signalEndEpochMs) && anchorEpochMs > 0 ? signalEndEpochMs - anchorEpochMs : null;
+  const entryMs = hasRealContract && Number.isFinite(entryEpochMs) && anchorEpochMs > 0 ? entryEpochMs - anchorEpochMs : null;
+  const exitMs = hasRealContract && Number.isFinite(exitEpochMs) && anchorEpochMs > 0 ? exitEpochMs - anchorEpochMs : null;
+  const alarmEndMs = Number.isFinite(signalEndMs)
+    ? signalEndMs
+    : (Number.isFinite(alarmMs) ? alarmMs + SIGNAL_RESULT_60_DURATION_MS : 0);
+  const rawEndMs = Math.max(
+    120000,
+    Number.isFinite(exitMs) ? exitMs + 1500 : 0,
+    alarmEndMs + 1000
+  );
   const windowEndMs = Math.min(180000, Math.max(120000, Math.ceil(rawEndMs / 15000) * 15000));
 
   return {
@@ -513,14 +562,20 @@ function getStudyCaptureTimeline(item) {
     formationEndMs: 60000,
     alarmEpochMs,
     alarmMs,
+    signalEndEpochMs,
+    signalEndMs,
+    signalStartQuote: studyValidQuote(signalResult.startQuote, null),
+    signalEndQuote: studyValidQuote(signalResult.endQuote, null),
+    signalOutcome: getStudySignal60Outcome(item),
+    hasRealContract,
     entryEpochMs,
     entryMs,
     exitEpochMs,
     exitMs,
-    entryQuote: studyValidQuote(trade.entry_spot, null),
-    exitQuote: studyValidQuote(trade.exit_spot, null),
+    entryQuote: hasRealContract ? studyValidQuote(trade.entry_spot, null) : null,
+    exitQuote: hasRealContract ? studyValidQuote(trade.exit_spot, null) : null,
     windowEndMs,
-    contractDurationMs: Number.isFinite(entryMs) && Number.isFinite(exitMs) ? Math.max(0, exitMs - entryMs) : null,
+    contractDurationMs: hasRealContract && Number.isFinite(entryMs) && Number.isFinite(exitMs) ? Math.max(0, exitMs - entryMs) : null,
   };
 }
 function normalizeStudyExactTicks(item, fetchedTicks = [], timeline = getStudyCaptureTimeline(item)) {
@@ -641,13 +696,18 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   const H = canvas.height;
   const timeline = timelineInput || getStudyCaptureTimeline(item);
   const dir = String(item?.direction || "PUT").toUpperCase() === "CALL" ? "CALL" : "PUT";
-  const result = getStudyCaptureTradeResult(item) || "PEND";
+  const tradeResult = getStudyCaptureTradeResult(item);
+  const hasRealContract = !!timeline.hasRealContract;
+  const result = tradeResult || "PEND";
+  const signal60Label = getStudySignal60Label(item);
+  const signal60Correctness = getStudySignal60Correctness(item);
   const isCall = dir === "CALL";
-  const isItm = result === "ITM";
-  const isOtm = result === "OTM";
+  const isItm = tradeResult === "ITM";
+  const isOtm = tradeResult === "OTM";
   const tradeColor = isItm ? "#22c55e" : isOtm ? "#ef4444" : "#f59e0b";
   const tradeSoft = isItm ? "rgba(34,197,94,.10)" : isOtm ? "rgba(239,68,68,.10)" : "rgba(245,158,11,.12)";
   const tradeGlow = isItm ? "rgba(34,197,94,.32)" : isOtm ? "rgba(239,68,68,.32)" : "rgba(245,158,11,.32)";
+  const signalColor = signal60Correctness === "correct" ? "#22c55e" : signal60Correctness === "incorrect" ? "#ef4444" : "#f59e0b";
   const allTicks = normalizeStudyExactTicks(item, exactTicks, timeline);
   const meta = getStudyCaptureLevelMeta(item);
   const patternText = getStudyPatternText(item, meta);
@@ -666,9 +726,13 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   ctx.fillText("Captura de estudio · cronología real", 52, 52);
   ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.78)";
-  const headerLine = `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} → cierre ${studyFormatUtc(timeline.exitEpochMs)}`;
+  const headerLine = hasRealContract
+    ? `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} → cierre ${studyFormatUtc(timeline.exitEpochMs)}`
+    : `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · alarma ${studyFormatUtc(timeline.alarmEpochMs)} · sin operación Deriv`;
   studyDrawFittedText(ctx, headerLine, 52, 80, W - 360, "600 15px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(220,235,255,.78)");
-  studyDrawPill(ctx, W - 270, 36, 220, 42, `Resultado real: ${result}`, tradeColor, "#f8fafc", 15);
+  const topResultText = hasRealContract ? `Deriv: ${result}` : `Señal 60s: ${signal60Label}`;
+  const topResultColor = hasRealContract ? tradeColor : signalColor;
+  studyDrawPill(ctx, W - 270, 36, 220, 42, topResultText, topResultColor, "#f8fafc", 15);
 
   const x0 = 54, y0 = 128, x1 = W - 54, y1 = H - 190;
   studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 24, false, true, "rgba(75,95,135,.65)");
@@ -686,9 +750,12 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   // Zonas temporales: formación flotante exacta y operación contractual exacta.
   ctx.fillStyle = "rgba(34,211,238,.055)";
   ctx.fillRect(xOf(0), cy0, Math.max(0, xOf(60000) - xOf(0)), cy1 - cy0);
-  if (Number.isFinite(Number(timeline.entryMs)) && Number.isFinite(Number(timeline.exitMs))) {
+  if (hasRealContract && Number.isFinite(Number(timeline.entryMs)) && Number.isFinite(Number(timeline.exitMs))) {
     ctx.fillStyle = tradeSoft;
     ctx.fillRect(xOf(timeline.entryMs), cy0, Math.max(2, xOf(timeline.exitMs) - xOf(timeline.entryMs)), cy1 - cy0);
+  } else if (!hasRealContract && Number.isFinite(Number(timeline.alarmMs)) && Number.isFinite(Number(timeline.signalEndMs))) {
+    ctx.fillStyle = signal60Correctness === "incorrect" ? "rgba(239,68,68,.08)" : "rgba(34,197,94,.065)";
+    ctx.fillRect(xOf(timeline.alarmMs), cy0, Math.max(2, xOf(timeline.signalEndMs) - xOf(timeline.alarmMs)), cy1 - cy0);
   }
 
   for (let i = 1; i <= 5; i++) {
@@ -713,10 +780,14 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   }
 
   studyDrawPill(ctx, cx0 + 8, cy0 + 8, 210, 29, "Formación anclada 0–60s", "rgba(34,211,238,.42)", "#cffafe", 13);
-  const operationLabel = Number.isFinite(Number(timeline.contractDurationMs))
-    ? `Operación real ${Math.round(timeline.contractDurationMs / 1000)}s`
-    : "Operación real";
-  studyDrawPill(ctx, Math.min(cx1 - 190, Math.max(cx0 + 230, xOf(timeline.entryMs) + 8)), cy0 + 8, 180, 29, operationLabel, tradeColor, "#f8fafc", 13);
+  if (hasRealContract) {
+    const operationLabel = Number.isFinite(Number(timeline.contractDurationMs))
+      ? `Operación Deriv ${Math.round(timeline.contractDurationMs / 1000)}s`
+      : "Operación Deriv";
+    studyDrawPill(ctx, Math.min(cx1 - 190, Math.max(cx0 + 230, xOf(timeline.entryMs) + 8)), cy0 + 8, 180, 29, operationLabel, tradeColor, "#f8fafc", 13);
+  } else if (Number.isFinite(Number(timeline.alarmMs))) {
+    studyDrawPill(ctx, Math.min(cx1 - 238, Math.max(cx0 + 230, xOf(timeline.alarmMs) + 8)), cy0 + 8, 228, 29, "Seguimiento 60s desde alarma", signalColor, "#f8fafc", 13);
+  }
 
   if (allTicks.length >= 2) {
     const qs = allTicks.map((p) => Number(p.quote)).filter(Number.isFinite);
@@ -798,58 +869,78 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
       studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ax - 62, cx1 - 126)), cy1 - 36, 124, 27, `ALARMA ${Math.round(timeline.alarmMs / 1000)}s`, "rgba(250,204,21,.72)", "#fff7c2", 12);
     }
 
-    const entryMs = Math.max(0, Math.min(windowEndMs, Number(timeline.entryMs || SIGNAL_AUTO_ENTRY_MS)));
-    const exitMs = Math.max(entryMs, Math.min(windowEndMs, Number(timeline.exitMs || entryMs + 60000)));
-    const entryQuote = studyValidQuote(timeline.entryQuote, null)
-      ?? studyNearestQuoteAtMs(allTicks, entryMs, 3500);
-    const exitQuote = studyValidQuote(timeline.exitQuote, null)
-      ?? studyNearestQuoteAtMs(allTicks, exitMs, 3500);
-    const ex = xOf(entryMs);
-    const hasEntryQuote = Number.isFinite(entryQuote);
-    const hasExitQuote = Number.isFinite(exitQuote);
-    const ey = hasEntryQuote ? yOf(entryQuote) : null;
-    const closeX = xOf(exitMs);
-    const closeY = hasExitQuote ? yOf(exitQuote) : null;
+    if (hasRealContract) {
+      const entryMs = Math.max(0, Math.min(windowEndMs, Number(timeline.entryMs)));
+      const exitMs = Math.max(entryMs, Math.min(windowEndMs, Number(timeline.exitMs)));
+      const entryQuote = studyValidQuote(timeline.entryQuote, null)
+        ?? studyNearestQuoteAtMs(allTicks, entryMs, 3500);
+      const exitQuote = studyValidQuote(timeline.exitQuote, null)
+        ?? studyNearestQuoteAtMs(allTicks, exitMs, 3500);
+      const ex = xOf(entryMs);
+      const hasEntryQuote = Number.isFinite(entryQuote);
+      const hasExitQuote = Number.isFinite(exitQuote);
+      const ey = hasEntryQuote ? yOf(entryQuote) : null;
+      const closeX = xOf(exitMs);
+      const closeY = hasExitQuote ? yOf(exitQuote) : null;
 
-    // Entrada y cierre: nunca usa spots 0 ni inventa un precio final.
-    if (hasEntryQuote) {
-      ctx.shadowColor = tradeGlow;
-      ctx.shadowBlur = 9;
-      ctx.strokeStyle = tradeColor;
-      ctx.lineWidth = 5;
-      ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = "#0b1220";
-      ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = tradeColor;
-      ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
-      studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA REAL", tradeColor, "#f8fafc", 12);
-
-      if (hasExitQuote) {
-        ctx.strokeStyle = tradeColor;
-        ctx.lineWidth = 3.5;
-        ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
-        ctx.setLineDash([8, 7]);
-        ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
-        ctx.setLineDash([]);
-
+      if (hasEntryQuote) {
         ctx.shadowColor = tradeGlow;
-        ctx.shadowBlur = 8;
-        ctx.fillStyle = tradeColor;
-        ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
-        ctx.shadowBlur = 0;
-        const resultWidth = result === "PEND" ? 110 : 92;
-        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
-      } else {
-        ctx.setLineDash([8, 7]);
+        ctx.shadowBlur = 9;
         ctx.strokeStyle = tradeColor;
-        ctx.lineWidth = 2.5;
-        ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
-        ctx.setLineDash([]);
-        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - 64, cx1 - 128)), Math.max(cy0 + 46, ey - 48), 124, 30, "PENDIENTE", tradeColor, "#f8fafc", 12);
+        ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#0b1220";
+        ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = tradeColor;
+        ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA DERIV", tradeColor, "#f8fafc", 12);
+
+        if (hasExitQuote) {
+          ctx.strokeStyle = tradeColor;
+          ctx.lineWidth = 3.5;
+          ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
+          ctx.setLineDash([8, 7]);
+          ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.shadowColor = tradeGlow;
+          ctx.shadowBlur = 8;
+          ctx.fillStyle = tradeColor;
+          ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+          const resultWidth = result === "PEND" ? 110 : 92;
+          studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
+        } else {
+          ctx.setLineDash([8, 7]);
+          ctx.strokeStyle = tradeColor;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
+          ctx.setLineDash([]);
+          studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - 64, cx1 - 128)), Math.max(cy0 + 46, ey - 48), 124, 30, "DERIV PENDIENTE", tradeColor, "#f8fafc", 12);
+        }
+      } else {
+        studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(xOf(entryMs) - 72, cx1 - 150)), cy1 - 38, 146, 28, "SPOT DERIV PENDIENTE", tradeColor, "#f8fafc", 11);
       }
-    } else {
-      studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(xOf(entryMs) - 72, cx1 - 150)), cy1 - 38, 146, 28, "SPOT PENDIENTE", tradeColor, "#f8fafc", 11);
+    } else if (Number.isFinite(Number(timeline.alarmMs)) && Number.isFinite(Number(timeline.signalEndMs))) {
+      const startMs = Math.max(0, Math.min(windowEndMs, Number(timeline.alarmMs)));
+      const endMs = Math.max(startMs, Math.min(windowEndMs, Number(timeline.signalEndMs)));
+      const startQuote = studyValidQuote(timeline.signalStartQuote, null)
+        ?? studyNearestQuoteAtMs(allTicks, startMs, 3500);
+      const endQuote = studyValidQuote(timeline.signalEndQuote, null)
+        ?? studyNearestQuoteAtMs(allTicks, endMs, 3500);
+      if (Number.isFinite(startQuote) && Number.isFinite(endQuote)) {
+        const sx = xOf(startMs), sy = yOf(startQuote), ex2 = xOf(endMs), ey2 = yOf(endQuote);
+        ctx.strokeStyle = signalColor;
+        ctx.lineWidth = 3.2;
+        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex2, sy); ctx.stroke();
+        ctx.setLineDash([8, 7]);
+        ctx.beginPath(); ctx.moveTo(ex2, sy); ctx.lineTo(ex2, ey2); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = signalColor;
+        ctx.beginPath(); ctx.arc(sx, sy, 10, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(ex2, ey2, 13, 0, Math.PI * 2); ctx.fill();
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex2 - 70, cx1 - 140)), Math.max(cy0 + 46, ey2 - 46), 136, 30, `60s ${signal60Label}`, signalColor, "#f8fafc", 12);
+      }
     }
   }
 
@@ -868,13 +959,21 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
 
   ctx.fillStyle = "rgba(220,235,255,.78)";
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  const footerEntryQuote = studyValidQuote(timeline.entryQuote, null);
-  const footerExitQuote = studyValidQuote(timeline.exitQuote, null);
-  const entrySpotTxt = Number.isFinite(footerEntryQuote) ? footerEntryQuote.toFixed(6) : "pendiente";
-  const exitSpotTxt = Number.isFinite(footerExitQuote) ? footerExitQuote.toFixed(6) : "pendiente";
-  studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
-  studyDrawFittedText(ctx, `Cierre ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · línea blanca: ticks_history del intervalo absoluto exacto`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
-  studyDrawFittedText(ctx, `Ancla flotante ${studyFormatUtc(timeline.anchorEpochMs)} · separación real formación/operación · sin minuto calendario desplazado`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
+  if (hasRealContract) {
+    const footerEntryQuote = studyValidQuote(timeline.entryQuote, null);
+    const footerExitQuote = studyValidQuote(timeline.exitQuote, null);
+    const entrySpotTxt = Number.isFinite(footerEntryQuote) ? footerEntryQuote.toFixed(6) : "pendiente";
+    const exitSpotTxt = Number.isFinite(footerExitQuote) ? footerExitQuote.toFixed(6) : "pendiente";
+    studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada Deriv ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Cierre Deriv ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · señal 60s ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Ancla flotante ${studyFormatUtc(timeline.anchorEpochMs)} · Deriv y señal 60s son ventanas distintas · ticks_history exacto`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
+  } else {
+    const signalStartTxt = Number.isFinite(studyValidQuote(timeline.signalStartQuote, null)) ? Number(timeline.signalStartQuote).toFixed(6) : "—";
+    const signalEndTxt = Number.isFinite(studyValidQuote(timeline.signalEndQuote, null)) ? Number(timeline.signalEndQuote).toFixed(6) : "—";
+    studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} @ ${signalStartTxt} · sin operación Deriv`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Final señal 60s ${studyFormatUtc(timeline.signalEndEpochMs)} @ ${signalEndTxt} · ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Ancla flotante ${studyFormatUtc(timeline.anchorEpochMs)} · solo seguimiento desde alarma · no se inventa contrato`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
+  }
 }
 
 async function generateAndSaveStudyCaptureForSignal(item, { force = false } = {}) {
@@ -913,6 +1012,8 @@ async function generateAndSaveStudyCaptureForSignal(item, { force = false } = {}
     symbol: String(sourceItem.symbol || ""),
     direction: String(sourceItem.direction || ""),
     result: getStudyCaptureTradeResult(sourceItem),
+    signal_60_outcome: getStudySignal60Outcome(sourceItem),
+    has_real_contract: !!timeline.hasRealContract,
     created_at: Date.now(),
     timeline: {
       anchor_epoch_ms: timeline.anchorEpochMs,
@@ -10873,7 +10974,7 @@ function updateModalFooterReadingUI() {
         const resultDetail = r
           ? (isSignalResult60Resolved(modalCurrentItem)
               ? `${getSignalResult60DirectionText(modalCurrentItem)} · inicio ${Number(r.startQuote).toFixed(6)} · final ${Number(r.endQuote).toFixed(6)}`
-              : `Resultado 60s pendiente · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s desde la alarma`)
+              : `Señal 60s pendiente · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s desde la alarma`)
           : "";
         modalSequenceDetail.textContent = resultDetail ? `${baseDetail} · ${resultDetail}` : baseDetail;
       } else {
@@ -11804,7 +11905,7 @@ function updateModalCandleStatusUI() {
     const resultTxt = result60
       ? (isSignalResult60Resolved(modalCurrentItem)
           ? ` · ${getSignalResult60DirectionText(modalCurrentItem)}`
-          : ` · resultado 60s en ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
+          : ` · señal 60s en ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
       : "";
     bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${resultTxt}`;
     bar.style.color = "#dcfce7";
@@ -11815,7 +11916,7 @@ function updateModalCandleStatusUI() {
     const result60 = isFloatingSignalItem(modalCurrentItem) ? ensureSignalResult60(modalCurrentItem) : null;
     if (result60 && !isSignalResult60Resolved(modalCurrentItem)) {
       const remain60 = getSignalResult60RemainingSec(modalCurrentItem);
-      bar.textContent = `⏳ Resultado 60s · faltan ${remain60}s desde la alarma`;
+      bar.textContent = `⏳ Señal 60s · faltan ${remain60}s desde la alarma`;
       bar.style.color = "#fef3c7";
       bar.style.background = "rgba(202,138,4,.14)";
       bar.style.borderColor = "rgba(250,204,21,.30)";
@@ -15700,11 +15801,11 @@ function getSignalResult60RemainingSec(item) {
   if (!r || isSignalResult60Resolved(item)) return 0;
   return Math.max(0, Math.ceil((Number(r.deadlineEpochMs) - serverNowMs()) / 1000));
 }
-function getSignalResult60DirectionText(item, pendingText = "RESULTADO 60s ⏳") {
+function getSignalResult60DirectionText(item, pendingText = "SEÑAL 60s ⏳") {
   const out = normalizeSignalResult60Outcome(item?.signalResult60?.outcome);
-  if (out === "up") return "RESULTADO 60s ALCISTA";
-  if (out === "down") return "RESULTADO 60s BAJISTA";
-  if (out === "flat") return "RESULTADO 60s NEUTRO";
+  if (out === "up") return "SEÑAL 60s ALCISTA";
+  if (out === "down") return "SEÑAL 60s BAJISTA";
+  if (out === "flat") return "SEÑAL 60s NEUTRA";
   return pendingText;
 }
 function getSignalResult60Correctness(item) {
