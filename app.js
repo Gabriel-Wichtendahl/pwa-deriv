@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V109_2_EXACT_FLOATING_TIMELINE";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V109_9_PENDING_ZERO_SPOT_FIX";
 
 /* =========================
    Trade account config
@@ -428,6 +428,24 @@ function studyFiniteNumber(value, fallback = null) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
+function studyValidQuote(value, fallback = null) {
+  const n = studyFiniteNumber(value, null);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+function studyNearestQuoteAtMs(ticks, ms, maxDistanceMs = 3500) {
+  const target = Number(ms);
+  if (!Array.isArray(ticks) || !ticks.length || !Number.isFinite(target)) return null;
+  let best = null;
+  let bestDist = Infinity;
+  for (const p of ticks) {
+    const t = Number(p?.ms);
+    const q = studyValidQuote(p?.quote, null);
+    if (!Number.isFinite(t) || !Number.isFinite(q)) continue;
+    const d = Math.abs(t - target);
+    if (d < bestDist) { bestDist = d; best = q; }
+  }
+  return bestDist <= Math.max(0, Number(maxDistanceMs) || 0) ? best : null;
+}
 function studyEpochMs(value) {
   const n = studyFiniteNumber(value, null);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -499,8 +517,8 @@ function getStudyCaptureTimeline(item) {
     entryMs,
     exitEpochMs,
     exitMs,
-    entryQuote: studyFiniteNumber(trade.entry_spot, null),
-    exitQuote: studyFiniteNumber(trade.exit_spot, null),
+    entryQuote: studyValidQuote(trade.entry_spot, null),
+    exitQuote: studyValidQuote(trade.exit_spot, null),
     windowEndMs,
     contractDurationMs: Number.isFinite(entryMs) && Number.isFinite(exitMs) ? Math.max(0, exitMs - entryMs) : null,
   };
@@ -526,11 +544,11 @@ function normalizeStudyExactTicks(item, fetchedTicks = [], timeline = getStudyCa
   }
 
   // Los spots contractuales son la fuente definitiva para entrada y cierre.
-  if (Number.isFinite(Number(timeline?.entryMs)) && Number.isFinite(Number(timeline?.entryQuote))) {
-    map.set(Math.round(Number(timeline.entryMs)), { ms: Number(timeline.entryMs), quote: Number(timeline.entryQuote), contractual: "entry" });
+  if (Number.isFinite(Number(timeline?.entryMs)) && Number.isFinite(studyValidQuote(timeline?.entryQuote, null))) {
+    map.set(Math.round(Number(timeline.entryMs)), { ms: Number(timeline.entryMs), quote: studyValidQuote(timeline.entryQuote, null), contractual: "entry" });
   }
-  if (Number.isFinite(Number(timeline?.exitMs)) && Number.isFinite(Number(timeline?.exitQuote))) {
-    map.set(Math.round(Number(timeline.exitMs)), { ms: Number(timeline.exitMs), quote: Number(timeline.exitQuote), contractual: "exit" });
+  if (Number.isFinite(Number(timeline?.exitMs)) && Number.isFinite(studyValidQuote(timeline?.exitQuote, null))) {
+    map.set(Math.round(Number(timeline.exitMs)), { ms: Number(timeline.exitMs), quote: studyValidQuote(timeline.exitQuote, null), contractual: "exit" });
   }
 
   return Array.from(map.values()).sort((a, b) => Number(a.ms) - Number(b.ms));
@@ -702,8 +720,10 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
 
   if (allTicks.length >= 2) {
     const qs = allTicks.map((p) => Number(p.quote)).filter(Number.isFinite);
-    if (Number.isFinite(Number(timeline.entryQuote))) qs.push(Number(timeline.entryQuote));
-    if (Number.isFinite(Number(timeline.exitQuote))) qs.push(Number(timeline.exitQuote));
+    const contractualEntryQuote = studyValidQuote(timeline.entryQuote, null);
+    const contractualExitQuote = studyValidQuote(timeline.exitQuote, null);
+    if (Number.isFinite(contractualEntryQuote)) qs.push(contractualEntryQuote);
+    if (Number.isFinite(contractualExitQuote)) qs.push(contractualExitQuote);
     let min = Math.min(...qs), max = Math.max(...qs);
     let range = max - min;
     if (!Number.isFinite(range) || range < 1e-9) range = Math.max(Math.abs(max || 1) * 0.000001, 1);
@@ -780,41 +800,57 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
 
     const entryMs = Math.max(0, Math.min(windowEndMs, Number(timeline.entryMs || SIGNAL_AUTO_ENTRY_MS)));
     const exitMs = Math.max(entryMs, Math.min(windowEndMs, Number(timeline.exitMs || entryMs + 60000)));
-    const entryQuote = Number.isFinite(Number(timeline.entryQuote)) ? Number(timeline.entryQuote) : Number(getPriceAtMs(allTicks, entryMs));
-    const exitQuote = Number.isFinite(Number(timeline.exitQuote)) ? Number(timeline.exitQuote) : Number(getPriceAtMs(allTicks, exitMs));
-    const ex = xOf(entryMs), ey = Number.isFinite(entryQuote) ? yOf(entryQuote) : cy0 + (cy1 - cy0) / 2;
-    const closeX = xOf(exitMs), closeY = Number.isFinite(exitQuote) ? yOf(exitQuote) : ey;
+    const entryQuote = studyValidQuote(timeline.entryQuote, null)
+      ?? studyNearestQuoteAtMs(allTicks, entryMs, 3500);
+    const exitQuote = studyValidQuote(timeline.exitQuote, null)
+      ?? studyNearestQuoteAtMs(allTicks, exitMs, 3500);
+    const ex = xOf(entryMs);
+    const hasEntryQuote = Number.isFinite(entryQuote);
+    const hasExitQuote = Number.isFinite(exitQuote);
+    const ey = hasEntryQuote ? yOf(entryQuote) : null;
+    const closeX = xOf(exitMs);
+    const closeY = hasExitQuote ? yOf(exitQuote) : null;
 
-    // Entrada real.
-    ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 9;
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 5;
-    ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#0b1220";
-    ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = tradeColor;
-    ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
-    studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA REAL", tradeColor, "#f8fafc", 12);
+    // Entrada y cierre: nunca usa spots 0 ni inventa un precio final.
+    if (hasEntryQuote) {
+      ctx.shadowColor = tradeGlow;
+      ctx.shadowBlur = 9;
+      ctx.strokeStyle = tradeColor;
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#0b1220";
+      ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = tradeColor;
+      ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
+      studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA REAL", tradeColor, "#f8fafc", 12);
 
-    // Nivel contractual y cierre exacto.
-    ctx.strokeStyle = tradeColor;
-    ctx.lineWidth = 3.5;
-    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
-    ctx.setLineDash([8, 7]);
-    ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
-    ctx.setLineDash([]);
+      if (hasExitQuote) {
+        ctx.strokeStyle = tradeColor;
+        ctx.lineWidth = 3.5;
+        ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
+        ctx.setLineDash([8, 7]);
+        ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
+        ctx.setLineDash([]);
 
-    ctx.shadowColor = tradeGlow;
-    ctx.shadowBlur = 8;
-    ctx.fillStyle = tradeColor;
-    ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "#07120d";
-    ctx.font = "900 12px system-ui, -apple-system, Segoe UI, sans-serif";
-    const resultWidth = result === "PEND" ? 110 : 92;
-    studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
+        ctx.shadowColor = tradeGlow;
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = tradeColor;
+        ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+        const resultWidth = result === "PEND" ? 110 : 92;
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
+      } else {
+        ctx.setLineDash([8, 7]);
+        ctx.strokeStyle = tradeColor;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
+        ctx.setLineDash([]);
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - 64, cx1 - 128)), Math.max(cy0 + 46, ey - 48), 124, 30, "PENDIENTE", tradeColor, "#f8fafc", 12);
+      }
+    } else {
+      studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(xOf(entryMs) - 72, cx1 - 150)), cy1 - 38, 146, 28, "SPOT PENDIENTE", tradeColor, "#f8fafc", 11);
+    }
   }
 
   ctx.restore();
@@ -832,8 +868,10 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
 
   ctx.fillStyle = "rgba(220,235,255,.78)";
   ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  const entrySpotTxt = Number.isFinite(Number(timeline.entryQuote)) ? Number(timeline.entryQuote).toFixed(6) : "—";
-  const exitSpotTxt = Number.isFinite(Number(timeline.exitQuote)) ? Number(timeline.exitQuote).toFixed(6) : "—";
+  const footerEntryQuote = studyValidQuote(timeline.entryQuote, null);
+  const footerExitQuote = studyValidQuote(timeline.exitQuote, null);
+  const entrySpotTxt = Number.isFinite(footerEntryQuote) ? footerEntryQuote.toFixed(6) : "pendiente";
+  const exitSpotTxt = Number.isFinite(footerExitQuote) ? footerExitQuote.toFixed(6) : "pendiente";
   studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
   studyDrawFittedText(ctx, `Cierre ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · línea blanca: ticks_history del intervalo absoluto exacto`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
   studyDrawFittedText(ctx, `Ancla flotante ${studyFormatUtc(timeline.anchorEpochMs)} · separación real formación/operación · sin minuto calendario desplazado`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");

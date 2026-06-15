@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v109.8 (único motor Doble Reducción) */
+/* sw.js — Deriv Signals v109.9 (único motor Doble Reducción) */
 "use strict";
 
-const CACHE = "deriv-assets-v109-8-solo-doble-reduccion-real";
+const CACHE = "deriv-assets-v109-9-captura-pendiente-fix";
 
 const ASSETS = [
   "./",
