@@ -10244,20 +10244,39 @@ function buildVisualReadFromItem(item) {
       primaryLabels = patLabels.length ? patLabels : primaryLabels;
     }
   }
-  const contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
+  const confirmationPack = isConstructiveRead && meta.constructiveConfirmationPack && typeof meta.constructiveConfirmationPack === "object"
+    ? meta.constructiveConfirmationPack
+    : null;
+  let contraryLabels = splitPatternText(meta.visualReductionContraryPattern);
+  if (isConstructiveRead && confirmationPack) {
+    const packPattern = String(confirmationPack.pattern || confirmationPack.label || "").trim();
+    if (/^(P|M|G)(→(P|M|G))+$/i.test(packPattern)) {
+      contraryLabels = splitPatternText(packPattern);
+    } else if (String(confirmationPack.type || "") === "opposite_symmetric") {
+      const count = Math.max(2, Array.isArray(confirmationPack.runs) ? confirmationPack.runs.length : 2);
+      contraryLabels = Array.from({ length: count }, (_, i) => `S${i + 1}`);
+    } else if (String(confirmationPack.type || "") === "opposite_strong") {
+      contraryLabels = ["FUERTE"];
+    } else if (Array.isArray(confirmationPack.runs) && confirmationPack.runs.length) {
+      contraryLabels = confirmationPack.runs.map((_, i) => `C${i + 1}`);
+    }
+  }
   const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
-  const contraryRunsRaw = Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : [];
+  const contraryRunsRaw = isConstructiveRead
+    ? (Array.isArray(meta.acceptedConfirmationRuns) && meta.acceptedConfirmationRuns.length
+        ? meta.acceptedConfirmationRuns
+        : Array.isArray(confirmationPack?.runs) ? confirmationPack.runs : [])
+    : (Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : []);
   let primaryRuns = primaryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
     .filter(Boolean);
 
-  // V108.9: identificar a qué reducción pertenece cada movimiento aceptado.
-  // Así Lectura ON puede mostrar 1·G, 1·M, 2·G, 2·P (o hasta 6 tramos)
-  // y no confundir una sola cadena con las dos reducciones distintas.
+  // V110.8: identificar a qué reducción pertenece cada movimiento aceptado.
+  // Lectura ON muestra 1·..., 2·... y 3·... cuando la ruta usa tres reducciones.
   if (isConstructiveRead && primaryRuns.length) {
-    const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks : [];
+    const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
     let cursor = 0;
-    for (let blockIndex = 0; blockIndex < Math.min(2, blocks.length); blockIndex++) {
+    for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
       const block = blocks[blockIndex] || {};
       const count = Math.max(
         Array.isArray(block.runs) ? block.runs.length : 0,
@@ -10267,12 +10286,13 @@ function buildVisualReadFromItem(item) {
         primaryRuns[cursor].reductionNo = blockIndex + 1;
       }
     }
+    const fallbackNo = Math.max(1, Math.min(3, blocks.length || 1));
     while (cursor < primaryRuns.length) {
-      primaryRuns[cursor].reductionNo = cursor < Math.ceil(primaryRuns.length / 2) ? 1 : 2;
+      primaryRuns[cursor].reductionNo = fallbackNo;
       cursor++;
     }
   }
-  // V108.9: en Constructiva mostramos las dos reducciones completas, no solo los primeros 3 tramos.
+  // En Constructiva mostramos todas las reducciones aceptadas y la confirmación extra, si corresponde.
   const contraryRuns = contraryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
     .filter(Boolean);
@@ -10285,8 +10305,16 @@ function buildVisualReadFromItem(item) {
     : [];
   const subtype = String(meta.visualReductionSubtype || "reducción visual");
   const quality = String(meta.visualReductionQuality || "").toUpperCase() || "—";
-  const primaryPattern = isConstructiveRead && meta.acceptedReductionPatternText ? String(meta.acceptedReductionPatternText) : getVisualReadPatternText(primaryLabels);
-  const contraryPattern = getVisualReadPatternText(contraryLabels);
+  const acceptedBlocks = isConstructiveRead && Array.isArray(meta.acceptedReductionBlocks)
+    ? meta.acceptedReductionBlocks.slice(0, 3)
+    : [];
+  const reductionsOnlyPattern = acceptedBlocks.length
+    ? acceptedBlocks.map((b) => String(b?.pattern || "").trim()).filter(Boolean).join(" + ")
+    : getVisualReadPatternText(primaryLabels);
+  const primaryPattern = reductionsOnlyPattern || "—";
+  const contraryPattern = confirmationPack
+    ? String(confirmationPack.label || confirmationPack.pattern || getVisualReadPatternText(contraryLabels) || "confirmación contraria")
+    : getVisualReadPatternText(contraryLabels);
   return {
     mode: isConstructiveRead ? MODE_REDUCCION_CONSTRUCTIVA_CONTINUA : MODE_REDUCCION_VISUAL_25S,
     direction,
@@ -10296,6 +10324,8 @@ function buildVisualReadFromItem(item) {
     subtype,
     primaryPattern,
     contraryPattern,
+    confirmationPack,
+    qualificationRoute: String(meta.constructiveQualificationRoute || ""),
     reasons: Array.isArray(meta.reasons) ? meta.reasons : [],
     rejectHints: Array.isArray(meta.rejectHints) ? meta.rejectHints : [],
     evalMs: Number(meta.analysisWindowMs || 25000),
@@ -10515,15 +10545,16 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   const sellCol = "rgba(248,113,113,.55)";
   const buyFill = "rgba(22,163,74,.38)";
   const sellFill = "rgba(185,28,28,.38)";
-  // V108.9: no recortar a 3. Dibujar todos los movimientos de las dos reducciones aceptadas.
-  // Combinaciones posibles: 2+2, 3+2, 2+3 o 3+3 movimientos.
-  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 6) : (read.primaryRuns || []);
-  const contraryRuns = isConstructive ? [] : (read.contraryRuns || []);
+  // V110.8: dibujar hasta tres reducciones completas (máximo 9 tramos)
+  // y, en la ruta 2 + confirmación, marcar también los movimientos contrarios agregados.
+  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 9) : (read.primaryRuns || []);
+  const contraryRuns = isConstructive ? (read.contraryRuns || []).slice(0, 4) : (read.contraryRuns || []);
 
-  const drawRun = (r, prefix, idx) => {
+  const drawRun = (r, prefix, idx, kind = "reduction") => {
     const isBuyer = String(r.side || "") === "comprador";
-    const col = isBuyer ? buyCol : sellCol;
-    const fill = isBuyer ? buyFill : sellFill;
+    const isConfirmation = kind === "confirmation";
+    const col = isConfirmation ? "rgba(251,191,36,.78)" : (isBuyer ? buyCol : sellCol);
+    const fill = isConfirmation ? "rgba(180,83,9,.58)" : (isBuyer ? buyFill : sellFill);
     const realPath = getVisualReadRunPathFromTicks(item, r);
     const fallbackPts = Array.isArray(r.points) && r.points.length >= 2
       ? r.points.map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) })).filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
@@ -10556,10 +10587,11 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     const my = Math.min(...path.map((p) => p.y));
     const sideLetter = isBuyer ? "C" : "V";
     const reductionPrefix = isConstructive && Number(r.reductionNo) > 0 ? `${Number(r.reductionNo)}·` : "";
-    drawRoundedLabel(ctx, midP.x, my, `${reductionPrefix}${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+    const confirmationPrefix = isConfirmation ? "CONF·" : reductionPrefix;
+    drawRoundedLabel(ctx, midP.x, my, `${confirmationPrefix}${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
   };
-  primaryRuns.forEach((r, i) => drawRun(r, "", i));
-  contraryRuns.forEach((r, i) => drawRun(r, "", i));
+  primaryRuns.forEach((r, i) => drawRun(r, "", i, "reduction"));
+  contraryRuns.forEach((r, i) => drawRun(r, "", i, isConstructive ? "confirmation" : "reduction"));
 
   if (!isConstructive) {
     for (const c of read.cuts || []) {
@@ -23630,7 +23662,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
   const status = `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Reforzada V110.7: ventana flotante no atada al minuto, con alarma hasta 40s. La señal requiere 3 reducciones claras (consecutivas o aisladas), o 2 reducciones más una confirmación del grupo contrario: P→G, M→G, P→M→G, entrada simétrica de al menos 2 movimientos o entrada fuerte. Cada reducción debe conservar avance estructural; el estancamiento no cuenta. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const logicText = `Reducción Reforzada V110.8: ventana flotante no atada al minuto, con alarma hasta 40s. La señal requiere 3 reducciones claras (consecutivas o aisladas), o 2 reducciones más una confirmación del grupo contrario: P→G, M→G, P→M→G, entrada simétrica de al menos 2 movimientos o entrada fuerte. Cada reducción debe conservar avance estructural; el estancamiento no cuenta. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
