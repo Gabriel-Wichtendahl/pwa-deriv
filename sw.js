@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v110.2 (resultado 60s desde primer movimiento) */
+/* sw.js — Deriv Signals v110.3 (resultado 60s desde primer movimiento) */
 "use strict";
 
-const CACHE = "deriv-assets-v110-2-anchor-60s";
+const CACHE = "deriv-assets-v110-3-resultado-unificado";
 
 const ASSETS = [
   "./",

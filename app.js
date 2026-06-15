@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_2_ANCHOR_FIRST_MOVEMENT";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_3_UNIFIED_60S_ANCHOR_FIRST_MOVEMENT";
 
 /* =========================
    Trade account config
@@ -409,7 +409,7 @@ async function getStudyCapture(id) {
 function getStudyCaptureIdFromItem(item) {
   if (!item) return "";
   const jid = item.journal_id || makeJournalIdFromSignal(item);
-  return jid ? `CAPV1092::${String(jid)}`.slice(0, 230) : "";
+  return jid ? `CAPV1103::${String(jid)}`.slice(0, 230) : "";
 }
 function getStudyCaptureTradeResult(item) {
   const b = String(item?.trade?.badge || "").toUpperCase();
@@ -428,11 +428,56 @@ function hasStudyRealContract(item) {
     studyEpochMs(trade.expiry_time ?? trade.exit_spot_time ?? trade.sold_time)
   );
 }
+function computeCanonicalSignal60FromStoredTicks(item) {
+  if (!item || !isFloatingSignalItem(item)) return null;
+  const ticks = (Array.isArray(item?.ticks) ? item.ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 60000)
+    .sort((a, b) => a.ms - b.ms);
+  if (ticks.length < 2) return null;
+  const nearest = (target) => {
+    let best = null;
+    let dist = Infinity;
+    for (const p of ticks) {
+      const d = Math.abs(p.ms - target);
+      if (d < dist) { dist = d; best = p; }
+    }
+    return best ? { ...best, dist } : null;
+  };
+  const start = nearest(0);
+  const end = nearest(60000);
+  // Solo se considera canónico si tenemos cobertura real de ambos extremos.
+  if (!start || !end || start.dist > 3500 || end.dist > 5000 || end.ms <= start.ms) return null;
+  const outcome = end.quote > start.quote ? "up" : end.quote < start.quote ? "down" : "flat";
+  return { outcome, startMs: start.ms, startQuote: start.quote, endMs: end.ms, endQuote: end.quote };
+}
+function syncCanonicalSignal60FromStoredTicks(item) {
+  const calc = computeCanonicalSignal60FromStoredTicks(item);
+  if (!calc) return "";
+  const anchor = Number(item?.signalAnchorEpochMs || 0);
+  const existing = item.signalResult60 && typeof item.signalResult60 === "object" ? item.signalResult60 : {};
+  item.signalResult60 = {
+    ...existing,
+    basis: SIGNAL_RESULT_60_BASIS,
+    startEpochMs: anchor > 0 ? anchor : Number(existing.startEpochMs || 0),
+    deadlineEpochMs: anchor > 0 ? anchor + SIGNAL_RESULT_60_DURATION_MS : Number(existing.deadlineEpochMs || 0),
+    startQuote: calc.startQuote,
+    endEpochMs: anchor > 0 ? anchor + calc.endMs : Number(existing.endEpochMs || 0),
+    endQuote: calc.endQuote,
+    delta: calc.endQuote - calc.startQuote,
+    outcome: calc.outcome,
+    status: "resolved",
+    source: "stored_anchor_ticks",
+    resolvedAt: Number(existing.resolvedAt || Date.now()),
+  };
+  item.nextOutcome = calc.outcome;
+  return calc.outcome;
+}
 function getStudySignal60Outcome(item) {
-  // En Doble Reducción flotante, el resultado canónico es SIEMPRE
-  // ancla del primer movimiento -> ancla + 60s.
+  // Fuente única: primer movimiento (ms 0) contra +60s.
   if (isFloatingSignalItem(item)) {
-    return normalizeSignalResult60Outcome(item?.signalResult60?.outcome || item?.nextOutcome || "");
+    const fromTicks = syncCanonicalSignal60FromStoredTicks(item);
+    if (fromTicks) return fromTicks;
   }
   return normalizeSignalResult60Outcome(item?.signalResult60?.outcome || item?.nextOutcome || "");
 }
@@ -561,12 +606,17 @@ function getStudyCaptureTimeline(item) {
   const alarmEndMs = Number.isFinite(signalEndMs)
     ? signalEndMs
     : SIGNAL_RESULT_60_DURATION_MS;
-  const rawEndMs = Math.max(
-    120000,
-    Number.isFinite(exitMs) ? exitMs + 1500 : 0,
-    alarmEndMs + 1000
-  );
-  const windowEndMs = Math.min(180000, Math.max(120000, Math.ceil(rawEndMs / 15000) * 15000));
+  // Sin contrato Deriv, la captura termina exactamente en +60s para que no
+  // se confunda contexto posterior con el resultado canónico de la señal.
+  let windowEndMs = SIGNAL_RESULT_60_DURATION_MS;
+  if (hasRealContract) {
+    const rawEndMs = Math.max(
+      SIGNAL_RESULT_60_DURATION_MS,
+      Number.isFinite(exitMs) ? exitMs + 1500 : 0,
+      alarmEndMs + 1000
+    );
+    windowEndMs = Math.min(180000, Math.max(60000, Math.ceil(rawEndMs / 15000) * 15000));
+  }
 
   return {
     anchorEpochMs,
@@ -2545,7 +2595,7 @@ const SIGNAL_RESULT_60_DURATION_MS = 60000;
 const SIGNAL_RESULT_60_LIVE_GRACE_MS = 10000;
 // En Doble Reducción, la "próxima vela" canónica empieza en el primer
 // movimiento de la primera reducción (ancla flotante), no en la alarma.
-const SIGNAL_RESULT_60_BASIS = "anchor_first_movement_v110_2";
+const SIGNAL_RESULT_60_BASIS = "anchor_first_movement_unified_v110_3";
 const signalResult60HydrationPending = new Set();
 let constructiveRollingTicksBySymbol = Object.create(null);
 let constructiveLastSignalBySymbol = Object.create(null);
@@ -2609,7 +2659,9 @@ function formatNextCandleDirectionLabel(direction) {
 function getItemNextOutcomeValue(itemOrOutcome) {
   if (itemOrOutcome && typeof itemOrOutcome === "object") {
     if (isFloatingSignalItem(itemOrOutcome)) {
-      return normalizeSignalResult60Outcome(itemOrOutcome?.signalResult60?.outcome || "");
+      const fromTicks = syncCanonicalSignal60FromStoredTicks(itemOrOutcome);
+      if (fromTicks) return fromTicks;
+      return normalizeSignalResult60Outcome(itemOrOutcome?.signalResult60?.outcome || itemOrOutcome?.nextOutcome || "");
     }
     return String(itemOrOutcome.nextOutcome || "").toLowerCase().trim();
   }
@@ -16232,11 +16284,13 @@ async function rehydrateHistoryOnBoot() {
   try {
     const recentFloating = slice.filter((it) => isFloatingSignalItem(it));
     for (const it of recentFloating) {
+      // Primero unifica desde los ticks anclados ya guardados. Si no alcanzan,
+      // reconstruye el mismo intervalo exacto desde Deriv.
+      syncCanonicalSignal60FromStoredTicks(it);
       const r = ensureSignalResult60(it);
       if (r && serverNowMs() >= Number(r.deadlineEpochMs)) {
-        // Recalcular SIEMPRE desde ticks_history. Corrige resultados guardados
-        // con la referencia vieja alarma + 60s y vuelve a ancla + 60s.
         await hydrateSignalResult60FromDerivHistory(it, { force: true });
+        syncCanonicalSignal60FromStoredTicks(it);
       }
     }
     for (const it of history) {
