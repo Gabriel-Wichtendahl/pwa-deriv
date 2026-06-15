@@ -1,6 +1,6 @@
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
-// v109.0: Resultado 60s desde el primer movimiento para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
+// v110.4: Próximos 60s después de la formación (60→120) para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_3_UNIFIED_60S_ANCHOR_FIRST_MOVEMENT";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_4_NEXT_60_AFTER_FORMATION";
 
 /* =========================
    Trade account config
@@ -432,7 +432,7 @@ function computeCanonicalSignal60FromStoredTicks(item) {
   if (!item || !isFloatingSignalItem(item)) return null;
   const ticks = (Array.isArray(item?.ticks) ? item.ticks : [])
     .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
-    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 60000)
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0 && p.ms <= 120000)
     .sort((a, b) => a.ms - b.ms);
   if (ticks.length < 2) return null;
   const nearest = (target) => {
@@ -444,8 +444,8 @@ function computeCanonicalSignal60FromStoredTicks(item) {
     }
     return best ? { ...best, dist } : null;
   };
-  const start = nearest(0);
-  const end = nearest(60000);
+  const start = nearest(60000);
+  const end = nearest(120000);
   // Solo se considera canónico si tenemos cobertura real de ambos extremos.
   if (!start || !end || start.dist > 3500 || end.dist > 5000 || end.ms <= start.ms) return null;
   const outcome = end.quote > start.quote ? "up" : end.quote < start.quote ? "down" : "flat";
@@ -459,8 +459,8 @@ function syncCanonicalSignal60FromStoredTicks(item) {
   item.signalResult60 = {
     ...existing,
     basis: SIGNAL_RESULT_60_BASIS,
-    startEpochMs: anchor > 0 ? anchor : Number(existing.startEpochMs || 0),
-    deadlineEpochMs: anchor > 0 ? anchor + SIGNAL_RESULT_60_DURATION_MS : Number(existing.deadlineEpochMs || 0),
+    startEpochMs: anchor > 0 ? anchor + 60000 : Number(existing.startEpochMs || 0),
+    deadlineEpochMs: anchor > 0 ? anchor + 120000 : Number(existing.deadlineEpochMs || 0),
     startQuote: calc.startQuote,
     endEpochMs: anchor > 0 ? anchor + calc.endMs : Number(existing.endEpochMs || 0),
     endQuote: calc.endQuote,
@@ -474,10 +474,12 @@ function syncCanonicalSignal60FromStoredTicks(item) {
   return calc.outcome;
 }
 function getStudySignal60Outcome(item) {
-  // Fuente única: primer movimiento (ms 0) contra +60s.
+  // Fuente única: segunda ventana, ancla+60s contra ancla+120s.
   if (isFloatingSignalItem(item)) {
     const fromTicks = syncCanonicalSignal60FromStoredTicks(item);
     if (fromTicks) return fromTicks;
+    const r = ensureSignalResult60(item); // invalida resultados viejos de otra base temporal
+    return normalizeSignalResult60Outcome(r?.outcome || item?.nextOutcome || "");
   }
   return normalizeSignalResult60Outcome(item?.signalResult60?.outcome || item?.nextOutcome || "");
 }
@@ -554,8 +556,8 @@ function getStudyCaptureTimeline(item) {
   const meta = getStudyCaptureLevelMeta(item);
   const hasRealContract = hasStudyRealContract(item);
 
-  // La alarma es un marcador dentro de la formación. No define el comienzo
-  // del resultado de 60s: ese resultado empieza en anchorEpochMs.
+  // La alarma es un marcador dentro de la formación. La flecha/resultados
+  // miden la ventana siguiente: ancla+60s hasta ancla+120s.
   let alarmEpochMs = studyFiniteNumber(
     item?.signalDetectedEpochMs ?? item?.signalCreatedEpochMs,
     null
@@ -590,9 +592,10 @@ function getStudyCaptureTimeline(item) {
   }
 
   const signalResult = item?.signalResult60 || {};
-  const signalStartEpochMs = anchorEpochMs > 0 ? anchorEpochMs : studyEpochMs(signalResult.startEpochMs);
-  // La posición temporal del resultado siempre es exactamente +60s desde
-  // el primer movimiento, aunque el tick usado para el precio llegue unos ms después.
+  const signalStartEpochMs = studyEpochMs(signalResult.startEpochMs)
+    ?? (anchorEpochMs > 0 ? anchorEpochMs + 60000 : null);
+  // La ventana de resultado comienza al terminar los primeros 60s y cierra
+  // 60s después: ancla+60s → ancla+120s.
   let signalEndEpochMs = studyEpochMs(signalResult.deadlineEpochMs);
   if (!Number.isFinite(signalEndEpochMs) && Number.isFinite(signalStartEpochMs)) {
     signalEndEpochMs = signalStartEpochMs + SIGNAL_RESULT_60_DURATION_MS;
@@ -606,16 +609,16 @@ function getStudyCaptureTimeline(item) {
   const alarmEndMs = Number.isFinite(signalEndMs)
     ? signalEndMs
     : SIGNAL_RESULT_60_DURATION_MS;
-  // Sin contrato Deriv, la captura termina exactamente en +60s para que no
-  // se confunda contexto posterior con el resultado canónico de la señal.
-  let windowEndMs = SIGNAL_RESULT_60_DURATION_MS;
+  // Sin contrato Deriv, la captura termina en ancla+120s para mostrar
+  // claramente la formación (0–60) y su ventana siguiente (60–120).
+  let windowEndMs = Math.max(120000, Number.isFinite(signalEndMs) ? signalEndMs : 120000);
   if (hasRealContract) {
     const rawEndMs = Math.max(
-      SIGNAL_RESULT_60_DURATION_MS,
+      120000,
       Number.isFinite(exitMs) ? exitMs + 1500 : 0,
       alarmEndMs + 1000
     );
-    windowEndMs = Math.min(180000, Math.max(60000, Math.ceil(rawEndMs / 15000) * 15000));
+    windowEndMs = Math.min(180000, Math.max(120000, Math.ceil(rawEndMs / 15000) * 15000));
   }
 
   return {
@@ -793,7 +796,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     ? `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} → cierre ${studyFormatUtc(timeline.exitEpochMs)}`
     : `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · alarma ${studyFormatUtc(timeline.alarmEpochMs)} · sin operación Deriv`;
   studyDrawFittedText(ctx, headerLine, 52, 80, W - 360, "600 15px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(220,235,255,.78)");
-  const topResultText = hasRealContract ? `Deriv: ${result}` : `Señal 60s: ${signal60Label}`;
+  const topResultText = hasRealContract ? `Deriv: ${result}` : `Próximos 60s: ${signal60Label}`;
   const topResultColor = hasRealContract ? tradeColor : signalColor;
   studyDrawPill(ctx, W - 270, 36, 220, 42, topResultText, topResultColor, "#f8fafc", 15);
 
@@ -818,7 +821,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     ctx.fillRect(xOf(timeline.entryMs), cy0, Math.max(2, xOf(timeline.exitMs) - xOf(timeline.entryMs)), cy1 - cy0);
   } else if (!hasRealContract && Number.isFinite(Number(timeline.signalEndMs))) {
     ctx.fillStyle = signal60Correctness === "incorrect" ? "rgba(239,68,68,.08)" : "rgba(34,197,94,.065)";
-    ctx.fillRect(xOf(0), cy0, Math.max(2, xOf(timeline.signalEndMs) - xOf(0)), cy1 - cy0);
+    ctx.fillRect(xOf(timeline.signalStartMs), cy0, Math.max(2, xOf(timeline.signalEndMs) - xOf(timeline.signalStartMs)), cy1 - cy0);
   }
 
   for (let i = 1; i <= 5; i++) {
@@ -849,7 +852,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
       : "Operación Deriv";
     studyDrawPill(ctx, Math.min(cx1 - 190, Math.max(cx0 + 230, xOf(timeline.entryMs) + 8)), cy0 + 8, 180, 29, operationLabel, tradeColor, "#f8fafc", 13);
   } else {
-    studyDrawPill(ctx, Math.min(cx1 - 238, Math.max(cx0 + 230, xOf(0) + 230)), cy0 + 8, 228, 29, "Resultado 60s desde 1er movimiento", signalColor, "#f8fafc", 13);
+    studyDrawPill(ctx, Math.min(cx1 - 238, Math.max(cx0 + 230, xOf(0) + 230)), cy0 + 8, 228, 29, "Próximos 60s (60→120)", signalColor, "#f8fafc", 13);
   }
 
   if (allTicks.length >= 2) {
@@ -985,7 +988,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
         studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(xOf(entryMs) - 72, cx1 - 150)), cy1 - 38, 146, 28, "SPOT DERIV PENDIENTE", tradeColor, "#f8fafc", 11);
       }
     } else if (Number.isFinite(Number(timeline.signalEndMs))) {
-      const startMs = 0;
+      const startMs = Math.max(0, Math.min(windowEndMs, Number(timeline.signalStartMs)));
       const endMs = Math.max(startMs, Math.min(windowEndMs, Number(timeline.signalEndMs)));
       const startQuote = studyValidQuote(timeline.signalStartQuote, null)
         ?? studyNearestQuoteAtMs(allTicks, startMs, 3500);
@@ -1002,7 +1005,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
         ctx.fillStyle = signalColor;
         ctx.beginPath(); ctx.arc(sx, sy, 10, 0, Math.PI * 2); ctx.fill();
         ctx.beginPath(); ctx.arc(ex2, ey2, 13, 0, Math.PI * 2); ctx.fill();
-        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex2 - 70, cx1 - 140)), Math.max(cy0 + 46, ey2 - 46), 136, 30, `60s ${signal60Label}`, signalColor, "#f8fafc", 12);
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex2 - 70, cx1 - 140)), Math.max(cy0 + 46, ey2 - 46), 136, 30, `SIG. 60s ${signal60Label}`, signalColor, "#f8fafc", 12);
       }
     }
   }
@@ -1028,14 +1031,14 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     const entrySpotTxt = Number.isFinite(footerEntryQuote) ? footerEntryQuote.toFixed(6) : "pendiente";
     const exitSpotTxt = Number.isFinite(footerExitQuote) ? footerExitQuote.toFixed(6) : "pendiente";
     studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada Deriv ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Cierre Deriv ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · señal 60s ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Señal 60s: primer movimiento → +60s · Deriv usa entrada/cierre contractual reales`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
+    studyDrawFittedText(ctx, `Cierre Deriv ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · próximos 60s ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Próximos 60s: ancla+60s → ancla+120s · Deriv usa entrada/cierre contractual reales`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
   } else {
     const signalStartTxt = Number.isFinite(studyValidQuote(timeline.signalStartQuote, null)) ? Number(timeline.signalStartQuote).toFixed(6) : "—";
     const signalEndTxt = Number.isFinite(studyValidQuote(timeline.signalEndQuote, null)) ? Number(timeline.signalEndQuote).toFixed(6) : "—";
-    studyDrawFittedText(ctx, `Primer movimiento ${studyFormatUtc(timeline.signalStartEpochMs)} @ ${signalStartTxt} · alarma ${studyFormatUtc(timeline.alarmEpochMs)} · sin operación Deriv`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Final señal 60s ${studyFormatUtc(timeline.signalEndEpochMs)} @ ${signalEndTxt} · ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Resultado canónico: primer movimiento → +60s · la alarma solo confirma la formación`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
+    studyDrawFittedText(ctx, `Inicio próximos 60s ${studyFormatUtc(timeline.signalStartEpochMs)} @ ${signalStartTxt} · alarma ${studyFormatUtc(timeline.alarmEpochMs)} · sin operación Deriv`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Final próximos 60s ${studyFormatUtc(timeline.signalEndEpochMs)} @ ${signalEndTxt} · ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
+    studyDrawFittedText(ctx, `Resultado canónico: ancla+60s → ancla+120s · la alarma solo confirma la formación`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
   }
 }
 
@@ -2593,9 +2596,9 @@ const CONSTRUCTIVE_CLOSE_MIN_OPPOSITE_STEPS = 2;
 const CONSTRUCTIVE_CLOSE_MIN_DURATION_MS = 250;
 const SIGNAL_RESULT_60_DURATION_MS = 60000;
 const SIGNAL_RESULT_60_LIVE_GRACE_MS = 10000;
-// En Doble Reducción, la "próxima vela" canónica empieza en el primer
-// movimiento de la primera reducción (ancla flotante), no en la alarma.
-const SIGNAL_RESULT_60_BASIS = "anchor_first_movement_unified_v110_3";
+// En Doble Reducción, la flecha muestra los 60 segundos SIGUIENTES a la
+// formación: compara el precio en ancla+60s contra el precio en ancla+120s.
+const SIGNAL_RESULT_60_BASIS = "next_60_after_formation_v110_4";
 const signalResult60HydrationPending = new Set();
 let constructiveRollingTicksBySymbol = Object.create(null);
 let constructiveLastSignalBySymbol = Object.create(null);
@@ -2661,7 +2664,8 @@ function getItemNextOutcomeValue(itemOrOutcome) {
     if (isFloatingSignalItem(itemOrOutcome)) {
       const fromTicks = syncCanonicalSignal60FromStoredTicks(itemOrOutcome);
       if (fromTicks) return fromTicks;
-      return normalizeSignalResult60Outcome(itemOrOutcome?.signalResult60?.outcome || itemOrOutcome?.nextOutcome || "");
+      const r = ensureSignalResult60(itemOrOutcome); // limpia el resultado 0→60 anterior
+      return normalizeSignalResult60Outcome(r?.outcome || itemOrOutcome?.nextOutcome || "");
     }
     return String(itemOrOutcome.nextOutcome || "").toLowerCase().trim();
   }
@@ -2707,7 +2711,7 @@ function setCompactModalHeader(item, ticksCount = null) {
       if (result60 && isSignalResult60Resolved(item)) {
         signalOrResultTxt = getSignalResult60DirectionText(item);
       } else if (result60) {
-        signalOrResultTxt = `RESULTADO 60s ⏳ ${getSignalResult60RemainingSec(item)}s`;
+        signalOrResultTxt = `PRÓX. 60s ⏳ ${getSignalResult60RemainingSec(item)}s`;
       } else {
         signalOrResultTxt = formatNextCandleDirectionLabel(item.direction).replace("PROX VELA", "SEÑAL");
       }
@@ -11056,7 +11060,7 @@ function updateModalFooterReadingUI() {
         const resultDetail = r
           ? (isSignalResult60Resolved(modalCurrentItem)
               ? `${getSignalResult60DirectionText(modalCurrentItem)} · inicio ${Number(r.startQuote).toFixed(6)} · final ${Number(r.endQuote).toFixed(6)}`
-              : `Señal 60s pendiente · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s desde el primer movimiento`)
+              : `Próximos 60s pendientes · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
           : "";
         modalSequenceDetail.textContent = resultDetail ? `${baseDetail} · ${resultDetail}` : baseDetail;
       } else {
@@ -11987,7 +11991,7 @@ function updateModalCandleStatusUI() {
     const resultTxt = result60
       ? (isSignalResult60Resolved(modalCurrentItem)
           ? ` · ${getSignalResult60DirectionText(modalCurrentItem)}`
-          : ` · señal 60s en ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
+          : ` · próximos 60s en ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
       : "";
     bar.textContent = `🟢 Vela abierta · faltan ${sec}s · ${sideTxt} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${resultTxt}`;
     bar.style.color = "#dcfce7";
@@ -11998,7 +12002,7 @@ function updateModalCandleStatusUI() {
     const result60 = isFloatingSignalItem(modalCurrentItem) ? ensureSignalResult60(modalCurrentItem) : null;
     if (result60 && !isSignalResult60Resolved(modalCurrentItem)) {
       const remain60 = getSignalResult60RemainingSec(modalCurrentItem);
-      bar.textContent = `⏳ Señal 60s · faltan ${remain60}s desde el primer movimiento`;
+      bar.textContent = `⏳ Próximos 60s · faltan ${remain60}s`;
       bar.style.color = "#fef3c7";
       bar.style.background = "rgba(202,138,4,.14)";
       bar.style.borderColor = "rgba(250,204,21,.30)";
@@ -14317,19 +14321,19 @@ function updateRowNextArrowOnRow(row, item) {
   if (outcome === "up") {
     el.textContent = "⬆️";
     el.className = "nextArrow up";
-    el.title = floating ? "Resultado 60s desde el primer movimiento: ALCISTA" : "Próxima vela: cerró arriba del cierre de la vela de señal";
+    el.title = floating ? "Próximos 60s (60→120): ALCISTA" : "Próxima vela: cerró arriba del cierre de la vela de señal";
   } else if (outcome === "down") {
     el.textContent = "⬇️";
     el.className = "nextArrow down";
-    el.title = floating ? "Resultado 60s desde el primer movimiento: BAJISTA" : "Próxima vela: cerró abajo del cierre de la vela de señal";
+    el.title = floating ? "Próximos 60s (60→120): BAJISTA" : "Próxima vela: cerró abajo del cierre de la vela de señal";
   } else if (outcome === "flat") {
     el.textContent = "➖";
     el.className = "nextArrow flat";
-    el.title = floating ? "Resultado 60s desde el primer movimiento: NEUTRO" : "Próxima vela: cerró igual que la vela de señal";
+    el.title = floating ? "Próximos 60s (60→120): NEUTRO" : "Próxima vela: cerró igual que la vela de señal";
   } else {
     el.textContent = "⏳";
     el.className = "nextArrow pending";
-    el.title = floating ? `Resultado 60s: esperando${getSignalResult60RemainingSec(item) ? ` (${getSignalResult60RemainingSec(item)}s)` : ""}` : "Próxima vela: esperando…";
+    el.title = floating ? `Próximos 60s: esperando${getSignalResult60RemainingSec(item) ? ` (${getSignalResult60RemainingSec(item)}s)` : ""}` : "Próxima vela: esperando…";
   }
 }
 function animateFailShake(item) {
@@ -15839,15 +15843,16 @@ function normalizeSignalResult60Outcome(value) {
   return "";
 }
 function inferSignalResult60StartEpochMs(item) {
-  // Regla canónica de Doble Reducción: el resultado empieza exactamente
-  // donde comienza el primer movimiento de la primera reducción.
+  // La flecha representa la ventana posterior a la formación:
+  // empieza 60s después del primer movimiento.
   const anchor = Number(item?.signalAnchorEpochMs || 0);
-  if (Number.isFinite(anchor) && anchor > 0) return anchor;
+  if (Number.isFinite(anchor) && anchor > 0) return anchor + 60000;
 
   const direct = Number(item?.signalResult60?.startEpochMs || 0);
   return Number.isFinite(direct) && direct > 0 ? direct : 0;
 }
 function getSignalResult60AnchorQuote(item) {
+  // Busca el precio al finalizar los primeros 60s (ms 60000).
   const ticks = Array.isArray(item?.ticks) ? item.ticks : [];
   let best = null;
   let bestDist = Infinity;
@@ -15855,10 +15860,10 @@ function getSignalResult60AnchorQuote(item) {
     const ms = Number(p?.ms);
     const quote = Number(p?.quote);
     if (!Number.isFinite(ms) || !Number.isFinite(quote)) continue;
-    const dist = Math.abs(ms);
+    const dist = Math.abs(ms - 60000);
     if (dist < bestDist) { bestDist = dist; best = quote; }
   }
-  return Number.isFinite(best) ? best : null;
+  return bestDist <= 5000 && Number.isFinite(best) ? best : null;
 }
 function ensureSignalResult60(item, opts = {}) {
   if (!item || !isFloatingSignalItem(item)) return null;
@@ -15892,7 +15897,7 @@ function ensureSignalResult60(item, opts = {}) {
     endEpochMs: basisChanged ? null : finiteOrNull(existing.endEpochMs),
     endQuote: basisChanged ? null : finiteOrNull(existing.endQuote),
     delta: basisChanged ? null : finiteOrNull(existing.delta),
-    source: basisChanged ? String(opts.source || "anchor_first_movement") : String(existing.source || opts.source || "anchor_first_movement"),
+    source: basisChanged ? String(opts.source || "next_60_after_formation") : String(existing.source || opts.source || "next_60_after_formation"),
     resolvedAt: basisChanged ? null : finiteOrNull(existing.resolvedAt),
   };
   if (basisChanged) item.nextOutcome = "";
@@ -15909,11 +15914,11 @@ function getSignalResult60RemainingSec(item) {
   if (!r || isSignalResult60Resolved(item)) return 0;
   return Math.max(0, Math.ceil((Number(r.deadlineEpochMs) - serverNowMs()) / 1000));
 }
-function getSignalResult60DirectionText(item, pendingText = "SEÑAL 60s ⏳") {
+function getSignalResult60DirectionText(item, pendingText = "PRÓXIMOS 60s ⏳") {
   const out = normalizeSignalResult60Outcome(item?.signalResult60?.outcome);
-  if (out === "up") return "SEÑAL 60s ALCISTA";
-  if (out === "down") return "SEÑAL 60s BAJISTA";
-  if (out === "flat") return "SEÑAL 60s NEUTRA";
+  if (out === "up") return "PRÓXIMOS 60s ALCISTA";
+  if (out === "down") return "PRÓXIMOS 60s BAJISTA";
+  if (out === "flat") return "PRÓXIMOS 60s NEUTRA";
   return pendingText;
 }
 function getSignalResult60Correctness(item) {
@@ -16009,10 +16014,10 @@ async function hydrateSignalResult60FromDerivHistory(item, opts = {}) {
     if (!h || !Array.isArray(h.times) || !Array.isArray(h.prices)) return false;
     const startTick = pickSignalResult60StartTick(h.times, h.prices, r.startEpochMs);
     if (startTick && Number.isFinite(Number(startTick.quote))) {
-      // Fuente canónica: precio del primer movimiento/ancla. El eje temporal
-      // permanece fijo en signalAnchorEpochMs; no se desplaza al tick siguiente.
+      // Fuente canónica: precio al comenzar la ventana siguiente (ancla+60s).
       r.startQuote = Number(startTick.quote);
-      r.startEpochMs = Number(item.signalAnchorEpochMs || r.startEpochMs);
+      const anchor = Number(item.signalAnchorEpochMs || 0);
+      r.startEpochMs = anchor > 0 ? anchor + 60000 : Number(r.startEpochMs);
       r.deadlineEpochMs = Number(r.startEpochMs) + SIGNAL_RESULT_60_DURATION_MS;
       r.basis = SIGNAL_RESULT_60_BASIS;
     }
@@ -22956,13 +22961,22 @@ function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
     for (const it of history.slice(-60)) {
       if (!it || !it.signalFloatingWindow || String(it.symbol || "") !== sym) continue;
 
-      // Resultado canónico: empieza en el primer movimiento/ancla y termina 60s después.
+      // Resultado canónico: próximos 60s después de la formación,
+      // desde ancla+60s hasta ancla+120s.
       const result60 = ensureSignalResult60(it);
       if (result60 && !isSignalResult60Resolved(it)) {
+        const resultStart = Number(result60.startEpochMs);
         const deadline = Number(result60.deadlineEpochMs);
+        if (ep >= resultStart && ep < deadline && String(result60.source || "") !== "live_tick_next_window_start") {
+          // El primer tick recibido al comenzar la ventana 60→120 prevalece
+          // sobre cualquier aproximación guardada de la formación.
+          result60.startQuote = q;
+          result60.source = "live_tick_next_window_start";
+          changed = true;
+        }
         if (ep >= deadline) {
-          if (ep - deadline <= SIGNAL_RESULT_60_LIVE_GRACE_MS) {
-            resolveSignalResult60(it, ep, q, "live_tick");
+          if (ep - deadline <= SIGNAL_RESULT_60_LIVE_GRACE_MS && Number.isFinite(Number(result60.startQuote))) {
+            resolveSignalResult60(it, ep, q, "live_tick_next_window_end");
             changed = true;
           } else {
             result60.status = "recovering";
@@ -23518,15 +23532,15 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
       signalCreatedEpochMs: now,
       signalResult60: {
         basis: SIGNAL_RESULT_60_BASIS,
-        startEpochMs: anchorEpochMs,
-        deadlineEpochMs: anchorEpochMs + SIGNAL_RESULT_60_DURATION_MS,
-        startQuote: Number(bestPack.ticks?.[0]?.quote),
+        startEpochMs: anchorEpochMs + 60000,
+        deadlineEpochMs: anchorEpochMs + 120000,
+        startQuote: null,
         status: "pending",
         outcome: "",
         endEpochMs: null,
         endQuote: null,
         delta: null,
-        source: "anchor_first_movement",
+        source: "next_60_after_formation",
         resolvedAt: null,
       },
       constructiveSignalKey: signalKey,
