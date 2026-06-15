@@ -869,14 +869,16 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     min -= range * 0.09; max += range * 0.09;
     const yOf = (q) => cy1 - ((Number(q) - min) / Math.max(max - min, 1e-9)) * (cy1 - cy0);
 
-    // Dos reducciones aceptadas: se muestran como bloques, sin deformar la línea real.
-    const blocks = Array.isArray(meta?.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 2) : [];
+    // Reducciones aceptadas (2 o 3): se muestran como bloques, sin deformar la línea real.
+    const blocks = Array.isArray(meta?.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
+    const blockColors = ["rgba(34,197,94,.52)", "rgba(168,85,247,.52)", "rgba(14,165,233,.52)"];
+    const blockFills = ["rgba(34,197,94,.07)", "rgba(168,85,247,.07)", "rgba(14,165,233,.07)"];
     blocks.forEach((block, index) => {
       const startMs = studyFiniteNumber(block?.startMs, null);
       const endMs = studyFiniteNumber(block?.endMs, null);
       if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return;
       const bx0 = xOf(startMs), bx1 = xOf(endMs);
-      ctx.fillStyle = index === 0 ? "rgba(34,197,94,.07)" : "rgba(168,85,247,.07)";
+      ctx.fillStyle = blockFills[index] || "rgba(14,165,233,.07)";
       ctx.fillRect(bx0, cy0 + 42, Math.max(3, bx1 - bx0), cy1 - cy0 - 42);
       studyDrawPill(
         ctx,
@@ -885,11 +887,20 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
         144,
         27,
         `${index + 1}ª ${String(block?.pattern || "reducción")}`,
-        index === 0 ? "rgba(34,197,94,.52)" : "rgba(168,85,247,.52)",
+        blockColors[index] || "rgba(14,165,233,.52)",
         "#f8fafc",
         12
       );
     });
+
+    const confirmationPack = meta?.constructiveConfirmationPack;
+    if (confirmationPack && Number.isFinite(Number(confirmationPack.startMs)) && Number.isFinite(Number(confirmationPack.endMs))) {
+      const qx0 = xOf(Number(confirmationPack.startMs));
+      const qx1 = xOf(Number(confirmationPack.endMs));
+      ctx.fillStyle = "rgba(245,158,11,.08)";
+      ctx.fillRect(qx0, cy0 + 42, Math.max(3, qx1 - qx0), cy1 - cy0 - 42);
+      studyDrawPill(ctx, Math.max(cx0 + 6, Math.min(qx0 + 4, cx1 - 210)), cy0 + 146, 204, 27, `Conf. ${String(confirmationPack.label || confirmationPack.pattern || "contraria")}`, "rgba(245,158,11,.55)", "#fff7ed", 12);
+    }
 
     if (shouldDrawStudyLevel(meta)) {
       const level = Number(meta?.level);
@@ -1307,7 +1318,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "DOBLE_REDUCCION_AVANCE_ESTRUCTURAL_V110_6_20260615";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_REFORZADA_3_O_2_MAS_CONFIRMACION_V110_7_20260615";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -2584,7 +2595,7 @@ let liveAutoEntryState = { minuteKey: "", attempted: false, status: "idle", side
 const autoPreProposalInFlight = new Set();
 const liveAutoPreProposalCache = new Map();
 const LIVE_REPLAY_DRAW_MIN_INTERVAL_MS = 120;
-const CONSTRUCTIVE_FLOATING_WINDOW_MS = 30000;
+const CONSTRUCTIVE_FLOATING_WINDOW_MS = 40000;
 const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
 const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 7000;
 const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
@@ -12981,8 +12992,32 @@ function normalizeSNRLevelMeta(meta) {
           endMs: n(meta.secondConstructiveReduction.endMs),
         }
       : null,
+    thirdConstructiveReduction: meta.thirdConstructiveReduction && typeof meta.thirdConstructiveReduction === "object"
+      ? {
+          pattern: s(meta.thirdConstructiveReduction.pattern),
+          startMs: n(meta.thirdConstructiveReduction.startMs),
+          endMs: n(meta.thirdConstructiveReduction.endMs),
+        }
+      : null,
+    constructiveQualificationRoute: s(meta.constructiveQualificationRoute),
+    constructiveQualificationLabel: s(meta.constructiveQualificationLabel),
+    constructiveConfirmationPack: meta.constructiveConfirmationPack && typeof meta.constructiveConfirmationPack === "object"
+      ? {
+          type: s(meta.constructiveConfirmationPack.type),
+          label: s(meta.constructiveConfirmationPack.label),
+          pattern: s(meta.constructiveConfirmationPack.pattern),
+          startMs: n(meta.constructiveConfirmationPack.startMs),
+          endMs: n(meta.constructiveConfirmationPack.endMs),
+          formedAtMs: n(meta.constructiveConfirmationPack.formedAtMs),
+          runs: Array.isArray(meta.constructiveConfirmationPack.runs)
+            ? meta.constructiveConfirmationPack.runs.slice(0, 3).map((run) => ({
+                startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx)
+              }))
+            : [],
+        }
+      : null,
     acceptedReductionBlocks: Array.isArray(meta.acceptedReductionBlocks)
-      ? meta.acceptedReductionBlocks.slice(0, 2).map((block) => ({
+      ? meta.acceptedReductionBlocks.slice(0, 3).map((block) => ({
           pattern: s(block?.pattern),
           startMs: n(block?.startMs),
           endMs: n(block?.endMs),
@@ -21909,7 +21944,7 @@ function analyzeReduccionExacta25sCandidate(candidate, minute, opts = {}) {
       analysisWindowMs: evalMs,
       irregularityWindow: "0-30s",
       confirmationWindow: "10-30s",
-      maxAnalysisSec: 30,
+      maxAnalysisSec: 40,
       signalFromSec: 10,
       motorIndependiente: true,
       visualReductionMode: true,
@@ -22866,7 +22901,7 @@ function analyzeReduccionVisual25sCandidate(candidate, minute, opts = {}) {
       evalSec: Math.round(evalMs / 1000),
       analysisWindowMs: evalMs,
       irregularityWindow: "0-30s",
-      maxAnalysisSec: 30,
+      maxAnalysisSec: 40,
       signalFromSec: Math.round(evalMs / 1000),
       motorIndependiente: true,
       visualReductionMode: true,
@@ -23204,20 +23239,21 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     .map((p) => ({ ms: Number(p.ms), quote: Number(p.quote), y: Number(p.quote) * Number(side || 1) }))
     .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && Number.isFinite(p.y) && p.ms <= Number(evalMs || CONSTRUCTIVE_FLOATING_WINDOW_MS))
     .sort((a, b) => a.ms - b.ms);
-  if (pts.length < 6) return null;
+  if (pts.length < 8) return null;
 
   const yMaxAll = Math.max(...pts.map((p) => p.y));
   const yMinAll = Math.min(...pts.map((p) => p.y));
   const alignedRange = Math.max(yMaxAll - yMinAll, Number(localRange || 0), Math.abs(Number(pts[0]?.y || 0)) * 0.000001, 1e-9);
-  const impulseMin = Math.max(alignedRange * 0.080, Number(tol || 0) * 1.90, 1e-9);
-  const cutMin = Math.max(alignedRange * 0.038, Number(tol || 0) * 1.00, 1e-9);
+  const impulseMin = Math.max(alignedRange * 0.075, Number(tol || 0) * 1.80, 1e-9);
+  const cutMin = Math.max(alignedRange * 0.034, Number(tol || 0) * 0.95, 1e-9);
 
   const runs = getVisualRuns25s(clean, side, evalMs, tol, alignedRange);
-  if (runs.length < 5) return null;
+  if (runs.length < 6) return null;
   const macroRuns = classifyMacroVisualRuns(runs, alignedRange, impulseMin, cutMin);
   const primaryRuns = macroRuns.primaryRuns || [];
   const contraryRuns = macroRuns.contraryRuns || [];
-  if (primaryRuns.length < 4) return null; // dos reducciones separadas requieren al menos 4 movimientos del grupo
+  const contraryRawRuns = macroRuns.contraryRaw || contraryRuns;
+  if (primaryRuns.length < 4) return null;
 
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
   const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
@@ -23237,7 +23273,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     const baseMove = Math.max(...blockRuns.map((r) => Number(r.move || 0)), 1e-9);
     return contraryRuns
       .filter((r) => Number(r.idx) > Number(firstRun.idx) && Number(r.idx) < Number(lastRun.idx))
-      .some((r) => Number(r.move || 0) >= Math.max(baseMove * 0.30, alignedRange * 0.080, Number(tol || 0) * 2.0));
+      .some((r) => Number(r.move || 0) >= Math.max(baseMove * 0.30, alignedRange * 0.078, Number(tol || 0) * 2.0));
   };
 
   const blocks = allBlocks.filter((b) => {
@@ -23246,59 +23282,194 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     const last = Number(b.runs?.[b.runs.length - 1]?.move || 0);
     if (!(first > last)) return false;
     const duration = Number(b.endMs || 0) - Number(b.startMs || 0);
-    if (!(duration >= 1800 && duration <= 18000)) return false;
-
-    // Filtro anti-estancamiento V110.6:
-    // el impulso reducido debe seguir haciendo avance estructural y romper
-    // con margen el máximo/mínimo del impulso anterior.
+    if (!(duration >= 1800 && duration <= 19000)) return false;
     const structuralProgress = getConstructiveBlockStructuralProgress(b, alignedRange, tol);
     if (!structuralProgress.ok) return false;
     b.structuralProgress = structuralProgress;
     return true;
-  });
+  }).sort((a, b) => Number(a.startIndex) - Number(b.startIndex) || Number(b.strength || 0) - Number(a.strength || 0));
   if (blocks.length < 2) return null;
 
-  // Elegimos DOS reducciones distintas y no superpuestas.
-  // G→M→P es una sola reducción; la segunda debe comenzar después de que terminó la primera.
-  // Las combinaciones pueden ser cualquiera de: G→M→P, G→M, G→P o M→P.
+  const blockVisible = (block, firstBlock = false) => {
+    const startMove = Number(block?.runs?.[0]?.move || 0);
+    const minVisible = firstBlock
+      ? Math.max(alignedRange * 0.105, Number(tol || 0) * 2.55, 1e-9)
+      : Math.max(alignedRange * 0.068, Number(tol || 0) * 1.90, 1e-9);
+    return startMove >= minVisible;
+  };
+  const nonOverlapping = (a, b) => Number(b?.startIndex) > Number(a?.endIndex);
+
+  // Devuelve la primera respuesta del grupo principal que confirma que una
+  // entrada contraria ya terminó. Así no disparamos sobre un tramo todavía abierto.
+  const closeOppositeRun = (oppositeRun, strict = false) => {
+    const idx = Number(oppositeRun?.idx);
+    const move = Number(oppositeRun?.move || 0);
+    if (!Number.isFinite(idx) || !(move > 0)) return null;
+    for (let i = idx + 1; i < runs.length; i++) {
+      const r = runs[i];
+      const sign = Number(r?.sign || 0);
+      if (sign === 0) continue;
+      if (sign < 0) return null;
+      const responseMove = Number(r.move || 0);
+      const pointsCount = Array.isArray(r.points) ? r.points.length : 0;
+      const minMove = Math.max(
+        move * (strict ? 0.16 : 0.10),
+        alignedRange * (strict ? 0.025 : 0.015),
+        Number(tol || 0) * (strict ? 1.20 : 0.75),
+        1e-9
+      );
+      if (responseMove < minMove) return null;
+      if (strict && Math.max(0, pointsCount - 1) < 2) return null;
+      return {
+        confirmedAtMs: Number(r.endMs || r.startMs || 0),
+        responseRun: { ...r },
+        responseMove,
+        retraceRatio: responseMove / Math.max(move, 1e-9),
+      };
+    }
+    return null;
+  };
+
+  const noStrongPrimaryBetween = (a, b) => {
+    const limit = Math.max(Math.min(Number(a?.move || 0), Number(b?.move || 0)) * 0.72, alignedRange * 0.095, Number(tol || 0) * 2.2);
+    return !primaryRuns
+      .filter((r) => Number(r.idx) > Number(a?.idx) && Number(r.idx) < Number(b?.idx))
+      .some((r) => Number(r.move || 0) >= limit);
+  };
+
+  // Confirmación alternativa después de DOS reducciones.
+  // P→G / M→G / P→M→G se leen siempre en el GRUPO CONTRARIO,
+  // porque representan una entrada que gana fuerza contra el grupo debilitado.
+  const findOppositeConfirmation = (secondBlock, primaryReferenceMove) => {
+    const afterIdx = Number(secondBlock?.runs?.[secondBlock.runs.length - 1]?.idx ?? secondBlock?.endIndex ?? -1);
+    const afterMs = Number(secondBlock?.endMs || 0);
+    const candidates = contraryRawRuns
+      .filter((r) => Number(r.idx) > afterIdx && Number(r.startMs || 0) >= afterMs - 1)
+      .filter((r) => Number(r.endMs || 0) <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
+      .sort((a, b) => Number(a.idx) - Number(b.idx));
+    if (!candidates.length) return null;
+
+    const visibleMin = Math.max(alignedRange * 0.052, Number(tol || 0) * 1.55, 1e-9);
+    const visible = candidates.filter((r) => Number(r.move || 0) >= visibleMin);
+    if (!visible.length) return null;
+
+    const packs = [];
+
+    // P→M→G: tres entradas contrarias que aumentan de forma escalonada.
+    for (let i = 0; i + 2 < visible.length; i++) {
+      const seq = visible.slice(i, i + 3);
+      if (!noStrongPrimaryBetween(seq[0], seq[1]) || !noStrongPrimaryBetween(seq[1], seq[2])) continue;
+      const moves = seq.map((r) => Number(r.move || 0));
+      const labs = summarizeVisualMoves(moves).labels;
+      const growing = moves[1] >= moves[0] * 1.18 && moves[2] >= moves[1] * 1.18 && moves[2] >= moves[0] * 1.75;
+      const close = closeOppositeRun(seq[2], true);
+      if (growing && labs.join("→") === "P→M→G" && close) {
+        packs.push({ type: "opposite_growth", label: `${contraryText} P→M→G`, pattern: "P→M→G", runs: seq, formedAtMs: close.confirmedAtMs, close, strength: 36 + moves[2] / Math.max(alignedRange, 1e-9) * 20 });
+      }
+    }
+
+    // P→G o M→G.
+    for (let i = 0; i + 1 < visible.length; i++) {
+      const seq = visible.slice(i, i + 2);
+      if (!noStrongPrimaryBetween(seq[0], seq[1])) continue;
+      const moves = seq.map((r) => Number(r.move || 0));
+      const labs = summarizeVisualMoves(moves).labels;
+      const pattern = labs.join("→");
+      const growthOk = moves[1] >= moves[0] * (pattern === "P→G" ? 1.70 : 1.32);
+      const close = closeOppositeRun(seq[1], true);
+      if ((pattern === "P→G" || pattern === "M→G") && growthOk && close) {
+        packs.push({ type: "opposite_growth", label: `${contraryText} ${pattern}`, pattern, runs: seq, formedAtMs: close.confirmedAtMs, close, strength: 30 + moves[1] / Math.max(alignedRange, 1e-9) * 18 });
+      }
+    }
+
+    // Entrada simétrica: al menos dos movimientos contrarios parecidos y visibles.
+    for (let i = 0; i + 1 < visible.length; i++) {
+      const seq = visible.slice(i, i + 2);
+      if (!noStrongPrimaryBetween(seq[0], seq[1])) continue;
+      const a = Number(seq[0].move || 0), b = Number(seq[1].move || 0);
+      const similarity = Math.min(a, b) / Math.max(a, b, 1e-9);
+      const combined = a + b;
+      const close = closeOppositeRun(seq[1], true);
+      if (similarity >= 0.80 && combined >= Math.max(alignedRange * 0.18, Number(tol || 0) * 5.0) && close) {
+        packs.push({ type: "opposite_symmetric", label: `${contraryText} simétrica ×2`, pattern: "SIMÉTRICA×2", runs: seq, formedAtMs: close.confirmedAtMs, close, strength: 28 + similarity * 12 + combined / Math.max(alignedRange, 1e-9) * 10 });
+      }
+    }
+
+    // Entrada fuerte aislada del grupo contrario.
+    for (const r of visible) {
+      const move = Number(r.move || 0);
+      const strongThreshold = Math.max(alignedRange * 0.20, Number(primaryReferenceMove || 0) * 0.68, Number(tol || 0) * 4.5, 1e-9);
+      const close = closeOppositeRun(r, true);
+      if (move >= strongThreshold && close) {
+        packs.push({ type: "opposite_strong", label: `${contraryText} fuerte`, pattern: "FUERTE", runs: [r], formedAtMs: close.confirmedAtMs, close, strength: 32 + move / Math.max(strongThreshold, 1e-9) * 10 });
+      }
+    }
+
+    return packs
+      .filter((p) => Number(p.formedAtMs) > 0 && Number(p.formedAtMs) <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
+      .sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0))[0] || null;
+  };
+
   let selected = null;
+  const consider = (candidate) => {
+    if (!candidate) return;
+    if (!(Number(candidate.elapsed) > 0) || Number(candidate.elapsed) > CONSTRUCTIVE_FLOATING_WINDOW_MS) return;
+    if (!selected || Number(candidate.score || 0) > Number(selected.score || 0)) selected = candidate;
+  };
+
+  // Ruta A: TRES reducciones claras, consecutivas o aisladas.
   for (const first of blocks) {
+    if (!blockVisible(first, true)) continue;
     for (const second of blocks) {
-      if (Number(second.startIndex) !== Number(first.endIndex) + 1) continue;
+      if (!nonOverlapping(first, second) || !blockVisible(second, false)) continue;
+      for (const third of blocks) {
+        if (!nonOverlapping(second, third) || !blockVisible(third, false)) continue;
+        const anchorMs = Number(first.startMs || 0);
+        const finalConfirmation = getConstructiveSecondReductionConfirmation(runs, third, alignedRange, tol);
+        if (!finalConfirmation) continue;
+        const formedAtMs = Number(finalConfirmation.confirmedAtMs || 0);
+        const elapsed = formedAtMs - anchorMs;
+        const isolatedGaps = Math.max(0, Number(second.startIndex) - Number(first.endIndex) - 1) + Math.max(0, Number(third.startIndex) - Number(second.endIndex) - 1);
+        const score =
+          Number(first.strength || 0) * 16 +
+          Number(second.strength || 0) * 16 +
+          Number(third.strength || 0) * 18 +
+          34 - isolatedGaps * 1.8 - Math.max(0, elapsed - 30000) / 850;
+        consider({ route: "three_reductions", reductions: [first, second, third], confirmation: finalConfirmation, anchorMs, formedAtMs, elapsed, score, confirmationPack: null });
+      }
+    }
+  }
+
+  // Ruta B: DOS reducciones + confirmación extra del grupo contrario.
+  for (const first of blocks) {
+    if (!blockVisible(first, true)) continue;
+    for (const second of blocks) {
+      if (!nonOverlapping(first, second) || !blockVisible(second, false)) continue;
+      const primaryReferenceMove = Math.max(Number(first.runs?.[0]?.move || 0), Number(second.runs?.[0]?.move || 0));
+      const pack = findOppositeConfirmation(second, primaryReferenceMove);
+      if (!pack) continue;
       const anchorMs = Number(first.startMs || 0);
-      // El último movimiento de la segunda reducción sigue EN CURSO hasta que
-      // una respuesta contraria real lo cierre. Sin esta confirmación no hay alarma.
-      const secondConfirmation = getConstructiveSecondReductionConfirmation(runs, second, alignedRange, tol);
-      if (!secondConfirmation) continue;
-      const formedAtMs = Number(secondConfirmation.confirmedAtMs || 0);
+      const formedAtMs = Number(pack.formedAtMs || 0);
       const elapsed = formedAtMs - anchorMs;
-      if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
-
-      const firstStartMove = Number(first.runs?.[0]?.move || 0);
-      const secondStartMove = Number(second.runs?.[0]?.move || 0);
-      const minVisibleStart = Math.max(alignedRange * 0.115, Number(tol || 0) * 2.7, 1e-9);
-      if (firstStartMove < minVisibleStart || secondStartMove < Math.max(alignedRange * 0.075, Number(tol || 0) * 2.0, 1e-9)) continue;
-
-      const score =
-        Number(first.strength || 0) * 18 +
-        Number(second.strength || 0) * 18 +
-        (first.pattern === "G→M→P" ? 8 : 0) +
-        (second.pattern === "G→M→P" ? 8 : 0) -
-        Math.max(0, elapsed - 22000) / 650;
-      if (!selected || score > selected.score) selected = { first, second, anchorMs, formedAtMs, elapsed, score, secondConfirmation };
+      const isolatedGap = Math.max(0, Number(second.startIndex) - Number(first.endIndex) - 1);
+      const score = Number(first.strength || 0) * 17 + Number(second.strength || 0) * 17 + Number(pack.strength || 0) + 28 - isolatedGap * 1.6 - Math.max(0, elapsed - 30000) / 900;
+      consider({ route: "two_plus_confirmation", reductions: [first, second], confirmation: pack.close, anchorMs, formedAtMs, elapsed, score, confirmationPack: pack });
     }
   }
   if (!selected) return null;
 
-  const firstReduction = selected.first;
-  const secondReduction = selected.second;
-  const acceptedRuns = [...firstReduction.runs, ...secondReduction.runs].map((r) => ({ ...r }));
-  const acceptedLabels = [...firstReduction.labels, ...secondReduction.labels];
-  const acceptedPatternText = `${firstReduction.pattern} + ${secondReduction.pattern}`;
+  const reductions = selected.reductions || [];
+  const firstReduction = reductions[0] || null;
+  const secondReduction = reductions[1] || null;
+  const thirdReduction = reductions[2] || null;
+  const confirmationPack = selected.confirmationPack || null;
+  const acceptedRuns = reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r }));
+  const acceptedLabels = reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
+  const reductionText = reductions.map((b) => String(b?.pattern || "—")).join(" + ");
+  const acceptedPatternText = confirmationPack ? `${reductionText} + ${confirmationPack.label}` : reductionText;
 
-  // La forma G/M/P se mide hasta el final del segundo bloque. La respuesta
-  // contraria posterior solo confirma el cierre y no altera el tamaño clasificado.
-  const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Number(secondReduction.endMs || selected.formedAtMs));
+  const reductionEndMs = Math.max(...reductions.map((b) => Number(b?.endMs || 0)), 0);
+  const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Math.max(reductionEndMs, selected.formedAtMs));
   if (acceptedPts.length < 5) return null;
   const y0 = Number(acceptedPts[0].y);
   const yEnd = Number(acceptedPts[acceptedPts.length - 1].y);
@@ -23309,32 +23480,39 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const totalPath = acceptedPts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(acceptedPts[i].y)), 0);
   const efficiency = Math.abs(yEnd - y0) / Math.max(totalPath, 1e-9);
 
-  if (dominantAdvance < Math.max(alignedRange * 0.34, Number(tol || 0) * 4.0)) return null;
-  if (oppositeDip > dominantAdvance * 0.62) return null;
-  if (efficiency < 0.09) return null;
-
-  const firstRunMove = Number(firstReduction.runs?.[0]?.move || 0);
-  const secondConfirmation = selected.secondConfirmation;
-  if (!secondConfirmation?.confirmed) return null;
-  const contraryStrong = true;
+  if (dominantAdvance < Math.max(alignedRange * 0.31, Number(tol || 0) * 4.0)) return null;
+  if (oppositeDip > dominantAdvance * 0.68) return null;
+  if (efficiency < 0.075) return null;
 
   let cutsBetween = 0;
   for (let i = 0; i < acceptedRuns.length - 1; i++) {
     if (hasVisualCutBetweenRuns(runs, acceptedRuns[i].idx, acceptedRuns[i + 1].idx, cutMin)) cutsBetween++;
   }
 
-  let points = 0;
-  const reasons = [];
-  points += 5; reasons.push(`${groupText} inicia el primer movimiento visible`);
-  points += 8; reasons.push(`1ª reducción clara con avance estructural: ${firstReduction.pattern}`);
-  points += 8; reasons.push(`2ª reducción clara y distinta con avance estructural: ${secondReduction.pattern}`);
-  points += 5; reasons.push("la segunda reducción comienza después de terminar la primera");
-  if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales entre movimientos"); }
-  points += 3; reasons.push(`último movimiento confirmado: ${contraryText} retrocede ${Math.round(Number(secondConfirmation.retraceRatio || 0) * 100)}% con ${Number(secondConfirmation.oppositeSteps || 0)} pasos`);
-  if (points < 24) return null;
+  let points = 5;
+  const reasons = [`${groupText} inicia el primer movimiento visible`];
+  reductions.forEach((block, index) => {
+    points += 7;
+    reasons.push(`${index + 1}ª reducción clara con avance estructural: ${block.pattern}`);
+  });
+  if (selected.route === "three_reductions") {
+    points += 5;
+    reasons.push("tres reducciones distintas, consecutivas o aisladas");
+    points += 3;
+    reasons.push(`última reducción confirmada por respuesta ${contraryText}`);
+  } else {
+    points += 9;
+    reasons.push(`confirmación extra: ${confirmationPack.label}`);
+    points += 2;
+    reasons.push("la entrada contraria quedó cerrada antes de emitir la alarma");
+  }
+  if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales claros entre movimientos"); }
+  if (points < 29) return null;
 
-  const quality = points * 12 + 42 + Math.min(16, cutsBetween * 3) + 12 - Math.max(0, selected.elapsed - 25000) / 700;
-  const subtype = "2 reducciones separadas y claras";
+  const quality = points * 11.5 + 62 + Math.min(16, cutsBetween * 2.5) - Math.max(0, selected.elapsed - 33000) / 750;
+  const subtype = selected.route === "three_reductions"
+    ? "3 reducciones claras"
+    : `2 reducciones + ${confirmationPack.label}`;
 
   return {
     side,
@@ -23343,16 +23521,16 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     contraryText,
     points,
     quality,
-    qualityLabel: quality >= 250 ? "A" : quality >= 190 ? "B" : "C",
+    qualityLabel: quality >= 250 ? "A" : quality >= 195 ? "B" : "C",
     reasons,
     evalMs,
     formedAtMs: selected.formedAtMs,
     anchorOffsetMs: selected.anchorMs,
     elapsedFromFirstMovementMs: selected.elapsed,
     alignedRange,
-    runs: runs.slice(0, 20),
-    primaryRuns: primaryRuns.slice(0, 14),
-    contraryRuns: contraryRuns.slice(0, 12),
+    runs: runs.slice(0, 26),
+    primaryRuns: primaryRuns.slice(0, 18),
+    contraryRuns: contraryRuns.slice(0, 16),
     primaryMoves,
     contraryMoves,
     labels,
@@ -23361,25 +23539,38 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     reductionBlocks: blocks,
     firstReduction,
     secondReduction,
+    thirdReduction,
+    qualificationRoute: selected.route,
+    qualificationLabel: subtype,
+    confirmationPack: confirmationPack ? {
+      type: confirmationPack.type,
+      label: confirmationPack.label,
+      pattern: confirmationPack.pattern,
+      startMs: Number(confirmationPack.runs?.[0]?.startMs || 0),
+      endMs: Number(confirmationPack.runs?.[confirmationPack.runs.length - 1]?.endMs || 0),
+      formedAtMs: Number(confirmationPack.formedAtMs || 0),
+      runs: confirmationPack.runs.map((r) => ({ ...r })),
+    } : null,
     cutsBetween,
-    contraryStrong,
-    secondReductionConfirmation: {
-      confirmedAtMs: Number(secondConfirmation.confirmedAtMs || 0),
-      responseMove: Number(secondConfirmation.responseMove || 0),
-      lastPrimaryMove: Number(secondConfirmation.lastPrimaryMove || 0),
-      retraceRatio: Number(secondConfirmation.retraceRatio || 0),
-      threshold: Number(secondConfirmation.threshold || 0),
-      oppositeSteps: Number(secondConfirmation.oppositeSteps || 0),
-      durationMs: Number(secondConfirmation.durationMs || 0),
-      responseRun: secondConfirmation.responseRun ? { ...secondConfirmation.responseRun } : null,
-    },
+    contraryStrong: !!confirmationPack || !!selected.confirmation,
+    finalConfirmation: selected.confirmation ? {
+      confirmedAtMs: Number(selected.confirmation.confirmedAtMs || 0),
+      responseMove: Number(selected.confirmation.responseMove || 0),
+      lastPrimaryMove: Number(selected.confirmation.lastPrimaryMove || 0),
+      retraceRatio: Number(selected.confirmation.retraceRatio || 0),
+      threshold: Number(selected.confirmation.threshold || 0),
+      oppositeSteps: Number(selected.confirmation.oppositeSteps || 0),
+      durationMs: Number(selected.confirmation.durationMs || 0),
+      responseRun: selected.confirmation.responseRun ? { ...selected.confirmation.responseRun } : null,
+    } : null,
     visualDisplacementEfficiency: efficiency,
     dominantAdvance,
     oppositeDip,
     acceptedChainRuns: acceptedRuns,
     acceptedChainLabels: acceptedLabels,
     acceptedChainPattern: acceptedPatternText,
-    acceptedReductionBlocks: [firstReduction, secondReduction].map((b) => ({
+    acceptedConfirmationRuns: confirmationPack ? confirmationPack.runs.map((r) => ({ ...r })) : [],
+    acceptedReductionBlocks: reductions.map((b) => ({
       pattern: b.pattern,
       startIndex: b.startIndex,
       endIndex: b.endIndex,
@@ -23438,8 +23629,8 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
-  const status = `🧩 Doble Reducción CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Último movimiento cerrado por respuesta ${best.contraryText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Doble Reducción V110.6: ventana flotante no atada al minuto. Requiere 2 reducciones DISTINTAS y no superpuestas dentro de 30s. Cada impulso reducido debe superar con recorrido claro el extremo del impulso anterior; si no lo supera o apenas lo roza, se clasifica como estancamiento y no cuenta. El último movimiento de la segunda reducción permanece provisional y la alarma solo sale cuando una respuesta contraria real (mínimo 24%, sobre ruido y al menos 2 pasos) confirma que terminó: ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento de la primera reducción.`;
+  const status = `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Reducción Reforzada V110.7: ventana flotante no atada al minuto, con alarma hasta 40s. La señal requiere 3 reducciones claras (consecutivas o aisladas), o 2 reducciones más una confirmación del grupo contrario: P→G, M→G, P→M→G, entrada simétrica de al menos 2 movimientos o entrada fuerte. Cada reducción debe conservar avance estructural; el estancamiento no cuenta. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -23455,7 +23646,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       zoneLow: level - zone * 0.45,
       zoneHigh: level + zone * 0.45,
       points: best.points,
-      maxPoints: 28,
+      maxPoints: 40,
       reasons: best.reasons,
       p0: open,
       pE: current,
@@ -23464,8 +23655,8 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       range: localRange,
       evalSec: Math.round(best.elapsedFromFirstMovementMs / 1000),
       analysisWindowMs: evalMs,
-      irregularityWindow: "flotante 0-30s",
-      maxAnalysisSec: 30,
+      irregularityWindow: "flotante 0-40s",
+      maxAnalysisSec: 40,
       signalFromSec: Math.round(best.elapsedFromFirstMovementMs / 1000),
       motorIndependiente: true,
       constructiveReductionMode: true,
@@ -23487,12 +23678,16 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       acceptedReductionBlocks: best.acceptedReductionBlocks,
       firstConstructiveReduction: best.firstReduction ? { pattern: best.firstReduction.pattern, startMs: best.firstReduction.startMs, endMs: best.firstReduction.endMs } : null,
       secondConstructiveReduction: best.secondReduction ? { pattern: best.secondReduction.pattern, startMs: best.secondReduction.startMs, endMs: best.secondReduction.endMs } : null,
+      thirdConstructiveReduction: best.thirdReduction ? { pattern: best.thirdReduction.pattern, startMs: best.thirdReduction.startMs, endMs: best.thirdReduction.endMs } : null,
+      constructiveQualificationRoute: best.qualificationRoute,
+      constructiveQualificationLabel: best.qualificationLabel,
+      constructiveConfirmationPack: best.confirmationPack,
       constructiveElapsedFromFirstMovementMs: best.elapsedFromFirstMovementMs,
-      visualReductionContraryRuns: [],
+      visualReductionContraryRuns: Array.isArray(best.acceptedConfirmationRuns) ? best.acceptedConfirmationRuns : [],
       visualReductionAllPrimaryRuns: best.primaryRuns,
       visualReductionAllContraryRuns: best.contraryRuns,
       constructiveReductionPairs: best.reductionPairs,
-      constructiveReductionConsecutive: true,
+      constructiveReductionConsecutive: false,
       constructiveReductionDistinct: true,
       constructiveAnchorOffsetMs: best.anchorOffsetMs,
       constructiveFormedAtMs: best.formedAtMs,
@@ -23500,14 +23695,15 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
       secondReductionConfirmed: true,
-      secondReductionConfirmation: best.secondReductionConfirmation,
-      secondReductionConfirmedAtMs: Number(best.secondReductionConfirmation?.confirmedAtMs || best.formedAtMs || 0),
-      secondReductionRetraceRatio: Number(best.secondReductionConfirmation?.retraceRatio || 0),
-      secondReductionOppositeSteps: Number(best.secondReductionConfirmation?.oppositeSteps || 0),
+      thirdReductionConfirmed: !!best.thirdReduction,
+      secondReductionConfirmation: best.finalConfirmation,
+      secondReductionConfirmedAtMs: Number(best.finalConfirmation?.confirmedAtMs || best.formedAtMs || 0),
+      secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
+      secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v110_6_structural_progress_no_stagnation",
+      movementFilter: "v110_7_three_reductions_or_two_plus_confirmation_40s",
       priority: "ALTA",
-      stage: "doble_reduccion_avance_estructural_v110_6",
+      stage: "reduccion_reforzada_v110_7",
       logic: logicText,
       status,
     },
@@ -23587,7 +23783,7 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
       signalPrealertAtSec: Math.round(Number(bestPack.match.meta?.signalFromSec || 0)),
       signalRadar: true,
       signalRadarStartSec: 0,
-      signalRadarEndSec: 30,
+      signalRadarEndSec: 40,
       signalAutoEntrySec: SIGNAL_AUTO_ENTRY_SEC,
       signalRequiresManualPoints: SIGNAL_CONFIRM_MIN,
       signalConfirmations: [],
@@ -23614,7 +23810,7 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
     });
     if (added) {
       constructiveLastSignalBySymbol[sym] = { epochMs: now, key: signalKey };
-      toast(`🧩 ${sym}: 2 reducciones confirmadas`, 1800);
+      toast(`🧩 ${sym}: ${bestPack.match.meta?.constructiveQualificationLabel || "reducción reforzada confirmada"}`, 2100);
       return true;
     }
   } catch (e) {
@@ -23809,7 +24005,7 @@ function analyzeAlcistaQuiebres30sCandidate(candidate, minute, opts = {}) {
       analysisWindowMs: evalMs,
       irregularityWindow: "0-30s",
       confirmationWindow: "20-30s",
-      maxAnalysisSec: 30,
+      maxAnalysisSec: 40,
       signalFromSec: 20,
       bullishCandleOnly: true,
       greenAtConfirm: true,
@@ -24235,7 +24431,7 @@ function analyzeAlcistaReduccion30sCandidate(candidate, minute, opts = {}) {
       analysisWindowMs: evalMs,
       irregularityWindow: "0-30s",
       confirmationWindow: "20-30s",
-      maxAnalysisSec: 30,
+      maxAnalysisSec: 40,
       signalFromSec: 20,
       bullishCandleOnly: true,
       greenAtConfirm,
