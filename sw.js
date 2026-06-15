@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v109.3-audio-robusto (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v109.4 (captura de estudio bajo demanda) */
 "use strict";
 
-const CACHE = "deriv-assets-v109-3-audio-robusto";
+const CACHE = "deriv-assets-v109-4-captura-bajo-demanda";
 
 const ASSETS = [
   "./",
