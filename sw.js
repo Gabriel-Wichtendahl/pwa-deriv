@@ -1,17 +1,20 @@
-/* sw.js — Deriv Signals v110.4 (próximos 60s después de la formación) */
+/* sw.js — Deriv Signals v110.5 (ventana siguiente 60→120 + actualización robusta) */
 "use strict";
 
-const CACHE = "deriv-assets-v110-4-next-60-after-formation";
+const CACHE = "deriv-assets-v110-5-next-window-60-120";
 
-const ASSETS = [
+const CORE_ASSETS = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
   "./manifest.json",
+  "./alert.mp3",
+];
+
+const OPTIONAL_ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
-  "./alert.mp3",
   "./bg-neon.png",
   "./despeje-mental-bg.png",
   "./pausa-visual-bg.png",
@@ -20,7 +23,10 @@ const ASSETS = [
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    await cache.addAll(ASSETS);
+    // Los archivos esenciales sí deben quedar disponibles.
+    await cache.addAll(CORE_ASSETS);
+    // Un asset visual ausente no puede impedir la instalación de la versión nueva.
+    await Promise.allSettled(OPTIONAL_ASSETS.map((asset) => cache.add(asset)));
   })());
   self.skipWaiting();
 });

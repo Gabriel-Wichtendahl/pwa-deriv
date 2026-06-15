@@ -1,6 +1,6 @@
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
-// v110.4: Próximos 60s después de la formación (60→120) para señales flotantes: ALCISTA/BAJISTA/NEUTRO, persistente y recuperable desde Deriv.
+// v110.5: Resultado real de la ventana siguiente 60→120 + captura regenerada + actualización de caché robusta.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_4_NEXT_60_AFTER_FORMATION";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_5_NEXT_WINDOW_60_120";
 
 /* =========================
    Trade account config
@@ -409,7 +409,7 @@ async function getStudyCapture(id) {
 function getStudyCaptureIdFromItem(item) {
   if (!item) return "";
   const jid = item.journal_id || makeJournalIdFromSignal(item);
-  return jid ? `CAPV1103::${String(jid)}`.slice(0, 230) : "";
+  return jid ? `CAPV1105::${String(jid)}`.slice(0, 230) : "";
 }
 function getStudyCaptureTradeResult(item) {
   const b = String(item?.trade?.badge || "").toUpperCase();
@@ -479,7 +479,9 @@ function getStudySignal60Outcome(item) {
     const fromTicks = syncCanonicalSignal60FromStoredTicks(item);
     if (fromTicks) return fromTicks;
     const r = ensureSignalResult60(item); // invalida resultados viejos de otra base temporal
-    return normalizeSignalResult60Outcome(r?.outcome || item?.nextOutcome || "");
+    // En señales flotantes, nextOutcome nunca puede rescatar un resultado viejo.
+    // La única fuente válida es signalResult60 resuelto para ancla+60 → ancla+120.
+    return normalizeSignalResult60Outcome(r?.outcome || "");
   }
   return normalizeSignalResult60Outcome(item?.signalResult60?.outcome || item?.nextOutcome || "");
 }
@@ -789,7 +791,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   studyRoundRect(ctx, 24, 18, W - 48, 88, 22, true, false);
   ctx.fillStyle = "#e5edf9";
   ctx.font = "800 27px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Captura de estudio · cronología real", 52, 52);
+  ctx.fillText("Captura de estudio · cronología real · v110.5", 52, 52);
   ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.78)";
   const headerLine = hasRealContract
@@ -2598,7 +2600,7 @@ const SIGNAL_RESULT_60_DURATION_MS = 60000;
 const SIGNAL_RESULT_60_LIVE_GRACE_MS = 10000;
 // En Doble Reducción, la flecha muestra los 60 segundos SIGUIENTES a la
 // formación: compara el precio en ancla+60s contra el precio en ancla+120s.
-const SIGNAL_RESULT_60_BASIS = "next_60_after_formation_v110_4";
+const SIGNAL_RESULT_60_BASIS = "next_60_after_formation_v110_5";
 const signalResult60HydrationPending = new Set();
 let constructiveRollingTicksBySymbol = Object.create(null);
 let constructiveLastSignalBySymbol = Object.create(null);
@@ -2665,7 +2667,8 @@ function getItemNextOutcomeValue(itemOrOutcome) {
       const fromTicks = syncCanonicalSignal60FromStoredTicks(itemOrOutcome);
       if (fromTicks) return fromTicks;
       const r = ensureSignalResult60(itemOrOutcome); // limpia el resultado 0→60 anterior
-      return normalizeSignalResult60Outcome(r?.outcome || itemOrOutcome?.nextOutcome || "");
+      // No usar nextOutcome como fallback: podría pertenecer a la ventana 0→60.
+      return normalizeSignalResult60Outcome(r?.outcome || "");
     }
     return String(itemOrOutcome.nextOutcome || "").toLowerCase().trim();
   }
