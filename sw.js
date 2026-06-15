@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v106.9.4.15 (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v109.8 (único motor Doble Reducción) */
 "use strict";
 
-const CACHE = "deriv-assets-v106-9-4-15-history-1000";
+const CACHE = "deriv-assets-v109-8-solo-doble-reduccion-real";
 
 const ASSETS = [
   "./",
