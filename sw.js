@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v109.4 (captura de estudio bajo demanda) */
+/* sw.js — Deriv Signals v109.5-doble-reduccion-unico (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
 "use strict";
 
-const CACHE = "deriv-assets-v109-4-captura-bajo-demanda";
+const CACHE = "deriv-assets-v109-5-doble-reduccion-unico";
 
 const ASSETS = [
   "./",
