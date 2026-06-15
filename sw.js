@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v110.0 (único motor Doble Reducción) */
+/* sw.js — Deriv Signals v110.2 (resultado 60s desde primer movimiento) */
 "use strict";
 
-const CACHE = "deriv-assets-v110-0-separa-senal-deriv";
+const CACHE = "deriv-assets-v110-2-anchor-60s";
 
 const ASSETS = [
   "./",
