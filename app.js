@@ -9146,10 +9146,57 @@ let visualReadOverlayEnabled = (() => {
 let visualReadPanelEl = null;
 let visualReadReasonWrapEl = null;
 
+function getVisualReadToggleButton() {
+  return document.getElementById("visualReadToggleBtn")
+    || visualReadPanelEl?.querySelector?.("#visualReadToggleBtn")
+    || null;
+}
+
+function refreshVisualReadToggleButton() {
+  const btn = getVisualReadToggleButton();
+  if (!btn) return;
+  btn.textContent = visualReadOverlayEnabled ? "👁️ Lectura ON" : "👁️ Lectura OFF";
+  btn.classList.toggle("active", !!visualReadOverlayEnabled);
+  btn.setAttribute("aria-pressed", visualReadOverlayEnabled ? "true" : "false");
+  btn.title = visualReadOverlayEnabled
+    ? "Ocultar lectura visual de las dos reducciones"
+    : "Mostrar lectura visual de las dos reducciones";
+}
+
+function toggleVisualReadOverlay() {
+  visualReadOverlayEnabled = !visualReadOverlayEnabled;
+  try { localStorage.setItem(VISUAL_READ_OVERLAY_KEY, visualReadOverlayEnabled ? "1" : "0"); } catch {}
+  refreshVisualReadToggleButton();
+  updateVisualReadPanelUI();
+  requestModalDraw(true);
+  setTimeout(() => requestModalDraw(true), 40);
+  toast(visualReadOverlayEnabled ? "👁️ Lectura visual activada" : "🙈 Lectura visual oculta", 900);
+}
+
+function bindVisualReadToggleButton(btn) {
+  if (!btn) return;
+  btn.onclick = (e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    toggleVisualReadOverlay();
+  };
+  btn.dataset.visualReadBound = "1";
+  refreshVisualReadToggleButton();
+}
+
 function isVisualReductionItem(item) {
-  const mode = normalizeSignalMode(item?.mode || item?.giroPolaridad?.levelMode || item?.snrLevel?.levelMode || "");
+  const rawMode = String(item?.mode || item?.giroPolaridad?.levelMode || item?.snrLevel?.levelMode || "").toLowerCase();
+  const mode = normalizeSignalMode(rawMode);
   const meta = item?.giroPolaridad || item?.snrLevel || {};
-  return mode === MODE_REDUCCION_VISUAL_25S || !!meta.visualReductionMode || String(meta.levelMode || "") === "reduccion_visual_25s";
+  const levelMode = String(meta.levelMode || "").toLowerCase();
+  return mode === MODE_REDUCCION_VISUAL_25S
+    || !!meta.visualReductionMode
+    || levelMode === "reduccion_visual_25s"
+    || levelMode === "reduccion_constructiva_continua"
+    || rawMode.includes("doble reduccion")
+    || rawMode.includes("doble reducción")
+    || rawMode.includes("reduccion constructiva")
+    || rawMode.includes("reducción constructiva");
 }
 function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
   if (!run || typeof run !== "object") return null;
@@ -9278,12 +9325,7 @@ function ensureVisualReadPanel() {
   visualReadPanelEl = panel;
   visualReadReasonWrapEl = panel.querySelector("#visualReadReasonWrap");
   const toggleBtn = panel.querySelector("#visualReadToggleBtn");
-  if (toggleBtn) toggleBtn.onclick = () => {
-    visualReadOverlayEnabled = !visualReadOverlayEnabled;
-    try { localStorage.setItem(VISUAL_READ_OVERLAY_KEY, visualReadOverlayEnabled ? "1" : "0"); } catch {}
-    updateVisualReadPanelUI();
-    requestModalDraw(true);
-  };
+  bindVisualReadToggleButton(toggleBtn);
   const goodBtn = panel.querySelector("#visualReadGoodBtn");
   const badBtn = panel.querySelector("#visualReadBadBtn");
   if (goodBtn) goodBtn.onclick = () => saveVisualReadFeedback("ok", "");
@@ -9346,13 +9388,10 @@ function updateVisualReadPanelUI() {
   }
   const read = buildVisualReadFromItem(modalCurrentItem);
   panel.style.display = "none";
-  const toggleBtn = panel.querySelector("#visualReadToggleBtn");
+  const toggleBtn = getVisualReadToggleButton();
   const summary = panel.querySelector("#visualReadSummary");
   const detail = panel.querySelector("#visualReadDetail");
-  if (toggleBtn) {
-    toggleBtn.textContent = visualReadOverlayEnabled ? "👁️ Lectura ON" : "👁️ Lectura OFF";
-    toggleBtn.classList.toggle("active", !!visualReadOverlayEnabled);
-  }
+  if (toggleBtn) refreshVisualReadToggleButton();
   if (summary) summary.textContent = getVisualReadText(read);
   if (detail) {
     const fb = modalCurrentItem.visualReadFeedback;
@@ -9870,6 +9909,7 @@ function updateModalFooterReadingUI() {
   if (toggleBtn && modalFooterChartTools && toggleBtn.parentElement !== modalFooterChartTools) {
     modalFooterChartTools.prepend(toggleBtn);
   }
+  bindVisualReadToggleButton(toggleBtn);
   if (panel) panel.style.display = "none";
   const tradeRow = document.querySelector("#chartModal .modalFooter .tradeRow");
   if (tradeRow) tradeRow.style.display = "none";
