@@ -1,6 +1,6 @@
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
-// v110.5: Resultado real de la ventana siguiente 60→120 + captura regenerada + actualización de caché robusta.
+// v111.1: inicio irregular estricto; se conservan 3 reducciones y 2 reducciones + ataque contrario.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V111_0_INICIO_IRREGULAR_RESPUESTA_SANA";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V111_1_INICIO_IRREGULAR_ESTRICTO";
 
 /* =========================
    Trade account config
@@ -791,7 +791,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   studyRoundRect(ctx, 24, 18, W - 48, 88, 22, true, false);
   ctx.fillStyle = "#e5edf9";
   ctx.font = "800 27px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Captura de estudio · cronología real · v110.5", 52, 52);
+  ctx.fillText("Captura de estudio · cronología real · v111.1", 52, 52);
   ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.78)";
   const headerLine = hasRealContract
@@ -869,7 +869,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     min -= range * 0.09; max += range * 0.09;
     const yOf = (q) => cy1 - ((Number(q) - min) / Math.max(max - min, 1e-9)) * (cy1 - cy0);
 
-    // V111.0: el inicio irregular se muestra como un único bloque macro, sin
+    // V111.1: el inicio irregular se muestra como un único bloque macro, sin
     // confundir sus impulsos internos con reducciones separadas.
     const irregularBlock = meta?.constructiveQualificationRoute === "irregular_initial_response" && meta?.irregularInitialBlock
       ? meta.irregularInitialBlock
@@ -1342,7 +1342,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "INICIO_IRREGULAR_MAS_RESPUESTA_SANA_V111_0_20260619";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "INICIO_IRREGULAR_ESTRICTO_V111_1_20260619";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -10607,7 +10607,7 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   const sellCol = "rgba(248,113,113,.55)";
   const buyFill = "rgba(22,163,74,.38)";
   const sellFill = "rgba(185,28,28,.38)";
-  // V111.0: además de las reducciones, Lectura ON muestra todo el inicio irregular
+  // V111.1: además de las reducciones, Lectura ON muestra todo el inicio irregular
   // y la respuesta sana que lo confirmó.
   const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, isIrregularRead ? 12 : 9) : (read.primaryRuns || []);
   const irregularCorrectionRuns = isIrregularRead ? (read.irregularCorrectionRuns || []).slice(0, 10) : [];
@@ -13119,6 +13119,12 @@ function normalizeSNRLevelMeta(meta) {
           formedAtMs: n(meta.constructiveConfirmationPack.formedAtMs),
           position: s(meta.constructiveConfirmationPack.position),
           positionLabel: s(meta.constructiveConfirmationPack.positionLabel),
+          recovery: n(meta.constructiveConfirmationPack.recovery),
+          recoveryRequired: n(meta.constructiveConfirmationPack.recoveryRequired),
+          recoveryRatio: n(meta.constructiveConfirmationPack.recoveryRatio),
+          brokenPivotY: n(meta.constructiveConfirmationPack.brokenPivotY),
+          breakDepth: n(meta.constructiveConfirmationPack.breakDepth),
+          continuationMargin: n(meta.constructiveConfirmationPack.continuationMargin),
           runs: Array.isArray(meta.constructiveConfirmationPack.runs)
             ? meta.constructiveConfirmationPack.runs.slice(0, 3).map((run) => ({
                 startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx),
@@ -13138,8 +13144,13 @@ function normalizeSNRLevelMeta(meta) {
           correctionShapes: Array.isArray(meta.irregularInitialBlock.correctionShapes) ? meta.irregularInitialBlock.correctionShapes.map((x) => s(x)).slice(0, 12) : [],
           sizeRatio: n(meta.irregularInitialBlock.sizeRatio),
           speedCv: n(meta.irregularInitialBlock.speedCv),
+          durationMs: n(meta.irregularInitialBlock.durationMs),
           efficiency: n(meta.irregularInitialBlock.efficiency),
           advance: n(meta.irregularInitialBlock.advance),
+          netAdvance: n(meta.irregularInitialBlock.netAdvance),
+          dominanceRatio: n(meta.irregularInitialBlock.dominanceRatio),
+          terminalEndY: n(meta.irregularInitialBlock.terminalEndY),
+          lastCorrectionEndY: n(meta.irregularInitialBlock.lastCorrectionEndY),
           oppositeDip: n(meta.irregularInitialBlock.oppositeDip),
           structuralAdvances: n(meta.irregularInitialBlock.structuralAdvances, 0),
           runs: Array.isArray(meta.irregularInitialBlock.runs)
@@ -23405,9 +23416,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const irregularContraryRawRuns = runs
     .map((r, idx) => ({ ...r, idx: Number.isFinite(Number(r?.idx)) ? Number(r.idx) : idx, move: Number(r?.move || 0) }))
     .filter((r) => Number(r.sign || 0) < 0 && Number(r.move || 0) >= irregularCorrectionMin);
-  // V111.0: la nueva ruta de inicio irregular necesita como mínimo 3 impulsos
-  // dominantes. Las rutas de reducciones mantienen sus propias exigencias.
-  if (primaryRuns.length < 3 && irregularPrimaryRuns.length < 3) return null;
+  // V111.1: la ruta irregular exige 4 impulsos dominantes.
+  // Las rutas de 3 reducciones y 2 reducciones + ataque conservan sus reglas.
+  if (primaryRuns.length < 3 && irregularPrimaryRuns.length < 4) return null;
 
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
   const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
@@ -23621,7 +23632,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   };
 
 
-  // V111.0 — Ruta C: movimiento macro irregular inicial + respuesta sana contraria.
+  // V111.1 — Ruta C estricta: movimiento macro irregular inicial + respuesta sana contraria.
   // El bloque irregular puede mezclar G/M/P, velocidades y formas, pero debe seguir
   // siendo direccional. Se ancla en su primer impulso y debe cerrarse antes de 30s.
   const getRunShapeInfo = (run, referenceSpeed = 0) => {
@@ -23657,7 +23668,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       .filter((r) => Number(r.endMs || 0) <= deadlineMs)
       .filter((r) => Number(r.move || 0) >= visibleMin)
       .sort((a, b) => Number(a.idx) - Number(b.idx));
-    if (!candidates.length) return null;
+    if (candidates.length < 2) return null;
 
     const responseProgressOk = (a, b) => {
       const aEnd = Number(a?.endY);
@@ -23672,13 +23683,55 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
 
     const packs = [];
     const addPack = (pack) => {
-      if (!pack || !Array.isArray(pack.runs) || !pack.runs.length) return;
-      const last = pack.runs[pack.runs.length - 1];
+      // V111.1: la respuesta de la ruta irregular no puede ser un rebote aislado.
+      // Exige al menos dos movimientos contrarios reales, posteriores al extremo.
+      if (!pack || !Array.isArray(pack.runs) || pack.runs.length < 2) return;
+      const responseRuns = pack.runs.slice().sort((a, b) => Number(a.idx) - Number(b.idx));
+      const last = responseRuns[responseRuns.length - 1];
       const close = closeOppositeRun(last, true);
       if (!close) return;
       const formedAtMs = Number(close.confirmedAtMs || 0);
       if (!(formedAtMs > blockEndMs) || formedAtMs > deadlineMs) return;
-      packs.push({ ...pack, close, formedAtMs, position: "after_irregular", positionLabel: "después del inicio irregular" });
+
+      const terminalY = Number(irregularBlock.terminalEndY);
+      const netAdvance = Math.max(Number(irregularBlock.netAdvance || irregularBlock.advance || 0), 1e-9);
+      const pivotY = Number(irregularBlock.lastCorrectionEndY);
+      const responseEnds = responseRuns.map((r) => Number(r?.endY)).filter(Number.isFinite);
+      if (!Number.isFinite(terminalY) || !Number.isFinite(pivotY) || responseEnds.length !== responseRuns.length) return;
+
+      // En la coordenada alineada el grupo dominante avanza hacia arriba y la
+      // respuesta contraria hacia abajo. Debe recuperar al menos 35% del avance.
+      const responseLowY = Math.min(...responseEnds);
+      const recovery = terminalY - responseLowY;
+      const recoveryRequired = Math.max(netAdvance * 0.35, alignedRange * 0.10, Number(tol || 0) * 3.0, 1e-9);
+      if (recovery < recoveryRequired) return;
+
+      // Debe romper el último pivote correctivo interno y continuar después de
+      // la ruptura; no alcanza con tocarlo o quedar estacionado sobre el nivel.
+      const continuationMargin = Math.max(alignedRange * 0.025, Number(tol || 0) * 1.20, netAdvance * 0.035, 1e-9);
+      const breakDepth = pivotY - responseLowY;
+      if (breakDepth < continuationMargin) return;
+
+      // El último movimiento de la respuesta debe conservar el progreso logrado.
+      // Si termina rebotando demasiado antes de confirmarse, no es una respuesta sana.
+      const finalEndY = Number(last?.endY);
+      const allowedGiveback = Math.max(alignedRange * 0.020, Number(tol || 0) * 1.0, recovery * 0.12, 1e-9);
+      if (!Number.isFinite(finalEndY) || finalEndY > responseLowY + allowedGiveback) return;
+
+      packs.push({
+        ...pack,
+        runs: responseRuns,
+        close,
+        formedAtMs,
+        position: "after_irregular",
+        positionLabel: "después del extremo irregular",
+        recovery,
+        recoveryRequired,
+        recoveryRatio: recovery / Math.max(netAdvance, 1e-9),
+        brokenPivotY: pivotY,
+        breakDepth,
+        continuationMargin,
+      });
     };
 
     // Respuesta creciente P→G, M→G o P→M→G.
@@ -23739,36 +23792,27 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       }
     }
 
-    // Una sola entrada muy fuerte también puede cerrar el patrón.
-    for (const r of candidates) {
-      const move = Number(r.move || 0);
-      const strongThreshold = Math.max(alignedRange * 0.205, primaryRef * 0.62, Number(tol || 0) * 4.4, 1e-9);
-      if (move >= strongThreshold) {
-        addPack({
-          type: "opposite_strong",
-          label: `${contraryText} fuerte`,
-          pattern: "FUERTE",
-          runs: [r],
-          strength: 36 + move / Math.max(strongThreshold, 1e-9) * 11,
-        });
-      }
-    }
+    // V111.1: una entrada fuerte aislada ya no basta para la ruta irregular.
+    // La respuesta debe estar construida por un mínimo de dos movimientos reales.
 
     return packs.sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0))[0] || null;
   };
 
   const findIrregularInitialCandidate = () => {
-    if (irregularPrimaryRuns.length < 3) return null;
+    if (irregularPrimaryRuns.length < 4) return null;
     const first = irregularPrimaryRuns[0];
     const anchorMs = Number(first?.startMs || 0);
     const maxIrregularEndMs = Math.min(CONSTRUCTIVE_FLOATING_WINDOW_MS, anchorMs + 30000);
     const candidates = [];
 
-    for (let endPos = 2; endPos < irregularPrimaryRuns.length; endPos++) {
+    for (let endPos = 3; endPos < irregularPrimaryRuns.length; endPos++) {
       const blockPrimary = irregularPrimaryRuns.slice(0, endPos + 1);
       const last = blockPrimary[blockPrimary.length - 1];
       const endMs = Number(last?.endMs || 0);
       if (!(endMs > anchorMs) || endMs > maxIrregularEndMs) break;
+      const irregularDurationMs = endMs - anchorMs;
+      // V111.1: debe ser un movimiento macro real, no un zigzag corto.
+      if (irregularDurationMs < 12000 || irregularDurationMs > 30000) continue;
       const startIdx = Number(first?.idx ?? 0);
       const endIdx = Number(last?.idx ?? -1);
       const internalCorrections = irregularContraryRawRuns
@@ -23780,7 +23824,8 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       const moveSummary = summarizeVisualMoves(moves);
       const distinctLabels = new Set(moveSummary.labels).size;
       const sizeRatio = Math.max(...moves) / Math.max(Math.min(...moves), 1e-9);
-      if (distinctLabels < 2 && sizeRatio < 1.42) continue;
+      // Se exigen por lo menos dos tamaños relativos distintos entre G/M/P.
+      if (distinctLabels < 2) continue;
 
       const speeds = blockPrimary.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
       const sortedSpeeds = speeds.slice().sort((a, b) => a - b);
@@ -23797,14 +23842,21 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       const y0 = Number(blockPts[0].y);
       const yMax = Math.max(...blockPts.map((p) => Number(p.y)));
       const yMin = Math.min(...blockPts.map((p) => Number(p.y)));
+      const terminalEndY = Number(last?.endY);
+      if (!Number.isFinite(terminalEndY)) continue;
+      const netAdvance = terminalEndY - y0;
       const advance = yMax - y0;
       const oppositeDip = Math.max(0, y0 - yMin);
       let path = 0;
       for (let i = 1; i < blockPts.length; i++) path += Math.abs(Number(blockPts[i].y) - Number(blockPts[i - 1].y));
-      const efficiency = advance / Math.max(path, 1e-9);
+      // La eficiencia se mide contra dónde termina realmente el bloque, no contra
+      // un máximo anterior que después haya sido devuelto.
+      const efficiency = netAdvance / Math.max(path, 1e-9);
       const primarySum = moves.reduce((a, b) => a + b, 0);
       const correctionMoves = internalCorrections.map((r) => Number(r.move || 0));
       const correctionSum = correctionMoves.reduce((a, b) => a + b, 0);
+      const dominanceRatio = primarySum / Math.max(primarySum + correctionSum, 1e-9);
+      if (dominanceRatio < 0.65) continue;
       const correctionLabels = summarizeVisualMoves(correctionMoves).labels;
       const correctionSpeeds = internalCorrections.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
       const sortedCorrectionSpeeds = correctionSpeeds.slice().sort((a, b) => a - b);
@@ -23826,20 +23878,34 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
           runningExtreme = Math.max(runningExtreme, curExtreme);
         }
       }
-      const requiredAdvances = Math.max(1, Math.ceil((blockPrimary.length - 1) * 0.50));
+      const requiredAdvances = Math.max(2, Math.ceil((blockPrimary.length - 1) * 0.60));
       if (structuralAdvances < requiredAdvances) continue;
-      if (advance < Math.max(alignedRange * 0.25, Number(tol || 0) * 4.0)) continue;
-      if (primarySum < correctionSum * 1.04) continue;
-      if (oppositeDip > advance * 0.86) continue;
-      if (efficiency < 0.13) continue;
+
+      // El último impulso debe dejar el extremo más avanzado del bloque. Si el
+      // mejor máximo/mínimo quedó atrás, se interpreta como pérdida o estancamiento.
+      const priorExtreme = Math.max(...blockPrimary.slice(0, -1).map((r) => Number(r?.endY)).filter(Number.isFinite));
+      const terminalProgressRequired = Math.max(alignedRange * 0.012, Number(tol || 0) * 0.90, Number(last?.move || 0) * 0.04, 1e-9);
+      if (!Number.isFinite(priorExtreme) || terminalEndY - priorExtreme < terminalProgressRequired) continue;
+      const terminalExtremeTolerance = Math.max(alignedRange * 0.010, Number(tol || 0) * 0.85, 1e-9);
+      if (yMax - terminalEndY > terminalExtremeTolerance) continue;
+
+      // Debe terminar suficientemente lejos del ancla y conservar dirección.
+      if (netAdvance < Math.max(alignedRange * 0.30, Number(tol || 0) * 4.5)) continue;
+      if (oppositeDip > netAdvance * 0.68) continue;
+      if (efficiency < 0.20) continue;
 
       const irregularEnough = sizeRatio >= 1.42 || speedCv >= 0.30 || distinctShapes >= 2 || efficiency <= 0.62;
       if (!irregularEnough) continue;
+
+      const lastInternalCorrection = internalCorrections[internalCorrections.length - 1] || null;
+      const lastCorrectionEndY = Number(lastInternalCorrection?.endY);
+      if (!Number.isFinite(lastCorrectionEndY)) continue;
 
       const irregularBlock = {
         anchorMs,
         startMs: anchorMs,
         endMs,
+        durationMs: irregularDurationMs,
         startIdx,
         endIdx,
         primaryRuns: blockPrimary.map((r, i) => ({ ...r, irregularLabel: moveSummary.labels[i] || "", irregularShape: shapes[i] || "ANGULO", irregularInitial: true })),
@@ -23855,9 +23921,13 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         distinctShapes,
         efficiency,
         advance,
+        netAdvance,
+        terminalEndY,
+        lastCorrectionEndY,
         oppositeDip,
         primarySum,
         correctionSum,
+        dominanceRatio,
         structuralAdvances,
         structuralChecks,
       };
@@ -23948,7 +24018,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   // Ruta C: inicio irregular direccional (0–30s) + respuesta sana contraria (hasta 40s).
   // Esta ruta no exige reducciones internas: todo el recorrido desordenado se agrupa
   // como un único movimiento macro y la señal se confirma por la respuesta opuesta.
-  consider(findIrregularInitialCandidate());
+  // V111.1: la ruta irregular tiene prioridad secundaria. Solo se evalúa
+  // cuando no se completó 3 reducciones ni 2 reducciones + ataque contrario.
+  if (!selected) consider(findIrregularInitialCandidate());
 
   if (!selected) return null;
 
@@ -24010,8 +24082,12 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     reasons.push(`tamaños y formas mixtas: ${irregularBlock.labels.join("→")} · ${(irregularBlock.shapes || []).join("/")}`);
     points += 4;
     reasons.push(`${irregularBlock.structuralAdvances} avances estructurales dentro del recorrido irregular`);
+    points += 4;
+    reasons.push(`dominio acumulado ${(Number(irregularBlock.dominanceRatio || 0) * 100).toFixed(0)}% y duración ${(Number(irregularBlock.durationMs || 0) / 1000).toFixed(1)}s`);
     points += 9;
     reasons.push(`respuesta sana ${confirmationPack?.positionLabel || "posterior"}: ${confirmationPack?.label || "grupo contrario"}`);
+    points += 3;
+    reasons.push(`recupera ${(Number(confirmationPack?.recoveryRatio || 0) * 100).toFixed(0)}%, rompe el último pivote y continúa`);
     if (Number(irregularBlock.efficiency || 0) <= 0.62) {
       points += 2;
       reasons.push("recorrido macro direccional con construcción irregular visible");
@@ -24081,6 +24157,12 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       position: String(confirmationPack.position || (isIrregularRoute ? "after_irregular" : "after")),
       positionLabel: String(confirmationPack.positionLabel || (isIrregularRoute ? "después del inicio irregular" : "después de la segunda reducción")),
       runs: confirmationPack.runs.map((r) => ({ ...r })),
+      recovery: Number(confirmationPack.recovery || 0),
+      recoveryRequired: Number(confirmationPack.recoveryRequired || 0),
+      recoveryRatio: Number(confirmationPack.recoveryRatio || 0),
+      brokenPivotY: Number(confirmationPack.brokenPivotY || 0),
+      breakDepth: Number(confirmationPack.breakDepth || 0),
+      continuationMargin: Number(confirmationPack.continuationMargin || 0),
     } : null,
     irregularInitialBlock: isIrregularRoute ? {
       startMs: Number(irregularBlock.startMs || 0),
@@ -24092,8 +24174,13 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       correctionShapes: Array.isArray(irregularBlock.correctionShapes) ? irregularBlock.correctionShapes.slice() : [],
       sizeRatio: Number(irregularBlock.sizeRatio || 0),
       speedCv: Number(irregularBlock.speedCv || 0),
+      durationMs: Number(irregularBlock.durationMs || 0),
       efficiency: Number(irregularBlock.efficiency || 0),
       advance: Number(irregularBlock.advance || 0),
+      netAdvance: Number(irregularBlock.netAdvance || 0),
+      terminalEndY: Number(irregularBlock.terminalEndY || 0),
+      lastCorrectionEndY: Number(irregularBlock.lastCorrectionEndY || 0),
+      dominanceRatio: Number(irregularBlock.dominanceRatio || 0),
       oppositeDip: Number(irregularBlock.oppositeDip || 0),
       structuralAdvances: Number(irregularBlock.structuralAdvances || 0),
       runs: Array.isArray(irregularBlock.primaryRuns) ? irregularBlock.primaryRuns.map((r) => ({ ...r })) : [],
@@ -24181,7 +24268,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const status = isIrregularRoute
     ? `🧩 Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
     : `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Motor V111.0: ventana flotante no atada al minuto y alarma hasta 40s. Rutas válidas: (1) 3 reducciones claras; (2) 2 reducciones más ataque contrario en orden flexible; o (3) movimiento macro irregular direccional anclado en el primer impulso, construido antes de 30s con al menos 3 impulsos dominantes de tamaños/formas mezcladas, seguido por respuesta sana contraria de mínimo 2 movimientos, crecimiento, simetría o entrada fuerte. El rango puro y el estancamiento no cuentan. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const logicText = `Motor V111.1: ventana flotante no atada al minuto y alarma hasta 40s. Se mantienen sin cambios las rutas (1) 3 reducciones claras y (2) 2 reducciones más ataque contrario en orden flexible. La ruta (3) irregular es secundaria y exige: 4 impulsos dominantes, 2 correcciones internas, duración 12–30s, dominio acumulado mínimo 65%, último extremo como el más avanzado del bloque y respuesta contraria posterior de mínimo 2 movimientos que recupere al menos 35%, rompa el último pivote correctivo y continúe después de la ruptura. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -24255,9 +24342,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: isIrregularRoute ? "v111_0_inicio_irregular_respuesta_sana_40s" : "v111_0_reduccion_reforzada_40s",
+      movementFilter: isIrregularRoute ? "v111_1_inicio_irregular_estricto_40s" : "v111_1_reduccion_reforzada_sin_cambios_40s",
       priority: "ALTA",
-      stage: isIrregularRoute ? "inicio_irregular_respuesta_sana_v111_0" : "reduccion_reforzada_v111_0",
+      stage: isIrregularRoute ? "inicio_irregular_estricto_v111_1" : "reduccion_reforzada_v111_1",
       logic: logicText,
       status,
     },
