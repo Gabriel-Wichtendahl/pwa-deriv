@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V110_5_NEXT_WINDOW_60_120";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V111_0_INICIO_IRREGULAR_RESPUESTA_SANA";
 
 /* =========================
    Trade account config
@@ -409,7 +409,7 @@ async function getStudyCapture(id) {
 function getStudyCaptureIdFromItem(item) {
   if (!item) return "";
   const jid = item.journal_id || makeJournalIdFromSignal(item);
-  return jid ? `CAPV1105::${String(jid)}`.slice(0, 230) : "";
+  return jid ? `CAPV1110::${String(jid)}`.slice(0, 230) : "";
 }
 function getStudyCaptureTradeResult(item) {
   const b = String(item?.trade?.badge || "").toUpperCase();
@@ -869,6 +869,29 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     min -= range * 0.09; max += range * 0.09;
     const yOf = (q) => cy1 - ((Number(q) - min) / Math.max(max - min, 1e-9)) * (cy1 - cy0);
 
+    // V111.0: el inicio irregular se muestra como un único bloque macro, sin
+    // confundir sus impulsos internos con reducciones separadas.
+    const irregularBlock = meta?.constructiveQualificationRoute === "irregular_initial_response" && meta?.irregularInitialBlock
+      ? meta.irregularInitialBlock
+      : null;
+    if (irregularBlock && Number.isFinite(Number(irregularBlock.startMs)) && Number.isFinite(Number(irregularBlock.endMs))) {
+      const ix0 = xOf(Number(irregularBlock.startMs));
+      const ix1 = xOf(Number(irregularBlock.endMs));
+      ctx.fillStyle = "rgba(14,165,233,.075)";
+      ctx.fillRect(ix0, cy0 + 42, Math.max(3, ix1 - ix0), cy1 - cy0 - 42);
+      studyDrawPill(
+        ctx,
+        Math.max(cx0 + 6, Math.min(ix0 + 4, cx1 - 232)),
+        cy0 + 44,
+        226,
+        27,
+        `Inicio irregular ${String(irregularBlock.pattern || "G/M/P")}`,
+        "rgba(14,165,233,.56)",
+        "#e0f2fe",
+        12
+      );
+    }
+
     // Reducciones aceptadas (2 o 3): se muestran como bloques, sin deformar la línea real.
     const blocks = Array.isArray(meta?.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
     const blockColors = ["rgba(34,197,94,.52)", "rgba(168,85,247,.52)", "rgba(14,165,233,.52)"];
@@ -899,7 +922,8 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
       const qx1 = xOf(Number(confirmationPack.endMs));
       ctx.fillStyle = "rgba(245,158,11,.08)";
       ctx.fillRect(qx0, cy0 + 42, Math.max(3, qx1 - qx0), cy1 - cy0 - 42);
-      studyDrawPill(ctx, Math.max(cx0 + 6, Math.min(qx0 + 4, cx1 - 210)), cy0 + 146, 204, 27, `Conf. ${String(confirmationPack.label || confirmationPack.pattern || "contraria")}`, "rgba(245,158,11,.55)", "#fff7ed", 12);
+      const confPrefix = meta?.constructiveQualificationRoute === "irregular_initial_response" ? "Respuesta" : "Conf.";
+      studyDrawPill(ctx, Math.max(cx0 + 6, Math.min(qx0 + 4, cx1 - 226)), cy0 + 146, 220, 27, `${confPrefix} ${String(confirmationPack.label || confirmationPack.pattern || "contraria")}`, "rgba(245,158,11,.55)", "#fff7ed", 12);
     }
 
     if (shouldDrawStudyLevel(meta)) {
@@ -1318,7 +1342,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "REDUCCION_REFORZADA_3_O_2_MAS_CONFIRMACION_V110_7_20260615";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "INICIO_IRREGULAR_MAS_RESPUESTA_SANA_V111_0_20260619";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -10212,7 +10236,10 @@ function normalizeVisualReadRun(run, fallbackSide = "", label = "") {
     move: Number(run.move || Math.abs(endQuote - startQuote)) || 0,
     sign: Number(run.sign || 0),
     side: fallbackSide,
-    label: label || "",
+    label: label || String(run.irregularLabel || ""),
+    shape: String(run.irregularShape || run.shape || ""),
+    irregularInitial: !!run.irregularInitial || !!run.irregularLabel || !!run.irregularShape,
+    irregularInitialCorrection: !!run.irregularInitialCorrection,
     idx: Number(run.idx || 0),
     points,
   };
@@ -10232,12 +10259,19 @@ function buildVisualReadFromItem(item) {
   const dominant = String(meta.visualReductionGroup || "").toLowerCase().includes("vendedor") ? "vendedor" : "comprador";
   const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
   const isConstructiveRead = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  const qualificationRoute = String(meta.constructiveQualificationRoute || "");
+  const irregularInitialBlock = qualificationRoute === "irregular_initial_response" && meta.irregularInitialBlock && typeof meta.irregularInitialBlock === "object"
+    ? meta.irregularInitialBlock
+    : null;
+  const isIrregularRead = !!irregularInitialBlock;
   let primaryLabels = Array.isArray(meta.visualReductionLabels)
     ? meta.visualReductionLabels.filter(Boolean)
     : splitPatternText(meta.visualReductionPattern);
   if (isConstructiveRead) {
     const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks : [];
-    if (blocks.length >= 2) {
+    if (isIrregularRead && Array.isArray(irregularInitialBlock.labels) && irregularInitialBlock.labels.length) {
+      primaryLabels = irregularInitialBlock.labels.slice();
+    } else if (blocks.length >= 2) {
       primaryLabels = blocks.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
     } else {
       const patLabels = splitPatternText(meta.visualReductionPattern || meta.acceptedChainPattern || "G→M");
@@ -10261,12 +10295,17 @@ function buildVisualReadFromItem(item) {
       contraryLabels = confirmationPack.runs.map((_, i) => `C${i + 1}`);
     }
   }
-  const primaryRunsRaw = Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : [];
+  const primaryRunsRaw = isIrregularRead && Array.isArray(irregularInitialBlock.runs) && irregularInitialBlock.runs.length
+    ? irregularInitialBlock.runs
+    : (Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : []);
   const contraryRunsRaw = isConstructiveRead
     ? (Array.isArray(meta.acceptedConfirmationRuns) && meta.acceptedConfirmationRuns.length
         ? meta.acceptedConfirmationRuns
         : Array.isArray(confirmationPack?.runs) ? confirmationPack.runs : [])
     : (Array.isArray(meta.visualReductionContraryRuns) ? meta.visualReductionContraryRuns : []);
+  const irregularCorrectionRunsRaw = isIrregularRead && Array.isArray(irregularInitialBlock.correctionRuns)
+    ? irregularInitialBlock.correctionRuns
+    : [];
   let primaryRuns = primaryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, dominant, primaryLabels[i] || ""))
     .filter(Boolean);
@@ -10274,24 +10313,42 @@ function buildVisualReadFromItem(item) {
   // V110.8: identificar a qué reducción pertenece cada movimiento aceptado.
   // Lectura ON muestra 1·..., 2·... y 3·... cuando la ruta usa tres reducciones.
   if (isConstructiveRead && primaryRuns.length) {
-    const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
-    let cursor = 0;
-    for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-      const block = blocks[blockIndex] || {};
-      const count = Math.max(
-        Array.isArray(block.runs) ? block.runs.length : 0,
-        Array.isArray(block.labels) ? block.labels.length : 0
-      );
-      for (let j = 0; j < count && cursor < primaryRuns.length; j++, cursor++) {
-        primaryRuns[cursor].reductionNo = blockIndex + 1;
+    if (isIrregularRead) {
+      const shapes = Array.isArray(irregularInitialBlock.shapes) ? irregularInitialBlock.shapes : [];
+      primaryRuns.forEach((run, i) => {
+        run.irregularInitial = true;
+        run.shape = String(run.shape || shapes[i] || "ANGULO");
+      });
+    } else {
+      const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
+      let cursor = 0;
+      for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
+        const block = blocks[blockIndex] || {};
+        const count = Math.max(
+          Array.isArray(block.runs) ? block.runs.length : 0,
+          Array.isArray(block.labels) ? block.labels.length : 0
+        );
+        for (let j = 0; j < count && cursor < primaryRuns.length; j++, cursor++) {
+          primaryRuns[cursor].reductionNo = blockIndex + 1;
+        }
+      }
+      const fallbackNo = Math.max(1, Math.min(3, blocks.length || 1));
+      while (cursor < primaryRuns.length) {
+        primaryRuns[cursor].reductionNo = fallbackNo;
+        cursor++;
       }
     }
-    const fallbackNo = Math.max(1, Math.min(3, blocks.length || 1));
-    while (cursor < primaryRuns.length) {
-      primaryRuns[cursor].reductionNo = fallbackNo;
-      cursor++;
-    }
   }
+  const irregularCorrectionLabels = isIrregularRead && Array.isArray(irregularInitialBlock.correctionLabels)
+    ? irregularInitialBlock.correctionLabels
+    : [];
+  const irregularCorrectionRuns = irregularCorrectionRunsRaw
+    .map((r, i) => {
+      const run = normalizeVisualReadRun(r, contrary, irregularCorrectionLabels[i] || String(r?.irregularLabel || ""));
+      if (run) run.irregularInitialCorrection = true;
+      return run;
+    })
+    .filter(Boolean);
   // En Constructiva mostramos todas las reducciones aceptadas y la confirmación extra, si corresponde.
   const contraryRuns = contraryRunsRaw
     .map((r, i) => normalizeVisualReadRun(r, contrary, contraryLabels[i] || ""))
@@ -10311,7 +10368,9 @@ function buildVisualReadFromItem(item) {
   const reductionsOnlyPattern = acceptedBlocks.length
     ? acceptedBlocks.map((b) => String(b?.pattern || "").trim()).filter(Boolean).join(" + ")
     : getVisualReadPatternText(primaryLabels);
-  const primaryPattern = reductionsOnlyPattern || "—";
+  const primaryPattern = isIrregularRead
+    ? `IRR ${String(irregularInitialBlock.pattern || getVisualReadPatternText(primaryLabels) || "—")}`
+    : (reductionsOnlyPattern || "—");
   const contraryPattern = confirmationPack
     ? String(confirmationPack.label || confirmationPack.pattern || getVisualReadPatternText(contraryLabels) || "confirmación contraria")
     : getVisualReadPatternText(contraryLabels);
@@ -10325,12 +10384,14 @@ function buildVisualReadFromItem(item) {
     primaryPattern,
     contraryPattern,
     confirmationPack,
-    qualificationRoute: String(meta.constructiveQualificationRoute || ""),
+    irregularInitialBlock,
+    qualificationRoute,
     reasons: Array.isArray(meta.reasons) ? meta.reasons : [],
     rejectHints: Array.isArray(meta.rejectHints) ? meta.rejectHints : [],
     evalMs: Number(meta.analysisWindowMs || 25000),
     points: Number(meta.points || meta.visualReductionScore || 0),
     primaryRuns,
+    irregularCorrectionRuns,
     contraryRuns,
     cuts,
     status: String(meta.status || ""),
@@ -10525,6 +10586,7 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
 
   const meta = item.giroPolaridad || item.snrLevel || {};
   const isConstructive = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
+  const isIrregularRead = read.qualificationRoute === "irregular_initial_response";
   const formedMs = Number(meta.constructiveFormedAtMs || meta.signalFromSec * 1000 || read.evalMs || 25000);
   const evalMs = Math.max(1000, Math.min(60000, isConstructive && Number.isFinite(formedMs) ? formedMs : Number(read.evalMs || 25000)));
   const x0 = xOf(0), xEval = xOf(evalMs);
@@ -10545,16 +10607,22 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
   const sellCol = "rgba(248,113,113,.55)";
   const buyFill = "rgba(22,163,74,.38)";
   const sellFill = "rgba(185,28,28,.38)";
-  // V110.8: dibujar hasta tres reducciones completas (máximo 9 tramos)
-  // y, en la ruta 2 + confirmación, marcar también los movimientos contrarios agregados.
-  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, 9) : (read.primaryRuns || []);
+  // V111.0: además de las reducciones, Lectura ON muestra todo el inicio irregular
+  // y la respuesta sana que lo confirmó.
+  const primaryRuns = isConstructive ? (read.primaryRuns || []).slice(0, isIrregularRead ? 12 : 9) : (read.primaryRuns || []);
+  const irregularCorrectionRuns = isIrregularRead ? (read.irregularCorrectionRuns || []).slice(0, 10) : [];
   const contraryRuns = isConstructive ? (read.contraryRuns || []).slice(0, 4) : (read.contraryRuns || []);
 
   const drawRun = (r, prefix, idx, kind = "reduction") => {
     const isBuyer = String(r.side || "") === "comprador";
     const isConfirmation = kind === "confirmation";
-    const col = isConfirmation ? "rgba(251,191,36,.78)" : (isBuyer ? buyCol : sellCol);
-    const fill = isConfirmation ? "rgba(180,83,9,.58)" : (isBuyer ? buyFill : sellFill);
+    const isIrregularCorrection = kind === "irregular_correction";
+    const col = isConfirmation
+      ? "rgba(251,191,36,.78)"
+      : (isIrregularCorrection ? "rgba(148,163,184,.70)" : (isBuyer ? buyCol : sellCol));
+    const fill = isConfirmation
+      ? "rgba(180,83,9,.58)"
+      : (isIrregularCorrection ? "rgba(71,85,105,.62)" : (isBuyer ? buyFill : sellFill));
     const realPath = getVisualReadRunPathFromTicks(item, r);
     const fallbackPts = Array.isArray(r.points) && r.points.length >= 2
       ? r.points.map((p) => ({ ms: Number(p.ms), quote: Number(p.quote) })).filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote))
@@ -10587,10 +10655,18 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
     const my = Math.min(...path.map((p) => p.y));
     const sideLetter = isBuyer ? "C" : "V";
     const reductionPrefix = isConstructive && Number(r.reductionNo) > 0 ? `${Number(r.reductionNo)}·` : "";
-    const confirmationPrefix = isConfirmation ? "CONF·" : reductionPrefix;
-    drawRoundedLabel(ctx, midP.x, my, `${confirmationPrefix}${sideLetter} ${r.label || prefix || ""}`.trim(), fill);
+    const irregularPrefix = isIrregularRead && !isConfirmation ? "IRR·" : reductionPrefix;
+    const confirmationPrefix = isConfirmation
+      ? (isIrregularRead ? "RESP·" : "CONF·")
+      : (isIrregularCorrection ? "IRR·CORR·" : irregularPrefix);
+    const shapeShort = isIrregularRead && !isConfirmation && r.shape
+      ? ({ PARADO: "PAR", ACOSTADO: "ACO", ANGULO: "ANG", QUEBRADO: "QUE" }[String(r.shape).toUpperCase()] || String(r.shape).slice(0, 3).toUpperCase())
+      : "";
+    const movementText = [r.label || prefix || "", shapeShort].filter(Boolean).join(" ");
+    drawRoundedLabel(ctx, midP.x, my, `${confirmationPrefix}${sideLetter} ${movementText}`.trim(), fill);
   };
   primaryRuns.forEach((r, i) => drawRun(r, "", i, "reduction"));
+  irregularCorrectionRuns.forEach((r, i) => drawRun(r, "", i, "irregular_correction"));
   contraryRuns.forEach((r, i) => drawRun(r, "", i, isConstructive ? "confirmation" : "reduction"));
 
   if (!isConstructive) {
@@ -13041,9 +13117,43 @@ function normalizeSNRLevelMeta(meta) {
           startMs: n(meta.constructiveConfirmationPack.startMs),
           endMs: n(meta.constructiveConfirmationPack.endMs),
           formedAtMs: n(meta.constructiveConfirmationPack.formedAtMs),
+          position: s(meta.constructiveConfirmationPack.position),
+          positionLabel: s(meta.constructiveConfirmationPack.positionLabel),
           runs: Array.isArray(meta.constructiveConfirmationPack.runs)
             ? meta.constructiveConfirmationPack.runs.slice(0, 3).map((run) => ({
-                startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx)
+                startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx),
+                startQuote: n(run?.startQuote), endQuote: n(run?.endQuote)
+              }))
+            : [],
+        }
+      : null,
+    irregularInitialBlock: meta.irregularInitialBlock && typeof meta.irregularInitialBlock === "object"
+      ? {
+          startMs: n(meta.irregularInitialBlock.startMs),
+          endMs: n(meta.irregularInitialBlock.endMs),
+          pattern: s(meta.irregularInitialBlock.pattern),
+          labels: Array.isArray(meta.irregularInitialBlock.labels) ? meta.irregularInitialBlock.labels.map((x) => s(x)).slice(0, 12) : [],
+          shapes: Array.isArray(meta.irregularInitialBlock.shapes) ? meta.irregularInitialBlock.shapes.map((x) => s(x)).slice(0, 12) : [],
+          correctionLabels: Array.isArray(meta.irregularInitialBlock.correctionLabels) ? meta.irregularInitialBlock.correctionLabels.map((x) => s(x)).slice(0, 12) : [],
+          correctionShapes: Array.isArray(meta.irregularInitialBlock.correctionShapes) ? meta.irregularInitialBlock.correctionShapes.map((x) => s(x)).slice(0, 12) : [],
+          sizeRatio: n(meta.irregularInitialBlock.sizeRatio),
+          speedCv: n(meta.irregularInitialBlock.speedCv),
+          efficiency: n(meta.irregularInitialBlock.efficiency),
+          advance: n(meta.irregularInitialBlock.advance),
+          oppositeDip: n(meta.irregularInitialBlock.oppositeDip),
+          structuralAdvances: n(meta.irregularInitialBlock.structuralAdvances, 0),
+          runs: Array.isArray(meta.irregularInitialBlock.runs)
+            ? meta.irregularInitialBlock.runs.slice(0, 12).map((run) => ({
+                startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx),
+                startQuote: n(run?.startQuote), endQuote: n(run?.endQuote),
+                irregularLabel: s(run?.irregularLabel), irregularShape: s(run?.irregularShape), irregularInitial: !!run?.irregularInitial
+              }))
+            : [],
+          correctionRuns: Array.isArray(meta.irregularInitialBlock.correctionRuns)
+            ? meta.irregularInitialBlock.correctionRuns.slice(0, 12).map((run) => ({
+                startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx),
+                startQuote: n(run?.startQuote), endQuote: n(run?.endQuote),
+                irregularLabel: s(run?.irregularLabel), irregularShape: s(run?.irregularShape), irregularInitialCorrection: !!run?.irregularInitialCorrection
               }))
             : [],
         }
@@ -23285,17 +23395,27 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const primaryRuns = macroRuns.primaryRuns || [];
   const contraryRuns = macroRuns.contraryRuns || [];
   const contraryRawRuns = macroRuns.contraryRaw || contraryRuns;
-  if (primaryRuns.length < 4) return null;
+  // Para el inicio irregular usamos un umbral algo más sensible que el macro de
+  // reducciones, porque dentro del mismo recorrido pueden existir impulsos P reales.
+  const irregularImpulseMin = Math.max(alignedRange * 0.040, Number(tol || 0) * 1.10, 1e-9);
+  const irregularCorrectionMin = Math.max(alignedRange * 0.022, Number(tol || 0) * 0.78, 1e-9);
+  const irregularPrimaryRuns = runs
+    .map((r, idx) => ({ ...r, idx: Number.isFinite(Number(r?.idx)) ? Number(r.idx) : idx, move: Number(r?.move || 0) }))
+    .filter((r) => Number(r.sign || 0) > 0 && Number(r.move || 0) >= irregularImpulseMin);
+  const irregularContraryRawRuns = runs
+    .map((r, idx) => ({ ...r, idx: Number.isFinite(Number(r?.idx)) ? Number(r.idx) : idx, move: Number(r?.move || 0) }))
+    .filter((r) => Number(r.sign || 0) < 0 && Number(r.move || 0) >= irregularCorrectionMin);
+  // V111.0: la nueva ruta de inicio irregular necesita como mínimo 3 impulsos
+  // dominantes. Las rutas de reducciones mantienen sus propias exigencias.
+  if (primaryRuns.length < 3 && irregularPrimaryRuns.length < 3) return null;
 
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
   const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
   const summary = summarizeVisualMoves(primaryMoves);
   const labels = summary.labels;
   const reductionPairs = buildConstructiveReductionPairs(primaryMoves, labels);
-  if (reductionPairs.length < 2) return null;
 
   const allBlocks = buildConstructiveReductionBlocks(primaryRuns, labels, reductionPairs);
-  if (allBlocks.length < 2) return null;
 
   const hasStrongContraryInsideBlock = (block) => {
     const blockRuns = Array.isArray(block?.runs) ? block.runs : [];
@@ -23320,7 +23440,6 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     b.structuralProgress = structuralProgress;
     return true;
   }).sort((a, b) => Number(a.startIndex) - Number(b.startIndex) || Number(b.strength || 0) - Number(a.strength || 0));
-  if (blocks.length < 2) return null;
 
   const blockVisible = (block, firstBlock = false) => {
     const startMove = Number(block?.runs?.[0]?.move || 0);
@@ -23501,6 +23620,271 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       .sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0))[0] || null;
   };
 
+
+  // V111.0 — Ruta C: movimiento macro irregular inicial + respuesta sana contraria.
+  // El bloque irregular puede mezclar G/M/P, velocidades y formas, pero debe seguir
+  // siendo direccional. Se ancla en su primer impulso y debe cerrarse antes de 30s.
+  const getRunShapeInfo = (run, referenceSpeed = 0) => {
+    const points = Array.isArray(run?.points) ? run.points : [];
+    const move = Number(run?.move || 0);
+    const durationMs = Math.max(1, Number(run?.durationMs || (Number(run?.endMs || 0) - Number(run?.startMs || 0)) || 1));
+    const speed = move / durationMs;
+    let path = 0;
+    for (let i = 1; i < points.length; i++) {
+      const a = Number(points[i - 1]?.y);
+      const b = Number(points[i]?.y);
+      if (Number.isFinite(a) && Number.isFinite(b)) path += Math.abs(b - a);
+    }
+    const efficiency = move / Math.max(path || move, 1e-9);
+    const ref = Math.max(Number(referenceSpeed || 0), 1e-12);
+    let shape = "ANGULO";
+    if (durationMs >= 6200 && speed <= ref * 0.72) shape = "ACOSTADO";
+    else if (durationMs <= 3600 && speed >= ref * 1.28) shape = "PARADO";
+    else if (efficiency < 0.84 || !!run?.internalSplit) shape = "QUEBRADO";
+    return { shape, speed, durationMs, path, efficiency };
+  };
+
+  const findHealthyResponseAfterIrregular = (irregularBlock) => {
+    if (!irregularBlock) return null;
+    const blockEndIdx = Number(irregularBlock.endIdx ?? -1);
+    const blockEndMs = Number(irregularBlock.endMs || 0);
+    const anchorMs = Number(irregularBlock.anchorMs || 0);
+    const deadlineMs = Math.min(CONSTRUCTIVE_FLOATING_WINDOW_MS, anchorMs + 40000);
+    const visibleMin = Math.max(alignedRange * 0.047, Number(tol || 0) * 1.45, 1e-9);
+    const primaryRef = Math.max(...(irregularBlock.primaryRuns || []).map((r) => Number(r.move || 0)), 1e-9);
+    const candidates = irregularContraryRawRuns
+      .filter((r) => Number(r.idx) > blockEndIdx && Number(r.startMs || 0) >= blockEndMs - 1)
+      .filter((r) => Number(r.endMs || 0) <= deadlineMs)
+      .filter((r) => Number(r.move || 0) >= visibleMin)
+      .sort((a, b) => Number(a.idx) - Number(b.idx));
+    if (!candidates.length) return null;
+
+    const responseProgressOk = (a, b) => {
+      const aEnd = Number(a?.endY);
+      const bEnd = Number(b?.endY);
+      const bMove = Number(b?.move || 0);
+      if (![aEnd, bEnd, bMove].every(Number.isFinite)) return false;
+      // En coordenada alineada, la respuesta contraria avanza hacia abajo.
+      const progress = aEnd - bEnd;
+      const required = Math.max(alignedRange * 0.022, Number(tol || 0) * 1.15, bMove * 0.08, 1e-9);
+      return progress >= required;
+    };
+
+    const packs = [];
+    const addPack = (pack) => {
+      if (!pack || !Array.isArray(pack.runs) || !pack.runs.length) return;
+      const last = pack.runs[pack.runs.length - 1];
+      const close = closeOppositeRun(last, true);
+      if (!close) return;
+      const formedAtMs = Number(close.confirmedAtMs || 0);
+      if (!(formedAtMs > blockEndMs) || formedAtMs > deadlineMs) return;
+      packs.push({ ...pack, close, formedAtMs, position: "after_irregular", positionLabel: "después del inicio irregular" });
+    };
+
+    // Respuesta creciente P→G, M→G o P→M→G.
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        const a = candidates[i], b = candidates[j];
+        if (!noStrongPrimaryBetween(a, b) || !responseProgressOk(a, b)) continue;
+        const moves = [Number(a.move || 0), Number(b.move || 0)];
+        const labs = summarizeVisualMoves(moves).labels;
+        const pattern = labs.join("→");
+        const growth = moves[1] >= moves[0] * (pattern === "P→G" ? 1.42 : 1.18);
+        if ((pattern === "P→G" || pattern === "M→G") && growth) {
+          addPack({
+            type: "opposite_growth",
+            label: `${contraryText} ${pattern}`,
+            pattern,
+            runs: [a, b],
+            strength: 35 + moves[1] / Math.max(alignedRange, 1e-9) * 22,
+          });
+        }
+
+        const ratio = Math.min(...moves) / Math.max(...moves, 1e-9);
+        const combined = moves[0] + moves[1];
+        if (ratio >= 0.68 && combined >= Math.max(alignedRange * 0.19, primaryRef * 0.46, Number(tol || 0) * 4.0)) {
+          addPack({
+            type: "opposite_symmetric",
+            label: `${contraryText} simétrica 2 movimientos`,
+            pattern: "S1→S2",
+            runs: [a, b],
+            strength: 33 + combined / Math.max(alignedRange, 1e-9) * 18,
+          });
+        } else if (moves[1] >= moves[0] * 0.52 && combined >= Math.max(alignedRange * 0.22, primaryRef * 0.50, Number(tol || 0) * 4.2)) {
+          addPack({
+            type: "opposite_healthy",
+            label: `${contraryText} sana 2 movimientos`,
+            pattern: "R1→R2",
+            runs: [a, b],
+            strength: 31 + combined / Math.max(alignedRange, 1e-9) * 17,
+          });
+        }
+      }
+    }
+
+    for (let i = 0; i + 2 < candidates.length; i++) {
+      const seq = candidates.slice(i, i + 3);
+      if (!noStrongPrimaryBetween(seq[0], seq[1]) || !noStrongPrimaryBetween(seq[1], seq[2])) continue;
+      if (!responseProgressOk(seq[0], seq[1]) || !responseProgressOk(seq[1], seq[2])) continue;
+      const moves = seq.map((r) => Number(r.move || 0));
+      const growing = moves[1] >= moves[0] * 1.12 && moves[2] >= moves[1] * 1.12 && moves[2] >= moves[0] * 1.55;
+      if (growing) {
+        addPack({
+          type: "opposite_growth",
+          label: `${contraryText} P→M→G`,
+          pattern: "P→M→G",
+          runs: seq,
+          strength: 40 + moves[2] / Math.max(alignedRange, 1e-9) * 22,
+        });
+      }
+    }
+
+    // Una sola entrada muy fuerte también puede cerrar el patrón.
+    for (const r of candidates) {
+      const move = Number(r.move || 0);
+      const strongThreshold = Math.max(alignedRange * 0.205, primaryRef * 0.62, Number(tol || 0) * 4.4, 1e-9);
+      if (move >= strongThreshold) {
+        addPack({
+          type: "opposite_strong",
+          label: `${contraryText} fuerte`,
+          pattern: "FUERTE",
+          runs: [r],
+          strength: 36 + move / Math.max(strongThreshold, 1e-9) * 11,
+        });
+      }
+    }
+
+    return packs.sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0))[0] || null;
+  };
+
+  const findIrregularInitialCandidate = () => {
+    if (irregularPrimaryRuns.length < 3) return null;
+    const first = irregularPrimaryRuns[0];
+    const anchorMs = Number(first?.startMs || 0);
+    const maxIrregularEndMs = Math.min(CONSTRUCTIVE_FLOATING_WINDOW_MS, anchorMs + 30000);
+    const candidates = [];
+
+    for (let endPos = 2; endPos < irregularPrimaryRuns.length; endPos++) {
+      const blockPrimary = irregularPrimaryRuns.slice(0, endPos + 1);
+      const last = blockPrimary[blockPrimary.length - 1];
+      const endMs = Number(last?.endMs || 0);
+      if (!(endMs > anchorMs) || endMs > maxIrregularEndMs) break;
+      const startIdx = Number(first?.idx ?? 0);
+      const endIdx = Number(last?.idx ?? -1);
+      const internalCorrections = irregularContraryRawRuns
+        .filter((r) => Number(r.idx) > startIdx && Number(r.idx) < endIdx)
+        .filter((r) => Number(r.move || 0) >= Math.max(cutMin * 0.80, Number(tol || 0) * 0.75, 1e-9));
+      if (internalCorrections.length < 2) continue;
+
+      const moves = blockPrimary.map((r) => Number(r.move || 0));
+      const moveSummary = summarizeVisualMoves(moves);
+      const distinctLabels = new Set(moveSummary.labels).size;
+      const sizeRatio = Math.max(...moves) / Math.max(Math.min(...moves), 1e-9);
+      if (distinctLabels < 2 && sizeRatio < 1.42) continue;
+
+      const speeds = blockPrimary.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
+      const sortedSpeeds = speeds.slice().sort((a, b) => a - b);
+      const medianSpeed = sortedSpeeds[Math.floor(sortedSpeeds.length / 2)] || Math.max(...speeds, 1e-12);
+      const shapeInfo = blockPrimary.map((r) => getRunShapeInfo(r, medianSpeed));
+      const shapes = shapeInfo.map((x) => x.shape);
+      const distinctShapes = new Set(shapes).size;
+      const meanSpeed = speeds.reduce((a, b) => a + b, 0) / Math.max(1, speeds.length);
+      const speedVariance = speeds.reduce((acc, v) => acc + Math.pow(v - meanSpeed, 2), 0) / Math.max(1, speeds.length);
+      const speedCv = Math.sqrt(speedVariance) / Math.max(meanSpeed, 1e-12);
+
+      const blockPts = pts.filter((p) => Number(p.ms) >= anchorMs && Number(p.ms) <= endMs);
+      if (blockPts.length < 5) continue;
+      const y0 = Number(blockPts[0].y);
+      const yMax = Math.max(...blockPts.map((p) => Number(p.y)));
+      const yMin = Math.min(...blockPts.map((p) => Number(p.y)));
+      const advance = yMax - y0;
+      const oppositeDip = Math.max(0, y0 - yMin);
+      let path = 0;
+      for (let i = 1; i < blockPts.length; i++) path += Math.abs(Number(blockPts[i].y) - Number(blockPts[i - 1].y));
+      const efficiency = advance / Math.max(path, 1e-9);
+      const primarySum = moves.reduce((a, b) => a + b, 0);
+      const correctionMoves = internalCorrections.map((r) => Number(r.move || 0));
+      const correctionSum = correctionMoves.reduce((a, b) => a + b, 0);
+      const correctionLabels = summarizeVisualMoves(correctionMoves).labels;
+      const correctionSpeeds = internalCorrections.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
+      const sortedCorrectionSpeeds = correctionSpeeds.slice().sort((a, b) => a - b);
+      const correctionMedianSpeed = sortedCorrectionSpeeds[Math.floor(sortedCorrectionSpeeds.length / 2)] || medianSpeed;
+      const correctionShapes = internalCorrections.map((r) => getRunShapeInfo(r, correctionMedianSpeed).shape);
+
+      let structuralAdvances = 0;
+      let runningExtreme = Number(blockPrimary[0]?.endY);
+      const structuralChecks = [];
+      for (let i = 1; i < blockPrimary.length; i++) {
+        const cur = blockPrimary[i];
+        const curExtreme = Number(cur?.endY);
+        const progress = curExtreme - runningExtreme;
+        const required = Math.max(alignedRange * 0.018, Number(tol || 0) * 1.05, Number(cur?.move || 0) * 0.06, 1e-9);
+        const ok = Number.isFinite(progress) && progress >= required;
+        structuralChecks.push({ from: i - 1, to: i, progress, required, ok });
+        if (ok) {
+          structuralAdvances++;
+          runningExtreme = Math.max(runningExtreme, curExtreme);
+        }
+      }
+      const requiredAdvances = Math.max(1, Math.ceil((blockPrimary.length - 1) * 0.50));
+      if (structuralAdvances < requiredAdvances) continue;
+      if (advance < Math.max(alignedRange * 0.25, Number(tol || 0) * 4.0)) continue;
+      if (primarySum < correctionSum * 1.04) continue;
+      if (oppositeDip > advance * 0.86) continue;
+      if (efficiency < 0.13) continue;
+
+      const irregularEnough = sizeRatio >= 1.42 || speedCv >= 0.30 || distinctShapes >= 2 || efficiency <= 0.62;
+      if (!irregularEnough) continue;
+
+      const irregularBlock = {
+        anchorMs,
+        startMs: anchorMs,
+        endMs,
+        startIdx,
+        endIdx,
+        primaryRuns: blockPrimary.map((r, i) => ({ ...r, irregularLabel: moveSummary.labels[i] || "", irregularShape: shapes[i] || "ANGULO", irregularInitial: true })),
+        correctionRuns: internalCorrections.map((r, i) => ({ ...r, irregularLabel: correctionLabels[i] || "", irregularShape: correctionShapes[i] || "ANGULO", irregularInitialCorrection: true })),
+        labels: moveSummary.labels.slice(),
+        shapes: shapes.slice(),
+        correctionLabels: correctionLabels.slice(),
+        correctionShapes: correctionShapes.slice(),
+        pattern: moveSummary.pattern,
+        sizeRatio,
+        speedCv,
+        distinctLabels,
+        distinctShapes,
+        efficiency,
+        advance,
+        oppositeDip,
+        primarySum,
+        correctionSum,
+        structuralAdvances,
+        structuralChecks,
+      };
+      const responsePack = findHealthyResponseAfterIrregular(irregularBlock);
+      if (!responsePack) continue;
+      const formedAtMs = Number(responsePack.formedAtMs || 0);
+      const elapsed = formedAtMs - anchorMs;
+      if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
+      const irregularScore =
+        54 + Math.min(22, sizeRatio * 6) + Math.min(18, speedCv * 24) +
+        Math.min(14, distinctShapes * 4) + Math.min(16, structuralAdvances * 5) +
+        Number(responsePack.strength || 0) - Math.max(0, elapsed - 33000) / 850;
+      candidates.push({
+        route: "irregular_initial_response",
+        reductions: [],
+        confirmation: responsePack.close || null,
+        confirmationPack: responsePack,
+        irregularBlock,
+        anchorMs,
+        formedAtMs,
+        elapsed,
+        score: irregularScore,
+      });
+    }
+
+    return candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
+  };
   let selected = null;
   const consider = (candidate) => {
     if (!candidate) return;
@@ -23560,37 +23944,57 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       });
     }
   }
+
+  // Ruta C: inicio irregular direccional (0–30s) + respuesta sana contraria (hasta 40s).
+  // Esta ruta no exige reducciones internas: todo el recorrido desordenado se agrupa
+  // como un único movimiento macro y la señal se confirma por la respuesta opuesta.
+  consider(findIrregularInitialCandidate());
+
   if (!selected) return null;
 
   const reductions = selected.reductions || [];
+  const irregularBlock = selected.irregularBlock || null;
+  const isIrregularRoute = selected.route === "irregular_initial_response" && !!irregularBlock;
   const firstReduction = reductions[0] || null;
   const secondReduction = reductions[1] || null;
   const thirdReduction = reductions[2] || null;
   const confirmationPack = selected.confirmationPack || null;
-  const acceptedRuns = reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r }));
-  const acceptedLabels = reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
+  const acceptedRuns = isIrregularRoute
+    ? (irregularBlock.primaryRuns || []).map((r) => ({ ...r }))
+    : reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r }));
+  const acceptedLabels = isIrregularRoute
+    ? (irregularBlock.labels || []).slice()
+    : reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
   const reductionText = reductions.map((b) => String(b?.pattern || "—")).join(" + ");
-  const acceptedPatternText = confirmationPack
-    ? (confirmationPack.position === "between"
-        ? `${reductions[0]?.pattern || "—"} + ${confirmationPack.label} + ${reductions[1]?.pattern || "—"}`
-        : `${reductionText} + ${confirmationPack.label}`)
-    : reductionText;
+  const acceptedPatternText = isIrregularRoute
+    ? `IRR ${irregularBlock.pattern || acceptedLabels.join("→") || "G/M/P"} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
+    : (confirmationPack
+        ? (confirmationPack.position === "between"
+            ? `${reductions[0]?.pattern || "—"} + ${confirmationPack.label} + ${reductions[1]?.pattern || "—"}`
+            : `${reductionText} + ${confirmationPack.label}`)
+        : reductionText);
 
-  const reductionEndMs = Math.max(...reductions.map((b) => Number(b?.endMs || 0)), 0);
+  const reductionEndMs = isIrregularRoute
+    ? Number(irregularBlock.endMs || 0)
+    : Math.max(...reductions.map((b) => Number(b?.endMs || 0)), 0);
   const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Math.max(reductionEndMs, selected.formedAtMs));
   if (acceptedPts.length < 5) return null;
   const y0 = Number(acceptedPts[0].y);
   const yEnd = Number(acceptedPts[acceptedPts.length - 1].y);
   const yMax = Math.max(...acceptedPts.map((p) => p.y));
   const yMin = Math.min(...acceptedPts.map((p) => p.y));
-  const dominantAdvance = yMax - y0;
-  const oppositeDip = Math.max(0, y0 - yMin);
+  const dominantAdvance = isIrregularRoute ? Number(irregularBlock.advance || 0) : yMax - y0;
+  const oppositeDip = isIrregularRoute ? Number(irregularBlock.oppositeDip || 0) : Math.max(0, y0 - yMin);
   const totalPath = acceptedPts.slice(1).reduce((acc, p, i) => acc + Math.abs(Number(p.y) - Number(acceptedPts[i].y)), 0);
-  const efficiency = Math.abs(yEnd - y0) / Math.max(totalPath, 1e-9);
+  const efficiency = isIrregularRoute
+    ? Number(irregularBlock.efficiency || 0)
+    : Math.abs(yEnd - y0) / Math.max(totalPath, 1e-9);
 
-  if (dominantAdvance < Math.max(alignedRange * 0.31, Number(tol || 0) * 4.0)) return null;
-  if (oppositeDip > dominantAdvance * 0.68) return null;
-  if (efficiency < 0.075) return null;
+  if (!isIrregularRoute) {
+    if (dominantAdvance < Math.max(alignedRange * 0.31, Number(tol || 0) * 4.0)) return null;
+    if (oppositeDip > dominantAdvance * 0.68) return null;
+    if (efficiency < 0.075) return null;
+  }
 
   let cutsBetween = 0;
   for (let i = 0; i < acceptedRuns.length - 1; i++) {
@@ -23599,28 +24003,45 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
 
   let points = 5;
   const reasons = [`${groupText} inicia el primer movimiento visible`];
-  reductions.forEach((block, index) => {
-    points += 7;
-    reasons.push(`${index + 1}ª reducción clara con avance estructural: ${block.pattern}`);
-  });
-  if (selected.route === "three_reductions") {
+  if (isIrregularRoute) {
+    points += 11;
+    reasons.push(`movimiento irregular direccional con ${acceptedRuns.length} impulsos dominantes: ${irregularBlock.pattern}`);
     points += 5;
-    reasons.push("tres reducciones distintas, consecutivas o aisladas");
-    points += 3;
-    reasons.push(`última reducción confirmada por respuesta ${contraryText}`);
-  } else {
+    reasons.push(`tamaños y formas mixtas: ${irregularBlock.labels.join("→")} · ${(irregularBlock.shapes || []).join("/")}`);
+    points += 4;
+    reasons.push(`${irregularBlock.structuralAdvances} avances estructurales dentro del recorrido irregular`);
     points += 9;
-    reasons.push(`confirmación extra ${confirmationPack.positionLabel || "en orden flexible"}: ${confirmationPack.label}`);
-    points += 2;
-    reasons.push("la entrada contraria y la segunda reducción quedaron cerradas antes de emitir la alarma");
+    reasons.push(`respuesta sana ${confirmationPack?.positionLabel || "posterior"}: ${confirmationPack?.label || "grupo contrario"}`);
+    if (Number(irregularBlock.efficiency || 0) <= 0.62) {
+      points += 2;
+      reasons.push("recorrido macro direccional con construcción irregular visible");
+    }
+  } else {
+    reductions.forEach((block, index) => {
+      points += 7;
+      reasons.push(`${index + 1}ª reducción clara con avance estructural: ${block.pattern}`);
+    });
+    if (selected.route === "three_reductions") {
+      points += 5;
+      reasons.push("tres reducciones distintas, consecutivas o aisladas");
+      points += 3;
+      reasons.push(`última reducción confirmada por respuesta ${contraryText}`);
+    } else {
+      points += 9;
+      reasons.push(`confirmación extra ${confirmationPack.positionLabel || "en orden flexible"}: ${confirmationPack.label}`);
+      points += 2;
+      reasons.push("la entrada contraria y la segunda reducción quedaron cerradas antes de emitir la alarma");
+    }
   }
   if (cutsBetween >= 2) { points += 2; reasons.push("cortes visuales claros entre movimientos"); }
   if (points < 29) return null;
 
   const quality = points * 11.5 + 62 + Math.min(16, cutsBetween * 2.5) - Math.max(0, selected.elapsed - 33000) / 750;
-  const subtype = selected.route === "three_reductions"
-    ? "3 reducciones claras"
-    : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`;
+  const subtype = isIrregularRoute
+    ? `inicio irregular + ${confirmationPack?.label || "respuesta sana"}`
+    : (selected.route === "three_reductions"
+        ? "3 reducciones claras"
+        : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`);
 
   return {
     side,
@@ -23657,9 +24078,26 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       startMs: Number(confirmationPack.runs?.[0]?.startMs || 0),
       endMs: Number(confirmationPack.runs?.[confirmationPack.runs.length - 1]?.endMs || 0),
       formedAtMs: Number(confirmationPack.formedAtMs || 0),
-      position: String(confirmationPack.position || "after"),
-      positionLabel: String(confirmationPack.positionLabel || "después de la segunda reducción"),
+      position: String(confirmationPack.position || (isIrregularRoute ? "after_irregular" : "after")),
+      positionLabel: String(confirmationPack.positionLabel || (isIrregularRoute ? "después del inicio irregular" : "después de la segunda reducción")),
       runs: confirmationPack.runs.map((r) => ({ ...r })),
+    } : null,
+    irregularInitialBlock: isIrregularRoute ? {
+      startMs: Number(irregularBlock.startMs || 0),
+      endMs: Number(irregularBlock.endMs || 0),
+      pattern: String(irregularBlock.pattern || ""),
+      labels: Array.isArray(irregularBlock.labels) ? irregularBlock.labels.slice() : [],
+      shapes: Array.isArray(irregularBlock.shapes) ? irregularBlock.shapes.slice() : [],
+      correctionLabels: Array.isArray(irregularBlock.correctionLabels) ? irregularBlock.correctionLabels.slice() : [],
+      correctionShapes: Array.isArray(irregularBlock.correctionShapes) ? irregularBlock.correctionShapes.slice() : [],
+      sizeRatio: Number(irregularBlock.sizeRatio || 0),
+      speedCv: Number(irregularBlock.speedCv || 0),
+      efficiency: Number(irregularBlock.efficiency || 0),
+      advance: Number(irregularBlock.advance || 0),
+      oppositeDip: Number(irregularBlock.oppositeDip || 0),
+      structuralAdvances: Number(irregularBlock.structuralAdvances || 0),
+      runs: Array.isArray(irregularBlock.primaryRuns) ? irregularBlock.primaryRuns.map((r) => ({ ...r })) : [],
+      correctionRuns: Array.isArray(irregularBlock.correctionRuns) ? irregularBlock.correctionRuns.map((r) => ({ ...r })) : [],
     } : null,
     cutsBetween,
     contraryStrong: !!confirmationPack || !!selected.confirmation,
@@ -23738,9 +24176,12 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
+  const isIrregularRoute = best.qualificationRoute === "irregular_initial_response";
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
-  const status = `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Reducción Reforzada V110.9: ventana flotante no atada al minuto, con alarma hasta 40s. La señal requiere 3 reducciones claras (consecutivas o aisladas), o 2 reducciones más una confirmación del grupo contrario, que puede aparecer entre la primera y la segunda reducción o después de la segunda: P→G, M→G, P→M→G, entrada simétrica de al menos 2 movimientos o entrada fuerte. Cada reducción debe conservar avance estructural; el estancamiento no cuenta. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const status = isIrregularRoute
+    ? `🧩 Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+    : `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Motor V111.0: ventana flotante no atada al minuto y alarma hasta 40s. Rutas válidas: (1) 3 reducciones claras; (2) 2 reducciones más ataque contrario en orden flexible; o (3) movimiento macro irregular direccional anclado en el primer impulso, construido antes de 30s con al menos 3 impulsos dominantes de tamaños/formas mezcladas, seguido por respuesta sana contraria de mínimo 2 movimientos, crecimiento, simetría o entrada fuerte. El rango puro y el estancamiento no cuentan. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -23749,7 +24190,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
     meta: {
       level,
       levelMode: "reduccion_constructiva_continua",
-      levelType: signalIsPut ? "buyer_constructive_reduction" : "seller_constructive_reduction",
+      levelType: isIrregularRoute
+        ? (signalIsPut ? "buyer_irregular_initial" : "seller_irregular_initial")
+        : (signalIsPut ? "buyer_constructive_reduction" : "seller_constructive_reduction"),
       direction: best.signalDirection,
       tolerance: tol,
       zone,
@@ -23792,6 +24235,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       constructiveQualificationRoute: best.qualificationRoute,
       constructiveQualificationLabel: best.qualificationLabel,
       constructiveConfirmationPack: best.confirmationPack,
+      irregularInitialBlock: best.irregularInitialBlock,
       constructiveElapsedFromFirstMovementMs: best.elapsedFromFirstMovementMs,
       visualReductionContraryRuns: Array.isArray(best.acceptedConfirmationRuns) ? best.acceptedConfirmationRuns : [],
       visualReductionAllPrimaryRuns: best.primaryRuns,
@@ -23804,16 +24248,16 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       constructiveFloatingWindow: true,
       cutsBetween: best.cutsBetween,
       contraryStrong: best.contraryStrong,
-      secondReductionConfirmed: true,
-      thirdReductionConfirmed: !!best.thirdReduction,
+      secondReductionConfirmed: !isIrregularRoute,
+      thirdReductionConfirmed: !isIrregularRoute && !!best.thirdReduction,
       secondReductionConfirmation: best.finalConfirmation,
       secondReductionConfirmedAtMs: Number(best.finalConfirmation?.confirmedAtMs || best.formedAtMs || 0),
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: "v110_9_flexible_opposite_attack_order_40s",
+      movementFilter: isIrregularRoute ? "v111_0_inicio_irregular_respuesta_sana_40s" : "v111_0_reduccion_reforzada_40s",
       priority: "ALTA",
-      stage: "reduccion_reforzada_v110_9",
+      stage: isIrregularRoute ? "inicio_irregular_respuesta_sana_v111_0" : "reduccion_reforzada_v111_0",
       logic: logicText,
       status,
     },
