@@ -1,3 +1,4 @@
+// v111.7: se elimina el bloqueo de la cuenta REAL por 2 OTM; solo continúa el bloqueo por ciclo IC2 completo.
 // v111.6: las alertas de señal vibran tres veces con dos pausas intermedias.
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
@@ -70,7 +71,7 @@
 // ✅ V49: En vivo dibuja recorrido/vela con todos los ticks recibidos del par seleccionado
 // ✅ V50: En vivo con menos zoom vertical y gráfico un poco más bajo
 // ✅ V68: Gestión IC2 5% escalonada por saldo hasta 2000, separada DEMO/REAL
-// ✅ V69: Disciplina REAL: 2 OTM o ciclo IC2 completo (2 ITM seguidos) bloquea 1h; DEMO libre para pruebas
+// ✅ V111.7: Disciplina REAL bloquea 1h únicamente al completar el ciclo IC2 (2 ITM seguidos); los OTM no bloquean
 // ✅ V70: Merge verificado: conserva V68 escalonado + V69 disciplina REAL + V66 timing pre-proposal
 // ✅ V71: Nuevo modo 🔁 Ruptura Débil Giro: rompe zona pero no expande, responde irregular y prepara giro.
 // ✅ V74: Despeje mental con imagen integrada, contador real, 10 puntitos y 10 consejos rotativos.
@@ -274,11 +275,10 @@ const DISCIPLINE_LOSSES_KEY = "discipline_losses_v1";
 const DISCIPLINE_LOCK_UNTIL_KEY = "discipline_lockUntilMs_v1";
 const DISCIPLINE_PENDING_CONTRACTS_KEY = "discipline_pendingContracts_v1";
 
-// V70: disciplina SOLO para REAL.
-// - 2 OTM acumulados en la ventana actual => bloqueo 1h.
-// - ciclo IC2 completo (2 ITM consecutivos: nivel 1 + nivel 2) => bloqueo 1h.
+// V111.7: disciplina SOLO para REAL.
+// - Los OTM no bloquean ni se acumulan como límite disciplinario.
+// - Solo el ciclo IC2 completo (2 ITM consecutivos: nivel 1 + nivel 2) bloquea 1h.
 const DISCIPLINE_MAX_WINS = 2;
-const DISCIPLINE_MAX_LOSSES = 2;
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 const DISCIPLINE_SCOPE_LABEL = "REAL";
 
@@ -3541,8 +3541,7 @@ function updateC100AfterResult(result, profit = null) {
     if (isTradeLockedNow()) toast("🔒 IC2 completo: REAL bloqueada 1h", 4200);
     else toast("✅ IC2: ciclo de 2 niveles completo · vuelve al stake base", 2600);
   } else {
-    if (isTradeLockedNow() && disciplineLosses >= DISCIPLINE_MAX_LOSSES) toast("🔒 2 OTM: REAL bloqueada 1h", 4200);
-    else toast("↺ IC2: OTM registrado · vuelve al stake base", 2400);
+    toast("↺ IC2: OTM registrado · vuelve al stake base · sin bloqueo REAL", 2600);
   }
 }
 function handleC100ContractClosed(contractId, isWin, profit = null) {
@@ -13395,7 +13394,7 @@ function applyModalTradeButtonsLayout() {
 /* =========================
    Despeje mental post-OTM
    - Bloqueo total corto para cortar impulso/revancha.
-   - No reemplaza el bloqueo REAL de 1 hora: ese queda como estaba.
+   - El bloqueo REAL de 1 hora queda únicamente para ciclo IC2 completo.
 ========================= */
 
 function isExpiryValueCorruptOrExpired(until, maxStoredMs) {
@@ -13864,6 +13863,18 @@ function loadDiscipline() {
     const arr = JSON.parse(raw);
     disciplinePendingContracts = Array.isArray(arr) ? arr.map(String) : [];
 
+    // V111.7: migra estados anteriores. Un bloqueo activo sin ciclo IC2 completo
+    // era un bloqueo por OTM y debe desaparecer inmediatamente.
+    if (activeTradingAccount === ACCOUNT_MODE_REAL) {
+      const hadLegacyOtmLock = Number(disciplineLockUntilMs || 0) > Date.now() && Number(disciplineWins || 0) < DISCIPLINE_MAX_WINS;
+      disciplineLosses = 0;
+      if (hadLegacyOtmLock) {
+        disciplineLockUntilMs = 0;
+        disciplineWindowStartMs = 0;
+      }
+      saveDiscipline();
+    }
+
     // V79: evita que quede una disciplina REAL vencida/corrupta pegada al volver a abrir.
     clearExpiredOrCorruptDisciplineLock({ silent: true });
   } catch {
@@ -13919,11 +13930,10 @@ function fmtRemaining(ms) {
 
 function getDisciplineLockReasonText() {
   if (disciplineWins >= DISCIPLINE_MAX_WINS) return `IC2 completo: 2 ITM seguidos`;
-  if (disciplineLosses >= DISCIPLINE_MAX_LOSSES) return `2 OTM alcanzados`;
-  return `límite REAL alcanzado`;
+  return `ciclo IC2 completo`;
 }
 function getDisciplineCounterText() {
-  return `IC2 ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM · ${disciplineLosses}/${DISCIPLINE_MAX_LOSSES} OTM`;
+  return `IC2 ${disciplineWins}/${DISCIPLINE_MAX_WINS} ITM · OTM sin bloqueo`;
 }
 function ensureDisciplineBanner() {
   if (disciplineBannerEl && disciplineBannerEl.isConnected) return disciplineBannerEl;
@@ -13985,13 +13995,13 @@ function updateDisciplineBannerUI() {
     return;
   }
 
-  const closeToLimit = disciplineWins >= DISCIPLINE_MAX_WINS - 1 || disciplineLosses >= DISCIPLINE_MAX_LOSSES - 1;
-  if (closeToLimit && (disciplineWins > 0 || disciplineLosses > 0)) {
+  const closeToLimit = disciplineWins >= DISCIPLINE_MAX_WINS - 1;
+  if (closeToLimit && disciplineWins > 0) {
     el.style.display = "block";
     el.style.borderColor = "rgba(251,191,36,.72)";
     el.style.background = "linear-gradient(180deg, rgba(120,53,15,.96), rgba(69,26,3,.96))";
     el.style.boxShadow = "0 18px 44px rgba(0,0,0,.45), 0 0 22px rgba(251,191,36,.24)";
-    el.innerHTML = `⚠️ <b>DISCIPLINA REAL</b><br>${getDisciplineCounterText()} · bloquea con 2 OTM o ciclo IC2 completo`;
+    el.innerHTML = `⚠️ <b>DISCIPLINA REAL</b><br>${getDisciplineCounterText()} · bloquea solo al completar el ciclo IC2`;
     return;
   }
 
@@ -14067,24 +14077,19 @@ function applyDisciplineOutcome(isWin) {
   if (isDisciplineBypassedForCurrentAccount()) return;
   if (isTradeLockedNow()) return;
 
-  // V70: los ITM consecutivos se manejan desde IC2, porque solo bloquean
-  // cuando se completa el ciclo de dos niveles. Acá contamos OTM reales.
+  // V111.7: los OTM ya no forman un límite ni bloquean la cuenta REAL.
+  // Solamente cortan la secuencia IC2 de ITM consecutivos.
   if (!isWin) {
-    disciplineLosses += 1;
-    disciplineWins = 0; // corta la secuencia IC2 de 2 ITM seguidos
+    disciplineLosses = 0;
+    disciplineWins = 0;
     saveDiscipline();
-
-    if (disciplineLosses >= DISCIPLINE_MAX_LOSSES) {
-      lockRealDiscipline("2 OTM alcanzados");
-      return;
-    }
-
-    toast(`⚠️ Disciplina REAL: ${getDisciplineCounterText()}`, 1900);
+    toast(`↺ OTM registrado · REAL continúa habilitada`, 1900);
     updateDisciplineLockUI(false);
     return;
   }
 
   // ITM nivel 1/nivel 2 se registra en updateC100AfterResult().
+  disciplineLosses = 0;
   saveDiscipline();
   updateDisciplineLockUI(false);
 }
