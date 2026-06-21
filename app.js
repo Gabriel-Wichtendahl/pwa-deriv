@@ -1,5 +1,6 @@
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
+// v111.5: se elimina por completo la pausa de Despeje mental de 10 minutos posterior a un OTM.
 // v111.4: Calidad A y B conservan su clasificación, pero ambas tienen alarma completa, apertura y AUTO 58.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
@@ -280,14 +281,14 @@ const DISCIPLINE_MAX_LOSSES = 2;
 const DISCIPLINE_LOCK_MS = 60 * 60 * 1000;
 const DISCIPLINE_SCOPE_LABEL = "REAL";
 
-// Despeje mental: bloqueo total corto después de 1 OTM.
-// Es global para la PWA (DEMO/REAL) para evitar operar por impulso.
-// El bloqueo REAL de 1 hora se mantiene como está y tiene prioridad visual.
+// V111.5: se elimina la pausa de Despeje mental posterior a un OTM.
+// Se conservan las claves únicamente para limpiar bloqueos guardados por versiones anteriores.
+const MENTAL_COOLDOWN_ENABLED = false;
 const MENTAL_COOLDOWN_UNTIL_KEY = "mentalCooldownUntilMs_v1";
 const MENTAL_COOLDOWN_REASON_KEY = "mentalCooldownReason_v1";
 const MENTAL_COOLDOWN_LAST_CONTRACT_KEY = "mentalCooldownLastContractId_v1";
-const MENTAL_COOLDOWN_MS = 10 * 60 * 1000;
-const MENTAL_COOLDOWN_MAX_STORED_MS = MENTAL_COOLDOWN_MS + 90 * 1000; // seguridad: nunca debe quedar más de ~11m30s
+const MENTAL_COOLDOWN_MS = 0;
+const MENTAL_COOLDOWN_MAX_STORED_MS = 0;
 const DISCIPLINE_LOCK_MAX_STORED_MS = DISCIPLINE_LOCK_MS + 2 * 60 * 1000; // seguridad: bloqueo REAL nunca debe quedar más de ~62m
 
 let mentalCooldownUntilMs = 0;
@@ -13430,9 +13431,8 @@ function clearExpiredOrCorruptDisciplineLock({ silent = true } = {}) {
 }
 
 function isMentalCooldownEnabledForCurrentAccount() {
-  // V85: el despeje mental post-OTM queda solo para REAL.
-  // En DEMO no se dispara ni bloquea, para poder seguir probando libremente.
-  return activeTradingAccount === ACCOUNT_MODE_REAL;
+  // V111.5: eliminado en DEMO y REAL.
+  return MENTAL_COOLDOWN_ENABLED;
 }
 function getScopedMentalCooldownStorageKey(baseKey) {
   // Lo dejamos preparado por cuenta, pero actualmente solo REAL puede guardar/leer el bloqueo.
@@ -13440,12 +13440,19 @@ function getScopedMentalCooldownStorageKey(baseKey) {
   return `${baseKey}_${scope}`;
 }
 function clearLegacyMentalCooldownKeys() {
-  // Limpieza de claves globales viejas de v73/v84 para evitar que un despeje generado en DEMO
-  // quede pegado y después bloquee cuando se cambia a REAL.
+  // V111.5: limpia tanto las claves globales como las separadas por cuenta
+  // para que ningún despeje guardado por una versión anterior vuelva a bloquear la PWA.
   try {
-    localStorage.removeItem(MENTAL_COOLDOWN_UNTIL_KEY);
-    localStorage.removeItem(MENTAL_COOLDOWN_REASON_KEY);
-    localStorage.removeItem(MENTAL_COOLDOWN_LAST_CONTRACT_KEY);
+    const bases = [
+      MENTAL_COOLDOWN_UNTIL_KEY,
+      MENTAL_COOLDOWN_REASON_KEY,
+      MENTAL_COOLDOWN_LAST_CONTRACT_KEY,
+    ];
+    const scopes = [ACCOUNT_MODE_DEMO, ACCOUNT_MODE_REAL];
+    bases.forEach((base) => {
+      localStorage.removeItem(base);
+      scopes.forEach((scope) => localStorage.removeItem(`${base}_${scope}`));
+    });
   } catch {}
 }
 function loadMentalCooldown() {
@@ -13592,6 +13599,15 @@ function updateMentalCooldownAdviceUI(el, remainingMs) {
   } catch {}
 }
 function updateMentalCooldownUI() {
+  if (!MENTAL_COOLDOWN_ENABLED) {
+    mentalCooldownUntilMs = 0;
+    mentalCooldownReason = "";
+    mentalCooldownLastContractId = "";
+    clearLegacyMentalCooldownKeys();
+    const oldOverlay = mentalCooldownOverlayEl || document.getElementById("mentalCooldownOverlay");
+    if (oldOverlay) oldOverlay.style.display = "none";
+    return;
+  }
   const active = isMentalCooldownActive();
   const el = ensureMentalCooldownOverlay();
   if (!el) return;
@@ -13609,25 +13625,17 @@ function updateMentalCooldownUI() {
   try { setStatus(`🌿 Despeje mental · ${fmtMentalCooldownRemaining(remain)}`); } catch {}
 }
 function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada") {
-  // V85: en DEMO no hay despeje mental. Solo REAL activa el bloqueo total de 10 minutos.
-  if (!isMentalCooldownEnabledForCurrentAccount()) return false;
-
-  // Si el OTM también disparó el bloqueo REAL de 1 hora, respetamos ese flujo como estaba:
-  // no mostramos overlay total para que puedas revisar Trades/velas durante la hora.
-  if (isTradeLockedNow()) return false;
-
-  const cid = String(contractId || "");
-  if (cid && cid === mentalCooldownLastContractId && isMentalCooldownActive()) return false;
-
-  mentalCooldownUntilMs = Date.now() + MENTAL_COOLDOWN_MS;
-  mentalCooldownReason = reason || "OTM registrada";
-  mentalCooldownLastContractId = cid;
-  saveMentalCooldown();
-  updateMentalCooldownUI();
-  applyLiveAnalysisPauseUI();
-  toast("🌿 Despeje mental: PWA bloqueada 10 minutos", 2600);
-  return true;
+  // V111.5: la pausa de 10 minutos fue eliminada. Un OTM ya no bloquea
+  // señales, gráfico ni operaciones. La disciplina REAL de 1 hora sigue intacta.
+  void contractId;
+  void reason;
+  clearLegacyMentalCooldownKeys();
+  mentalCooldownUntilMs = 0;
+  mentalCooldownReason = "";
+  mentalCooldownLastContractId = "";
+  return false;
 }
+
 
 
 function loadSignalFatigueCooldown() {

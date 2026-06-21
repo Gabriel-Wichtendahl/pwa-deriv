@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v111.4 (ventana siguiente 60→120 + actualización robusta) */
+/* sw.js — Deriv Signals v111.5 (ventana siguiente 60→120 + actualización robusta) */
 "use strict";
 
-const CACHE = "deriv-assets-v111-4-calidad-ab-operable";
+const CACHE = "deriv-assets-v111-5-sin-despeje-mental";
 
 const CORE_ASSETS = [
   "./",
@@ -16,7 +16,6 @@ const OPTIONAL_ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
   "./bg-neon.png",
-  "./despeje-mental-bg.png",
   "./pausa-visual-bg.png",
 ];
 
