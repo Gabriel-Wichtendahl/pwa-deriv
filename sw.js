@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.0 (Higher/Lower 130% corregido) */
+/* sw.js — Deriv Signals v112.2 (captura de estudio estilo Deriv) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-0-highlow-130-fixed";
+const CACHE = "deriv-assets-v112-2-study-capture-deriv-style";
 
 const CORE_ASSETS = [
   "./",

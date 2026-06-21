@@ -1,3 +1,5 @@
+// v112.2: Captura de estudio estilo Deriv: gráfico limpio tipo comparativas, línea blanca y cronología 0-120s.
+// v112.1: AUTO 58 estricto: Rise/Fall prearma antes, envía solamente buy(proposal_id) al tick 58 y cancela si no está listo; nunca compra tarde.
 // v112.0: Higher/Lower 130% corregido: usa tipos API HIGHER/LOWER, búsqueda tolerante a barreras inválidas y fallback de proposal fresca para no perder la operación.
 // v111.7: se elimina el bloqueo de la cuenta REAL por 2 OTM; solo continúa el bloqueo por ciclo IC2 completo.
 // v111.6: las alertas de señal vibran tres veces con dos pausas intermedias.
@@ -145,7 +147,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V111_4_CALIDAD_AB_OPERABLE";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V112_2_ESTILO_DERIV_LINEA_BLANCA";
 
 /* =========================
    Trade account config
@@ -762,202 +764,103 @@ function getStudyPatternText(item, meta) {
     ""
   ).trim();
 }
+
 function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput = null) {
   const ctx = canvas.getContext("2d");
   const W = canvas.width;
   const H = canvas.height;
   const timeline = timelineInput || getStudyCaptureTimeline(item);
   const dir = String(item?.direction || "PUT").toUpperCase() === "CALL" ? "CALL" : "PUT";
+  const isCall = dir === "CALL";
   const tradeResult = getStudyCaptureTradeResult(item);
-  const hasRealContract = !!timeline.hasRealContract;
-  const result = tradeResult || "PEND";
   const signal60Label = getStudySignal60Label(item);
   const signal60Correctness = getStudySignal60Correctness(item);
-  const isCall = dir === "CALL";
-  const isItm = tradeResult === "ITM";
-  const isOtm = tradeResult === "OTM";
-  const tradeColor = isItm ? "#22c55e" : isOtm ? "#ef4444" : "#f59e0b";
-  const tradeSoft = isItm ? "rgba(34,197,94,.10)" : isOtm ? "rgba(239,68,68,.10)" : "rgba(245,158,11,.12)";
-  const tradeGlow = isItm ? "rgba(34,197,94,.32)" : isOtm ? "rgba(239,68,68,.32)" : "rgba(245,158,11,.32)";
-  const signalColor = signal60Correctness === "correct" ? "#22c55e" : signal60Correctness === "incorrect" ? "#ef4444" : "#f59e0b";
+  const hasRealContract = !!timeline.hasRealContract;
+  const resultLabel = tradeResult || "PEND";
   const allTicks = normalizeStudyExactTicks(item, exactTicks, timeline);
   const meta = getStudyCaptureLevelMeta(item);
   const patternText = getStudyPatternText(item, meta);
   const windowEndMs = Number(timeline.windowEndMs || 120000);
 
-  const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, "#091321");
-  bg.addColorStop(1, "#111827");
+  const bg = "#0f141d";
+  const panel = "#141b26";
+  const border = "rgba(255,255,255,.10)";
+  const grid = "rgba(255,255,255,.09)";
+  const line = "#f8fafc";
+  const softText = "rgba(235,241,255,.72)";
+  const mainText = "#eef4ff";
+  const accent = isCall ? "#22c55e" : "#ef4444";
+  const neutral = "#38bdf8";
+  const signalColor = signal60Correctness === "correct" ? "#22c55e" : signal60Correctness === "incorrect" ? "#ef4444" : "#f59e0b";
+
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = "rgba(13,22,42,.95)";
-  studyRoundRect(ctx, 24, 18, W - 48, 88, 22, true, false);
-  ctx.fillStyle = "#e5edf9";
-  ctx.font = "800 27px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Captura de estudio · cronología real · v111.4", 52, 52);
-  ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillStyle = "rgba(220,235,255,.78)";
-  const headerLine = hasRealContract
-    ? `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · entrada ${studyFormatUtc(timeline.entryEpochMs)} → cierre ${studyFormatUtc(timeline.exitEpochMs)}`
-    : `${item?.symbol || "—"} · ${isCall ? "COMPRA / CALL" : "VENTA / PUT"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)} · alarma ${studyFormatUtc(timeline.alarmEpochMs)} · sin operación Deriv`;
-  studyDrawFittedText(ctx, headerLine, 52, 80, W - 360, "600 15px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(220,235,255,.78)");
-  const topResultText = hasRealContract ? `Deriv: ${result}` : `Próximos 60s: ${signal60Label}`;
-  const topResultColor = hasRealContract ? tradeColor : signalColor;
-  studyDrawPill(ctx, W - 270, 36, 220, 42, topResultText, topResultColor, "#f8fafc", 15);
+  // Encabezado mínimo estilo Deriv
+  ctx.fillStyle = panel;
+  studyRoundRect(ctx, 24, 20, W - 48, 72, 16, true, true, border);
+  ctx.fillStyle = mainText;
+  ctx.font = "700 24px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText(`${item?.symbol || "—"} · ${isCall ? "COMPRA" : "VENTA"}`, 46, 50);
+  ctx.font = "500 14px system-ui, -apple-system, Segoe UI, sans-serif";
+  const sub = `${String(patternText || meta?.visualReductionPattern || "Formación").trim() || "Formación"} · ancla ${studyFormatUtc(timeline.anchorEpochMs)}`;
+  studyDrawFittedText(ctx, sub, 46, 73, W - 360, "500 14px system-ui, -apple-system, Segoe UI, sans-serif", softText);
+  studyDrawPill(ctx, W - 250, 36, 92, 28, hasRealContract ? resultLabel : signal60Label, hasRealContract ? (tradeResult === "ITM" ? "#22c55e" : tradeResult === "OTM" ? "#ef4444" : "#f59e0b") : signalColor, "#f8fafc", 12);
+  studyDrawPill(ctx, W - 148, 36, 98, 28, isCall ? "CALL" : "PUT", accent, "#f8fafc", 12);
 
-  const x0 = 54, y0 = 128, x1 = W - 54, y1 = H - 190;
-  studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 24, false, true, "rgba(75,95,135,.65)");
+  // Zona principal del gráfico
+  const x0 = 28, y0 = 108, x1 = W - 28, y1 = H - 112;
+  ctx.fillStyle = panel;
+  studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 16, true, true, border);
   ctx.save();
   ctx.beginPath();
-  studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 24, false, false);
+  studyRoundRect(ctx, x0, y0, x1 - x0, y1 - y0, 16, false, false);
   ctx.clip();
-  ctx.fillStyle = "#151a24";
-  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 
-  const chartPad = { l: 58, r: 46, t: 46, b: 48 };
+  const chartPad = { l: 34, r: 24, t: 28, b: 38 };
   const cx0 = x0 + chartPad.l, cy0 = y0 + chartPad.t, cx1 = x1 - chartPad.r, cy1 = y1 - chartPad.b;
-  const xOf = (ms) => cx0 + ((cx1 - cx0) * Math.max(0, Math.min(windowEndMs, Number(ms)))) / windowEndMs;
+  const xOf = (ms) => cx0 + ((cx1 - cx0) * Math.max(0, Math.min(windowEndMs, Number(ms)))) / Math.max(windowEndMs, 1);
 
-  // Zonas temporales: formación flotante exacta y operación contractual exacta.
-  ctx.fillStyle = "rgba(34,211,238,.055)";
+  // Fondo del chart y sombreado suave por ventanas
+  ctx.fillStyle = "#171f2b";
+  ctx.fillRect(cx0, cy0, cx1 - cx0, cy1 - cy0);
+  ctx.fillStyle = "rgba(255,255,255,.018)";
   ctx.fillRect(xOf(0), cy0, Math.max(0, xOf(60000) - xOf(0)), cy1 - cy0);
-  if (hasRealContract && Number.isFinite(Number(timeline.entryMs)) && Number.isFinite(Number(timeline.exitMs))) {
-    ctx.fillStyle = tradeSoft;
-    ctx.fillRect(xOf(timeline.entryMs), cy0, Math.max(2, xOf(timeline.exitMs) - xOf(timeline.entryMs)), cy1 - cy0);
-  } else if (!hasRealContract && Number.isFinite(Number(timeline.signalEndMs))) {
-    ctx.fillStyle = signal60Correctness === "incorrect" ? "rgba(239,68,68,.08)" : "rgba(34,197,94,.065)";
-    ctx.fillRect(xOf(timeline.signalStartMs), cy0, Math.max(2, xOf(timeline.signalEndMs) - xOf(timeline.signalStartMs)), cy1 - cy0);
-  }
+  ctx.fillStyle = "rgba(255,255,255,.028)";
+  ctx.fillRect(xOf(60000), cy0, Math.max(0, xOf(Math.min(windowEndMs, 120000)) - xOf(60000)), cy1 - cy0);
 
-  for (let i = 1; i <= 5; i++) {
-    const y = cy0 + ((cy1 - cy0) * i) / 6;
-    ctx.strokeStyle = "rgba(148,163,184,.12)";
+  // Grillas
+  for (let i = 0; i <= 5; i++) {
+    const y = cy0 + ((cy1 - cy0) * i) / 5;
+    ctx.strokeStyle = grid;
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(cx0, y); ctx.lineTo(cx1, y); ctx.stroke();
   }
-  for (let ms = 0; ms <= windowEndMs; ms += 15000) {
+  const verticalMarks = [0, 15000, 30000, 45000, 60000, 90000, 120000].filter((ms) => ms <= windowEndMs);
+  verticalMarks.forEach((ms) => {
     const x = xOf(ms);
-    const formationBoundary = ms === 60000;
-    ctx.strokeStyle = formationBoundary ? "rgba(34,211,238,.55)" : "rgba(148,163,184,.12)";
-    ctx.lineWidth = formationBoundary ? 2.2 : 1;
-    ctx.setLineDash(formationBoundary ? [7, 7] : []);
+    ctx.strokeStyle = ms === 60000 ? "rgba(255,255,255,.16)" : grid;
+    ctx.lineWidth = ms === 60000 ? 1.6 : 1;
     ctx.beginPath(); ctx.moveTo(x, cy0); ctx.lineTo(x, cy1); ctx.stroke();
-    ctx.setLineDash([]);
-    const sec = Math.round(ms / 1000);
-    const label = sec <= 60 ? `${sec}s` : `+${sec - 60}s`;
-    ctx.fillStyle = formationBoundary ? "#67e8f9" : "rgba(203,213,225,.70)";
-    ctx.font = "12px system-ui, -apple-system, Segoe UI, sans-serif";
-    ctx.fillText(label, x - 12, cy1 + 26);
-  }
-
-  studyDrawPill(ctx, cx0 + 8, cy0 + 8, 210, 29, "Formación anclada 0–60s", "rgba(34,211,238,.42)", "#cffafe", 13);
-  if (hasRealContract) {
-    const operationLabel = Number.isFinite(Number(timeline.contractDurationMs))
-      ? `Operación Deriv ${Math.round(timeline.contractDurationMs / 1000)}s`
-      : "Operación Deriv";
-    studyDrawPill(ctx, Math.min(cx1 - 190, Math.max(cx0 + 230, xOf(timeline.entryMs) + 8)), cy0 + 8, 180, 29, operationLabel, tradeColor, "#f8fafc", 13);
-  } else {
-    studyDrawPill(ctx, Math.min(cx1 - 238, Math.max(cx0 + 230, xOf(0) + 230)), cy0 + 8, 228, 29, "Próximos 60s (60→120)", signalColor, "#f8fafc", 13);
-  }
+  });
 
   if (allTicks.length >= 2) {
     const qs = allTicks.map((p) => Number(p.quote)).filter(Number.isFinite);
-    const contractualEntryQuote = studyValidQuote(timeline.entryQuote, null);
-    const contractualExitQuote = studyValidQuote(timeline.exitQuote, null);
-    if (Number.isFinite(contractualEntryQuote)) qs.push(contractualEntryQuote);
-    if (Number.isFinite(contractualExitQuote)) qs.push(contractualExitQuote);
+    const entryQuote = studyValidQuote(timeline.entryQuote, null);
+    const exitQuote = studyValidQuote(timeline.exitQuote, null);
+    if (Number.isFinite(entryQuote)) qs.push(entryQuote);
+    if (Number.isFinite(exitQuote)) qs.push(exitQuote);
     let min = Math.min(...qs), max = Math.max(...qs);
     let range = max - min;
     if (!Number.isFinite(range) || range < 1e-9) range = Math.max(Math.abs(max || 1) * 0.000001, 1);
-    min -= range * 0.09; max += range * 0.09;
+    min -= range * 0.10; max += range * 0.10;
     const yOf = (q) => cy1 - ((Number(q) - min) / Math.max(max - min, 1e-9)) * (cy1 - cy0);
 
-    // V111.1: el inicio irregular se muestra como un único bloque macro, sin
-    // confundir sus impulsos internos con reducciones separadas.
-    const irregularBlock = meta?.constructiveQualificationRoute === "irregular_initial_response" && meta?.irregularInitialBlock
-      ? meta.irregularInitialBlock
-      : null;
-    if (irregularBlock && Number.isFinite(Number(irregularBlock.startMs)) && Number.isFinite(Number(irregularBlock.endMs))) {
-      const ix0 = xOf(Number(irregularBlock.startMs));
-      const ix1 = xOf(Number(irregularBlock.endMs));
-      ctx.fillStyle = "rgba(14,165,233,.075)";
-      ctx.fillRect(ix0, cy0 + 42, Math.max(3, ix1 - ix0), cy1 - cy0 - 42);
-      studyDrawPill(
-        ctx,
-        Math.max(cx0 + 6, Math.min(ix0 + 4, cx1 - 232)),
-        cy0 + 44,
-        226,
-        27,
-        `Inicio irregular ${String(irregularBlock.pattern || "G/M/P")}`,
-        "rgba(14,165,233,.56)",
-        "#e0f2fe",
-        12
-      );
-    }
-
-    // Reducciones aceptadas (2 o 3): se muestran como bloques, sin deformar la línea real.
-    const blocks = Array.isArray(meta?.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
-    const blockColors = ["rgba(34,197,94,.52)", "rgba(168,85,247,.52)", "rgba(14,165,233,.52)"];
-    const blockFills = ["rgba(34,197,94,.07)", "rgba(168,85,247,.07)", "rgba(14,165,233,.07)"];
-    blocks.forEach((block, index) => {
-      const startMs = studyFiniteNumber(block?.startMs, null);
-      const endMs = studyFiniteNumber(block?.endMs, null);
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return;
-      const bx0 = xOf(startMs), bx1 = xOf(endMs);
-      ctx.fillStyle = blockFills[index] || "rgba(14,165,233,.07)";
-      ctx.fillRect(bx0, cy0 + 42, Math.max(3, bx1 - bx0), cy1 - cy0 - 42);
-      studyDrawPill(
-        ctx,
-        Math.max(cx0 + 6, Math.min(bx0 + 4, cx1 - 150)),
-        cy0 + 44 + index * 34,
-        144,
-        27,
-        `${index + 1}ª ${String(block?.pattern || "reducción")}`,
-        blockColors[index] || "rgba(14,165,233,.52)",
-        "#f8fafc",
-        12
-      );
-    });
-
-    const confirmationPack = meta?.constructiveConfirmationPack;
-    if (confirmationPack && Number.isFinite(Number(confirmationPack.startMs)) && Number.isFinite(Number(confirmationPack.endMs))) {
-      const qx0 = xOf(Number(confirmationPack.startMs));
-      const qx1 = xOf(Number(confirmationPack.endMs));
-      ctx.fillStyle = "rgba(245,158,11,.08)";
-      ctx.fillRect(qx0, cy0 + 42, Math.max(3, qx1 - qx0), cy1 - cy0 - 42);
-      const confPrefix = meta?.constructiveQualificationRoute === "irregular_initial_response" ? "Respuesta" : "Conf.";
-      studyDrawPill(ctx, Math.max(cx0 + 6, Math.min(qx0 + 4, cx1 - 226)), cy0 + 146, 220, 27, `${confPrefix} ${String(confirmationPack.label || confirmationPack.pattern || "contraria")}`, "rgba(245,158,11,.55)", "#fff7ed", 12);
-    }
-
-    if (shouldDrawStudyLevel(meta)) {
-      const level = Number(meta?.level);
-      if (Number.isFinite(level)) {
-        const ly = yOf(level);
-        const levelColor = isCall ? "rgba(34,197,94,.58)" : "rgba(244,63,94,.58)";
-        ctx.strokeStyle = levelColor;
-        ctx.lineWidth = 1.6;
-        ctx.beginPath(); ctx.moveTo(cx0, ly); ctx.lineTo(cx1, ly); ctx.stroke();
-        studyDrawPill(ctx, cx0 + 10, Math.max(cy0 + 84, ly - 16), 190, 29, isCall ? "NIVEL SOPORTE" : "NIVEL RESISTENCIA", levelColor, "#f8fafc", 12);
-      }
-    }
-
-    // Área y línea: usa únicamente ticks del intervalo absoluto exacto.
-    ctx.beginPath();
-    allTicks.forEach((p, i) => {
-      const x = xOf(p.ms), y = yOf(p.quote);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.lineTo(xOf(allTicks[allTicks.length - 1].ms), cy1);
-    ctx.lineTo(xOf(allTicks[0].ms), cy1);
-    ctx.closePath();
-    ctx.fillStyle = "rgba(229,231,235,.12)";
-    ctx.fill();
-
-    ctx.strokeStyle = "#f1f5f9";
-    ctx.lineWidth = 3.2;
-    ctx.lineJoin = "round";
+    // Línea blanca limpia
+    ctx.strokeStyle = line;
+    ctx.lineWidth = 3.4;
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
     ctx.beginPath();
     allTicks.forEach((p, i) => {
       const x = xOf(p.ms), y = yOf(p.quote);
@@ -965,122 +868,104 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
     });
     ctx.stroke();
 
-    // Momento exacto de la alarma, separado de la entrada contractual.
-    if (Number.isFinite(Number(timeline.alarmMs)) && timeline.alarmMs >= 0 && timeline.alarmMs <= windowEndMs) {
-      const ax = xOf(timeline.alarmMs);
-      ctx.strokeStyle = "rgba(250,204,21,.88)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 6]);
-      ctx.beginPath(); ctx.moveTo(ax, cy0); ctx.lineTo(ax, cy1); ctx.stroke();
-      ctx.setLineDash([]);
-      studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ax - 62, cx1 - 126)), cy1 - 36, 124, 27, `ALARMA ${Math.round(timeline.alarmMs / 1000)}s`, "rgba(250,204,21,.72)", "#fff7c2", 12);
+    // Marcadores mínimos
+    const startP = allTicks[0];
+    const endP = allTicks[allTicks.length - 1];
+    if (startP) {
+      ctx.fillStyle = line;
+      ctx.beginPath(); ctx.arc(xOf(startP.ms), yOf(startP.quote), 4.5, 0, Math.PI * 2); ctx.fill();
+    }
+    if (endP) {
+      ctx.fillStyle = line;
+      ctx.beginPath(); ctx.arc(xOf(endP.ms), yOf(endP.quote), 4.5, 0, Math.PI * 2); ctx.fill();
     }
 
-    if (hasRealContract) {
+    // Entrada/cierre contractual o ventana siguiente, con marcadores discretos
+    if (hasRealContract && Number.isFinite(Number(timeline.entryMs))) {
       const entryMs = Math.max(0, Math.min(windowEndMs, Number(timeline.entryMs)));
       const exitMs = Math.max(entryMs, Math.min(windowEndMs, Number(timeline.exitMs)));
-      const entryQuote = studyValidQuote(timeline.entryQuote, null)
-        ?? studyNearestQuoteAtMs(allTicks, entryMs, 3500);
-      const exitQuote = studyValidQuote(timeline.exitQuote, null)
-        ?? studyNearestQuoteAtMs(allTicks, exitMs, 3500);
-      const ex = xOf(entryMs);
-      const hasEntryQuote = Number.isFinite(entryQuote);
-      const hasExitQuote = Number.isFinite(exitQuote);
-      const ey = hasEntryQuote ? yOf(entryQuote) : null;
-      const closeX = xOf(exitMs);
-      const closeY = hasExitQuote ? yOf(exitQuote) : null;
-
-      if (hasEntryQuote) {
-        ctx.shadowColor = tradeGlow;
-        ctx.shadowBlur = 9;
-        ctx.strokeStyle = tradeColor;
-        ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.arc(ex, ey, 14, 0, Math.PI * 2); ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = "#0b1220";
-        ctx.beginPath(); ctx.arc(ex, ey, 10, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = tradeColor;
-        ctx.beginPath(); ctx.arc(ex, ey, 5.5, 0, Math.PI * 2); ctx.fill();
-        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 62, cx1 - 132)), Math.max(cy0 + 80, ey - 48), 130, 30, "ENTRADA DERIV", tradeColor, "#f8fafc", 12);
-
-        if (hasExitQuote) {
-          ctx.strokeStyle = tradeColor;
-          ctx.lineWidth = 3.5;
-          ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
-          ctx.setLineDash([8, 7]);
-          ctx.beginPath(); ctx.moveTo(closeX, ey); ctx.lineTo(closeX, closeY); ctx.stroke();
-          ctx.setLineDash([]);
-          ctx.shadowColor = tradeGlow;
-          ctx.shadowBlur = 8;
-          ctx.fillStyle = tradeColor;
-          ctx.beginPath(); ctx.arc(closeX, closeY, 15, 0, Math.PI * 2); ctx.fill();
-          ctx.shadowBlur = 0;
-          const resultWidth = result === "PEND" ? 110 : 92;
-          studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - resultWidth / 2, cx1 - resultWidth)), Math.max(cy0 + 46, closeY - 48), resultWidth, 30, result, tradeColor, "#f8fafc", 13);
-        } else {
-          ctx.setLineDash([8, 7]);
-          ctx.strokeStyle = tradeColor;
-          ctx.lineWidth = 2.5;
-          ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(closeX, ey); ctx.stroke();
-          ctx.setLineDash([]);
-          studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(closeX - 64, cx1 - 128)), Math.max(cy0 + 46, ey - 48), 124, 30, "DERIV PENDIENTE", tradeColor, "#f8fafc", 12);
-        }
-      } else {
-        studyDrawPill(ctx, Math.max(cx0 + 8, Math.min(xOf(entryMs) - 72, cx1 - 150)), cy1 - 38, 146, 28, "SPOT DERIV PENDIENTE", tradeColor, "#f8fafc", 11);
+      const eq = Number.isFinite(entryQuote) ? entryQuote : studyNearestQuoteAtMs(allTicks, entryMs, 3500);
+      const xq = Number.isFinite(exitQuote) ? exitQuote : studyNearestQuoteAtMs(allTicks, exitMs, 3500);
+      if (Number.isFinite(eq)) {
+        const ex = xOf(entryMs), ey = yOf(eq);
+        ctx.fillStyle = neutral;
+        ctx.beginPath(); ctx.arc(ex, ey, 7, 0, Math.PI * 2); ctx.fill();
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex - 34, cx1 - 68)), Math.max(cy0 + 8, ey - 34), 68, 24, "ENT", neutral, "#f8fafc", 11);
       }
-    } else if (Number.isFinite(Number(timeline.signalEndMs))) {
-      const startMs = Math.max(0, Math.min(windowEndMs, Number(timeline.signalStartMs)));
-      const endMs = Math.max(startMs, Math.min(windowEndMs, Number(timeline.signalEndMs)));
-      const startQuote = studyValidQuote(timeline.signalStartQuote, null)
-        ?? studyNearestQuoteAtMs(allTicks, startMs, 3500);
-      const endQuote = studyValidQuote(timeline.signalEndQuote, null)
-        ?? studyNearestQuoteAtMs(allTicks, endMs, 3500);
-      if (Number.isFinite(startQuote) && Number.isFinite(endQuote)) {
-        const sx = xOf(startMs), sy = yOf(startQuote), ex2 = xOf(endMs), ey2 = yOf(endQuote);
-        ctx.strokeStyle = signalColor;
-        ctx.lineWidth = 3.2;
-        ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex2, sy); ctx.stroke();
-        ctx.setLineDash([8, 7]);
-        ctx.beginPath(); ctx.moveTo(ex2, sy); ctx.lineTo(ex2, ey2); ctx.stroke();
-        ctx.setLineDash([]);
+      if (Number.isFinite(xq)) {
+        const xx = xOf(exitMs), xy = yOf(xq);
+        const resColor = tradeResult === "ITM" ? "#22c55e" : tradeResult === "OTM" ? "#ef4444" : "#f59e0b";
+        ctx.fillStyle = resColor;
+        ctx.beginPath(); ctx.arc(xx, xy, 7, 0, Math.PI * 2); ctx.fill();
+        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(xx - 34, cx1 - 68)), Math.max(cy0 + 8, xy - 34), 68, 24, resultLabel, resColor, "#f8fafc", 11);
+      }
+    } else if (Number.isFinite(Number(timeline.signalStartMs)) && Number.isFinite(Number(timeline.signalEndMs))) {
+      const sMs = Math.max(0, Math.min(windowEndMs, Number(timeline.signalStartMs)));
+      const eMs = Math.max(sMs, Math.min(windowEndMs, Number(timeline.signalEndMs)));
+      const sq = studyValidQuote(timeline.signalStartQuote, null) ?? studyNearestQuoteAtMs(allTicks, sMs, 3500);
+      const eq = studyValidQuote(timeline.signalEndQuote, null) ?? studyNearestQuoteAtMs(allTicks, eMs, 3500);
+      if (Number.isFinite(sq)) {
+        const sx = xOf(sMs), sy = yOf(sq);
+        ctx.fillStyle = neutral;
+        ctx.beginPath(); ctx.arc(sx, sy, 6.5, 0, Math.PI * 2); ctx.fill();
+      }
+      if (Number.isFinite(eq)) {
+        const ex = xOf(eMs), ey = yOf(eq);
         ctx.fillStyle = signalColor;
-        ctx.beginPath(); ctx.arc(sx, sy, 10, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(ex2, ey2, 13, 0, Math.PI * 2); ctx.fill();
-        studyDrawPill(ctx, Math.max(cx0 + 4, Math.min(ex2 - 70, cx1 - 140)), Math.max(cy0 + 46, ey2 - 46), 136, 30, `SIG. 60s ${signal60Label}`, signalColor, "#f8fafc", 12);
+        ctx.beginPath(); ctx.arc(ex, ey, 6.5, 0, Math.PI * 2); ctx.fill();
       }
     }
+
+    // Etiquetas de precio mínimas a la derecha
+    const priceSteps = 4;
+    ctx.font = "12px system-ui, -apple-system, Segoe UI, sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,.52)";
+    for (let i = 0; i <= priceSteps; i++) {
+      const frac = i / priceSteps;
+      const q = max - (max - min) * frac;
+      const y = cy0 + (cy1 - cy0) * frac;
+      const label = Math.abs(q) >= 1000 ? q.toFixed(2) : q.toFixed(4);
+      const tw = ctx.measureText(label).width;
+      ctx.fillText(label, cx1 - tw - 4, y - 4);
+    }
+  }
+
+  // Etiquetas temporales
+  const timeLabels = [
+    [0, "0s"], [30000, "30s"], [60000, "60s"], [90000, "+30s"], [120000, "+60s"]
+  ].filter(([ms]) => ms <= windowEndMs);
+  ctx.font = "12px system-ui, -apple-system, Segoe UI, sans-serif";
+  timeLabels.forEach(([ms, label]) => {
+    const x = xOf(ms);
+    ctx.fillStyle = ms === 60000 ? "rgba(255,255,255,.88)" : "rgba(255,255,255,.58)";
+    const tw = ctx.measureText(label).width;
+    ctx.fillText(label, Math.max(cx0, Math.min(cx1 - tw, x - tw / 2)), cy1 + 24);
+  });
+  ctx.fillStyle = "rgba(255,255,255,.56)";
+  ctx.font = "600 12px system-ui, -apple-system, Segoe UI, sans-serif";
+  ctx.fillText("Formación", cx0 + 4, cy0 - 8);
+  if (windowEndMs >= 120000) {
+    const t = "Próximos 60s";
+    const tw = ctx.measureText(t).width;
+    ctx.fillText(t, Math.max(cx0 + 4, xOf(60000) + 6), cy0 - 8);
   }
 
   ctx.restore();
 
-  // Resumen útil para auditar la captura contra Deriv.
-  const footerY = H - 166;
-  ctx.fillStyle = "rgba(15,23,42,.94)";
-  studyRoundRect(ctx, 54, footerY, W - 108, 132, 18, true, true, "rgba(75,95,135,.5)");
-  ctx.fillStyle = "#eaf2ff";
-  ctx.font = "800 16px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Lectura:", 82, footerY + 32);
-  const group = String(meta?.visualReductionGroup || "").trim();
-  const signalText = `${group ? group + " " : ""}${patternText || "formación"} → ${isCall ? "COMPRA" : "VENTA"}`;
-  studyDrawFittedText(ctx, signalText, 172, footerY + 32, W - 255, "700 16px system-ui, -apple-system, Segoe UI, sans-serif", "#f8fafc");
-
-  ctx.fillStyle = "rgba(220,235,255,.78)";
-  ctx.font = "600 14px system-ui, -apple-system, Segoe UI, sans-serif";
-  if (hasRealContract) {
-    const footerEntryQuote = studyValidQuote(timeline.entryQuote, null);
-    const footerExitQuote = studyValidQuote(timeline.exitQuote, null);
-    const entrySpotTxt = Number.isFinite(footerEntryQuote) ? footerEntryQuote.toFixed(6) : "pendiente";
-    const exitSpotTxt = Number.isFinite(footerExitQuote) ? footerExitQuote.toFixed(6) : "pendiente";
-    studyDrawFittedText(ctx, `Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · entrada Deriv ${studyFormatUtc(timeline.entryEpochMs)} @ ${entrySpotTxt}`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Cierre Deriv ${studyFormatUtc(timeline.exitEpochMs)} @ ${exitSpotTxt} · ${result} · próximos 60s ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Próximos 60s: ancla+60s → ancla+120s · Deriv usa entrada/cierre contractual reales`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
-  } else {
-    const signalStartTxt = Number.isFinite(studyValidQuote(timeline.signalStartQuote, null)) ? Number(timeline.signalStartQuote).toFixed(6) : "—";
-    const signalEndTxt = Number.isFinite(studyValidQuote(timeline.signalEndQuote, null)) ? Number(timeline.signalEndQuote).toFixed(6) : "—";
-    studyDrawFittedText(ctx, `Inicio próximos 60s ${studyFormatUtc(timeline.signalStartEpochMs)} @ ${signalStartTxt} · alarma ${studyFormatUtc(timeline.alarmEpochMs)} · sin operación Deriv`, 82, footerY + 64, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Final próximos 60s ${studyFormatUtc(timeline.signalEndEpochMs)} @ ${signalEndTxt} · ${signal60Label}`, 82, footerY + 92, W - 164, undefined, "rgba(220,235,255,.80)");
-    studyDrawFittedText(ctx, `Resultado canónico: ancla+60s → ancla+120s · la alarma solo confirma la formación`, 82, footerY + 118, W - 164, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", "rgba(148,163,184,.88)");
-  }
+  // Pie simple
+  const fy = H - 86;
+  ctx.fillStyle = panel;
+  studyRoundRect(ctx, 24, fy, W - 48, 50, 14, true, true, border);
+  ctx.fillStyle = mainText;
+  ctx.font = "600 13px system-ui, -apple-system, Segoe UI, sans-serif";
+  const foot1 = hasRealContract
+    ? `Ancla ${studyFormatUtc(timeline.anchorEpochMs)} · Entrada ${studyFormatUtc(timeline.entryEpochMs)} · Cierre ${studyFormatUtc(timeline.exitEpochMs)}`
+    : `Ancla ${studyFormatUtc(timeline.anchorEpochMs)} · Alarma ${studyFormatUtc(timeline.alarmEpochMs)} · Resultado ${signal60Label}`;
+  const foot2 = hasRealContract
+    ? `Resultado Deriv ${resultLabel} · Próximos 60s ${signal60Label}`
+    : `Ventana siguiente 60→120s · sin operación Deriv`;
+  studyDrawFittedText(ctx, foot1, 44, fy + 20, W - 88, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", softText);
+  studyDrawFittedText(ctx, foot2, 44, fy + 38, W - 88, "600 13px system-ui, -apple-system, Segoe UI, sans-serif", softText);
 }
 
 async function generateAndSaveStudyCaptureForSignal(item, { force = false } = {}) {
@@ -2246,12 +2131,14 @@ const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 const SIGNAL_AUTO_POST58_MAX_MS = 59200;
 const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 // V66: preparar proposal ANTES del post-58 para que en 58 solo se compre.
-const SIGNAL_AUTO_PREPROPOSAL_START_MS = 52000;
-const SIGNAL_AUTO_PREPROPOSAL_END_MS = 59000;
-const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 10000;
-// V106.4: con API nueva PAT/OTP no bloqueamos la operación si la proposal no quedó prearmada.
-// Si no está lista, la PWA intenta pedir proposal rápida/direct buy en el post-58.
-const SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT = false;
+// V112.1: la proposal se empieza a preparar con margen suficiente y queda vigente
+// hasta el cierre operativo de la formación. En el tick 58 no se consulta nada: solo buy.
+const SIGNAL_AUTO_PREPROPOSAL_START_MS = 44000;
+const SIGNAL_AUTO_PREPROPOSAL_END_MS = 57500;
+const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 20000;
+// V112.1: modo estricto. Si al tick 58 no hay proposal válida, se cancela.
+// Nunca se pide una proposal nueva después de 58 porque eso genera entradas tardías.
+const SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT = true;
 // V23: la señal vive en 3 etapas: prealerta temprana para analizar,
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
@@ -3893,8 +3780,27 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
   const plan = buildNextCandleTimingPlan(item);
   const suffix = plan.visual_candle_sync ? "visual58" : "cierre60";
   const closeMsg = plan.visual_candle_sync
-    ? "cierre visual (vela) al segundo 58 de la vela operada"
+    ? "entrada al cierre operativo de la formación (58s) y vencimiento 60s después"
     : "cierre fijo al segundo 60";
+
+  // V112.1: con cierre visual 58 no usamos date_start. La operación debe comenzar
+  // cuando se envía buy al tick 58, no dos segundos más tarde en el segundo 60.
+  if (plan.visual_candle_sync) {
+    return [{
+      label: `AUTO58_DATE_EXPIRY_ONLY_${suffix}`,
+      params: {
+        ...base,
+        date_expiry: plan.next_expiry_epoch_sec,
+      },
+      timing: {
+        ...plan,
+        planned_entry_epoch_sec: plan.current_start_epoch_sec + 58,
+        variant: "date_expiry_only_visual58",
+        message: `AUTO 58 estricto: proposal prearmada; al tick 58 se envía solo buy(proposal_id), con ${closeMsg}.`,
+      },
+    }];
+  }
+
   return [
     {
       label: `AUTO58_DATE_START_EXPIRY_${suffix}`,
@@ -3905,8 +3811,8 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
       },
       timing: {
         ...plan,
-        variant: plan.visual_candle_sync ? "date_start_plus_date_expiry_visual58" : "date_start_plus_date_expiry",
-        message: `AUTO pre-56/post-58: proposal prearmada; compra luego del tick >=58s; inicio programado en próxima vela y ${closeMsg}.`,
+        variant: "date_start_plus_date_expiry",
+        message: `AUTO prearmado: inicio programado en próxima vela y ${closeMsg}.`,
       },
     },
     {
@@ -3917,9 +3823,9 @@ function buildRiseFallTimingVariants(side, symbol, stake, item = null) {
       },
       timing: {
         ...plan,
-        variant: plan.visual_candle_sync ? "date_expiry_only_visual58" : "date_expiry_only",
-        fallback_from: plan.visual_candle_sync ? "date_start_plus_date_expiry_visual58" : "date_start_plus_date_expiry",
-        message: `AUTO pre-56/post-58: Deriv no aceptó inicio programado; se usa proposal prearmada con ${closeMsg}.`,
+        variant: "date_expiry_only",
+        fallback_from: "date_start_plus_date_expiry",
+        message: `AUTO prearmado: Deriv no aceptó inicio programado; se usa date_expiry con ${closeMsg}.`,
       },
     },
   ];
@@ -3929,6 +3835,7 @@ function getRiseFallTimingExtra(timing = null) {
   return {
     entry_timing_mode: String(timing.mode || ""),
     entry_timing_variant: String(timing.variant || ""),
+    planned_entry_time: Number(timing.planned_entry_epoch_sec || 0) || null,
     planned_next_start_time: Number(timing.next_start_epoch_sec || 0) || null,
     planned_expiry_time: Number(timing.next_expiry_epoch_sec || 0) || null,
     planned_duration_sec: Number(timing.planned_duration_sec || 0) || null,
@@ -4056,6 +3963,9 @@ function getValidAutoPreProposal(item, side, symbol, stake) {
     ppVariant.includes("new_api_duration_2s") ||
     ppVariant.includes("new_api_duration_1m") ||
     ppVariant.includes("AUTO58_NEW_API_DURATION");
+  // V112.1: en AUTO 58 visual no aceptamos fallbacks de 2s/1m como preproposal.
+  // El contrato debe empezar al cierre de la formación y vencer exactamente en el objetivo.
+  if (isEntryTimingVisual58() && isDurationFallback) return null;
   if (!isDurationFallback && ppExpiry && planExpiry && ppExpiry !== planExpiry) return null;
   if (Date.now() - Number(pp.prepared_at || 0) > SIGNAL_AUTO_PREPROPOSAL_TTL_MS) return null;
   return pp;
@@ -4100,6 +4010,10 @@ async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preprop
     await ensureAuthorized();
     const pack = await requestRiseFallProposalWithTiming(safeSide, symbol, stake, item, 9000);
     const proposal = pack?.res?.proposal;
+    const timingVariant = String(pack?.timing?.variant || pack?.timing?.mode || "");
+    if (isEntryTimingVisual58() && (timingVariant.includes("duration_2s") || timingVariant.includes("duration_1m") || timingVariant.includes("AUTO58_NEW_API_DURATION"))) {
+      throw new Error("Deriv no devolvió una proposal con vencimiento exacto para AUTO 58");
+    }
     const proposalId = proposal?.id ? String(proposal.id) : "";
     const askPrice = Number(proposal?.ask_price);
     const payout = Number(proposal?.payout);
@@ -4154,7 +4068,7 @@ function cancelSignalAutoEntryNoPreProposal(item, side, readiness, reason = "AUT
     sec: Math.round(Number(readiness?.ms || getSignalConfirmationMs(item)) / 1000),
     reason: String(reason || "AUTO_PREPROPOSAL_MISSING"),
     at: Date.now(),
-    error: "Cancelada: la proposal no estaba prearmada. En v106.4 esto solo debe ocurrir si el modo estricto de prearmado está activado.",
+    error: "Cancelada: al tick 58 no había una proposal prearmada válida. Se evita comprar tarde.",
     post58_readiness: { ...(readiness || {}) },
     preproposal: item?.signalAutoPreProposal || null,
   };
@@ -4171,12 +4085,13 @@ function scanSignalAutoPreProposals() {
     let started = false;
     const candidates = (history || [])
       .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
-      .filter((it) => getSignalEnabledTradeSide(it))
       .filter((it) => isAutoPreProposalWindow(it));
     for (const it of candidates) {
-      const side = getSignalEnabledTradeSide(it);
+      // V112.1: empezamos a prearmar por la dirección de la señal aunque todavía
+      // no estén los 4 puntos. Si los puntos habilitan el lado contrario, se reemplaza.
+      const side = getSignalEnabledTradeSide(it) || normalizeSignalConfirmationSide(it?.direction);
       if (side) {
-        void prepareRiseFallAutoPreProposal(it, side, "signal_scan_56_58");
+        void prepareRiseFallAutoPreProposal(it, side, "signal_scan_pre58");
         started = true;
       }
     }
@@ -15946,8 +15861,19 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   tradeInFlight = true;
 
   try {
+    const isAutoCloseExecution = !!(
+      itemCtx?.signalAutoEntry?.attempted &&
+      itemCtx?.signalAutoEntry?.status === "sending" &&
+      isNextCandleExpiryTiming() &&
+      !shouldUseAutoHighLowExecution()
+    );
+
+    // V112.1: la autorización ya quedó activa al preparar la proposal. En AUTO 58
+    // no refrescamos balance ni hacemos otra consulta antes de buy(proposal_id).
     await ensureAuthorized();
-    try { await refreshAccountBalance({ force: true }); } catch {}
+    if (!isAutoCloseExecution) {
+      try { await refreshAccountBalance({ force: true }); } catch {}
+    }
     startNewDisciplineWindowIfNeeded();
 
     const symbol =
@@ -16042,6 +15968,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       }
       assertC100PayoutOK(profitPct);
 
+      tradeExtra.entry_target_ms = SIGNAL_AUTO_ENTRY_MS;
+      tradeExtra.entry_buy_request_sent_at_ms = Math.round(getSignalConfirmationMs(itemCtx));
+      tradeExtra.entry_buy_request_sent_at = Date.now();
       res = await wsRequest({ buy: proposalId, price: askPrice }, 20000);
       tradeExtra = {
         ...tradeExtra,
@@ -16063,6 +15992,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       };
     } else {
       if (autoPreProposal) {
+        tradeExtra.entry_target_ms = SIGNAL_AUTO_ENTRY_MS;
+        tradeExtra.entry_buy_request_sent_at_ms = Math.round(getSignalConfirmationMs(itemCtx));
+        tradeExtra.entry_buy_request_sent_at = Date.now();
         res = await wsRequest({ buy: autoPreProposal.proposal_id, price: Number(autoPreProposal.ask_price) }, 20000);
         tradeExtra = {
           ...tradeExtra,
