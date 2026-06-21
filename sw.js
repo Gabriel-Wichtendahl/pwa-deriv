@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v111.8 (Higher/Lower flujo Windows) */
+/* sw.js — Deriv Signals v111.9 (Higher/Lower objetivo 130% por señal) */
 "use strict";
 
-const CACHE = "deriv-assets-v111-8-higher-lower-windows";
+const CACHE = "deriv-assets-v111-9-highlow-130-signal-search";
 
 const CORE_ASSETS = [
   "./",
