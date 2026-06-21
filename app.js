@@ -1,3 +1,4 @@
+// v111.6: las alertas de señal vibran tres veces con dos pausas intermedias.
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
 // v111.5: se elimina por completo la pausa de Despeje mental de 10 minutos posterior a un OTM.
@@ -9951,6 +9952,8 @@ function initNotificationOpenRouting() {
 /* =========================
    Notifications
 ========================= */
+// V111.6: tres pulsos claros, separados por dos pausas.
+const SIGNAL_NOTIFICATION_VIBRATION = [220, 140, 220, 140, 220];
 if ("Notification" in window && Notification.permission === "default") {
   Notification.requestPermission().catch(() => {});
 }
@@ -9971,7 +9974,7 @@ function showNotification(symbol, direction, modeLabel, item = null) {
       renotify: true,
       requireInteraction: true,
       silent: false,
-      vibrate: vibrateEnabled ? [200, 100, 200] : undefined,
+      vibrate: vibrateEnabled ? SIGNAL_NOTIFICATION_VIBRATION : undefined,
       data: {
         type: "OPEN_SIGNAL_FROM_NOTIFICATION",
         url: pwaUrl,
@@ -25541,8 +25544,9 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   if (fatigueTriggered) return item;
 
   if (soundEnabled) playSignalAlertSound();
-  if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
+  // La vibración de la señal la controla la notificación con un patrón de 3 pulsos.
+  // Así evitamos sumar una vibración adicional desde la página abierta.
   showNotification(symbol, direction, modeLabel, item);
 
   if (shouldAutoOpenChartNow()) {

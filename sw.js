@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v111.5 (ventana siguiente 60→120 + actualización robusta) */
+/* sw.js — Deriv Signals v111.6 (vibración triple + actualización robusta) */
 "use strict";
 
-const CACHE = "deriv-assets-v111-5-sin-despeje-mental";
+const CACHE = "deriv-assets-v111-6-vibracion-triple";
 
 const CORE_ASSETS = [
   "./",
