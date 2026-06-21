@@ -1,6 +1,6 @@
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
 // v109.1: confirma el ÚLTIMO movimiento de la segunda reducción con retroceso contrario real antes de emitir la alarma.
-// v111.1: inicio irregular estricto; se conservan 3 reducciones y 2 reducciones + ataque contrario.
+// v111.2: filtro final de giro a 40s con Calidad A/B; AUTO solo para Calidad A.
 // v108.9: Lectura ON dibuja completas y numeradas las DOS reducciones aceptadas (hasta 6 movimientos).
 // v107.1: Motor Reducción visual 30s exige DOS reducciones claras antes del segundo 30 (G-M-P / G-M / G-P / M-P repetidas).
 // v108.7: FIX definitivo ventana flotante: evita que finalize/rehydrate del minuto calendario sobrescriba los ticks anclados, cierre antes de 60s o calcule un resultado ajeno.
@@ -141,7 +141,7 @@ const TRADES_JOURNAL_MAX = 500;
 const STUDY_CAPTURE_DB_NAME = "derivStudyCaptures_v1";
 const STUDY_CAPTURE_STORE_NAME = "captures";
 const STUDY_CAPTURE_VERSION = 1;
-const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V111_1_INICIO_IRREGULAR_ESTRICTO";
+const STUDY_CAPTURE_RENDER_VERSION = "STUDY_CAPTURE_V111_2_FILTRO_GIRO_40S";
 
 /* =========================
    Trade account config
@@ -791,7 +791,7 @@ function drawStudyCaptureToCanvas(canvas, item, exactTicks = [], timelineInput =
   studyRoundRect(ctx, 24, 18, W - 48, 88, 22, true, false);
   ctx.fillStyle = "#e5edf9";
   ctx.font = "800 27px system-ui, -apple-system, Segoe UI, sans-serif";
-  ctx.fillText("Captura de estudio · cronología real · v111.1", 52, 52);
+  ctx.fillText("Captura de estudio · cronología real · v111.2", 52, 52);
   ctx.font = "600 15px system-ui, -apple-system, Segoe UI, sans-serif";
   ctx.fillStyle = "rgba(220,235,255,.78)";
   const headerLine = hasRealContract
@@ -1342,7 +1342,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "INICIO_IRREGULAR_ESTRICTO_V111_1_20260619";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "FILTRO_GIRO_40S_V111_2_20260620";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -4066,6 +4066,7 @@ function markAutoPreProposalOnItem(item, payload) {
 async function prepareRiseFallAutoPreProposal(item, side, reason = "auto_preproposal") {
   const safeSide = normalizeSignalConfirmationSide(side);
   if (!item || !safeSide) return false;
+  if (item?.signalAutoTradeAllowed === false) return false;
   if (!isNextCandleExpiryTiming() || shouldUseAutoHighLowExecution()) return false;
   if (item?.trade?.badge || item?.signalAutoEntry?.attempted) return false;
   if (!isAutoPreProposalWindow(item)) return false;
@@ -4168,6 +4169,7 @@ function scanSignalAutoPreProposals() {
     let started = false;
     const candidates = (history || [])
       .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => it?.signalAutoTradeAllowed !== false)
       .filter((it) => getSignalEnabledTradeSide(it))
       .filter((it) => isAutoPreProposalWindow(it));
     for (const it of candidates) {
@@ -10361,7 +10363,7 @@ function buildVisualReadFromItem(item) {
       })).filter((b) => Number.isFinite(b.startMs) || Number.isFinite(b.endMs))
     : [];
   const subtype = String(meta.visualReductionSubtype || "reducción visual");
-  const quality = String(meta.visualReductionQuality || "").toUpperCase() || "—";
+  const quality = String(meta.turnQualityClass || meta.visualReductionQuality || "").toUpperCase() || "—";
   const acceptedBlocks = isConstructiveRead && Array.isArray(meta.acceptedReductionBlocks)
     ? meta.acceptedReductionBlocks.slice(0, 3)
     : [];
@@ -11477,11 +11479,11 @@ function addSignalConfirmation(side = "CALL") {
 
   const enabled = getSignalEnabledTradeSide(modalCurrentItem);
   if (enabled === "CALL") {
-    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
-    toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
+    if (modalCurrentItem?.signalAutoTradeAllowed !== false) void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
+    toast(`${modalCurrentItem?.signalAutoTradeAllowed === false ? "👁️ Calidad B sin AUTO" : "✅ COMPRA habilitada"}: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else if (enabled === "PUT") {
-    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
-    toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
+    if (modalCurrentItem?.signalAutoTradeAllowed !== false) void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
+    toast(`${modalCurrentItem?.signalAutoTradeAllowed === false ? "👁️ Calidad B sin AUTO" : "✅ VENTA habilitada"}: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
@@ -11524,7 +11526,10 @@ function updateSignalConfirmationUI() {
   if (signalConfirmHintEl) {
     const scope = formatCompactScopeLabel ? formatCompactScopeLabel() : "";
     const nextOutcomeTxt = formatNextCandleOutcomeLabel(modalCurrentItem, true);
-    if (enabled === "CALL") {
+    if (modalCurrentItem?.signalAutoTradeAllowed === false) {
+      signalConfirmHintEl.textContent = `CALIDAD B · observación · AUTO deshabilitado`;
+      signalConfirmHintEl.style.color = "#fde68a";
+    } else if (enabled === "CALL") {
       signalConfirmHintEl.textContent = `AUTO ${SIGNAL_AUTO_ENTRY_SEC}s · ${nextOutcomeTxt} · ${isDynamicLineMode(modalCurrentItem?.mode) ? "línea respetada" : "zona azul/amarilla"}${scope ? " · " + scope : ""}`;
       signalConfirmHintEl.style.color = getNextCandleOutcomeTextColor(modalCurrentItem, "#bbf7d0");
     } else if (enabled === "PUT") {
@@ -11907,6 +11912,7 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
 function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
   const item = itemOverride || modalCurrentItem;
   if (!item || !isTradeEntryOpen(item)) return false;
+  if (item?.signalAutoTradeAllowed === false) return false;
   if (item?.trade?.badge) return false;
   if (tradeInFlight) return false;
   if (item?.signalAutoEntry?.attempted) return false;
@@ -12012,6 +12018,7 @@ function scanSignalAutoEntriesAt57() {
     const nowMinute = currentServerMinute();
     const candidates = (history || [])
       .filter((it) => it && (it.minute === nowMinute || isItemLiveMinute(it)) && !it?.trade?.badge && !it?.signalAutoEntry?.attempted)
+      .filter((it) => it?.signalAutoTradeAllowed !== false)
       .filter((it) => getSignalEnabledTradeSide(it));
 
     for (const it of candidates) {
@@ -13075,6 +13082,17 @@ function normalizeSNRLevelMeta(meta) {
     stage: s(meta.stage),
     status: s(meta.status),
     logic: s(meta.logic),
+    turnQualityClass: s(meta.turnQualityClass),
+    turnQualityScore: n(meta.turnQualityScore, 0),
+    turnQualityAutoAllowed: meta.turnQualityAutoAllowed === true,
+    turnQualityConditions: meta.turnQualityConditions && typeof meta.turnQualityConditions === "object"
+      ? { ...meta.turnQualityConditions }
+      : {},
+    turnQualityValidatedAtMs: n(meta.turnQualityValidatedAtMs),
+    turnQualitySetupFormedAtMs: n(meta.turnQualitySetupFormedAtMs),
+    turnQualitySetupElapsedMs: n(meta.turnQualitySetupElapsedMs),
+    turnQualityControlledResponseRatio: n(meta.turnQualityControlledResponseRatio),
+    turnQualityLastIrregularLabel: s(meta.turnQualityLastIrregularLabel),
 
     // V109.2: conservar la lectura constructiva necesaria para que la captura
     // pueda mostrar exactamente las dos reducciones también desde Trades/exportes.
@@ -13125,6 +13143,7 @@ function normalizeSNRLevelMeta(meta) {
           brokenPivotY: n(meta.constructiveConfirmationPack.brokenPivotY),
           breakDepth: n(meta.constructiveConfirmationPack.breakDepth),
           continuationMargin: n(meta.constructiveConfirmationPack.continuationMargin),
+          distinctAttackCount: n(meta.constructiveConfirmationPack.distinctAttackCount, 0),
           runs: Array.isArray(meta.constructiveConfirmationPack.runs)
             ? meta.constructiveConfirmationPack.runs.slice(0, 3).map((run) => ({
                 startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx),
@@ -14782,6 +14801,14 @@ function getSignalLifecycleStageInfo(item) {
   const status = String(item?.signalAutoEntry?.status || "");
 
   const dynamicMode = isDynamicLineMode(item.mode);
+
+  if (String(item.signalQualityClass || item?.giroPolaridad?.turnQualityClass || "") === "B" && !item.minuteComplete) {
+    return {
+      key: "quality_b_observation",
+      label: "👁️ CALIDAD B",
+      title: "Observación: visible para estudio, sin alarma sonora y sin entrada automática.",
+    };
+  }
 
   if (isFloatingSignalItem(item)) {
     const result60 = ensureSignalResult60(item);
@@ -23626,9 +23653,29 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       }
     }
 
-    return packs
+    const validPacks = packs
       .filter((p) => Number(p.formedAtMs) > 0 && Number(p.formedAtMs) <= CONSTRUCTIVE_FLOATING_WINDOW_MS)
-      .sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0))[0] || null;
+      .sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0));
+    if (!validPacks.length) return null;
+
+    // V111.2: varias interpretaciones sobre los mismos runs cuentan como un solo ataque.
+    // Solo sumamos un segundo ataque cuando ocupa una ventana temporal distinta.
+    const distinctWindows = [];
+    const temporal = validPacks.slice().sort((a, b) => {
+      const as = Number(a?.runs?.[0]?.idx ?? Infinity);
+      const bs = Number(b?.runs?.[0]?.idx ?? Infinity);
+      return as - bs || Number(a?.formedAtMs || 0) - Number(b?.formedAtMs || 0);
+    });
+    for (const pack of temporal) {
+      const startIdx = Number(pack?.runs?.[0]?.idx ?? Infinity);
+      const endIdx = Number(pack?.runs?.[pack.runs.length - 1]?.idx ?? -Infinity);
+      if (!Number.isFinite(startIdx) || !Number.isFinite(endIdx)) continue;
+      const overlaps = distinctWindows.some((w) => !(endIdx < w.startIdx || startIdx > w.endIdx));
+      if (!overlaps) distinctWindows.push({ startIdx, endIdx });
+    }
+    const bestPack = validPacks[0];
+    bestPack.distinctAttackCount = distinctWindows.length;
+    return bestPack;
   };
 
 
@@ -23731,6 +23778,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         brokenPivotY: pivotY,
         breakDepth,
         continuationMargin,
+        setupFormedAtMs: formedAtMs,
       });
     };
 
@@ -23933,13 +23981,54 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       };
       const responsePack = findHealthyResponseAfterIrregular(irregularBlock);
       if (!responsePack) continue;
-      const formedAtMs = Number(responsePack.formedAtMs || 0);
+      const setupFormedAtMs = Number(responsePack.formedAtMs || 0);
+      const setupElapsed = setupFormedAtMs - anchorMs;
+      if (!(setupElapsed > 0) || setupElapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
+
+      // V111.2: el inicio irregular queda como candidato y recién se valida al completar 40s.
+      // Así comprobamos que el giro se sostuvo y que el grupo original no retomó el extremo.
+      const qualityValidationMs = anchorMs + 40000;
+      if (Number(evalMs || 0) < qualityValidationMs - 150) continue;
+
+      const alignedAtMs = (targetMs) => {
+        let value = Number(pts[0]?.y);
+        for (const point of pts) {
+          if (Number(point?.ms) > targetMs) break;
+          if (Number.isFinite(Number(point?.y))) value = Number(point.y);
+        }
+        return value;
+      };
+      const y28 = alignedAtMs(anchorMs + 28000);
+      const y40 = alignedAtMs(qualityValidationMs);
+      if (![y28, y40].every(Number.isFinite)) continue;
+      const controlledResponseRatio = (y28 - y40) / Math.max(alignedRange, 1e-9);
+
+      // Cancelaciones duras observadas en el análisis de 185 señales.
+      const pre32 = pts.filter((p) => Number(p.ms) >= anchorMs && Number(p.ms) < anchorMs + 32000).map((p) => Number(p.y)).filter(Number.isFinite);
+      const late32 = pts.filter((p) => Number(p.ms) >= anchorMs + 32000 && Number(p.ms) <= qualityValidationMs).map((p) => Number(p.y)).filter(Number.isFinite);
+      const newDominantExtremeAfter32 = !!(pre32.length && late32.length && Math.max(...late32) > Math.max(...pre32));
+      const responseCollapsedAfter28 = controlledResponseRatio < -0.25;
+      if (newDominantExtremeAfter32 || responseCollapsedAfter28) continue;
+
+      const lastIrregularLabel = String(moveSummary.labels[moveSummary.labels.length - 1] || "");
+      const recoveryRatio = Number(responsePack.recoveryRatio || 0);
+      const qualityConditions = {
+        dominance80: dominanceRatio >= 0.80,
+        recovery60to79: recoveryRatio >= 0.60 && recoveryRatio < 0.80,
+        setupConfirmed36to40: setupElapsed >= 36000 && setupElapsed <= 40000,
+        lastImpulseLarge: lastIrregularLabel === "G",
+        controlledResponse28to40: controlledResponseRatio >= 0 && controlledResponseRatio <= 0.25,
+      };
+      const turnQualityScore = Object.values(qualityConditions).filter(Boolean).length;
+      // Calidad B queda visible desde 2 puntos. Menos de 2 no genera señal.
+      if (turnQualityScore < 2) continue;
+      const turnQualityClass = turnQualityScore >= 3 ? "A" : "B";
+      const formedAtMs = qualityValidationMs;
       const elapsed = formedAtMs - anchorMs;
-      if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
       const irregularScore =
         54 + Math.min(22, sizeRatio * 6) + Math.min(18, speedCv * 24) +
         Math.min(14, distinctShapes * 4) + Math.min(16, structuralAdvances * 5) +
-        Number(responsePack.strength || 0) - Math.max(0, elapsed - 33000) / 850;
+        Number(responsePack.strength || 0) + turnQualityScore * 18;
       candidates.push({
         route: "irregular_initial_response",
         reductions: [],
@@ -23949,6 +24038,17 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         anchorMs,
         formedAtMs,
         elapsed,
+        setupFormedAtMs,
+        setupElapsed,
+        qualityValidationMs,
+        turnQualityScore,
+        turnQualityClass,
+        turnQualityAutoAllowed: turnQualityClass === "A",
+        turnQualityConditions,
+        controlledResponseRatio,
+        newDominantExtremeAfter32,
+        responseCollapsedAfter28,
+        lastIrregularLabel,
         score: irregularScore,
       });
     }
@@ -23959,7 +24059,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const consider = (candidate) => {
     if (!candidate) return;
     if (!(Number(candidate.elapsed) > 0) || Number(candidate.elapsed) > CONSTRUCTIVE_FLOATING_WINDOW_MS) return;
-    if (!selected || Number(candidate.score || 0) > Number(selected.score || 0)) selected = candidate;
+    const qualityBonus = String(candidate.turnQualityClass || "B") === "A" ? 10000 : 0;
+    candidate.selectionRank = Number(candidate.score || 0) + qualityBonus;
+    if (!selected || Number(candidate.selectionRank || 0) > Number(selected.selectionRank || 0)) selected = candidate;
   };
 
   // Ruta A: TRES reducciones claras, consecutivas o aisladas.
@@ -23980,7 +24082,20 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
           Number(second.strength || 0) * 16 +
           Number(third.strength || 0) * 18 +
           34 - isolatedGaps * 1.8 - Math.max(0, elapsed - 30000) / 850;
-        consider({ route: "three_reductions", reductions: [first, second, third], confirmation: finalConfirmation, anchorMs, formedAtMs, elapsed, score, confirmationPack: null });
+        consider({
+          route: "three_reductions",
+          reductions: [first, second, third],
+          confirmation: finalConfirmation,
+          anchorMs,
+          formedAtMs,
+          elapsed,
+          score,
+          confirmationPack: null,
+          turnQualityScore: 2,
+          turnQualityClass: "B",
+          turnQualityAutoAllowed: false,
+          turnQualityConditions: { threeReductionsStudySample: true },
+        });
       }
     }
   }
@@ -24002,6 +24117,28 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       const isolatedGap = Math.max(0, Number(second.startIndex) - Number(first.endIndex) - 1);
       const betweenBonus = pack.position === "between" ? 2.5 : 0;
       const score = Number(first.strength || 0) * 17 + Number(second.strength || 0) * 17 + Number(pack.strength || 0) + 28 + betweenBonus - isolatedGap * 1.6 - Math.max(0, elapsed - 30000) / 900;
+
+      const secondPattern = String(second?.pattern || "");
+      const secondEndsInP = /→P$/.test(secondPattern);
+      const thirdReductionSupport = blocks.some((third) => {
+        if (!nonOverlapping(second, third) || !blockVisible(third, false)) return false;
+        return !!getConstructiveSecondReductionConfirmation(runs, third, alignedRange, tol);
+      });
+      const packRuns = Array.isArray(pack?.runs) ? pack.runs : [];
+      const packLast = packRuns[packRuns.length - 1] || null;
+      const packLastIdx = Number(packLast?.idx ?? -1);
+      const packLastEndY = Number(packLast?.endY);
+      const extraContraryExtension = Number.isFinite(packLastEndY) && contraryRawRuns.some((r) => {
+        if (Number(r?.idx) <= packLastIdx) return false;
+        const move = Number(r?.move || 0);
+        const endY = Number(r?.endY);
+        const margin = Math.max(alignedRange * 0.035, Number(tol || 0) * 1.45, move * 0.10, 1e-9);
+        return Number.isFinite(endY) && move >= Math.max(alignedRange * 0.055, Number(tol || 0) * 1.70) && packLastEndY - endY >= margin;
+      });
+      const secondAttackSupport = Number(pack?.distinctAttackCount || 0) >= 2;
+      const growingThreeAttack = String(pack?.pattern || "") === "P→M→G";
+      const extraEvidenceForGM = thirdReductionSupport || secondAttackSupport || growingThreeAttack || extraContraryExtension;
+      const turnQualityClass = secondEndsInP || extraEvidenceForGM ? "A" : "B";
       consider({
         route: "two_plus_confirmation",
         reductions: [first, second],
@@ -24011,6 +24148,16 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         elapsed,
         score,
         confirmationPack: pack,
+        turnQualityScore: turnQualityClass === "A" ? 3 : 2,
+        turnQualityClass,
+        turnQualityAutoAllowed: turnQualityClass === "A",
+        turnQualityConditions: {
+          secondReductionEndsInP: secondEndsInP,
+          thirdReductionSupport,
+          secondAttackSupport,
+          growingThreeAttack,
+          extraContraryExtension,
+        },
       });
     }
   }
@@ -24073,8 +24220,11 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     if (hasVisualCutBetweenRuns(runs, acceptedRuns[i].idx, acceptedRuns[i + 1].idx, cutMin)) cutsBetween++;
   }
 
+  const turnQualityClass = String(selected.turnQualityClass || "B");
+  const turnQualityScore = Number(selected.turnQualityScore || 0);
+  const turnQualityAutoAllowed = selected.turnQualityAutoAllowed === true;
   let points = 5;
-  const reasons = [`${groupText} inicia el primer movimiento visible`];
+  const reasons = [`CALIDAD ${turnQualityClass} (${turnQualityScore} puntos de giro)`, `${groupText} inicia el primer movimiento visible`];
   if (isIrregularRoute) {
     points += 11;
     reasons.push(`movimiento irregular direccional con ${acceptedRuns.length} impulsos dominantes: ${irregularBlock.pattern}`);
@@ -24163,6 +24313,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       brokenPivotY: Number(confirmationPack.brokenPivotY || 0),
       breakDepth: Number(confirmationPack.breakDepth || 0),
       continuationMargin: Number(confirmationPack.continuationMargin || 0),
+      distinctAttackCount: Number(confirmationPack.distinctAttackCount || 0),
     } : null,
     irregularInitialBlock: isIrregularRoute ? {
       startMs: Number(irregularBlock.startMs || 0),
@@ -24228,6 +24379,15 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       } : null,
     })),
     subtype,
+    turnQualityClass,
+    turnQualityScore,
+    turnQualityAutoAllowed,
+    turnQualityConditions: selected.turnQualityConditions || {},
+    qualityValidationMs: Number(selected.qualityValidationMs || selected.formedAtMs || 0),
+    setupFormedAtMs: Number(selected.setupFormedAtMs || selected.formedAtMs || 0),
+    setupElapsedMs: Number(selected.setupElapsed || selected.elapsed || 0),
+    controlledResponseRatio: Number(selected.controlledResponseRatio || 0),
+    lastIrregularLabel: String(selected.lastIrregularLabel || ""),
   };
 }
 function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
@@ -24265,10 +24425,11 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const zone = Math.max(tol * 4, localRange * 0.10);
   const isIrregularRoute = best.qualificationRoute === "irregular_initial_response";
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
+  const qualityPrefix = best.turnQualityClass === "A" ? "⭐ CALIDAD A" : "👁️ CALIDAD B · OBSERVACIÓN";
   const status = isIrregularRoute
-    ? `🧩 Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
-    : `🧩 Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Motor V111.1: ventana flotante no atada al minuto y alarma hasta 40s. Se mantienen sin cambios las rutas (1) 3 reducciones claras y (2) 2 reducciones más ataque contrario en orden flexible. La ruta (3) irregular es secundaria y exige: 4 impulsos dominantes, 2 correcciones internas, duración 12–30s, dominio acumulado mínimo 65%, último extremo como el más avanzado del bloque y respuesta contraria posterior de mínimo 2 movimientos que recupere al menos 35%, rompa el último pivote correctivo y continúe después de la ruptura. ${best.reasons.join(", ")}. Formación confirmada en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+    ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+    : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
+  const logicText = `Motor V111.2: filtro final de giro con validación hasta 40s. Calidad A habilita alarma completa y AUTO; Calidad B queda visible para observación sin AUTO. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -24302,7 +24463,16 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       constructiveReductionMode: true,
       visualReductionMode: true,
       visualReductionScore: best.points,
-      visualReductionQuality: best.qualityLabel,
+      visualReductionQuality: best.turnQualityClass || best.qualityLabel,
+      turnQualityClass: best.turnQualityClass,
+      turnQualityScore: best.turnQualityScore,
+      turnQualityAutoAllowed: best.turnQualityAutoAllowed,
+      turnQualityConditions: best.turnQualityConditions,
+      turnQualityValidatedAtMs: best.qualityValidationMs,
+      turnQualitySetupFormedAtMs: best.setupFormedAtMs,
+      turnQualitySetupElapsedMs: best.setupElapsedMs,
+      turnQualityControlledResponseRatio: best.controlledResponseRatio,
+      turnQualityLastIrregularLabel: best.lastIrregularLabel,
       visualReductionSubtype: best.subtype,
       visualReductionGroup: best.groupText,
       visualReductionContraryGroup: best.contraryText,
@@ -24342,9 +24512,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: isIrregularRoute ? "v111_1_inicio_irregular_estricto_40s" : "v111_1_reduccion_reforzada_sin_cambios_40s",
-      priority: "ALTA",
-      stage: isIrregularRoute ? "inicio_irregular_estricto_v111_1" : "reduccion_reforzada_v111_1",
+      movementFilter: isIrregularRoute ? "v111_2_inicio_irregular_filtro_giro_40s" : "v111_2_reduccion_reforzada_filtro_giro",
+      priority: best.turnQualityClass === "A" ? "ALTA" : "OBSERVACION",
+      stage: isIrregularRoute ? "inicio_irregular_filtro_giro_v111_2" : "reduccion_reforzada_filtro_giro_v111_2",
       logic: logicText,
       status,
     },
@@ -24428,6 +24598,9 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
       signalAutoEntrySec: SIGNAL_AUTO_ENTRY_SEC,
       signalRequiresManualPoints: SIGNAL_CONFIRM_MIN,
       signalConfirmations: [],
+      signalQualityClass: String(bestPack.match.meta?.turnQualityClass || "B"),
+      signalQualityScore: Number(bestPack.match.meta?.turnQualityScore || 0),
+      signalAutoTradeAllowed: bestPack.match.meta?.turnQualityAutoAllowed === true,
       signalFloatingWindow: true,
       signalAnchorEpochMs: anchorEpochMs,
       signalAnchorSecond: Number(((anchorEpochMs % 60000) + 60000) % 60000) / 1000,
@@ -24451,7 +24624,8 @@ function scanConstructiveReductionContinuousOnTick(symbol, epochMs) {
     });
     if (added) {
       constructiveLastSignalBySymbol[sym] = { epochMs: now, key: signalKey };
-      toast(`🧩 ${sym}: ${bestPack.match.meta?.constructiveQualificationLabel || "reducción reforzada confirmada"}`, 2100);
+      const qClass = String(bestPack.match.meta?.turnQualityClass || "B");
+      toast(`${qClass === "A" ? "⭐" : "👁️"} ${sym}: Calidad ${qClass} · ${bestPack.match.meta?.constructiveQualificationLabel || "formación confirmada"}`, 2100);
       return true;
     }
   } catch (e) {
@@ -25354,17 +25528,18 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
     trimSignalsDomToVisibleLimit();
   }
   updateRowChartBtn(item);
-  if (shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
+  const isQualityBObservation = String(item.signalQualityClass || item?.giroPolaridad?.turnQualityClass || "A") === "B";
+  if (!isQualityBObservation && shouldUseAutoHighLowExecution()) ensureSignalAutoPrecalc(item);
 
-  const fatigueTriggered = registerSignalForFatigueGuard(item);
+  const fatigueTriggered = !isQualityBObservation && registerSignalForFatigueGuard(item);
   if (fatigueTriggered) return item;
 
-  if (soundEnabled) playSignalAlertSound();
-  if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
+  if (!isQualityBObservation && soundEnabled) playSignalAlertSound();
+  if (!isQualityBObservation && vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120]);
 
-  showNotification(symbol, direction, modeLabel, item);
+  if (!isQualityBObservation) showNotification(symbol, direction, modeLabel, item);
 
-  if (shouldAutoOpenChartNow()) {
+  if (!isQualityBObservation && shouldAutoOpenChartNow()) {
     requestAnimationFrame(() => {
       try {
         setActiveView("signals");
