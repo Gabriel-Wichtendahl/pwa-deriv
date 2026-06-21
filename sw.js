@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v111.9 (Higher/Lower objetivo 130% por señal) */
+/* sw.js — Deriv Signals v112.0 (Higher/Lower 130% corregido) */
 "use strict";
 
-const CACHE = "deriv-assets-v111-9-highlow-130-signal-search";
+const CACHE = "deriv-assets-v112-0-highlow-130-fixed";
 
 const CORE_ASSETS = [
   "./",

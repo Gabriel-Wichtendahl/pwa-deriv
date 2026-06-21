@@ -1,4 +1,4 @@
-// v111.9: Higher/Lower objetivo fijo 130%: al salir cada señal busca la barrera del par que más se acerque al 130%, y al operar pide proposal fresca + compra inmediata.
+// v112.0: Higher/Lower 130% corregido: usa tipos API HIGHER/LOWER, búsqueda tolerante a barreras inválidas y fallback de proposal fresca para no perder la operación.
 // v111.7: se elimina el bloqueo de la cuenta REAL por 2 OTM; solo continúa el bloqueo por ciclo IC2 completo.
 // v111.6: las alertas de señal vibran tres veces con dos pausas intermedias.
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
@@ -216,10 +216,10 @@ let entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
 const AUTO_TARGET_RETURN_PCT = 130; // pago total objetivo para Higher/Lower (payout / stake × 100).
 const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 130;
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
-const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 6;
+const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 10;
 const AUTO_PRECALC_REFRESH_MS = 8000;
 const AUTO_PRECALC_STALE_MS = 120000;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v4_fixed_by_symbol";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v5_target130_higher_lower";
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
 const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_v1";
 const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
@@ -4450,12 +4450,32 @@ function extractProposalRelativeBarrier(proposal, fallbackSide = "CALL") {
     const parsed = parseRelativeBarrierString(v);
     if (parsed) return parsed;
   }
+  const spots = [
+    proposal.spot,
+    proposal.entry_spot,
+    proposal.current_spot,
+    proposal.contract_details?.spot,
+    proposal.contract_details?.entry_spot,
+  ].map(Number).filter((v) => Number.isFinite(v) && v > 0);
+  for (const rawBarrier of direct) {
+    const barrierAbsPrice = Number(rawBarrier);
+    if (!Number.isFinite(barrierAbsPrice) || barrierAbsPrice <= 0) continue;
+    for (const spot of spots) {
+      const distance = Math.abs(barrierAbsPrice - spot);
+      if (!Number.isFinite(distance) || distance <= 0) continue;
+      const precision = getBarrierPrecisionForAbs(distance);
+      const signedDistance = fallbackSide === "CALL" ? distance : -distance;
+      return {
+        barrierNum: signedDistance,
+        precision,
+        barrier: formatRelativeBarrier(signedDistance, precision),
+        derivedFromAbsolute: true,
+      };
+    }
+  }
   const longcode = String(proposal.longcode || "");
   const parsedLongcode = parseRelativeBarrierString(longcode);
   if (parsedLongcode) return parsedLongcode;
-
-  // Si Deriv acepta la propuesta por defecto pero no expone la barrera en el payload,
-  // la dejamos como "auto". Se puede comprar igual por proposal_id, pero no se puede espejar.
   return {
     barrierNum: NaN,
     precision: 0,
@@ -4468,12 +4488,10 @@ function parseProposalToExecution(planRaw, side, precision) {
   const askPrice = Number(proposal?.ask_price);
   const payout = Number(proposal?.payout);
   const id = proposal?.id ? String(proposal.id) : "";
-
   let barrierNum = Number(planRaw?.barrierNum);
   let barrierPrecision = Math.max(0, Number(planRaw?.precision ?? precision ?? 0));
   let barrier = planRaw?.barrier ? String(planRaw.barrier) : "";
   let defaultBarrier = !!planRaw?.defaultBarrier;
-
   if (!barrier || !Number.isFinite(barrierNum) || Math.abs(barrierNum) <= 0) {
     const extracted = extractProposalRelativeBarrier(proposal, side);
     if (extracted) {
@@ -4483,14 +4501,14 @@ function parseProposalToExecution(planRaw, side, precision) {
       defaultBarrier = !!extracted.defaultBarrier;
     }
   }
-
   if (!id || !Number.isFinite(askPrice) || askPrice <= 0 || !Number.isFinite(payout)) return null;
   const profitPct = ((payout - askPrice) / askPrice) * 100;
   const payoutTotalPct = (payout / askPrice) * 100;
+  const apiContractType = String(planRaw?.apiContractType || (side === "CALL" ? "HIGHER" : "LOWER"));
   return {
     proposalId: id,
     contractType: side === "CALL" ? "HIGHER" : "LOWER",
-    apiContractType: side,
+    apiContractType,
     askPrice,
     payout,
     profitPct,
@@ -4519,24 +4537,62 @@ function isHighLowPlanAtTarget(plan, tolerance = HIGHLOW_TARGET_TOLERANCE_PCT) {
   return !!plan && getHighLowTargetDistance(plan) <= Math.max(0, Number(tolerance || 0));
 }
 
-async function getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
-  const req = {
-    proposal: 1,
-    amount: stake,
-    basis: "stake",
-    contract_type: side,
-    currency: DEFAULT_CURRENCY,
-    duration: Number(DEFAULT_DURATION) || 1,
-    duration_unit: DEFAULT_DURATION_UNIT || "m",
-    symbol,
-  };
-  const res = await wsRequest(req, timeoutMs);
-  if (res?.error) {
-    const msg = res.error.message || "proposal default error";
-    if (isHighLowProposalLimitError(msg)) writeHighLowProposalCooldown();
-    throw new Error(msg);
+function getHighLowPrimaryApiContractType(side) {
+  return String(side || "CALL").toUpperCase() === "PUT" ? "LOWER" : "HIGHER";
+}
+function getHighLowLegacyApiContractType(side) {
+  return String(side || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL";
+}
+function getHighLowApiContractTypeCandidates(side) {
+  const primary = getHighLowPrimaryApiContractType(side);
+  const legacy = getHighLowLegacyApiContractType(side);
+  return primary === legacy ? [primary] : [primary, legacy];
+}
+async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, allowLegacy = true) {
+  const errors = [];
+  const apiTypes = allowLegacy
+    ? getHighLowApiContractTypeCandidates(side)
+    : [getHighLowPrimaryApiContractType(side)];
+  for (const apiContractType of apiTypes) {
+    const req = {
+      proposal: 1,
+      amount: stake,
+      basis: "stake",
+      contract_type: apiContractType,
+      currency: DEFAULT_CURRENCY,
+      duration: Number(DEFAULT_DURATION) || 1,
+      duration_unit: DEFAULT_DURATION_UNIT || "m",
+      symbol,
+    };
+    if (barrier) req.barrier = barrier;
+    try {
+      const res = await wsRequest(req, timeoutMs);
+      if (res?.proposal?.id) return { res, apiContractType };
+      const msg = res?.error?.message || `${apiContractType}: proposal vacía`;
+      errors.push(msg);
+      if (isHighLowProposalLimitError(msg)) {
+        writeHighLowProposalCooldown();
+        break;
+      }
+    } catch (e) {
+      const msg = e?.message || String(e || `${apiContractType}: error proposal`);
+      errors.push(msg);
+      if (isHighLowProposalLimitError(msg)) {
+        writeHighLowProposalCooldown();
+        break;
+      }
+    }
   }
-  const plan = parseProposalToExecution({ proposal: res?.proposal, defaultBarrier: true }, side, 0);
+  throw new Error(errors.filter(Boolean).join(" | ") || "Deriv no devolvió proposal Higher/Lower");
+}
+
+async function getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+  const raw = await requestHighLowProposalRaw(symbol, side, stake, "", timeoutMs, false);
+  const plan = parseProposalToExecution({
+    proposal: raw?.res?.proposal,
+    defaultBarrier: true,
+    apiContractType: raw?.apiContractType,
+  }, side, 0);
   if (plan) {
     plan.symbolDefaultBarrier = true;
     plan.source = "symbol_default";
@@ -4548,25 +4604,14 @@ async function getHighLowProposalQuote(symbol, side, barrierCandidate, precision
     ? barrierCandidate
     : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
   if (!candidate?.barrier) return null;
-
-  const req = {
-    proposal: 1,
-    amount: stake,
-    basis: "stake",
-    contract_type: side,
-    currency: DEFAULT_CURRENCY,
-    duration: Number(DEFAULT_DURATION) || 1,
-    duration_unit: DEFAULT_DURATION_UNIT || "m",
+  const raw = await requestHighLowProposalRaw(symbol, side, stake, candidate.barrier, timeoutMs, true);
+  const plan = parseProposalToExecution({
+    proposal: raw?.res?.proposal,
+    barrierNum: candidate.barrierNum,
+    precision: candidate.precision,
     barrier: candidate.barrier,
-    symbol,
-  };
-  const res = await wsRequest(req, timeoutMs);
-  if (res?.error) {
-    const msg = res.error.message || "proposal error";
-    if (isHighLowProposalLimitError(msg)) writeHighLowProposalCooldown();
-    throw new Error(msg);
-  }
-  const plan = parseProposalToExecution({ proposal: res?.proposal, barrierNum: candidate.barrierNum, precision: candidate.precision, barrier: candidate.barrier }, side, candidate.precision);
+    apiContractType: raw?.apiContractType,
+  }, side, candidate.precision);
   return isHighLowPlanWithinPayoutCap(plan) ? plan : null;
 }
 
@@ -4586,20 +4631,20 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
   if (!symbol || isHighLowProposalCooldownActive()) return null;
   const stake = Number(opts.stake || getEffectiveTradeStake());
   const timeoutMs = Number(opts.timeoutMs || (opts.fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS));
-  const maxQuotes = Math.max(1, Math.min(8, Number(opts.maxQuotes || HIGHLOW_TARGET_MAX_SEARCH_QUOTES)));
+  const maxQuotes = Math.max(1, Math.min(12, Number(opts.maxQuotes || HIGHLOW_TARGET_MAX_SEARCH_QUOTES)));
   const target = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
   const seen = new Set();
   const samples = [];
   let quotesUsed = 0;
   let best = null;
-
-  const remember = (plan, candidate) => {
+  let lastError = "";
+  const remember = (plan, candidate = null) => {
     if (!plan) return null;
     plan.targetPayoutTotalPct = target;
     plan.targetDistancePct = getHighLowTargetDistance(plan);
     plan.targetSearch = true;
     plan.fixedBarrier = false;
-    plan.source = "signal_target_130_search";
+    plan.source = candidate?.barrier ? "signal_target_130_search" : "signal_default_probe";
     if (candidate?.barrier) plan.barrier = candidate.barrier;
     if (candidate && Number.isFinite(Number(candidate.barrierNum))) plan.barrierNum = Number(candidate.barrierNum);
     if (candidate && Number.isFinite(Number(candidate.precision))) plan.precision = Number(candidate.precision);
@@ -4607,11 +4652,9 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     if (!best || getHighLowTargetDistance(plan) < getHighLowTargetDistance(best)) best = plan;
     return plan;
   };
-
-  const quoteAbs = async (absValue, forcedPrecision = null) => {
-    if (quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) return null;
-    const candidate = makeBarrierCandidateFromAbsolute(side, absValue, forcedPrecision);
-    if (!candidate?.barrier || seen.has(candidate.barrier)) return null;
+  const quoteCandidate = async (candidate) => {
+    if (!candidate?.barrier || quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) return null;
+    if (seen.has(candidate.barrier)) return null;
     seen.add(candidate.barrier);
     quotesUsed++;
     try {
@@ -4619,61 +4662,87 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
       return remember(plan, candidate);
     } catch (e) {
       const msg = e?.message || String(e || "");
+      lastError = msg;
       if (isHighLowProposalLimitError(msg)) writeHighLowProposalCooldown();
       return null;
     }
   };
-
-  const hint = getExecutionBarrierHint(symbol, side);
-  const seedRaw = Number(hint?.barrierAbs) > 0
-    ? Math.abs(Number(hint.barrierAbs))
-    : Math.abs(Number(getHighLowFixedBarrierRaw(symbol) || 0));
-  if (!Number.isFinite(seedRaw) || seedRaw <= 0) return null;
-  const seedPrecision = Number.isFinite(Number(hint?.precision))
-    ? Number(hint.precision)
-    : Math.max(0, (String(getHighLowFixedBarrierRaw(symbol) || "").split(".")[1] || "").length);
-
-  let first = await quoteAbs(seedRaw, seedPrecision);
-  if (!first) return null;
-  if (isHighLowPlanAtTarget(first)) {
-    rememberExecutionBarrierHint(symbol, side, first, first.precision || seedPrecision);
-    return first;
+  let defaultPlan = null;
+  try {
+    defaultPlan = await getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs);
+    if (defaultPlan) remember(defaultPlan, null);
+    if (defaultPlan && isHighLowPlanAtTarget(defaultPlan)) {
+      const defaultCandidate = makeHighLowCandidateFromPlan(defaultPlan, side);
+      if (defaultCandidate) rememberExecutionBarrierHint(symbol, side, defaultPlan, defaultCandidate.precision || 0);
+      return defaultPlan;
+    }
+  } catch (e) {
+    lastError = e?.message || String(e || "");
   }
-
-  let low = Number(first.payoutTotalPct) < target ? first : null;
-  let high = Number(first.payoutTotalPct) > target ? first : null;
-  let probeAbs = seedRaw;
-
-  // Primero arma un intervalo por debajo/encima de 130%.
-  for (let i = 0; i < 3 && quotesUsed < maxQuotes && !(low && high); i++) {
-    probeAbs *= low ? 1.35 : 0.72;
-    const probe = await quoteAbs(probeAbs, getBarrierPrecisionForAbs(probeAbs));
-    if (!probe) continue;
-    const pct = Number(probe.payoutTotalPct);
-    if (pct < target) low = !low || pct > Number(low.payoutTotalPct) ? probe : low;
-    if (pct > target) high = !high || pct < Number(high.payoutTotalPct) ? probe : high;
-    if (isHighLowPlanAtTarget(probe)) {
-      rememberExecutionBarrierHint(symbol, side, probe, probe.precision || 0);
-      return probe;
+  const hint = getExecutionBarrierHint(symbol, side);
+  const seeds = [];
+  if (Number.isFinite(Number(hint?.barrierAbs)) && Number(hint.barrierAbs) > 0) {
+    seeds.push({ abs: Math.abs(Number(hint.barrierAbs)), precision: Number(hint.precision || getBarrierPrecisionForAbs(hint.barrierAbs)) });
+  }
+  const fixedRaw = Math.abs(Number(getHighLowFixedBarrierRaw(symbol) || 0));
+  if (Number.isFinite(fixedRaw) && fixedRaw > 0) {
+    seeds.push({ abs: fixedRaw, precision: Math.max(0, (String(getHighLowFixedBarrierRaw(symbol) || "").split(".")[1] || "").length) });
+  }
+  const defaultCandidate = makeHighLowCandidateFromPlan(defaultPlan, side);
+  if (defaultCandidate) seeds.push({ abs: Math.abs(Number(defaultCandidate.barrierNum)), precision: Number(defaultCandidate.precision || 0) });
+  const latestQuote = getLatestSignalQuoteForBarrier(item);
+  if (Number.isFinite(latestQuote) && latestQuote > 0) {
+    for (const f of [0.00003, 0.00006, 0.00010, 0.000145, 0.00020, 0.00030]) {
+      seeds.push({ abs: Math.abs(latestQuote * f), precision: getBarrierPrecisionForAbs(latestQuote * f) });
     }
   }
-
-  // Si hay intervalo, refina por bisección sobre la distancia de barrera.
-  while (low && high && quotesUsed < maxQuotes) {
-    const lowAbs = Math.abs(Number(low.barrierNum));
-    const highAbs = Math.abs(Number(high.barrierNum));
-    if (!Number.isFinite(lowAbs) || !Number.isFinite(highAbs) || Math.abs(highAbs - lowAbs) < 1e-9) break;
-    const midAbs = (lowAbs + highAbs) / 2;
-    const mid = await quoteAbs(midAbs, getBarrierPrecisionForAbs(midAbs));
-    if (!mid) break;
-    const pct = Number(mid.payoutTotalPct);
-    if (pct < target) low = mid;
-    else if (pct > target) high = mid;
-    if (isHighLowPlanAtTarget(mid)) break;
+  const uniqueBases = [];
+  const baseSeen = new Set();
+  for (const seed of seeds) {
+    const abs = Math.abs(Number(seed?.abs || 0));
+    if (!Number.isFinite(abs) || abs <= 0) continue;
+    const key = abs.toPrecision(8);
+    if (baseSeen.has(key)) continue;
+    baseSeen.add(key);
+    uniqueBases.push({ abs, precision: Number(seed.precision || getBarrierPrecisionForAbs(abs)) });
   }
-
-  if (best) rememberExecutionBarrierHint(symbol, side, best, best.precision || seedPrecision);
-  return best;
+  const scaleOrder = [1, 0.72, 1.35, 0.50, 2.0, 0.30, 3.5, 0.18, 5.5];
+  for (const base of uniqueBases) {
+    for (const factor of scaleOrder) {
+      if (quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) break;
+      const abs = base.abs * factor;
+      const candidate = makeBarrierCandidateFromAbsolute(side, abs, factor === 1 ? base.precision : getBarrierPrecisionForAbs(abs));
+      const plan = await quoteCandidate(candidate);
+      if (plan && isHighLowPlanAtTarget(plan)) {
+        rememberExecutionBarrierHint(symbol, side, plan, plan.precision || candidate.precision || 0);
+        return plan;
+      }
+    }
+    if (quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) break;
+  }
+  const explicit = samples.filter((p) => Number.isFinite(Number(p?.barrierNum)) && Math.abs(Number(p.barrierNum)) > 0 && Number.isFinite(Number(p?.payoutTotalPct)));
+  let below = explicit.filter((p) => Number(p.payoutTotalPct) < target).sort((a, b) => Number(b.payoutTotalPct) - Number(a.payoutTotalPct))[0] || null;
+  let above = explicit.filter((p) => Number(p.payoutTotalPct) > target).sort((a, b) => Number(a.payoutTotalPct) - Number(b.payoutTotalPct))[0] || null;
+  while (below && above && quotesUsed < maxQuotes && !isHighLowProposalCooldownActive()) {
+    const a = Math.abs(Number(below.barrierNum));
+    const b = Math.abs(Number(above.barrierNum));
+    if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a - b) < 1e-8) break;
+    const midAbs = (a + b) / 2;
+    const midCandidate = makeBarrierCandidateFromAbsolute(side, midAbs, getBarrierPrecisionForAbs(midAbs));
+    const mid = await quoteCandidate(midCandidate);
+    if (!mid) break;
+    if (isHighLowPlanAtTarget(mid)) break;
+    if (Number(mid.payoutTotalPct) < target) below = mid;
+    else above = mid;
+  }
+  if (best && Number.isFinite(Number(best.barrierNum)) && Math.abs(Number(best.barrierNum)) > 0) {
+    rememberExecutionBarrierHint(symbol, side, best, best.precision || 0);
+  }
+  if (best) {
+    best.searchLastError = lastError;
+    return best;
+  }
+  return null;
 }
 
 async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPlan, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
@@ -4695,7 +4764,6 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   const symbol = String(item?.symbol || "");
   let lastError = null;
   let prepared = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 3);
-
   if (!prepared) {
     prepared = await findHighLowPlanNear130(item, side, {
       stake,
@@ -4704,16 +4772,33 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       timeoutMs: AUTO_FULL_PROPOSAL_TIMEOUT_MS,
     });
   }
-  if (!prepared) throw new Error(`No se encontró barrera ${HIGHLOW_TARGET_PAYOUT_TOTAL_PCT}% para ${symbol}.`);
-
-  // Dos intentos: proposal fresca con la barrera encontrada al salir la señal y buy inmediato.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const plan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, prepared, 12000);
+      let plan = null;
+      const usableBarrier = makeHighLowCandidateFromPlan(prepared, side);
+      if (usableBarrier) {
+        try {
+          plan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, prepared, 12000);
+        } catch (e) {
+          lastError = e instanceof Error ? e : new Error(String(e || "Higher/Lower barrera error"));
+        }
+      }
+      if (!plan) {
+        plan = await getHighLowDefaultProposalQuote(symbol, side, stake, 12000);
+        if (plan) {
+          plan.targetPayoutTotalPct = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
+          plan.targetDistancePct = getHighLowTargetDistance(plan);
+          plan.targetSearch = true;
+          plan.targetFallbackDefault = true;
+          plan.source = "fresh_default_fallback";
+        }
+      }
+      if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
+        throw lastError || new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
+      }
       const res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
       if (res?.buy?.contract_id) return { res, plan, attempt, preparedPlan: prepared };
-      const msg = res?.error?.message || "Deriv no confirmó la compra Higher/Lower";
-      lastError = new Error(msg);
+      lastError = new Error(res?.error?.message || "Deriv no confirmó la compra Higher/Lower");
     } catch (e) {
       lastError = e instanceof Error ? e : new Error(String(e || "Higher/Lower error"));
     }
@@ -4970,14 +5055,14 @@ function ensureSignalAutoPrecalc(item) {
     }
     const targetSide = String(currentItem.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL";
     const readyPlan = targetSide === "CALL" ? cache.call : cache.put;
-    if (readyPlan && Number.isFinite(Number(readyPlan.barrierNum))) {
+    if (readyPlan?.proposalId) {
       stopExecutionPlanLoop(item.id);
       return;
     }
     await refreshExecutionPlanForSignal(currentItem, true);
     if (!cache.active) return;
     const planAfter = targetSide === "CALL" ? cache.call : cache.put;
-    if (planAfter && Number.isFinite(Number(planAfter.barrierNum))) {
+    if (planAfter?.proposalId) {
       stopExecutionPlanLoop(item.id);
       return;
     }
@@ -15894,7 +15979,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       const barrierTxt = prepared130?.barrier || "buscando";
       toast(`⏳ ${hlName} objetivo 130% · ${barrierTxt}…`, 1200);
 
-      // V111.9: al salir la señal ya buscó la barrera más cercana al 130%.
+      // V112.0: al salir la señal consulta HIGHER/LOWER y busca la barrera más cercana al 130%.
       // Al operar pide una proposal nueva con esa barrera y compra inmediatamente.
       const highLowBuy = await buyFreshHighLowLikeWindows(itemCtx || { symbol }, side, stake);
       const plan = highLowBuy.plan;
@@ -15905,13 +15990,14 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         ...tradeExtra,
         exec_mode: "HIGHLOW_TARGET_130_SIGNAL_SEARCH_FRESH_BUY",
         contract_type: contractLabel,
-        api_contract_type: side,
+        api_contract_type: plan.apiContractType || getHighLowPrimaryApiContractType(side),
         barrier: plan.barrier,
         fixed_barrier: false,
         barrier_searched_on_signal: true,
         target_payout_total_pct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
         target_distance_pct: Number(plan.targetDistancePct || getHighLowTargetDistance(plan)),
         proposal_fresh: true,
+        barrier_search_fallback_default: !!plan.targetFallbackDefault,
         proposal_attempt: Number(highLowBuy.attempt || 1),
         payout_pct: Number(plan.profitPct),
         actual_return_pct: Math.round(plan.profitPct),
