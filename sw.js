@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v111.7 (sin bloqueo por 2 OTM + vibración triple) */
+/* sw.js — Deriv Signals v111.8 (Higher/Lower flujo Windows) */
 "use strict";
 
-const CACHE = "deriv-assets-v111-7-sin-bloqueo-2-otm";
+const CACHE = "deriv-assets-v111-8-higher-lower-windows";
 
 const CORE_ASSETS = [
   "./",

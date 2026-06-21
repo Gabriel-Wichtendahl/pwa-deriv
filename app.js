@@ -1,3 +1,4 @@
+// v111.8: Higher/Lower estilo Windows: API CALL/PUT + barrera fija, proposal fresca al operar y compra inmediata sin límite artificial de payout.
 // v111.7: se elimina el bloqueo de la cuenta REAL por 2 OTM; solo continúa el bloqueo por ciclo IC2 completo.
 // v111.6: las alertas de señal vibran tres veces con dos pausas intermedias.
 // v109.2: Captura de estudio usa cronología absoluta exacta (ancla flotante, alarma, entrada/exit_spot reales) y conserva las dos reducciones.
@@ -213,8 +214,8 @@ const ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY = "AUTO58_VISUAL_58_EXPIRY";
 const ENTRY_TIMING_AUTO58_DURATION_1M = "AUTO58_DURATION_1M";
 let entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
 const AUTO_TARGET_RETURN_PCT = 120; // legado: ya no se usa para buscar High/Low fijo.
-const AUTO_PRECALC_REFRESH_MS = 45000;
-const AUTO_PRECALC_STALE_MS = 180000;
+const AUTO_PRECALC_REFRESH_MS = 10000;
+const AUTO_PRECALC_STALE_MS = 15000;
 const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v4_fixed_by_symbol";
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
 const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_v1";
@@ -225,8 +226,10 @@ const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
 // Límite de pago total para High/Low: payout potencial / stake.
 // Ejemplo: stake $5 => payout máximo aprox. $7.50.
 // Evita barreras demasiado lejanas tipo $5 -> $55.
-const HIGHLOW_MAX_PAYOUT_TOTAL_PCT = 150;
-const HIGHLOW_MIN_PAYOUT_TOTAL_PCT = 100;
+// V111.8: con barrera fija no descartamos propuestas por payout.
+// En Windows Higher/Lower puede devolver pagos totales muy por encima de 150%.
+const HIGHLOW_MAX_PAYOUT_TOTAL_PCT = Number.POSITIVE_INFINITY;
+const HIGHLOW_MIN_PAYOUT_TOTAL_PCT = 0;
 // Barreras relativas fijas por símbolo/par.
 // IMPORTANTE: son distancias relativas, no precios absolutos.
 // COMPRA/HIGHER => +valor. VENTA/LOWER => -valor.
@@ -242,8 +245,8 @@ const HIGHLOW_FIXED_RELATIVE_BARRIERS = {
 const AUTO_PRECALC_COARSE_PIPS = [60, 80, 100, 120, 150, 180, 200, 220, 250, 285, 320, 350, 400, 450, 500, 650, 800, 1000, 1200];
 const AUTO_PRECALC_FAST_PIPS = [80, 120, 180, 250, 350];
 const AUTO_PRECALC_FINE_FACTORS = [0.96, 1.0, 1.04];
-const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 2200;
-const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 4200;
+const AUTO_FAST_PROPOSAL_TIMEOUT_MS = 7000;
+const AUTO_FULL_PROPOSAL_TIMEOUT_MS = 12000;
 
 /* =========================
    Auto-open chart config
@@ -3588,7 +3591,7 @@ function shouldUseAutoHighLowExecution() {
   return executionMode === EXECUTION_MODE_HIGHLOW_AUTO;
 }
 function getExecutionModeLabel() {
-  return shouldUseAutoHighLowExecution() ? "🎯 High/Low fijo por par" : "↕️ Rise/Fall 1m";
+  return shouldUseAutoHighLowExecution() ? "🎯 Higher/Lower fijo por par" : "↕️ Rise/Fall 1m";
 }
 function applyExecutionModeUI() {
   const btn = pickEl("executionModeBtn");
@@ -3596,7 +3599,7 @@ function applyExecutionModeUI() {
   btn.textContent = getExecutionModeLabel();
   btn.classList.toggle("active", shouldUseAutoHighLowExecution());
   btn.title = shouldUseAutoHighLowExecution()
-    ? "Usa barrera fija por par: COMPRA = HIGHER y VENTA = LOWER. Si no hay propuesta válida, cancela; NO cae a Rise/Fall."
+    ? "Flujo Windows: API CALL/PUT + barrera fija por par, proposal fresca y compra inmediata. COMPRA = HIGHER; VENTA = LOWER."
     : "Usa Rise/Fall de 1 minuto como hasta ahora.";
 }
 function ensureExecutionModeButton() {
@@ -4503,15 +4506,12 @@ function parseProposalToExecution(planRaw, side, precision) {
   };
 }
 function isHighLowPlanWithinPayoutCap(plan) {
-  if (!plan) return false;
-  const totalPct = Number(plan.payoutTotalPct);
-  if (!Number.isFinite(totalPct)) return true;
-  if (totalPct > HIGHLOW_MAX_PAYOUT_TOTAL_PCT) return false;
-  if (totalPct < HIGHLOW_MIN_PAYOUT_TOTAL_PCT) return false;
-  return true;
+  // V111.8: la barrera ya está fijada por símbolo. No rechazamos una proposal válida
+  // por tener payout alto; eso era lo que impedía operar en la PWA.
+  return !!plan;
 }
 function getHighLowPayoutCapText() {
-  return `pago máx ${Math.round(HIGHLOW_MAX_PAYOUT_TOTAL_PCT)}%`;
+  return "payout libre con barrera fija";
 }
 
 async function getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
@@ -4563,6 +4563,50 @@ async function getHighLowProposalQuote(symbol, side, barrierCandidate, precision
   }
   const plan = parseProposalToExecution({ proposal: res?.proposal, barrierNum: candidate.barrierNum, precision: candidate.precision, barrier: candidate.barrier }, side, candidate.precision);
   return isHighLowPlanWithinPayoutCap(plan) ? plan : null;
+}
+
+async function requestFreshFixedHighLowPlan(symbol, side, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+  const candidate = makeHighLowFixedBarrierCandidate(symbol, side);
+  if (!candidate?.barrier) {
+    throw new Error(`Higher/Lower sin barrera fija configurada para ${symbol}.`);
+  }
+
+  // Igual que en Windows: Deriv recibe CALL/PUT + barrier.
+  // HIGHER/LOWER es solo el nombre visual del contrato.
+  const plan = await getHighLowProposalQuote(
+    symbol,
+    side,
+    candidate,
+    candidate.precision,
+    stake,
+    timeoutMs
+  );
+  if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
+    throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
+  }
+  plan.fixedBarrier = true;
+  plan.source = "fresh_fixed_by_symbol";
+  return plan;
+}
+
+async function buyFreshHighLowLikeWindows(symbol, side, stake) {
+  let lastError = null;
+
+  // Dos intentos completos: proposal fresca y buy inmediato.
+  // Nunca reutiliza una proposal vieja para ejecutar.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const plan = await requestFreshFixedHighLowPlan(symbol, side, stake, 12000);
+      const res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
+      if (res?.buy?.contract_id) return { res, plan, attempt };
+      const msg = res?.error?.message || "Deriv no confirmó la compra Higher/Lower";
+      lastError = new Error(msg);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e || "Higher/Lower error"));
+    }
+  }
+
+  throw lastError || new Error("No se pudo comprar Higher/Lower.");
 }
 
 async function findBestHighLowPlan(item, side, opts = {}) {
@@ -15746,44 +15790,37 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
     if (snrEntryGate && snrEntryGate.reason && String(snrEntryGate.reason).includes("linea")) tradeExtra.dynamic_line_gate = snrEntryGate;
     else if (snrEntryGate) tradeExtra.snr_entry_gate = snrEntryGate;
 
-    if (shouldUseAutoHighLowExecution() && itemCtx?.id) {
-      ensureSignalAutoPrecalc(itemCtx);
-      let plan = getCachedExecutionPlan(itemCtx, side, AUTO_PRECALC_STALE_MS * 2);
-      if (!plan) {
-        toast(`⏳ Buscando ${side === "CALL" ? "HIGHER" : "LOWER"} rápido…`, 1200);
-        plan = await ensureExecutionPlanForTrade(itemCtx, side);
-      }
-      if (!plan?.proposalId || !Number.isFinite(plan.askPrice)) {
-        // MODO ESTRICTO: si está activado High/Low, NO caemos a Rise/Fall.
-        // Si Deriv no acepta la barrera fija del par o el pago queda fuera del límite,
-        // se cancela la entrada para evitar comprar un contrato distinto al pedido.
-        const hlName = side === "CALL" ? "HIGHER" : "LOWER";
-        const fixedBarrier = makeHighLowFixedBarrierCandidate(symbol, side)?.barrier || getHighLowFixedBarrierRaw(symbol) || "sin configurar";
-        const capTxt = `${Math.round(HIGHLOW_MIN_PAYOUT_TOTAL_PCT)}%-${Math.round(HIGHLOW_MAX_PAYOUT_TOTAL_PCT)}%`;
-        toast(`⛔ ${hlName} cancelado: barrera ${fixedBarrier} sin propuesta válida`, 2600);
-        throw new Error(`${hlName} cancelado: no hubo propuesta High/Low válida para ${symbol} con barrera ${fixedBarrier}. Posibles causas: Deriv rechazó esa barrera, el pago quedó fuera del rango ${capTxt}, hubo cooldown/rate limit, o el símbolo no aceptó High/Low 1m en ese momento.`);
-      } else {
-        assertC100PayoutOK(Number(plan.profitPct));
+    if (shouldUseAutoHighLowExecution()) {
+      const hlName = side === "CALL" ? "HIGHER" : "LOWER";
+      const fixedBarrier = makeHighLowFixedBarrierCandidate(symbol, side)?.barrier || getHighLowFixedBarrierRaw(symbol) || "sin configurar";
+      toast(`⏳ Preparando ${hlName} ${fixedBarrier}…`, 1200);
 
-        res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
-        contractLabel = plan.contractType || contractLabel;
-        tradeExtra = {
-          ...tradeExtra,
-          exec_mode: executionMode,
-          contract_type: contractLabel,
-          barrier: plan.barrier,
-          mirrored_barrier: !!plan.mirroredBarrier,
-          reference_barrier: plan.referenceBarrier || "",
-          payout_pct: Number(plan.profitPct),
-          actual_return_pct: Math.round(plan.profitPct),
-          payout_total_pct: Number(plan.payoutTotalPct),
-          payout_cap_total_pct: HIGHLOW_MAX_PAYOUT_TOTAL_PCT,
-          proposal_id: plan.proposalId,
-          ic2_enabled: isC100Active(),
-          ic2_level: c100State?.level || null,
-          ic2_step: c100State?.compoundStep || 0,
-        };
-      }
+      // V111.8: mismo flujo que funcionó en Windows.
+      // 1) proposal NUEVA con API CALL/PUT + barrier fija
+      // 2) buy inmediato con ese proposal_id
+      // No usa una proposal cacheada para ejecutar y no cae a Rise/Fall.
+      const highLowBuy = await buyFreshHighLowLikeWindows(symbol, side, stake);
+      const plan = highLowBuy.plan;
+      res = highLowBuy.res;
+      contractLabel = plan.contractType || hlName;
+
+      tradeExtra = {
+        ...tradeExtra,
+        exec_mode: "HIGHLOW_WINDOWS_FLOW_FRESH_PROPOSAL",
+        contract_type: contractLabel,
+        api_contract_type: side,
+        barrier: plan.barrier,
+        fixed_barrier: true,
+        proposal_fresh: true,
+        proposal_attempt: Number(highLowBuy.attempt || 1),
+        payout_pct: Number(plan.profitPct),
+        actual_return_pct: Math.round(plan.profitPct),
+        payout_total_pct: Number(plan.payoutTotalPct),
+        proposal_id: plan.proposalId,
+        ic2_enabled: isC100Active(),
+        ic2_level: c100State?.level || null,
+        ic2_step: c100State?.compoundStep || 0,
+      };
     } else if (isC100Active()) {
       // V66: si es AUTO post-58 con cierre 60, la proposal debe estar prearmada desde 56-58s.
       // Así en el post-58 solo enviamos buy(proposal_id), sin gastar tiempo pidiendo proposal.
