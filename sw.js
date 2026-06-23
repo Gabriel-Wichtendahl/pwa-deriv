@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.2 (captura de estudio estilo Deriv) */
+/* sw.js — Deriv Signals v112.3 (5 puntos para compra/venta) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-2-study-capture-deriv-style";
+const CACHE = "deriv-assets-v112-3-five-points-trade";
 
 const CORE_ASSETS = [
   "./",

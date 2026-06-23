@@ -1,3 +1,4 @@
+// v112.3: Compra/venta real y En vivo requieren 5 puntos netos.
 // v112.2: Captura de estudio estilo Deriv: gráfico limpio tipo comparativas, línea blanca y cronología 0-120s.
 // v112.1: AUTO 58 estricto: Rise/Fall prearma antes, envía solamente buy(proposal_id) al tick 58 y cancela si no está listo; nunca compra tarde.
 // v112.0: Higher/Lower 130% corregido: usa tipos API HIGHER/LOWER, búsqueda tolerante a barreras inválidas y fallback de proposal fresca para no perder la operación.
@@ -52,20 +53,20 @@
 // ✅ NUEVO UX: botones de borrar por pestaña en la UI, no en el modal Config
 // ✅ NUEVO: guardar señales manualmente al pool de práctica con botón 💾
 // ✅ NUEVO: GIRO en práctica y señales solo permite operar contra el color actual de la vela
-// ✅ NUEVO: Práctica y Señales con confirmaciones direccionales COMPRA/VENTA, 4 puntos netos y bloqueo del lado contrario
+// ✅ Confirmaciones direccionales: Práctica conserva 4 puntos; Señales y En vivo requieren 5 puntos netos
 // ✅ NUEVO: Práctica permite guardar formaciones claras para exportar junto al journal
 // ✅ FIX PRÁCTICA: pool deduplicada por vela/ticks, orden persistente y sin repetir la última vela al remezclar
 // ✅ NUEVO PRÁCTICA: auto-entrada al segundo 58 si ya hay 4 confirmaciones netas para COMPRA/VENTA
-// ✅ NUEVO REAL: señales reales funcionan como práctica: 4 puntos netos por dirección + auto-entrada al segundo 58
+// ✅ NUEVO REAL: señales reales requieren 5 puntos netos por dirección + auto-entrada al segundo 58
 // ✅ NUEVO: Modo GIRO + APRENDIZAJE con botones para enseñar “es mi formación / no es / dudosa / muy clara”
 // ✅ V8: el modal muestra zonas SNR/amarilla sin rótulos para evitar contaminación visual
 // ✅ V9: modal más limpio: header compacto, disciplina sin duplicados, decisión clara y gráfico con precio actual
 // ✅ V36: replay tick por tick de la vela de señal en recuadro con zoom
 // ✅ V37: SNR horizontal exige mínimo 70% de efectividad; si no, ajusta con cierres actuales o descarta
-// ✅ V40: AUTO 58 requiere 4 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
+// ✅ V40: AUTO 58 requiere 5 puntos + precio dentro de zona azul/amarilla en SNR/SNR polaridad
 // ✅ V44: SNR usa 70% global + 70% reciente; 2 fallos seguidos revisa/reajusta, 3 fallos bloquea
 // ✅ V45: opción en Señales para conservar o purgar señales que cierran fuera de zona SNR/amarilla
-// ✅ V46: AUTO 58 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 4 puntos
+// ✅ V46: AUTO 58 en modos SNR/SNR polaridad no exige cierre final ni validación de zona SNR; entra con 5 puntos
 // ✅ V48: pestaña En vivo separada, pausa señales, corrige dibujo live y agrega botones compra/venta
 // ✅ V51: corrige pausa accidental desde En vivo; al instalar reinicia pausa manual para recuperar señales
 // ✅ V53: En vivo usa formato de modal, sin vela lateral, y opera con puntos igual que Señales
@@ -2123,7 +2124,7 @@ let manualGiroPanelEl = null;
 let manualGiroSummaryEl = null;
 let manualGiroStateEl = null;
 let manualGiroButtonsEl = null;
-const SIGNAL_CONFIRM_MIN = 4;
+const SIGNAL_CONFIRM_MIN = 5;
 const SIGNAL_AUTO_ENTRY_MS = 58000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 // V65: en el timing de próxima vela no compramos apenas el reloj marca 58s.
@@ -2143,7 +2144,7 @@ const SIGNAL_AUTO_REQUIRE_PREPROPOSAL_STRICT = true;
 // validación de autoentrada en 58s y confirmación final por cierre en SNR/amarilla.
 const SIGNAL_PREALERT_MIN_SEC = 35;
 const SIGNAL_PREALERT_MAX_SEC = 45;
-// V7: aunque haya 4 puntos manuales, la entrada real solo se permite
+// V7: aunque haya 5 puntos manuales, la entrada real solo se permite
 // si al segundo 58 el precio está dentro de la zona SNR o muy cerca.
 const SIGNAL_AUTO_SNR_GATE_ENABLED = true;
 const SIGNAL_AUTO_SNR_CHECK_MS = SIGNAL_AUTO_ENTRY_MS;
@@ -4088,7 +4089,7 @@ function scanSignalAutoPreProposals() {
       .filter((it) => isAutoPreProposalWindow(it));
     for (const it of candidates) {
       // V112.1: empezamos a prearmar por la dirección de la señal aunque todavía
-      // no estén los 4 puntos. Si los puntos habilitan el lado contrario, se reemplaza.
+      // no estén los 5 puntos. Si los puntos habilitan el lado contrario, se reemplaza.
       const side = getSignalEnabledTradeSide(it) || normalizeSignalConfirmationSide(it?.direction);
       if (side) {
         void prepareRiseFallAutoPreProposal(it, side, "signal_scan_pre58");
@@ -7491,7 +7492,7 @@ function liveManualTrade(side = "CALL") {
   if (enabledSide !== safeSide) {
     const faltan = getLiveMissingConfirmations(safeSide);
     setLiveTradeStatus(`Faltan ${faltan} punto${faltan === 1 ? "" : "s"} neto${faltan === 1 ? "" : "s"} para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}. ${getLiveConfirmationStatusText()}`, "pending");
-    toast(`Primero marcá 4 puntos netos para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1600);
+    toast(`Primero marcá ${SIGNAL_CONFIRM_MIN} puntos netos para ${safeSide === "CALL" ? "COMPRA" : "VENTA"}`, 1600);
     return false;
   }
   const wait = formatLiveAutoEntryWaitText(liveReplaySymbol);
@@ -7523,7 +7524,7 @@ function initLiveTradeButtons() {
     liveBuyPutBtn.dataset.ready = "1";
   }
   updateLiveConfirmationUI();
-  setLiveTradeStatus("Modo en vivo: señales pausadas. Sumá 4 puntos netos; se ejecuta automático en el segundo 58.");
+  setLiveTradeStatus(`Modo en vivo: señales pausadas. Sumá ${SIGNAL_CONFIRM_MIN} puntos netos; se ejecuta automático en el segundo 58.`);
 }
 
 function requestLiveReplayDraw(force = false) {
@@ -11631,7 +11632,7 @@ function addSignalConfirmation(side = "CALL") {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario supera los 4 puntos netos cuando la vela ya pasó 58s,
+  // Si el usuario alcanza los 5 puntos netos cuando la formación ya pasó 58s,
   // también se dispara la auto-entrada sin esperar otro tick/timer.
   trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -12021,7 +12022,7 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
 
   // V46: en modos SNR/SNR polaridad NO se exige que la vela cierre dentro del SNR
   // ni se bloquea la autoentrada por estar lejos de la zona al check de 58s.
-  // La operación se decide por: vela viva + 4 puntos netos + disciplina OK.
+  // La operación se decide por: formación viva + 5 puntos netos + disciplina OK.
   // Igual calculamos el gate SNR para registrar si el precio estaba dentro/cerca/lejos,
   // pero no lo usamos como bloqueo operativo.
   const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
@@ -12029,23 +12030,23 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
     return {
       ok: true,
       pending: false,
-      reason: "auto58_4pts_snr_sin_cierre_zona",
+      reason: "auto58_5pts_snr_sin_cierre_zona",
       side: normalizeSignalConfirmationSide(side) || "",
       check_ms: SIGNAL_AUTO_SNR_CHECK_MS,
       check_sec: SIGNAL_AUTO_ENTRY_SEC,
-      message: "AUTO 58 habilitado por 4 puntos; cierre/zona SNR no bloquean la entrada.",
+      message: `AUTO 58 habilitado por ${SIGNAL_CONFIRM_MIN} puntos; cierre/zona SNR no bloquean la entrada.`,
       original_gate: gate,
     };
   }
   return Object.assign({}, gate || {}, {
     ok: true,
     pending: false,
-    reason: gate?.reason ? `auto58_4pts_sin_bloqueo_${gate.reason}` : "auto58_4pts_sin_cierre_zona",
+    reason: gate?.reason ? `auto58_5pts_sin_bloqueo_${gate.reason}` : "auto58_5pts_sin_cierre_zona",
     original_ok: !!gate?.ok,
     original_reason: gate?.reason || "sin_snr_gate",
     message: gate?.ok
-      ? (gate.message || "AUTO 58 por 4 puntos; precio dentro/cerca del SNR.")
-      : `AUTO 58 por 4 puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
+      ? (gate.message || `AUTO 58 por ${SIGNAL_CONFIRM_MIN} puntos; precio dentro/cerca del SNR.`)
+      : `AUTO 58 por ${SIGNAL_CONFIRM_MIN} puntos; SNR no bloquea entrada (${gate?.message || "sin validación SNR"}).`,
   });
 }
 
@@ -12310,7 +12311,7 @@ function updateModalCandleStatusUI() {
   applyBrainProcessTradeGate(locked, candleClosed);
   updateVisualReadPanelUI();
 
-  // Auto-entrada real: igual que práctica, al segundo 58 si ya hay 4 puntos netos.
+  // Auto-entrada real: al segundo 58 si ya hay 5 puntos netos.
   if (!locked && !candleClosed && !brainBlocked) trySignalAutoEntryAt57("TIMER_58");
 }
 
@@ -15018,7 +15019,7 @@ function getSignalLifecycleStageInfo(item) {
     const gate = dynamicMode ? buildSignalDynamicLineEntryGate(item, side, SIGNAL_AUTO_ENTRY_MS) : buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
     if (dynamicMode) {
       if (gate?.ok && getSignalEnabledTradeSide(item)) {
-        return { key: "auto_ready_line", label: `🟢 AUTO ${autoSec}s`, title: `Listo: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos + línea dinámica respetada. ${pointsTxt}` };
+        return { key: "auto_ready_line", label: `🟢 AUTO ${autoSec}s`, title: `Listo: ${SIGNAL_AUTO_ENTRY_SEC}s + ${SIGNAL_CONFIRM_MIN} puntos + línea dinámica respetada. ${pointsTxt}` };
       }
       return { key: "auto_wait_line", label: gate?.ok ? `🟢 LÍNEA ${autoSec}s` : `⛔ LÍNEA ${autoSec}s`, title: `${gate?.message || "Línea dinámica pendiente"}. ${pointsTxt}` };
     }
@@ -15026,20 +15027,20 @@ function getSignalLifecycleStageInfo(item) {
       return {
         key: "auto_ready",
         label: `🟢 AUTO ${autoSec}s`,
-        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + 4 puntos completos + precio dentro de zona azul/amarilla. ${pointsTxt}`,
+        title: `Listo para autoentrada: ${SIGNAL_AUTO_ENTRY_SEC}s + ${SIGNAL_CONFIRM_MIN} puntos completos + precio dentro de zona azul/amarilla. ${pointsTxt}`,
       };
     }
     if (gate?.ok) {
       return {
         key: "auto_zone",
         label: `🟢 ZONA ${autoSec}s`,
-        title: `Precio dentro/cerca del SNR como referencia. Para operar faltan 4 puntos. ${pointsTxt}`,
+        title: `Precio dentro/cerca del SNR como referencia. Para operar faltan ${SIGNAL_CONFIRM_MIN} puntos. ${pointsTxt}`,
       };
     }
     return {
       key: "auto_wait",
       label: `🟠 ${autoSec}s`,
-      title: `En ${autoSec}s el SNR queda solo como referencia. Para operar importan los 4 puntos. ${pointsTxt}`,
+      title: `En ${autoSec}s el SNR queda solo como referencia. Para operar importan los ${SIGNAL_CONFIRM_MIN} puntos. ${pointsTxt}`,
     };
   }
 
@@ -15851,7 +15852,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   assertEntryWindowOpen(itemCtx);
   assertBrainProcessCanTrade(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
-  // V46: en SNR/SNR polaridad, la operación se permite por 4 puntos + AUTO 58.
+  // V46: en SNR/SNR polaridad, la operación se permite por 5 puntos + AUTO 58.
   // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
   // En Línea dinámica se mantiene su validación específica.
   const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
@@ -16952,7 +16953,7 @@ function onTick(tick) {
       // 0-15s queda como observación interna, pero NO se muestra señal todavía.
       // La señal visible recién puede salir entre 20-30s, si la vela sigue alcista
       // y no perdió el open con fuerza antes de los 20s.
-      // La operación no sale sola por radar: requiere 4 puntos manuales como el resto.
+      // La operación no sale sola por radar: requiere 5 puntos manuales como el resto.
       const ruptureStartSec = 20;
       const ruptureEndSec = 30;
       if (sec >= ruptureStartSec && sec <= ruptureEndSec && lastEvaluatedMinute !== minute) {
@@ -24599,7 +24600,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const status = isIrregularRoute
     ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
     : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Motor V111.4: filtro final de giro con validación flexible entre 36 y 40s. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 4 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const logicText = `Motor V111.4: filtro final de giro con validación flexible entre 36 y 40s. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 5 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
