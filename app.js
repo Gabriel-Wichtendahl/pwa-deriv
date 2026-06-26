@@ -1,3 +1,4 @@
+// v112.5: corrige M→G→M por desplazamiento real: ignora zigzag inicial, busca el bloque direccional válido y reancla la formación en su primer impulso.
 // v112.4: M→G→M inicial válido como irregularidad anclada; requiere después otra reducción o respuesta del grupo contrario.
 // v112.3: Compra/venta real y En vivo requieren 5 puntos netos.
 // v112.2: Captura de estudio estilo Deriv: gráfico limpio tipo comparativas, línea blanca y cronología 0-120s.
@@ -1233,7 +1234,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "MGM_INICIAL_IRREGULAR_V112_4_20260626";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "MGM_DESPLAZAMIENTO_REAL_V112_5_20260626";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -24250,147 +24251,249 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     return candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
   };
 
-  // V112.4 — Ruta D experimental: M→G→M al comienzo del ancla.
-  // El patrón por sí solo NO genera señal. Debe estar formado por los tres
-  // primeros impulsos dominantes, con dos cortes contrarios reales, y después
-  // aparecer una reducción nueva separada O una respuesta sana del grupo contrario.
+  // V112.5 — Ruta D experimental: M→G→M con DESPLAZAMIENTO REAL.
+  // No toma automáticamente los tres primeros impulsos del lado dominante.
+  // Recorre los tríos M→G→M y elige el que realmente desplaza precio:
+  // correcciones internas pequeñas, dominio alto, eficiencia direccional y
+  // extremos crecientes. El comienzo de ese bloque se convierte en el ancla real.
+  // El patrón por sí solo NO genera señal: después debe aparecer una reducción
+  // separada o una respuesta clara del grupo contrario.
   const findAnchoredMgmContinuationCandidate = () => {
     if (irregularPrimaryRuns.length < 3) return null;
 
-    const mgmRuns = irregularPrimaryRuns.slice(0, 3);
-    const first = mgmRuns[0];
-    const second = mgmRuns[1];
-    const third = mgmRuns[2];
-    const anchorMs = Number(first?.startMs || 0);
-    const endMs = Number(third?.endMs || 0);
-    const durationMs = endMs - anchorMs;
-    if (!(durationMs >= 6000) || durationMs > 30000) return null;
+    const mgmBlocks = [];
+    for (let startPos = 0; startPos + 2 < irregularPrimaryRuns.length; startPos++) {
+      const mgmRuns = irregularPrimaryRuns.slice(startPos, startPos + 3);
+      const first = mgmRuns[0];
+      const second = mgmRuns[1];
+      const third = mgmRuns[2];
+      const anchorMs = Number(first?.startMs || 0);
+      const endMs = Number(third?.endMs || 0);
+      const durationMs = endMs - anchorMs;
+      if (!(durationMs >= 6000) || durationMs > 30000) continue;
 
-    const moves = mgmRuns.map((r) => Number(r?.move || 0));
-    if (!moves.every((v) => Number.isFinite(v) && v > 0)) return null;
-    const mgmSummary = summarizeVisualMoves(moves);
-    if (mgmSummary.pattern !== "M→G→M") return null;
+      const moves = mgmRuns.map((r) => Number(r?.move || 0));
+      if (!moves.every((v) => Number.isFinite(v) && v > 0)) continue;
+      const mgmSummary = summarizeVisualMoves(moves);
+      // V112.5: M→G→M describe la FORMA. Los hombros pueden quedar
+      // matemáticamente etiquetados P frente a un centro muy grande (P→G→P),
+      // pero visualmente siguen siendo los dos M del patrón si son parecidos,
+      // visibles y el movimiento central domina claramente.
+      const mediumSimilarity = Math.min(moves[0], moves[2]) / Math.max(moves[0], moves[2], 1e-9);
+      const largeVsMedium = moves[1] / Math.max(moves[0], moves[2], 1e-9);
+      const middleIsLargest = moves[1] > moves[0] && moves[1] > moves[2];
+      if (!middleIsLargest || mediumSimilarity < 0.42 || largeVsMedium < 1.32) continue;
+      const mgmLabels = ["M", "G", "M"];
 
-    // Los dos M deben verse medianos de verdad y guardar una relación razonable
-    // entre sí; evita aceptar un casi-P o un casi-G etiquetado por borde.
-    const mediumSimilarity = Math.min(moves[0], moves[2]) / Math.max(moves[0], moves[2], 1e-9);
-    const largeVsMedium = moves[1] / Math.max(moves[0], moves[2], 1e-9);
-    if (mediumSimilarity < 0.55 || largeVsMedium < 1.40) return null;
+      const mgmCutMin = Math.max(cutMin * 0.62, Number(tol || 0) * 0.68, alignedRange * 0.014, 1e-9);
+      const correctionBetween = (a, b) => irregularContraryRawRuns
+        .filter((r) => Number(r.idx) > Number(a?.idx) && Number(r.idx) < Number(b?.idx))
+        .filter((r) => Number(r.move || 0) >= mgmCutMin)
+        .sort((x, y) => Number(x.idx) - Number(y.idx));
+      const cutOne = correctionBetween(first, second);
+      const cutTwo = correctionBetween(second, third);
+      if (!cutOne.length || !cutTwo.length) continue;
+      const internalCorrections = [cutOne[cutOne.length - 1], cutTwo[cutTwo.length - 1]];
+      const correctionMoves = internalCorrections.map((r) => Number(r.move || 0));
 
-    const mgmCutMin = Math.max(cutMin * 0.72, Number(tol || 0) * 0.82, alignedRange * 0.022, 1e-9);
-    const correctionBetween = (a, b) => irregularContraryRawRuns
-      .filter((r) => Number(r.idx) > Number(a?.idx) && Number(r.idx) < Number(b?.idx))
-      .filter((r) => Number(r.move || 0) >= mgmCutMin)
-      .sort((x, y) => Number(x.idx) - Number(y.idx));
-    const cutOne = correctionBetween(first, second);
-    const cutTwo = correctionBetween(second, third);
-    if (!cutOne.length || !cutTwo.length) return null;
-    const internalCorrections = [cutOne[cutOne.length - 1], cutTwo[cutTwo.length - 1]];
+      // Las correcciones deben cortar visualmente, pero no dominar el bloque.
+      const cutOneRatio = correctionMoves[0] / Math.max(Math.min(moves[0], moves[1]), 1e-9);
+      const cutTwoRatio = correctionMoves[1] / Math.max(Math.min(moves[1], moves[2]), 1e-9);
+      if (cutOneRatio > 0.78 || cutTwoRatio > 0.78) continue;
 
-    // Cada nuevo impulso debe superar el extremo anterior: son tres movimientos
-    // separados del mismo grupo, no tres trozos de un único impulso continuo.
-    let structuralAdvances = 0;
-    const structuralChecks = [];
-    for (let i = 1; i < mgmRuns.length; i++) {
-      const prevExtreme = Number(mgmRuns[i - 1]?.endY);
-      const curExtreme = Number(mgmRuns[i]?.endY);
-      const required = Math.max(alignedRange * 0.018, Number(tol || 0) * 1.05, Number(mgmRuns[i]?.move || 0) * 0.06, 1e-9);
-      const progress = curExtreme - prevExtreme;
-      const ok = Number.isFinite(progress) && progress >= required;
-      structuralChecks.push({ from: i - 1, to: i, progress, required, ok });
-      if (ok) structuralAdvances++;
+      // Cada impulso siguiente debe marcar un extremo nuevo visible.
+      let structuralAdvances = 0;
+      const structuralChecks = [];
+      for (let i = 1; i < mgmRuns.length; i++) {
+        const prevExtreme = Number(mgmRuns[i - 1]?.endY);
+        const curExtreme = Number(mgmRuns[i]?.endY);
+        const required = Math.max(alignedRange * 0.014, Number(tol || 0) * 0.92, Number(mgmRuns[i]?.move || 0) * 0.045, 1e-9);
+        const progress = curExtreme - prevExtreme;
+        const ok = Number.isFinite(progress) && progress >= required;
+        structuralChecks.push({ from: i - 1, to: i, progress, required, ok });
+        if (ok) structuralAdvances++;
+      }
+      if (structuralAdvances < 2) continue;
+
+      const blockPts = pts.filter((pt) => Number(pt.ms) >= anchorMs && Number(pt.ms) <= endMs);
+      if (blockPts.length < 5) continue;
+      const y0 = Number(blockPts[0]?.y);
+      const terminalEndY = Number(third?.endY);
+      const yMax = Math.max(...blockPts.map((pt) => Number(pt.y)));
+      const yMin = Math.min(...blockPts.map((pt) => Number(pt.y)));
+      const netAdvance = terminalEndY - y0;
+      const advance = yMax - y0;
+      const oppositeDip = Math.max(0, y0 - yMin);
+      let path = 0;
+      for (let i = 1; i < blockPts.length; i++) path += Math.abs(Number(blockPts[i].y) - Number(blockPts[i - 1].y));
+      const efficiency = netAdvance / Math.max(path, 1e-9);
+
+      const primarySum = moves.reduce((a, b) => a + b, 0);
+      const correctionSum = correctionMoves.reduce((a, b) => a + b, 0);
+      const dominanceRatio = primarySum / Math.max(primarySum + correctionSum, 1e-9);
+      const displacementRatio = netAdvance / Math.max(primarySum, 1e-9);
+
+      // Filtro central pedido: tiene que verse como un desplazamiento M-G-M,
+      // no como el zigzag que la versión anterior tomó al principio.
+      if (netAdvance < Math.max(alignedRange * 0.22, Number(tol || 0) * 3.2)) continue;
+      if (dominanceRatio < 0.72) continue;
+      if (displacementRatio < 0.62) continue;
+      if (efficiency < 0.45) continue;
+      if (correctionSum > primarySum * 0.39) continue;
+      if (oppositeDip > netAdvance * 0.38) continue;
+
+      const terminalTolerance = Math.max(alignedRange * 0.012, Number(tol || 0) * 0.82, 1e-9);
+      if (yMax - terminalEndY > terminalTolerance) continue;
+
+      const speeds = mgmRuns.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
+      const sortedSpeeds = speeds.slice().sort((a, b) => a - b);
+      const medianSpeed = sortedSpeeds[Math.floor(sortedSpeeds.length / 2)] || Math.max(...speeds, 1e-12);
+      const shapeInfo = mgmRuns.map((r) => getRunShapeInfo(r, medianSpeed));
+      const correctionLabels = summarizeVisualMoves(correctionMoves).labels;
+
+      const irregularBlock = {
+        anchorMs, startMs: anchorMs, endMs, durationMs,
+        startIdx: Number(first?.idx ?? 0), endIdx: Number(third?.idx ?? -1),
+        primaryRuns: mgmRuns.map((r, i) => ({ ...r, irregularLabel: mgmLabels[i], irregularShape: shapeInfo[i]?.shape || "ANGULO", irregularInitial: true })),
+        correctionRuns: internalCorrections.map((r, i) => ({ ...r, irregularLabel: correctionLabels[i] || "", irregularShape: "CORTE", irregularInitialCorrection: true })),
+        labels: mgmLabels.slice(),
+        shapes: shapeInfo.map((x) => x.shape),
+        correctionLabels: correctionLabels.slice(),
+        correctionShapes: internalCorrections.map(() => "CORTE"),
+        pattern: "M→G→M",
+        sizeRatio: mgmSummary.ratio, speedCv: 0, distinctLabels: 2, distinctShapes: new Set(shapeInfo.map((x) => x.shape)).size,
+        efficiency, advance, netAdvance, terminalEndY,
+        lastCorrectionEndY: Number(internalCorrections[internalCorrections.length - 1]?.endY),
+        oppositeDip, primarySum, correctionSum, dominanceRatio, displacementRatio,
+        structuralAdvances, structuralChecks,
+        anchoredMgm: true,
+        displacementMgm: true,
+        ignoredEarlierNoiseMs: Math.max(0, anchorMs),
+      };
+
+      const blockQuality =
+        dominanceRatio * 90 + efficiency * 90 + displacementRatio * 70 +
+        Math.min(24, netAdvance / Math.max(alignedRange, 1e-9) * 20) -
+        (cutOneRatio + cutTwoRatio) * 12;
+      mgmBlocks.push({ irregularBlock, mgmRuns, blockQuality });
     }
-    if (structuralAdvances < 2) return null;
 
-    const blockPts = pts.filter((pt) => Number(pt.ms) >= anchorMs && Number(pt.ms) <= endMs);
-    if (blockPts.length < 5) return null;
-    const y0 = Number(blockPts[0]?.y);
-    const terminalEndY = Number(third?.endY);
-    const yMax = Math.max(...blockPts.map((pt) => Number(pt.y)));
-    const yMin = Math.min(...blockPts.map((pt) => Number(pt.y)));
-    const netAdvance = terminalEndY - y0;
-    const advance = yMax - y0;
-    const oppositeDip = Math.max(0, y0 - yMin);
-    let path = 0;
-    for (let i = 1; i < blockPts.length; i++) path += Math.abs(Number(blockPts[i].y) - Number(blockPts[i - 1].y));
-    const efficiency = netAdvance / Math.max(path, 1e-9);
-    if (netAdvance < Math.max(alignedRange * 0.24, Number(tol || 0) * 3.8)) return null;
-    if (oppositeDip > netAdvance * 0.72 || efficiency < 0.16) return null;
-    const terminalTolerance = Math.max(alignedRange * 0.014, Number(tol || 0) * 0.95, 1e-9);
-    if (yMax - terminalEndY > terminalTolerance) return null;
+    if (!mgmBlocks.length) return null;
 
-    const speeds = mgmRuns.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
-    const sortedSpeeds = speeds.slice().sort((a, b) => a - b);
-    const medianSpeed = sortedSpeeds[Math.floor(sortedSpeeds.length / 2)] || Math.max(...speeds, 1e-12);
-    const shapeInfo = mgmRuns.map((r) => getRunShapeInfo(r, medianSpeed));
-    const correctionMoves = internalCorrections.map((r) => Number(r.move || 0));
-    const correctionLabels = summarizeVisualMoves(correctionMoves).labels;
-    const primarySum = moves.reduce((a, b) => a + b, 0);
-    const correctionSum = correctionMoves.reduce((a, b) => a + b, 0);
-    const dominanceRatio = primarySum / Math.max(primarySum + correctionSum, 1e-9);
-    if (dominanceRatio < 0.62) return null;
+    // Confirmación MGM específica: también permite una sola entrada contraria
+    // verdaderamente fuerte, con al menos dos pasos, ruptura del último pivote y
+    // recuperación importante del desplazamiento. Esto cubre el ejemplo 34–38s.
+    const findStrongMgmOppositeResponse = (irregularBlock) => {
+      const blockEndIdx = Number(irregularBlock?.endIdx ?? -1);
+      const blockEndMs = Number(irregularBlock?.endMs || 0);
+      const anchorMs = Number(irregularBlock?.anchorMs || 0);
+      const deadlineMs = Math.min(CONSTRUCTIVE_FLOATING_WINDOW_MS, anchorMs + 40000);
+      const terminalY = Number(irregularBlock?.terminalEndY);
+      const pivotY = Number(irregularBlock?.lastCorrectionEndY);
+      const netAdvance = Math.max(Number(irregularBlock?.netAdvance || 0), 1e-9);
+      if (![terminalY, pivotY].every(Number.isFinite)) return null;
 
-    const irregularBlock = {
-      anchorMs, startMs: anchorMs, endMs, durationMs,
-      startIdx: Number(first?.idx ?? 0), endIdx: Number(third?.idx ?? -1),
-      primaryRuns: mgmRuns.map((r, i) => ({ ...r, irregularLabel: mgmSummary.labels[i], irregularShape: shapeInfo[i]?.shape || "ANGULO", irregularInitial: true })),
-      correctionRuns: internalCorrections.map((r, i) => ({ ...r, irregularLabel: correctionLabels[i] || "", irregularShape: "CORTE", irregularInitialCorrection: true })),
-      labels: mgmSummary.labels.slice(),
-      shapes: shapeInfo.map((x) => x.shape),
-      correctionLabels: correctionLabels.slice(),
-      correctionShapes: internalCorrections.map(() => "CORTE"),
-      pattern: "M→G→M",
-      sizeRatio: mgmSummary.ratio, speedCv: 0, distinctLabels: 2, distinctShapes: new Set(shapeInfo.map((x) => x.shape)).size,
-      efficiency, advance, netAdvance, terminalEndY,
-      lastCorrectionEndY: Number(internalCorrections[internalCorrections.length - 1]?.endY),
-      oppositeDip, primarySum, correctionSum, dominanceRatio, structuralAdvances, structuralChecks,
-      anchoredMgm: true,
+      const candidates = irregularContraryRawRuns
+        .filter((r) => Number(r.idx) > blockEndIdx && Number(r.startMs || 0) >= blockEndMs - 1)
+        .filter((r) => Number(r.endMs || 0) <= deadlineMs)
+        .sort((a, b) => Number(a.idx) - Number(b.idx));
+
+      const packs = [];
+      for (const response of candidates) {
+        const move = Number(response?.move || 0);
+        const endY = Number(response?.endY);
+        const pointCount = Array.isArray(response?.points) ? response.points.length : 0;
+        const oppositeSteps = Math.max(0, pointCount - 1);
+        const durationMs = Math.max(0, Number(response?.durationMs || 0));
+        if (!(move > 0) || !Number.isFinite(endY)) continue;
+        if (oppositeSteps < 2 || durationMs < 1800) continue;
+
+        const recovery = terminalY - endY;
+        const recoveryRequired = Math.max(netAdvance * 0.48, alignedRange * 0.13, Number(tol || 0) * 3.0, 1e-9);
+        if (recovery < recoveryRequired) continue;
+        const continuationMargin = Math.max(alignedRange * 0.022, Number(tol || 0) * 1.0, netAdvance * 0.03, 1e-9);
+        const breakDepth = pivotY - endY;
+        if (breakDepth < continuationMargin) continue;
+
+        packs.push({
+          type: "opposite_strong",
+          label: `${contraryText} fuerte`,
+          pattern: "FUERTE",
+          runs: [{ ...response }],
+          close: {
+            confirmedAtMs: Number(response.endMs || response.startMs || 0),
+            responseRun: { ...response },
+            responseMove: move,
+            retraceRatio: recovery / Math.max(netAdvance, 1e-9),
+          },
+          formedAtMs: Number(response.endMs || response.startMs || 0),
+          position: "after_irregular",
+          positionLabel: "después del M→G→M",
+          recovery,
+          recoveryRequired,
+          recoveryRatio: recovery / Math.max(netAdvance, 1e-9),
+          brokenPivotY: pivotY,
+          breakDepth,
+          continuationMargin,
+          setupFormedAtMs: Number(response.endMs || response.startMs || 0),
+          strength: 44 + recovery / Math.max(alignedRange, 1e-9) * 24,
+          oppositeSteps,
+          durationMs,
+        });
+      }
+      return packs.sort((a, b) => Number(b.strength || 0) - Number(a.strength || 0))[0] || null;
     };
 
     const candidates = [];
-    const mgmLastRawIdx = Number(third?.idx ?? -1);
+    for (const mgm of mgmBlocks) {
+      const irregularBlock = mgm.irregularBlock;
+      const third = mgm.mgmRuns[2];
+      const anchorMs = Number(irregularBlock.anchorMs || 0);
+      const endMs = Number(irregularBlock.endMs || 0);
+      const mgmLastRawIdx = Number(third?.idx ?? -1);
 
-    // Opción 1: después del M→G→M aparece una reducción nueva, separada.
-    const followReductions = blocks
-      .filter((b) => Number(b?.runs?.[0]?.idx ?? -1) > mgmLastRawIdx)
-      .filter((b) => Number(b?.startMs || 0) >= endMs - 1)
-      .filter((b) => blockVisible(b, false));
-    for (const reduction of followReductions) {
-      const close = getConstructiveSecondReductionConfirmation(runs, reduction, alignedRange, tol);
-      if (!close) continue;
-      const formedAtMs = Number(close.confirmedAtMs || 0);
-      const elapsed = formedAtMs - anchorMs;
-      if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
-      candidates.push({
-        route: "anchored_mgm_plus_reduction",
-        reductions: [reduction],
-        confirmation: close,
-        confirmationPack: null,
-        irregularBlock, anchorMs, formedAtMs, elapsed,
-        score: 82 + Number(reduction.strength || 0) * 20 - Math.max(0, elapsed - 32000) / 900,
-        turnQualityScore: 2, turnQualityClass: "B", turnQualityAutoAllowed: true,
-        turnQualityConditions: { anchoredMgm: true, followupReduction: true, followupContrary: false },
-        mgmFollowupType: "reduction",
-      });
-    }
-
-    // Opción 2: después del M→G→M aparece una respuesta sana del grupo contrario.
-    const responsePack = findHealthyResponseAfterIrregular(irregularBlock);
-    if (responsePack) {
-      const formedAtMs = Number(responsePack.formedAtMs || 0);
-      const elapsed = formedAtMs - anchorMs;
-      if (elapsed > 0 && elapsed <= CONSTRUCTIVE_FLOATING_WINDOW_MS) {
+      // Opción 1: después del M→G→M aparece una reducción nueva y separada.
+      const followReductions = blocks
+        .filter((b) => Number(b?.runs?.[0]?.idx ?? -1) > mgmLastRawIdx)
+        .filter((b) => Number(b?.startMs || 0) >= endMs - 1)
+        .filter((b) => blockVisible(b, false));
+      for (const reduction of followReductions) {
+        const close = getConstructiveSecondReductionConfirmation(runs, reduction, alignedRange, tol);
+        if (!close) continue;
+        const formedAtMs = Number(close.confirmedAtMs || 0);
+        const elapsed = formedAtMs - anchorMs;
+        if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
         candidates.push({
-          route: "anchored_mgm_plus_contrary",
-          reductions: [],
-          confirmation: responsePack.close || null,
-          confirmationPack: responsePack,
+          route: "anchored_mgm_plus_reduction",
+          reductions: [reduction],
+          confirmation: close,
+          confirmationPack: null,
           irregularBlock, anchorMs, formedAtMs, elapsed,
-          score: 88 + Number(responsePack.strength || 0) - Math.max(0, elapsed - 32000) / 900,
+          score: 96 + Number(mgm.blockQuality || 0) + Number(reduction.strength || 0) * 20 - Math.max(0, elapsed - 32000) / 900,
           turnQualityScore: 2, turnQualityClass: "B", turnQualityAutoAllowed: true,
-          turnQualityConditions: { anchoredMgm: true, followupReduction: false, followupContrary: true },
-          mgmFollowupType: "contrary",
+          turnQualityConditions: { anchoredMgm: true, displacementMgm: true, followupReduction: true, followupContrary: false },
+          mgmFollowupType: "reduction",
         });
+      }
+
+      // Opción 2: respuesta sana de dos movimientos o una entrada contraria fuerte.
+      const responsePack = findHealthyResponseAfterIrregular(irregularBlock) || findStrongMgmOppositeResponse(irregularBlock);
+      if (responsePack) {
+        const formedAtMs = Number(responsePack.formedAtMs || 0);
+        const elapsed = formedAtMs - anchorMs;
+        if (elapsed > 0 && elapsed <= CONSTRUCTIVE_FLOATING_WINDOW_MS) {
+          candidates.push({
+            route: "anchored_mgm_plus_contrary",
+            reductions: [],
+            confirmation: responsePack.close || null,
+            confirmationPack: responsePack,
+            irregularBlock, anchorMs, formedAtMs, elapsed,
+            score: 104 + Number(mgm.blockQuality || 0) + Number(responsePack.strength || 0) - Math.max(0, elapsed - 32000) / 900,
+            turnQualityScore: 2, turnQualityClass: "B", turnQualityAutoAllowed: true,
+            turnQualityConditions: { anchoredMgm: true, displacementMgm: true, followupReduction: false, followupContrary: true },
+            mgmFollowupType: "contrary",
+          });
+        }
       }
     }
 
@@ -24504,7 +24607,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     }
   }
 
-  // Ruta D experimental: M→G→M exactamente al inicio del ancla.
+  // Ruta D experimental: M→G→M con desplazamiento real; puede reanclar después de ruido previo.
   // No avisa por el patrón solo: exige una reducción posterior separada o
   // una respuesta sana posterior del grupo contrario.
   if (!selected) consider(findAnchoredMgmContinuationCandidate());
@@ -24591,11 +24694,11 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const reasons = [`CALIDAD ${turnQualityClass} (${turnQualityScore} puntos de giro)`, `${groupText} inicia el primer movimiento visible`];
   if (isAnchoredMgmRoute) {
     points += 10;
-    reasons.push("irregularidad inicial anclada M→G→M");
+    reasons.push("M→G→M direccional usado como ancla real");
     points += 5;
-    reasons.push("los tres impulsos son distintos, avanzan estructura y tienen dos cortes contrarios reales");
+    reasons.push("tres impulsos con extremos crecientes, dos cortes menores y desplazamiento real");
     points += 4;
-    reasons.push(`dominio acumulado ${(Number(irregularBlock.dominanceRatio || 0) * 100).toFixed(0)}% y duración ${(Number(irregularBlock.durationMs || 0) / 1000).toFixed(1)}s`);
+    reasons.push(`dominio ${(Number(irregularBlock.dominanceRatio || 0) * 100).toFixed(0)}%, eficiencia ${(Number(irregularBlock.efficiency || 0) * 100).toFixed(0)}% y duración ${(Number(irregularBlock.durationMs || 0) / 1000).toFixed(1)}s`);
     if (reductions.length) {
       points += 10;
       reasons.push(`reducción posterior separada: ${reductions[0]?.pattern || "reducción"}`);
@@ -24817,7 +24920,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
     : (isIrregularRoute
         ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
         : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`);
-  const logicText = `Motor V112.4: agrega M→G→M como irregularidad válida solo cuando ocupa el inicio del ancla y luego aparece otra reducción separada o una respuesta sana del grupo contrario. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 5 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const logicText = `Motor V112.5: M→G→M exige desplazamiento real, correcciones internas menores, eficiencia direccional y extremos crecientes; puede ignorar ruido previo y reanclar la formación en el primer M válido. Luego exige otra reducción o una respuesta clara del grupo contrario. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 5 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -24902,9 +25005,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "v112_4_mgm_inicial_mas_confirmacion" : (isIrregularRoute ? "v111_3_inicio_irregular_filtro_giro_36_40s" : "v111_3_reduccion_reforzada_filtro_giro"),
+      movementFilter: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "v112_5_mgm_desplazamiento_real_mas_confirmacion" : (isIrregularRoute ? "v111_3_inicio_irregular_filtro_giro_36_40s" : "v111_3_reduccion_reforzada_filtro_giro"),
       priority: "OPERABLE",
-      stage: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "mgm_inicial_confirmado_v112_4" : (isIrregularRoute ? "inicio_irregular_filtro_giro_v111_3" : "reduccion_reforzada_filtro_giro_v111_3"),
+      stage: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "mgm_desplazamiento_confirmado_v112_5" : (isIrregularRoute ? "inicio_irregular_filtro_giro_v111_3" : "reduccion_reforzada_filtro_giro_v111_3"),
       logic: logicText,
       status,
     },

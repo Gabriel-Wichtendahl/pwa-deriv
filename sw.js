@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.4 (MGM inicial irregular) */
+/* sw.js — Deriv Signals v112.5 (MGM desplazamiento real) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-4-mgm-initial-irregular";
+const CACHE = "deriv-assets-v112-5-mgm-real-displacement";
 
 const CORE_ASSETS = [
   "./",
