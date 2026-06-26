@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.3 (5 puntos para compra/venta) */
+/* sw.js — Deriv Signals v112.4 (MGM inicial irregular) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-3-five-points-trade";
+const CACHE = "deriv-assets-v112-4-mgm-initial-irregular";
 
 const CORE_ASSETS = [
   "./",

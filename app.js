@@ -1,3 +1,4 @@
+// v112.4: M→G→M inicial válido como irregularidad anclada; requiere después otra reducción o respuesta del grupo contrario.
 // v112.3: Compra/venta real y En vivo requieren 5 puntos netos.
 // v112.2: Captura de estudio estilo Deriv: gráfico limpio tipo comparativas, línea blanca y cronología 0-120s.
 // v112.1: AUTO 58 estricto: Rise/Fall prearma antes, envía solamente buy(proposal_id) al tick 58 y cancela si no está listo; nunca compra tarde.
@@ -1232,7 +1233,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "FILTRO_GIRO_AB_OPERABLE_V111_4_20260621";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "MGM_INICIAL_IRREGULAR_V112_4_20260626";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -10406,17 +10407,23 @@ function buildVisualReadFromItem(item) {
   const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
   const isConstructiveRead = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
   const qualificationRoute = String(meta.constructiveQualificationRoute || "");
-  const irregularInitialBlock = qualificationRoute === "irregular_initial_response" && meta.irregularInitialBlock && typeof meta.irregularInitialBlock === "object"
+  const irregularInitialBlock = (qualificationRoute === "irregular_initial_response" || qualificationRoute.startsWith("anchored_mgm_")) && meta.irregularInitialBlock && typeof meta.irregularInitialBlock === "object"
     ? meta.irregularInitialBlock
     : null;
   const isIrregularRead = !!irregularInitialBlock;
+  const isAnchoredMgmRead = qualificationRoute.startsWith("anchored_mgm_");
   let primaryLabels = Array.isArray(meta.visualReductionLabels)
     ? meta.visualReductionLabels.filter(Boolean)
     : splitPatternText(meta.visualReductionPattern);
   if (isConstructiveRead) {
     const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks : [];
     if (isIrregularRead && Array.isArray(irregularInitialBlock.labels) && irregularInitialBlock.labels.length) {
-      primaryLabels = irregularInitialBlock.labels.slice();
+      primaryLabels = isAnchoredMgmRead
+        ? [
+            ...irregularInitialBlock.labels,
+            ...blocks.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []),
+          ]
+        : irregularInitialBlock.labels.slice();
     } else if (blocks.length >= 2) {
       primaryLabels = blocks.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
     } else {
@@ -10442,7 +10449,14 @@ function buildVisualReadFromItem(item) {
     }
   }
   const primaryRunsRaw = isIrregularRead && Array.isArray(irregularInitialBlock.runs) && irregularInitialBlock.runs.length
-    ? irregularInitialBlock.runs
+    ? (isAnchoredMgmRead
+        ? [
+            ...irregularInitialBlock.runs,
+            ...(Array.isArray(meta.acceptedReductionBlocks)
+              ? meta.acceptedReductionBlocks.flatMap((b) => Array.isArray(b?.runs) ? b.runs : [])
+              : []),
+          ]
+        : irregularInitialBlock.runs)
     : (Array.isArray(meta.visualReductionPrimaryRuns) ? meta.visualReductionPrimaryRuns : []);
   const contraryRunsRaw = isConstructiveRead
     ? (Array.isArray(meta.acceptedConfirmationRuns) && meta.acceptedConfirmationRuns.length
@@ -10461,9 +10475,15 @@ function buildVisualReadFromItem(item) {
   if (isConstructiveRead && primaryRuns.length) {
     if (isIrregularRead) {
       const shapes = Array.isArray(irregularInitialBlock.shapes) ? irregularInitialBlock.shapes : [];
+      const irregularCount = Array.isArray(irregularInitialBlock.runs) ? irregularInitialBlock.runs.length : primaryRuns.length;
       primaryRuns.forEach((run, i) => {
-        run.irregularInitial = true;
-        run.shape = String(run.shape || shapes[i] || "ANGULO");
+        if (i < irregularCount) {
+          run.irregularInitial = true;
+          run.shape = String(run.shape || shapes[i] || "ANGULO");
+        } else {
+          run.reductionNo = 1;
+          run.mgmFollowupReduction = true;
+        }
       });
     } else {
       const blocks = Array.isArray(meta.acceptedReductionBlocks) ? meta.acceptedReductionBlocks.slice(0, 3) : [];
@@ -10515,7 +10535,9 @@ function buildVisualReadFromItem(item) {
     ? acceptedBlocks.map((b) => String(b?.pattern || "").trim()).filter(Boolean).join(" + ")
     : getVisualReadPatternText(primaryLabels);
   const primaryPattern = isIrregularRead
-    ? `IRR ${String(irregularInitialBlock.pattern || getVisualReadPatternText(primaryLabels) || "—")}`
+    ? (isAnchoredMgmRead && acceptedBlocks.length
+        ? `IRR ${String(irregularInitialBlock.pattern || "M→G→M")} + RED ${reductionsOnlyPattern}`
+        : `IRR ${String(irregularInitialBlock.pattern || getVisualReadPatternText(primaryLabels) || "—")}`)
     : (reductionsOnlyPattern || "—");
   const contraryPattern = confirmationPack
     ? String(confirmationPack.label || confirmationPack.pattern || getVisualReadPatternText(contraryLabels) || "confirmación contraria")
@@ -10732,7 +10754,7 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
 
   const meta = item.giroPolaridad || item.snrLevel || {};
   const isConstructive = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-  const isIrregularRead = read.qualificationRoute === "irregular_initial_response";
+  const isIrregularRead = read.qualificationRoute === "irregular_initial_response" || String(read.qualificationRoute || "").startsWith("anchored_mgm_");
   const formedMs = Number(meta.constructiveFormedAtMs || meta.signalFromSec * 1000 || read.evalMs || 25000);
   const evalMs = Math.max(1000, Math.min(60000, isConstructive && Number.isFinite(formedMs) ? formedMs : Number(read.evalMs || 25000)));
   const x0 = xOf(0), xEval = xOf(evalMs);
@@ -13311,6 +13333,7 @@ function normalizeSNRLevelMeta(meta) {
           lastCorrectionEndY: n(meta.irregularInitialBlock.lastCorrectionEndY),
           oppositeDip: n(meta.irregularInitialBlock.oppositeDip),
           structuralAdvances: n(meta.irregularInitialBlock.structuralAdvances, 0),
+          anchoredMgm: !!meta.irregularInitialBlock.anchoredMgm,
           runs: Array.isArray(meta.irregularInitialBlock.runs)
             ? meta.irregularInitialBlock.runs.slice(0, 12).map((run) => ({
                 startMs: n(run?.startMs), endMs: n(run?.endMs), move: n(run?.move), sign: n(run?.sign), idx: n(run?.idx),
@@ -23610,7 +23633,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     .filter((r) => Number(r.sign || 0) < 0 && Number(r.move || 0) >= irregularCorrectionMin);
   // V111.1: la ruta irregular exige 4 impulsos dominantes.
   // Las rutas de 3 reducciones y 2 reducciones + ataque conservan sus reglas.
-  if (primaryRuns.length < 3 && irregularPrimaryRuns.length < 4) return null;
+  if (primaryRuns.length < 3 && irregularPrimaryRuns.length < 3) return null;
 
   const primaryMoves = primaryRuns.map((r) => Number(r.move || 0));
   const contraryMoves = contraryRuns.map((r) => Number(r.move || 0));
@@ -24226,6 +24249,154 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
 
     return candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
   };
+
+  // V112.4 — Ruta D experimental: M→G→M al comienzo del ancla.
+  // El patrón por sí solo NO genera señal. Debe estar formado por los tres
+  // primeros impulsos dominantes, con dos cortes contrarios reales, y después
+  // aparecer una reducción nueva separada O una respuesta sana del grupo contrario.
+  const findAnchoredMgmContinuationCandidate = () => {
+    if (irregularPrimaryRuns.length < 3) return null;
+
+    const mgmRuns = irregularPrimaryRuns.slice(0, 3);
+    const first = mgmRuns[0];
+    const second = mgmRuns[1];
+    const third = mgmRuns[2];
+    const anchorMs = Number(first?.startMs || 0);
+    const endMs = Number(third?.endMs || 0);
+    const durationMs = endMs - anchorMs;
+    if (!(durationMs >= 6000) || durationMs > 30000) return null;
+
+    const moves = mgmRuns.map((r) => Number(r?.move || 0));
+    if (!moves.every((v) => Number.isFinite(v) && v > 0)) return null;
+    const mgmSummary = summarizeVisualMoves(moves);
+    if (mgmSummary.pattern !== "M→G→M") return null;
+
+    // Los dos M deben verse medianos de verdad y guardar una relación razonable
+    // entre sí; evita aceptar un casi-P o un casi-G etiquetado por borde.
+    const mediumSimilarity = Math.min(moves[0], moves[2]) / Math.max(moves[0], moves[2], 1e-9);
+    const largeVsMedium = moves[1] / Math.max(moves[0], moves[2], 1e-9);
+    if (mediumSimilarity < 0.55 || largeVsMedium < 1.40) return null;
+
+    const mgmCutMin = Math.max(cutMin * 0.72, Number(tol || 0) * 0.82, alignedRange * 0.022, 1e-9);
+    const correctionBetween = (a, b) => irregularContraryRawRuns
+      .filter((r) => Number(r.idx) > Number(a?.idx) && Number(r.idx) < Number(b?.idx))
+      .filter((r) => Number(r.move || 0) >= mgmCutMin)
+      .sort((x, y) => Number(x.idx) - Number(y.idx));
+    const cutOne = correctionBetween(first, second);
+    const cutTwo = correctionBetween(second, third);
+    if (!cutOne.length || !cutTwo.length) return null;
+    const internalCorrections = [cutOne[cutOne.length - 1], cutTwo[cutTwo.length - 1]];
+
+    // Cada nuevo impulso debe superar el extremo anterior: son tres movimientos
+    // separados del mismo grupo, no tres trozos de un único impulso continuo.
+    let structuralAdvances = 0;
+    const structuralChecks = [];
+    for (let i = 1; i < mgmRuns.length; i++) {
+      const prevExtreme = Number(mgmRuns[i - 1]?.endY);
+      const curExtreme = Number(mgmRuns[i]?.endY);
+      const required = Math.max(alignedRange * 0.018, Number(tol || 0) * 1.05, Number(mgmRuns[i]?.move || 0) * 0.06, 1e-9);
+      const progress = curExtreme - prevExtreme;
+      const ok = Number.isFinite(progress) && progress >= required;
+      structuralChecks.push({ from: i - 1, to: i, progress, required, ok });
+      if (ok) structuralAdvances++;
+    }
+    if (structuralAdvances < 2) return null;
+
+    const blockPts = pts.filter((pt) => Number(pt.ms) >= anchorMs && Number(pt.ms) <= endMs);
+    if (blockPts.length < 5) return null;
+    const y0 = Number(blockPts[0]?.y);
+    const terminalEndY = Number(third?.endY);
+    const yMax = Math.max(...blockPts.map((pt) => Number(pt.y)));
+    const yMin = Math.min(...blockPts.map((pt) => Number(pt.y)));
+    const netAdvance = terminalEndY - y0;
+    const advance = yMax - y0;
+    const oppositeDip = Math.max(0, y0 - yMin);
+    let path = 0;
+    for (let i = 1; i < blockPts.length; i++) path += Math.abs(Number(blockPts[i].y) - Number(blockPts[i - 1].y));
+    const efficiency = netAdvance / Math.max(path, 1e-9);
+    if (netAdvance < Math.max(alignedRange * 0.24, Number(tol || 0) * 3.8)) return null;
+    if (oppositeDip > netAdvance * 0.72 || efficiency < 0.16) return null;
+    const terminalTolerance = Math.max(alignedRange * 0.014, Number(tol || 0) * 0.95, 1e-9);
+    if (yMax - terminalEndY > terminalTolerance) return null;
+
+    const speeds = mgmRuns.map((r) => Number(r.move || 0) / Math.max(1, Number(r.durationMs || (Number(r.endMs || 0) - Number(r.startMs || 0)) || 1)));
+    const sortedSpeeds = speeds.slice().sort((a, b) => a - b);
+    const medianSpeed = sortedSpeeds[Math.floor(sortedSpeeds.length / 2)] || Math.max(...speeds, 1e-12);
+    const shapeInfo = mgmRuns.map((r) => getRunShapeInfo(r, medianSpeed));
+    const correctionMoves = internalCorrections.map((r) => Number(r.move || 0));
+    const correctionLabels = summarizeVisualMoves(correctionMoves).labels;
+    const primarySum = moves.reduce((a, b) => a + b, 0);
+    const correctionSum = correctionMoves.reduce((a, b) => a + b, 0);
+    const dominanceRatio = primarySum / Math.max(primarySum + correctionSum, 1e-9);
+    if (dominanceRatio < 0.62) return null;
+
+    const irregularBlock = {
+      anchorMs, startMs: anchorMs, endMs, durationMs,
+      startIdx: Number(first?.idx ?? 0), endIdx: Number(third?.idx ?? -1),
+      primaryRuns: mgmRuns.map((r, i) => ({ ...r, irregularLabel: mgmSummary.labels[i], irregularShape: shapeInfo[i]?.shape || "ANGULO", irregularInitial: true })),
+      correctionRuns: internalCorrections.map((r, i) => ({ ...r, irregularLabel: correctionLabels[i] || "", irregularShape: "CORTE", irregularInitialCorrection: true })),
+      labels: mgmSummary.labels.slice(),
+      shapes: shapeInfo.map((x) => x.shape),
+      correctionLabels: correctionLabels.slice(),
+      correctionShapes: internalCorrections.map(() => "CORTE"),
+      pattern: "M→G→M",
+      sizeRatio: mgmSummary.ratio, speedCv: 0, distinctLabels: 2, distinctShapes: new Set(shapeInfo.map((x) => x.shape)).size,
+      efficiency, advance, netAdvance, terminalEndY,
+      lastCorrectionEndY: Number(internalCorrections[internalCorrections.length - 1]?.endY),
+      oppositeDip, primarySum, correctionSum, dominanceRatio, structuralAdvances, structuralChecks,
+      anchoredMgm: true,
+    };
+
+    const candidates = [];
+    const mgmLastRawIdx = Number(third?.idx ?? -1);
+
+    // Opción 1: después del M→G→M aparece una reducción nueva, separada.
+    const followReductions = blocks
+      .filter((b) => Number(b?.runs?.[0]?.idx ?? -1) > mgmLastRawIdx)
+      .filter((b) => Number(b?.startMs || 0) >= endMs - 1)
+      .filter((b) => blockVisible(b, false));
+    for (const reduction of followReductions) {
+      const close = getConstructiveSecondReductionConfirmation(runs, reduction, alignedRange, tol);
+      if (!close) continue;
+      const formedAtMs = Number(close.confirmedAtMs || 0);
+      const elapsed = formedAtMs - anchorMs;
+      if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
+      candidates.push({
+        route: "anchored_mgm_plus_reduction",
+        reductions: [reduction],
+        confirmation: close,
+        confirmationPack: null,
+        irregularBlock, anchorMs, formedAtMs, elapsed,
+        score: 82 + Number(reduction.strength || 0) * 20 - Math.max(0, elapsed - 32000) / 900,
+        turnQualityScore: 2, turnQualityClass: "B", turnQualityAutoAllowed: true,
+        turnQualityConditions: { anchoredMgm: true, followupReduction: true, followupContrary: false },
+        mgmFollowupType: "reduction",
+      });
+    }
+
+    // Opción 2: después del M→G→M aparece una respuesta sana del grupo contrario.
+    const responsePack = findHealthyResponseAfterIrregular(irregularBlock);
+    if (responsePack) {
+      const formedAtMs = Number(responsePack.formedAtMs || 0);
+      const elapsed = formedAtMs - anchorMs;
+      if (elapsed > 0 && elapsed <= CONSTRUCTIVE_FLOATING_WINDOW_MS) {
+        candidates.push({
+          route: "anchored_mgm_plus_contrary",
+          reductions: [],
+          confirmation: responsePack.close || null,
+          confirmationPack: responsePack,
+          irregularBlock, anchorMs, formedAtMs, elapsed,
+          score: 88 + Number(responsePack.strength || 0) - Math.max(0, elapsed - 32000) / 900,
+          turnQualityScore: 2, turnQualityClass: "B", turnQualityAutoAllowed: true,
+          turnQualityConditions: { anchoredMgm: true, followupReduction: false, followupContrary: true },
+          mgmFollowupType: "contrary",
+        });
+      }
+    }
+
+    return candidates.sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || null;
+  };
+
   let selected = null;
   const consider = (candidate) => {
     if (!candidate) return;
@@ -24333,40 +24504,62 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
     }
   }
 
+  // Ruta D experimental: M→G→M exactamente al inicio del ancla.
+  // No avisa por el patrón solo: exige una reducción posterior separada o
+  // una respuesta sana posterior del grupo contrario.
+  if (!selected) consider(findAnchoredMgmContinuationCandidate());
+
   // Ruta C: inicio irregular direccional (0–30s) + respuesta sana contraria (hasta 40s).
   // Esta ruta no exige reducciones internas: todo el recorrido desordenado se agrupa
   // como un único movimiento macro y la señal se confirma por la respuesta opuesta.
   // V111.1: la ruta irregular tiene prioridad secundaria. Solo se evalúa
-  // cuando no se completó 3 reducciones ni 2 reducciones + ataque contrario.
+  // cuando no se completó 3 reducciones ni 2 reducciones + ataque contrario ni M→G→M válido.
   if (!selected) consider(findIrregularInitialCandidate());
 
   if (!selected) return null;
 
   const reductions = selected.reductions || [];
   const irregularBlock = selected.irregularBlock || null;
-  const isIrregularRoute = selected.route === "irregular_initial_response" && !!irregularBlock;
+  const isAnchoredMgmRoute = String(selected.route || "").startsWith("anchored_mgm_");
+  const isIrregularRoute = (selected.route === "irregular_initial_response" || isAnchoredMgmRoute) && !!irregularBlock;
   const firstReduction = reductions[0] || null;
   const secondReduction = reductions[1] || null;
   const thirdReduction = reductions[2] || null;
   const confirmationPack = selected.confirmationPack || null;
-  const acceptedRuns = isIrregularRoute
-    ? (irregularBlock.primaryRuns || []).map((r) => ({ ...r }))
-    : reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r }));
-  const acceptedLabels = isIrregularRoute
-    ? (irregularBlock.labels || []).slice()
-    : reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []);
+  const acceptedRuns = isAnchoredMgmRoute
+    ? [
+        ...(irregularBlock.primaryRuns || []).map((r) => ({ ...r })),
+        ...reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r })),
+      ]
+    : (isIrregularRoute
+        ? (irregularBlock.primaryRuns || []).map((r) => ({ ...r }))
+        : reductions.flatMap((b) => Array.isArray(b?.runs) ? b.runs : []).map((r) => ({ ...r })));
+  const acceptedLabels = isAnchoredMgmRoute
+    ? [
+        ...(irregularBlock.labels || []),
+        ...reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []),
+      ]
+    : (isIrregularRoute
+        ? (irregularBlock.labels || []).slice()
+        : reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []));
   const reductionText = reductions.map((b) => String(b?.pattern || "—")).join(" + ");
-  const acceptedPatternText = isIrregularRoute
-    ? `IRR ${irregularBlock.pattern || acceptedLabels.join("→") || "G/M/P"} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
-    : (confirmationPack
+  const acceptedPatternText = isAnchoredMgmRoute
+    ? (reductions.length
+        ? `IRR M→G→M + RED ${reductionText}`
+        : `IRR M→G→M + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`)
+    : (isIrregularRoute
+        ? `IRR ${irregularBlock.pattern || acceptedLabels.join("→") || "G/M/P"} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
+        : (confirmationPack
         ? (confirmationPack.position === "between"
             ? `${reductions[0]?.pattern || "—"} + ${confirmationPack.label} + ${reductions[1]?.pattern || "—"}`
             : `${reductionText} + ${confirmationPack.label}`)
-        : reductionText);
+        : reductionText));
 
-  const reductionEndMs = isIrregularRoute
-    ? Number(irregularBlock.endMs || 0)
-    : Math.max(...reductions.map((b) => Number(b?.endMs || 0)), 0);
+  const reductionEndMs = isAnchoredMgmRoute
+    ? Math.max(Number(irregularBlock.endMs || 0), ...reductions.map((b) => Number(b?.endMs || 0)), 0)
+    : (isIrregularRoute
+        ? Number(irregularBlock.endMs || 0)
+        : Math.max(...reductions.map((b) => Number(b?.endMs || 0)), 0));
   const acceptedPts = pts.filter((p) => Number(p.ms) >= selected.anchorMs && Number(p.ms) <= Math.max(reductionEndMs, selected.formedAtMs));
   if (acceptedPts.length < 5) return null;
   const y0 = Number(acceptedPts[0].y);
@@ -24396,7 +24589,25 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const turnQualityAutoAllowed = true;
   let points = 5;
   const reasons = [`CALIDAD ${turnQualityClass} (${turnQualityScore} puntos de giro)`, `${groupText} inicia el primer movimiento visible`];
-  if (isIrregularRoute) {
+  if (isAnchoredMgmRoute) {
+    points += 10;
+    reasons.push("irregularidad inicial anclada M→G→M");
+    points += 5;
+    reasons.push("los tres impulsos son distintos, avanzan estructura y tienen dos cortes contrarios reales");
+    points += 4;
+    reasons.push(`dominio acumulado ${(Number(irregularBlock.dominanceRatio || 0) * 100).toFixed(0)}% y duración ${(Number(irregularBlock.durationMs || 0) / 1000).toFixed(1)}s`);
+    if (reductions.length) {
+      points += 10;
+      reasons.push(`reducción posterior separada: ${reductions[0]?.pattern || "reducción"}`);
+      points += 3;
+      reasons.push(`la reducción posterior cerró con respuesta ${contraryText}`);
+    } else if (confirmationPack) {
+      points += 12;
+      reasons.push(`respuesta sana posterior del grupo contrario: ${confirmationPack.label || confirmationPack.pattern || contraryText}`);
+      points += 3;
+      reasons.push(`recupera ${(Number(confirmationPack.recoveryRatio || 0) * 100).toFixed(0)}% y rompe el último pivote interno`);
+    }
+  } else if (isIrregularRoute) {
     points += 11;
     reasons.push(`movimiento irregular direccional con ${acceptedRuns.length} impulsos dominantes: ${irregularBlock.pattern}`);
     points += 5;
@@ -24434,11 +24645,13 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   if (points < 29) return null;
 
   const quality = points * 11.5 + 62 + Math.min(16, cutsBetween * 2.5) - Math.max(0, selected.elapsed - 33000) / 750;
-  const subtype = isIrregularRoute
-    ? `inicio irregular + ${confirmationPack?.label || "respuesta sana"}`
-    : (selected.route === "three_reductions"
+  const subtype = isAnchoredMgmRoute
+    ? (reductions.length ? `M→G→M inicial + reducción ${reductions[0]?.pattern || "posterior"}` : `M→G→M inicial + ${confirmationPack?.label || "grupo contrario"}`)
+    : (isIrregularRoute
+        ? `inicio irregular + ${confirmationPack?.label || "respuesta sana"}`
+        : (selected.route === "three_reductions"
         ? "3 reducciones claras"
-        : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`);
+        : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`));
 
   return {
     side,
@@ -24505,6 +24718,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
       dominanceRatio: Number(irregularBlock.dominanceRatio || 0),
       oppositeDip: Number(irregularBlock.oppositeDip || 0),
       structuralAdvances: Number(irregularBlock.structuralAdvances || 0),
+      anchoredMgm: !!irregularBlock.anchoredMgm,
       runs: Array.isArray(irregularBlock.primaryRuns) ? irregularBlock.primaryRuns.map((r) => ({ ...r })) : [],
       correctionRuns: Array.isArray(irregularBlock.correctionRuns) ? irregularBlock.correctionRuns.map((r) => ({ ...r })) : [],
     } : null,
@@ -24594,13 +24808,16 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const isIrregularRoute = best.qualificationRoute === "irregular_initial_response";
+  const isIrregularRoute = best.qualificationRoute === "irregular_initial_response" || String(best.qualificationRoute || "").startsWith("anchored_mgm_");
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
   const qualityPrefix = best.turnQualityClass === "A" ? "⭐ CALIDAD A" : "🔹 CALIDAD B";
-  const status = isIrregularRoute
-    ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
-    : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`;
-  const logicText = `Motor V111.4: filtro final de giro con validación flexible entre 36 y 40s. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 5 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const isAnchoredMgmRoute = String(best.qualificationRoute || "").startsWith("anchored_mgm_");
+  const status = isAnchoredMgmRoute
+    ? `${qualityPrefix} · M→G→M INICIAL CONFIRMADO · ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+    : (isIrregularRoute
+        ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+        : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`);
+  const logicText = `Motor V112.4: agrega M→G→M como irregularidad válida solo cuando ocupa el inicio del ancla y luego aparece otra reducción separada o una respuesta sana del grupo contrario. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 5 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -24662,6 +24879,8 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       thirdConstructiveReduction: best.thirdReduction ? { pattern: best.thirdReduction.pattern, startMs: best.thirdReduction.startMs, endMs: best.thirdReduction.endMs } : null,
       constructiveQualificationRoute: best.qualificationRoute,
       constructiveQualificationLabel: best.qualificationLabel,
+      anchoredMgmConfirmed: isAnchoredMgmRoute,
+      anchoredMgmFollowupType: isAnchoredMgmRoute ? (best.confirmationPack ? "contrary" : "reduction") : "",
       constructiveConfirmationPack: best.confirmationPack,
       irregularInitialBlock: best.irregularInitialBlock,
       constructiveElapsedFromFirstMovementMs: best.elapsedFromFirstMovementMs,
@@ -24683,9 +24902,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: isIrregularRoute ? "v111_3_inicio_irregular_filtro_giro_36_40s" : "v111_3_reduccion_reforzada_filtro_giro",
+      movementFilter: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "v112_4_mgm_inicial_mas_confirmacion" : (isIrregularRoute ? "v111_3_inicio_irregular_filtro_giro_36_40s" : "v111_3_reduccion_reforzada_filtro_giro"),
       priority: "OPERABLE",
-      stage: isIrregularRoute ? "inicio_irregular_filtro_giro_v111_3" : "reduccion_reforzada_filtro_giro_v111_3",
+      stage: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "mgm_inicial_confirmado_v112_4" : (isIrregularRoute ? "inicio_irregular_filtro_giro_v111_3" : "reduccion_reforzada_filtro_giro_v111_3"),
       logic: logicText,
       status,
     },
