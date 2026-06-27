@@ -1,3 +1,4 @@
+// v112.7: corrige rechazo de barrera Higher/Lower: toda barrera se normaliza a un máximo de 3 decimales antes de pedir proposal.
 // v112.6: corrige Higher/Lower 130% en API nueva: proposal usa underlying_symbol y buy envía solo proposal_id + price.
 // v112.5: corrige M→G→M por desplazamiento real: ignora zigzag inicial, busca el bloque direccional válido y reancla la formación en su primer impulso.
 // v112.4: M→G→M inicial válido como irregularidad anclada; requiere después otra reducción o respuesta del grupo contrario.
@@ -225,7 +226,9 @@ const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
 const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 10;
 const AUTO_PRECALC_REFRESH_MS = 8000;
 const AUTO_PRECALC_STALE_MS = 120000;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v5_target130_higher_lower";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v6_target130_barrier_3dec";
+const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
+const HIGHLOW_API_MIN_RELATIVE_BARRIER = 0.001;
 const HIGHLOW_BARRIER_CACHE_TTL_MS = 10 * 60 * 1000;
 const HIGHLOW_PROPOSAL_COOLDOWN_KEY = "highLowProposalCooldownUntil_v1";
 const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
@@ -241,8 +244,8 @@ const HIGHLOW_MIN_PAYOUT_TOTAL_PCT = 0;
 const HIGHLOW_FIXED_RELATIVE_BARRIERS = {
   R_10: "0.192",
   R_25: "0.311",
-  R_50: "0.0162",
-  R_75: "10.5950",
+  R_50: "0.016",
+  R_75: "10.595",
   R_100: "0.15",
 };
 // Búsqueda por presets de "pips" relativos (no por rango reciente de la vela),
@@ -4228,13 +4231,23 @@ function getLatestSignalQuoteForBarrier(item) {
   return NaN;
 }
 function getBarrierPrecisionForAbs(absValue) {
+  // Deriv rechaza Higher/Lower si la barrera tiene más de 3 decimales.
+  // Usamos siempre el máximo permitido para conservar la mayor precisión posible.
   const n = Math.abs(Number(absValue || 0));
-  if (!Number.isFinite(n) || n <= 0) return 3;
-  if (n >= 10) return 3;
-  if (n >= 1) return 3;
-  if (n >= 0.1) return 3;
-  if (n >= 0.01) return 4;
-  return 5;
+  return Number.isFinite(n) && n > 0 ? HIGHLOW_API_MAX_BARRIER_DECIMALS : HIGHLOW_API_MAX_BARRIER_DECIMALS;
+}
+function normalizeHighLowBarrierForApi(rawBarrier, side = "CALL") {
+  const txt = String(rawBarrier ?? "").trim();
+  if (!txt) return "";
+  const parsed = txt.match(/^([+-])?\s*(\d+(?:\.\d+)?)$/);
+  if (!parsed) return "";
+  const fallbackSign = String(side || "CALL").toUpperCase() === "PUT" ? -1 : 1;
+  const sign = parsed[1] === "-" ? -1 : parsed[1] === "+" ? 1 : fallbackSign;
+  let abs = Math.abs(Number(parsed[2]));
+  if (!Number.isFinite(abs) || abs <= 0) return "";
+  abs = Number(abs.toFixed(HIGHLOW_API_MAX_BARRIER_DECIMALS));
+  if (!Number.isFinite(abs) || abs <= 0) abs = HIGHLOW_API_MIN_RELATIVE_BARRIER;
+  return `${sign >= 0 ? "+" : "-"}${abs.toFixed(HIGHLOW_API_MAX_BARRIER_DECIMALS)}`;
 }
 function makeBarrierCandidateFromAbsolute(side, absValue, forcedPrecision = null) {
   const sign = side === "CALL" ? 1 : -1;
@@ -4242,8 +4255,13 @@ function makeBarrierCandidateFromAbsolute(side, absValue, forcedPrecision = null
   if (!Number.isFinite(raw0) || raw0 <= 0) return null;
 
   let precision = Number.isFinite(Number(forcedPrecision)) ? Number(forcedPrecision) : getBarrierPrecisionForAbs(raw0);
-  precision = Math.max(0, Math.min(8, precision));
-  const raw = Number(raw0.toFixed(precision));
+  precision = Math.max(0, Math.min(HIGHLOW_API_MAX_BARRIER_DECIMALS, precision));
+  // La API acepta hasta 3 decimales. Evita que valores muy pequeños redondeen a cero.
+  let raw = Number(raw0.toFixed(precision));
+  if ((!Number.isFinite(raw) || raw <= 0) && raw0 > 0) {
+    precision = HIGHLOW_API_MAX_BARRIER_DECIMALS;
+    raw = HIGHLOW_API_MIN_RELATIVE_BARRIER;
+  }
   if (!Number.isFinite(raw) || raw <= 0) return null;
 
   const barrierNum = sign * raw;
@@ -4261,7 +4279,7 @@ function makeHighLowFixedBarrierCandidate(symbol, side) {
   if (!rawText) return null;
   const abs = Math.abs(Number(rawText));
   if (!Number.isFinite(abs) || abs <= 0) return null;
-  const precision = Math.max(0, Math.min(8, (rawText.split(".")[1] || "").length));
+  const precision = Math.max(0, Math.min(HIGHLOW_API_MAX_BARRIER_DECIMALS, (rawText.split(".")[1] || "").length));
   const sign = side === "CALL" ? 1 : -1;
   const barrierNum = sign * abs;
   return {
@@ -4341,7 +4359,7 @@ function buildBarrierCandidates(item, side, mode = "full") {
 function formatRelativeBarrier(value, precision = 3) {
   const n = Number(value || 0);
   if (!Number.isFinite(n) || n === 0) return "+0";
-  const p = Math.max(0, Number(precision || 0));
+  const p = Math.max(0, Math.min(HIGHLOW_API_MAX_BARRIER_DECIMALS, Number(precision || 0)));
   const abs = Math.abs(n).toFixed(p);
   return `${n >= 0 ? "+" : "-"}${abs}`;
 }
@@ -4352,9 +4370,11 @@ function parseRelativeBarrierString(raw) {
   if (!m) return null;
   const n = Number(m[2]);
   if (!Number.isFinite(n) || n <= 0) return null;
-  const precision = (String(m[2]).split(".")[1] || "").length;
-  const barrierNum = (m[1] === "-" ? -1 : 1) * n;
-  return { barrierNum, precision, barrier: formatRelativeBarrier(barrierNum, precision) };
+  const precision = Math.min(HIGHLOW_API_MAX_BARRIER_DECIMALS, (String(m[2]).split(".")[1] || "").length);
+  const sign = m[1] === "-" ? -1 : 1;
+  const roundedAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, Number(n.toFixed(HIGHLOW_API_MAX_BARRIER_DECIMALS)));
+  const barrierNum = sign * roundedAbs;
+  return { barrierNum, precision: HIGHLOW_API_MAX_BARRIER_DECIMALS, barrier: formatRelativeBarrier(barrierNum, HIGHLOW_API_MAX_BARRIER_DECIMALS) };
 }
 function extractProposalRelativeBarrier(proposal, fallbackSide = "CALL") {
   if (!proposal) return null;
@@ -4474,6 +4494,8 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
   const safeSymbol = String(symbol || "").trim();
   const safeSide = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side) || "CALL";
   const primaryType = getHighLowPrimaryApiContractType(safeSide);
+  const safeBarrier = barrier ? normalizeHighLowBarrierForApi(barrier, safeSide) : "";
+  if (barrier && !safeBarrier) throw new Error(`Barrera Higher/Lower inválida: ${String(barrier)}`);
 
   // API nueva Options: `symbol` ya no está permitido en proposal.
   // Debe enviarse `underlying_symbol`. Probamos el código actual y su alias 1HZ.
@@ -4494,7 +4516,7 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
         duration_unit: DEFAULT_DURATION_UNIT || "m",
         underlying_symbol: underlyingSymbol,
       };
-      if (barrier) req.barrier = String(barrier);
+      if (safeBarrier) req.barrier = safeBarrier;
       attempts.push({ req, apiContractType: primaryType, underlyingSymbol, payloadMode: "new_underlying_symbol" });
     }
   } else {
@@ -4514,7 +4536,7 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
         duration_unit: DEFAULT_DURATION_UNIT || "m",
         symbol: safeSymbol,
       };
-      if (barrier) req.barrier = String(barrier);
+      if (safeBarrier) req.barrier = safeBarrier;
       attempts.push({ req, apiContractType, underlyingSymbol: safeSymbol, payloadMode: "legacy_symbol" });
     }
   }
@@ -4526,7 +4548,7 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
         payloadMode,
         apiContractType,
         underlyingSymbol,
-        barrier: String(barrier || "default"),
+        barrier: String(safeBarrier || "default"),
       });
       const res = await wsRequest(req, timeoutMs);
       if (res?.proposal?.id) {
@@ -4576,12 +4598,14 @@ async function getHighLowProposalQuote(symbol, side, barrierCandidate, precision
     ? barrierCandidate
     : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
   if (!candidate?.barrier) return null;
-  const raw = await requestHighLowProposalRaw(symbol, side, stake, candidate.barrier, timeoutMs, true, preferredUnderlyingSymbol);
+  const normalizedBarrier = normalizeHighLowBarrierForApi(candidate.barrier, side);
+  const normalizedParsed = parseRelativeBarrierString(normalizedBarrier);
+  const raw = await requestHighLowProposalRaw(symbol, side, stake, normalizedBarrier, timeoutMs, true, preferredUnderlyingSymbol);
   const plan = parseProposalToExecution({
     proposal: raw?.res?.proposal,
-    barrierNum: candidate.barrierNum,
-    precision: candidate.precision,
-    barrier: candidate.barrier,
+    barrierNum: normalizedParsed?.barrierNum ?? candidate.barrierNum,
+    precision: HIGHLOW_API_MAX_BARRIER_DECIMALS,
+    barrier: normalizedBarrier,
     apiContractType: raw?.apiContractType,
     underlyingSymbol: raw?.underlyingSymbol,
     payloadMode: raw?.payloadMode,
