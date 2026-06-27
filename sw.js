@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.9 (candado flotante se libera sin recargar) */
+/* sw.js — Deriv Signals v113.0 (reanclaje visual y doble estructura MGM) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-9-floating-chart-unlock";
+const CACHE = "deriv-assets-v113-0-mgm-reanchor-double-structure";
 
 const CORE_ASSETS = [
   "./",
