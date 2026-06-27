@@ -1,3 +1,4 @@
+// v112.6: corrige Higher/Lower 130% en API nueva: proposal usa underlying_symbol y buy envía solo proposal_id + price.
 // v112.5: corrige M→G→M por desplazamiento real: ignora zigzag inicial, busca el bloque direccional válido y reancla la formación en su primer impulso.
 // v112.4: M→G→M inicial válido como irregularidad anclada; requiere después otra reducción o respuesta del grupo contrario.
 // v112.3: Compra/venta real y En vivo requieren 5 puntos netos.
@@ -4427,6 +4428,8 @@ function parseProposalToExecution(planRaw, side, precision) {
     proposalId: id,
     contractType: side === "CALL" ? "HIGHER" : "LOWER",
     apiContractType,
+    underlyingSymbol: String(planRaw?.underlyingSymbol || planRaw?.underlying_symbol || ""),
+    payloadMode: String(planRaw?.payloadMode || ""),
     askPrice,
     payout,
     profitPct,
@@ -4466,35 +4469,84 @@ function getHighLowApiContractTypeCandidates(side) {
   const legacy = getHighLowLegacyApiContractType(side);
   return primary === legacy ? [primary] : [primary, legacy];
 }
-async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, allowLegacy = true) {
+async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, allowLegacy = true, preferredUnderlyingSymbol = "") {
   const errors = [];
-  const apiTypes = allowLegacy
-    ? getHighLowApiContractTypeCandidates(side)
-    : [getHighLowPrimaryApiContractType(side)];
-  for (const apiContractType of apiTypes) {
-    const req = {
-      proposal: 1,
-      amount: stake,
-      basis: "stake",
-      contract_type: apiContractType,
-      currency: DEFAULT_CURRENCY,
-      duration: Number(DEFAULT_DURATION) || 1,
-      duration_unit: DEFAULT_DURATION_UNIT || "m",
-      symbol,
-    };
-    if (barrier) req.barrier = barrier;
+  const safeSymbol = String(symbol || "").trim();
+  const safeSide = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side) || "CALL";
+  const primaryType = getHighLowPrimaryApiContractType(safeSide);
+
+  // API nueva Options: `symbol` ya no está permitido en proposal.
+  // Debe enviarse `underlying_symbol`. Probamos el código actual y su alias 1HZ.
+  const attempts = [];
+  if (isNewPatApiMode()) {
+    const symbolCandidates = uniqList([
+      String(preferredUnderlyingSymbol || "").trim(),
+      ...getNewApiUnderlyingSymbolCandidates(safeSymbol),
+    ]);
+    for (const underlyingSymbol of symbolCandidates) {
+      const req = {
+        proposal: 1,
+        amount: Number(stake),
+        basis: "stake",
+        contract_type: primaryType,
+        currency: DEFAULT_CURRENCY,
+        duration: Number(DEFAULT_DURATION) || 1,
+        duration_unit: DEFAULT_DURATION_UNIT || "m",
+        underlying_symbol: underlyingSymbol,
+      };
+      if (barrier) req.barrier = String(barrier);
+      attempts.push({ req, apiContractType: primaryType, underlyingSymbol, payloadMode: "new_underlying_symbol" });
+    }
+  } else {
+    // Legacy conserva `symbol`. Para no cambiar el producto, primero usa HIGHER/LOWER;
+    // CALL/PUT queda solo como compatibilidad antigua cuando se habilita allowLegacy.
+    const apiTypes = allowLegacy
+      ? getHighLowApiContractTypeCandidates(safeSide)
+      : [primaryType];
+    for (const apiContractType of apiTypes) {
+      const req = {
+        proposal: 1,
+        amount: Number(stake),
+        basis: "stake",
+        contract_type: apiContractType,
+        currency: DEFAULT_CURRENCY,
+        duration: Number(DEFAULT_DURATION) || 1,
+        duration_unit: DEFAULT_DURATION_UNIT || "m",
+        symbol: safeSymbol,
+      };
+      if (barrier) req.barrier = String(barrier);
+      attempts.push({ req, apiContractType, underlyingSymbol: safeSymbol, payloadMode: "legacy_symbol" });
+    }
+  }
+
+  for (const attempt of attempts) {
+    const { req, apiContractType, underlyingSymbol, payloadMode } = attempt;
     try {
+      window.DerivDebug?.log?.("HIGHLOW_PROPOSAL_ATTEMPT", {
+        payloadMode,
+        apiContractType,
+        underlyingSymbol,
+        barrier: String(barrier || "default"),
+      });
       const res = await wsRequest(req, timeoutMs);
-      if (res?.proposal?.id) return { res, apiContractType };
-      const msg = res?.error?.message || `${apiContractType}: proposal vacía`;
-      errors.push(msg);
+      if (res?.proposal?.id) {
+        window.DerivDebug?.log?.("HIGHLOW_PROPOSAL_OK", {
+          payloadMode,
+          apiContractType,
+          underlyingSymbol,
+          proposal_id: String(res.proposal.id),
+        });
+        return { res, apiContractType, underlyingSymbol, payloadMode };
+      }
+      const msg = res?.error?.message || `${apiContractType}/${underlyingSymbol}: proposal vacía`;
+      errors.push(`${apiContractType}/${underlyingSymbol}: ${msg}`);
       if (isHighLowProposalLimitError(msg)) {
         writeHighLowProposalCooldown();
         break;
       }
     } catch (e) {
       const msg = e?.message || String(e || `${apiContractType}: error proposal`);
-      errors.push(msg);
+      errors.push(`${apiContractType}/${underlyingSymbol}: ${msg}`);
       if (isHighLowProposalLimitError(msg)) {
         writeHighLowProposalCooldown();
         break;
@@ -4510,6 +4562,8 @@ async function getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs = A
     proposal: raw?.res?.proposal,
     defaultBarrier: true,
     apiContractType: raw?.apiContractType,
+    underlyingSymbol: raw?.underlyingSymbol,
+    payloadMode: raw?.payloadMode,
   }, side, 0);
   if (plan) {
     plan.symbolDefaultBarrier = true;
@@ -4517,18 +4571,20 @@ async function getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs = A
   }
   return isHighLowPlanWithinPayoutCap(plan) ? plan : null;
 }
-async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
+async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, preferredUnderlyingSymbol = "") {
   const candidate = typeof barrierCandidate === "object" && barrierCandidate
     ? barrierCandidate
     : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
   if (!candidate?.barrier) return null;
-  const raw = await requestHighLowProposalRaw(symbol, side, stake, candidate.barrier, timeoutMs, true);
+  const raw = await requestHighLowProposalRaw(symbol, side, stake, candidate.barrier, timeoutMs, true, preferredUnderlyingSymbol);
   const plan = parseProposalToExecution({
     proposal: raw?.res?.proposal,
     barrierNum: candidate.barrierNum,
     precision: candidate.precision,
     barrier: candidate.barrier,
     apiContractType: raw?.apiContractType,
+    underlyingSymbol: raw?.underlyingSymbol,
+    payloadMode: raw?.payloadMode,
   }, side, candidate.precision);
   return isHighLowPlanWithinPayoutCap(plan) ? plan : null;
 }
@@ -4666,7 +4722,15 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
 async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPlan, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
   const candidate = makeHighLowCandidateFromPlan(barrierPlan, side);
   if (!candidate?.barrier) throw new Error(`Higher/Lower sin barrera 130% preparada para ${symbol}.`);
-  const plan = await getHighLowProposalQuote(symbol, side, candidate, candidate.precision, stake, timeoutMs);
+  const plan = await getHighLowProposalQuote(
+    symbol,
+    side,
+    candidate,
+    candidate.precision,
+    stake,
+    timeoutMs,
+    String(barrierPlan?.underlyingSymbol || "")
+  );
   if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
     throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
   }
@@ -4682,13 +4746,25 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   const symbol = String(item?.symbol || "");
   let lastError = null;
   let prepared = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 3);
+
+  // La búsqueda completa de 130% debe hacerse cuando nace la señal, no al segundo 58.
+  // Si por algún motivo no quedó en memoria, usamos primero el último hint válido o
+  // la barrera base del par y hacemos una sola proposal fresca para no entrar tarde.
   if (!prepared) {
-    prepared = await findHighLowPlanNear130(item, side, {
-      stake,
-      fast: false,
-      maxQuotes: HIGHLOW_TARGET_MAX_SEARCH_QUOTES,
-      timeoutMs: AUTO_FULL_PROPOSAL_TIMEOUT_MS,
-    });
+    const hint = getExecutionBarrierHint(symbol, side);
+    const hintedCandidate = hint && Number.isFinite(Number(hint.barrierAbs)) && Number(hint.barrierAbs) > 0
+      ? makeBarrierCandidateFromAbsolute(side, Math.abs(Number(hint.barrierAbs)), Number(hint.precision || 0))
+      : makeHighLowFixedBarrierCandidate(symbol, side);
+    if (hintedCandidate?.barrier) {
+      prepared = {
+        barrier: hintedCandidate.barrier,
+        barrierNum: hintedCandidate.barrierNum,
+        precision: hintedCandidate.precision,
+        source: hint ? "entry_cached_130_hint" : "entry_pair_seed",
+        targetSearch: true,
+        targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+      };
+    }
   }
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -4714,7 +4790,20 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
         throw lastError || new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
       }
-      const res = await wsRequest({ buy: plan.proposalId, price: plan.askPrice }, 20000);
+      // BUY nunca debe recibir symbol/underlying_symbol: solo proposal_id y precio.
+      const buyPayload = {
+        buy: String(plan.proposalId),
+        price: Number(plan.askPrice),
+      };
+      window.DerivDebug?.log?.("HIGHLOW_BUY_ATTEMPT", {
+        proposal_id: buyPayload.buy,
+        price: buyPayload.price,
+        apiContractType: plan.apiContractType,
+        underlyingSymbol: plan.underlyingSymbol || symbol,
+        barrier: plan.barrier,
+        payoutTotalPct: plan.payoutTotalPct,
+      });
+      const res = await wsRequest(buyPayload, 20000);
       if (res?.buy?.contract_id) return { res, plan, attempt, preparedPlan: prepared };
       lastError = new Error(res?.error?.message || "Deriv no confirmó la compra Higher/Lower");
     } catch (e) {
@@ -15942,6 +16031,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         exec_mode: "HIGHLOW_TARGET_130_SIGNAL_SEARCH_FRESH_BUY",
         contract_type: contractLabel,
         api_contract_type: plan.apiContractType || getHighLowPrimaryApiContractType(side),
+        api_symbol_field: isNewPatApiMode() ? "underlying_symbol" : "symbol",
+        api_underlying_symbol: plan.underlyingSymbol || symbol,
+        proposal_payload_mode: plan.payloadMode || (isNewPatApiMode() ? "new_underlying_symbol" : "legacy_symbol"),
         barrier: plan.barrier,
         fixed_barrier: false,
         barrier_searched_on_signal: true,

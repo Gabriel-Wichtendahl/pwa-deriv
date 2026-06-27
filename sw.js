@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.5 (MGM desplazamiento real) */
+/* sw.js — Deriv Signals v112.6 (Higher/Lower 130% API nueva corregido) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-5-mgm-real-displacement";
+const CACHE = "deriv-assets-v112-6-highlow-130-underlying-symbol";
 
 const CORE_ASSETS = [
   "./",
