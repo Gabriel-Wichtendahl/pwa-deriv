@@ -1,3 +1,4 @@
+// v112.9: corrige candado persistente: la formación flotante se cierra y habilita el gráfico a los 60s aunque el trade ya tenga ITM/OTM.
 // v112.8: Higher/Lower aprende la precisión de barrera por índice; reintenta con menos decimales y guarda el límite aceptado.
 // v112.7: corrige rechazo de barrera Higher/Lower: toda barrera se normaliza a un máximo de 3 decimales antes de pedir proposal.
 // v112.6: corrige Higher/Lower 130% en API nueva: proposal usa underlying_symbol y buy envía solo proposal_id + price.
@@ -5624,6 +5625,7 @@ function startUiTimers() {
     }
     updateModalCandleStatusUI();
     refreshOpenSignalStageBadges();
+    finalizeExpiredFloatingSignalRows();
     scanSignalAutoPreProposals();
     scanSignalAutoEntriesAt57();
   }, getUiIntervalMs());
@@ -14865,12 +14867,12 @@ function updateRowChartBtnOnRow(row, item) {
     btn.title = liveEligible ? "Ver gráfico en vivo (ticks reales)" : "Ver gráfico del minuto (ticks 0–60)";
   } else {
     btn.innerHTML = `<span class="lockBadge" aria-hidden="true">🔒</span>`;
-    btn.title = "Esperando cierre del minuto…";
+    btn.title = isFloatingSignalItem(item) ? "Esperando los 60s de la formación…" : "Esperando cierre del minuto…";
   }
 
   if (candleBtn) {
     candleBtn.disabled = !ready;
-    candleBtn.title = ready ? "Ver mini gráfico de velas de 1 minuto" : "Esperando cierre del minuto…";
+    candleBtn.title = ready ? "Ver mini gráfico de velas de 1 minuto" : (isFloatingSignalItem(item) ? "Esperando los 60s de la formación…" : "Esperando cierre del minuto…");
   }
 }
 function updateRowTradeBadgeOnRow(row, item) {
@@ -16731,6 +16733,48 @@ async function hydrateFloatingSignalFromDerivHistory(item) {
   } catch {
     return false;
   }
+}
+
+
+const floatingWindowHydrationInFlight = new Set();
+function finalizeExpiredFloatingSignalRows(nowMs = serverNowMs()) {
+  if (!Array.isArray(history) || !history.length) return false;
+  const now = Number(nowMs);
+  if (!Number.isFinite(now)) return false;
+  let changed = false;
+
+  for (const it of history.slice(-250)) {
+    if (!it || !isFloatingSignalItem(it) || it.minuteComplete) continue;
+    const anchorMs = Number(it.signalAnchorEpochMs || 0);
+    if (!Number.isFinite(anchorMs) || anchorMs <= 0 || now < anchorMs + 60000) continue;
+
+    // El candado depende de minuteComplete. Se libera por el reloj propio de
+    // la formación, no por el resultado del contrato ni por el minuto calendario.
+    it.minuteComplete = true;
+    changed = true;
+    updateRowChartBtn(it);
+
+    if (modalCurrentItem && String(modalCurrentItem.id || "") === String(it.id || "")) {
+      modalCurrentItem.minuteComplete = true;
+      modalCurrentItem.ticks = Array.isArray(it.ticks) ? it.ticks.slice() : [];
+      updateModalCandleStatusUI();
+      requestModalDraw(false);
+    }
+
+    // Completa los ticks faltantes sin bloquear la interfaz.
+    const key = String(it.id || `${it.symbol}:${anchorMs}`);
+    if (ws && ws.readyState === 1 && !floatingWindowHydrationInFlight.has(key)) {
+      floatingWindowHydrationInFlight.add(key);
+      Promise.resolve(hydrateFloatingSignalFromDerivHistory(it))
+        .catch(() => false)
+        .finally(() => floatingWindowHydrationInFlight.delete(key));
+    }
+  }
+
+  if (changed) {
+    try { saveHistory(history); } catch {}
+  }
+  return changed;
 }
 
 async function fetchFullMinuteTicks(symbol, minute) {
@@ -23612,7 +23656,11 @@ function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
       const anchor = Number(it.signalAnchorEpochMs || 0);
       if (!Number.isFinite(anchor) || anchor <= 0) continue;
       const ms = ep - anchor;
-      if (ms >= -250 && ms <= 61000 && !it.trade?.badge) {
+      // La formación flotante debe seguir completándose hasta sus propios 60s,
+      // aunque Higher/Lower o Rise/Fall ya haya informado ITM/OTM.
+      // Antes, trade.badge cortaba este bloque y dejaba el botón con candado
+      // hasta recargar y rehidratar el historial.
+      if (ms >= -250 && ms <= 61000) {
         it.ticks ||= [];
         if (ms >= 0 && ms <= 60000) {
           const last = it.ticks[it.ticks.length - 1];

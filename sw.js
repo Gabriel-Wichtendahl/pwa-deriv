@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.8 (Higher/Lower precisión de barrera adaptativa por índice) */
+/* sw.js — Deriv Signals v112.9 (candado flotante se libera sin recargar) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-8-highlow-dynamic-barrier-decimals";
+const CACHE = "deriv-assets-v112-9-floating-chart-unlock";
 
 const CORE_ASSETS = [
   "./",
