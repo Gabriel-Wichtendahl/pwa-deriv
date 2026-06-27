@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v112.7 (Higher/Lower barrera máximo 3 decimales) */
+/* sw.js — Deriv Signals v112.8 (Higher/Lower precisión de barrera adaptativa por índice) */
 "use strict";
 
-const CACHE = "deriv-assets-v112-7-highlow-barrier-3dec";
+const CACHE = "deriv-assets-v112-8-highlow-dynamic-barrier-decimals";
 
 const CORE_ASSETS = [
   "./",
