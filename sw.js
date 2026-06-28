@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.1 (Higher/Lower 130 dual CALL PUT) */
+/* sw.js — Deriv Signals v113.1 (payout 130 estricto y Trades corregidos) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-1-highlow-dual-side-130";
+const CACHE = "deriv-assets-v113-1-strict130-trades-clean";
 
 const CORE_ASSETS = [
   "./",
