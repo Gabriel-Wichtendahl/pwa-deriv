@@ -1,4 +1,4 @@
-// v113.7: corrige las proposals con barrera personalizada en la API nueva. En modo PAT prueba CALL/PUT con barrier antes de HIGHER/LOWER, evitando “Single barrier input is expected”.
+// v113.8: corrige el fallback real de barreras en API nueva: no acepta proposals incompletas, conserva el símbolo exacto y prueba barrera relativa/absoluta con auditoría detallada.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
@@ -105,7 +105,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.7";
+const APP_BUILD_VERSION = "v113.8";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -237,7 +237,7 @@ const AUTO_PRECALC_REFRESH_MS = 10000;
 const AUTO_PRECALC_STALE_MS = 120000;
 const HIGHLOW_PRECALC_MAX_ATTEMPTS = 1;
 const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v8_target130_dual_125_135";
-const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v1";
+const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v2_absolute_fallback";
 const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
 const HIGHLOW_DEFAULT_MAX_BARRIER_DECIMALS_BY_SYMBOL = {
   R_100: 2,
@@ -4513,6 +4513,8 @@ function parseProposalToExecution(planRaw, side, precision) {
     apiContractType,
     underlyingSymbol: String(planRaw?.underlyingSymbol || planRaw?.underlying_symbol || ""),
     payloadMode: String(planRaw?.payloadMode || ""),
+    barrierMode: String(planRaw?.barrierMode || ""),
+    apiBarrier: String(planRaw?.apiBarrier || ""),
     askPrice,
     payout,
     profitPct,
@@ -4559,8 +4561,36 @@ function getHighLowApiContractTypeCandidates(side) {
   const legacy = getHighLowLegacyApiContractType(side);
   return primary === legacy ? [primary] : [primary, legacy];
 }
-async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, allowLegacy = true, preferredUnderlyingSymbol = "") {
+const highLowProposalAttemptAudit = new Map();
+function getHighLowProposalAuditKey(symbol, side) {
+  return `${String(symbol || "").trim()}|${normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side) || String(side || "").toUpperCase()}`;
+}
+function saveHighLowProposalAttemptAudit(symbol, side, rows = []) {
+  try {
+    highLowProposalAttemptAudit.set(getHighLowProposalAuditKey(symbol, side), (rows || []).slice(-12));
+  } catch {}
+}
+function readHighLowProposalAttemptAudit(symbol, side) {
+  try { return [...(highLowProposalAttemptAudit.get(getHighLowProposalAuditKey(symbol, side)) || [])]; }
+  catch { return []; }
+}
+function getHighLowAbsoluteBarrierDecimals(spot) {
+  const text = String(spot ?? "");
+  const decimals = (text.split(".")[1] || "").length;
+  return Math.max(2, Math.min(8, decimals || 4));
+}
+function buildHighLowAbsoluteBarrier(relativeBarrier, spotHint) {
+  const parsed = parseRelativeBarrierString(relativeBarrier);
+  const spot = Number(spotHint);
+  if (!parsed || !Number.isFinite(spot) || spot <= 0) return "";
+  const absolute = spot + Number(parsed.barrierNum || 0);
+  if (!Number.isFinite(absolute) || absolute <= 0) return "";
+  return absolute.toFixed(getHighLowAbsoluteBarrierDecimals(spotHint));
+}
+
+async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, allowLegacy = true, preferredUnderlyingSymbol = "", spotHint = NaN) {
   const allErrors = [];
+  const auditRows = [];
   const safeSymbol = String(symbol || "").trim();
   const safeSide = normalizeSignalConfirmationSide(side) || normalizeTradeDirection(side) || "CALL";
   const primaryType = getHighLowPrimaryApiContractType(safeSide);
@@ -4575,42 +4605,108 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
 
     const attempts = [];
     if (isNewPatApiMode()) {
-      const symbolCandidates = uniqList([
-        String(preferredUnderlyingSymbol || "").trim(),
-        ...getNewApiUnderlyingSymbolCandidates(safeSymbol),
-      ]);
-
-      // V113.7 — API nueva:
-      // HIGHER/LOWER sin `barrier` devuelve correctamente la barrera automática.
-      // Para una barrera elegida por la PWA, algunas cuentas rechazan
-      // HIGHER/LOWER + barrier con “Single barrier input is expected”.
-      // En esas cuentas el contrato configurable se solicita como CALL/PUT + barrier;
-      // Deriv lo describe y compra igualmente como Higher/Lower.
+      // V113.8: nunca cambia R_75 por 1HZ75V (ni otro índice) al preparar una operación.
+      // La proposal debe pertenecer exactamente al mismo símbolo que generó la señal.
+      const symbolCandidates = uniqList([safeSymbol]);
       const legacyType = getHighLowLegacyApiContractType(safeSide);
-      const apiTypes = safeBarrier && allowLegacy
-        ? uniqList([legacyType, primaryType])
-        : [primaryType];
+      const absoluteBarrier = safeBarrier ? buildHighLowAbsoluteBarrier(safeBarrier, spotHint) : "";
 
-      for (const apiContractType of apiTypes) {
-        for (const underlyingSymbol of symbolCandidates) {
-          const req = {
+      for (const underlyingSymbol of symbolCandidates) {
+        if (!safeBarrier) {
+          attempts.push({
+            req: {
+              proposal: 1,
+              amount: Number(stake),
+              basis: "stake",
+              contract_type: primaryType,
+              currency: DEFAULT_CURRENCY,
+              duration: Number(DEFAULT_DURATION) || 1,
+              duration_unit: DEFAULT_DURATION_UNIT || "m",
+              underlying_symbol: underlyingSymbol,
+            },
+            apiContractType: primaryType,
+            underlyingSymbol,
+            payloadMode: "new_underlying_symbol_default_barrier",
+            barrierMode: "default",
+          });
+          continue;
+        }
+
+        // La API nueva documenta barreras relativas y, para índices sintéticos,
+        // también absolutas. Probamos ambas con el contrato Higher/Lower real.
+        if (absoluteBarrier) {
+          attempts.push({
+            req: {
+              proposal: 1,
+              amount: Number(stake),
+              basis: "stake",
+              contract_type: primaryType,
+              currency: DEFAULT_CURRENCY,
+              duration: Number(DEFAULT_DURATION) || 1,
+              duration_unit: DEFAULT_DURATION_UNIT || "m",
+              underlying_symbol: underlyingSymbol,
+              barrier: absoluteBarrier,
+            },
+            apiContractType: primaryType,
+            underlyingSymbol,
+            payloadMode: "new_underlying_symbol_highlow_absolute_barrier",
+            barrierMode: "absolute",
+          });
+        }
+        attempts.push({
+          req: {
             proposal: 1,
             amount: Number(stake),
             basis: "stake",
-            contract_type: apiContractType,
+            contract_type: primaryType,
             currency: DEFAULT_CURRENCY,
             duration: Number(DEFAULT_DURATION) || 1,
             duration_unit: DEFAULT_DURATION_UNIT || "m",
             underlying_symbol: underlyingSymbol,
-          };
-          if (safeBarrier) req.barrier = safeBarrier;
+            barrier: safeBarrier,
+          },
+          apiContractType: primaryType,
+          underlyingSymbol,
+          payloadMode: "new_underlying_symbol_highlow_relative_barrier",
+          barrierMode: "relative",
+        });
+
+        if (allowLegacy) {
+          if (absoluteBarrier) {
+            attempts.push({
+              req: {
+                proposal: 1,
+                amount: Number(stake),
+                basis: "stake",
+                contract_type: legacyType,
+                currency: DEFAULT_CURRENCY,
+                duration: Number(DEFAULT_DURATION) || 1,
+                duration_unit: DEFAULT_DURATION_UNIT || "m",
+                underlying_symbol: underlyingSymbol,
+                barrier: absoluteBarrier,
+              },
+              apiContractType: legacyType,
+              underlyingSymbol,
+              payloadMode: "new_underlying_symbol_callput_absolute_barrier",
+              barrierMode: "absolute",
+            });
+          }
           attempts.push({
-            req,
-            apiContractType,
+            req: {
+              proposal: 1,
+              amount: Number(stake),
+              basis: "stake",
+              contract_type: legacyType,
+              currency: DEFAULT_CURRENCY,
+              duration: Number(DEFAULT_DURATION) || 1,
+              duration_unit: DEFAULT_DURATION_UNIT || "m",
+              underlying_symbol: underlyingSymbol,
+              barrier: safeBarrier,
+            },
+            apiContractType: legacyType,
             underlyingSymbol,
-            payloadMode: safeBarrier && apiContractType === legacyType
-              ? "new_underlying_symbol_callput_barrier"
-              : "new_underlying_symbol",
+            payloadMode: "new_underlying_symbol_callput_relative_barrier",
+            barrierMode: "relative",
           });
         }
       }
@@ -4628,45 +4724,87 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
           symbol: safeSymbol,
         };
         if (safeBarrier) req.barrier = safeBarrier;
-        attempts.push({ req, apiContractType, underlyingSymbol: safeSymbol, payloadMode: "legacy_symbol" });
+        attempts.push({ req, apiContractType, underlyingSymbol: safeSymbol, payloadMode: "legacy_symbol", barrierMode: safeBarrier ? "relative" : "default" });
       }
     }
 
     let retryWithPrecision = null;
     const roundErrors = [];
     for (const attempt of attempts) {
-      const { req, apiContractType, underlyingSymbol, payloadMode } = attempt;
+      const { req, apiContractType, underlyingSymbol, payloadMode, barrierMode } = attempt;
+      const auditBase = {
+        at: Date.now(),
+        payload_mode: payloadMode,
+        barrier_mode: barrierMode,
+        contract_type: apiContractType,
+        underlying_symbol: underlyingSymbol,
+        sent_barrier: String(req.barrier || ""),
+        relative_candidate: String(safeBarrier || ""),
+      };
       try {
         window.DerivDebug?.log?.("HIGHLOW_PROPOSAL_ATTEMPT", {
           payloadMode,
+          barrierMode,
           apiContractType,
           underlyingSymbol,
-          barrier: String(safeBarrier || "default"),
-          barrierPrecision: safeBarrier ? parseRelativeBarrierString(safeBarrier)?.precision : null,
+          barrier: String(req.barrier || "default"),
+          relativeCandidate: String(safeBarrier || ""),
         });
         const res = await wsRequest(req, timeoutMs);
-        if (res?.proposal?.id) {
+        const proposal = res?.proposal || null;
+        const proposalId = proposal?.id ? String(proposal.id) : "";
+        const askPrice = Number(proposal?.ask_price);
+        const payout = Number(proposal?.payout);
+        const complete = !!proposalId && Number.isFinite(askPrice) && askPrice > 0 && Number.isFinite(payout) && payout > 0;
+        const longcodeText = String(proposal?.longcode || "").toLowerCase();
+        const proposalHasBarrierField = proposal?.barrier !== undefined || proposal?.barrier_display_value !== undefined || proposal?.contract_details?.barrier !== undefined;
+        const sentBarrierText = String(req.barrier || "").replace(/^\+/, "");
+        const legacyBarrierProven = apiContractType === getHighLowLegacyApiContractType(safeSide) && !!safeBarrier
+          ? (proposalHasBarrierField || /\bplus\b|\bminus\b|\bbarrier\b/.test(longcodeText) || (!!sentBarrierText && longcodeText.includes(sentBarrierText)))
+          : true;
+
+        if (proposalId && complete && legacyBarrierProven) {
           const parsedBarrier = safeBarrier ? parseRelativeBarrierString(safeBarrier) : null;
-          if (parsedBarrier) rememberHighLowBarrierMaxDecimals(safeSymbol, parsedBarrier.precision);
+          if (parsedBarrier && barrierMode === "relative") rememberHighLowBarrierMaxDecimals(safeSymbol, parsedBarrier.precision);
+          auditRows.push({ ...auditBase, status: "ok", proposal_id: proposalId, ask_price: askPrice, payout });
+          saveHighLowProposalAttemptAudit(safeSymbol, safeSide, auditRows);
           window.DerivDebug?.log?.("HIGHLOW_PROPOSAL_OK", {
             payloadMode,
+            barrierMode,
             apiContractType,
             underlyingSymbol,
-            proposal_id: String(res.proposal.id),
-            barrier: safeBarrier || "default",
+            proposal_id: proposalId,
+            barrier: req.barrier || "default",
           });
           return {
             res,
             apiContractType,
             underlyingSymbol,
             payloadMode,
+            barrierMode,
             barrier: safeBarrier,
+            apiBarrier: String(req.barrier || ""),
             barrierPrecision: parsedBarrier?.precision ?? 0,
           };
         }
+
+        // V113.7 devolvía inmediatamente una proposal con solo ID. La API nueva
+        // solo garantiza el ID, por lo que eso cortaba los fallbacks sin precio/payout.
+        // CALL/PUT tampoco se acepta como Higher/Lower si la respuesta no demuestra
+        // que Deriv aplicó realmente la barrera: así nunca se compra Rise/Fall por error.
+        if (proposalId) {
+          const msg = !complete
+            ? `${apiContractType}/${underlyingSymbol}: proposal incompleta (sin ask_price/payout)`
+            : `${apiContractType}/${underlyingSymbol}: proposal descartada porque no confirma la barrera Higher/Lower`;
+          roundErrors.push(msg);
+          auditRows.push({ ...auditBase, status: !complete ? "incomplete" : "unsafe_contract", proposal_id: proposalId, ask_price: Number.isFinite(askPrice) ? askPrice : null, payout: Number.isFinite(payout) ? payout : null, longcode: String(proposal?.longcode || ""), error: msg });
+          continue;
+        }
+
         const msg = res?.error?.message || `${apiContractType}/${underlyingSymbol}: proposal vacía`;
         roundErrors.push(`${apiContractType}/${underlyingSymbol}: ${msg}`);
-        const limit = parseHighLowBarrierDecimalLimit(msg);
+        auditRows.push({ ...auditBase, status: "error", error: String(msg) });
+        const limit = barrierMode === "relative" ? parseHighLowBarrierDecimalLimit(msg) : null;
         if (safeBarrier && limit !== null) {
           retryWithPrecision = limit >= 0 ? Math.min(activePrecision - 1, limit) : activePrecision - 1;
           break;
@@ -4678,7 +4816,8 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
       } catch (e) {
         const msg = e?.message || String(e || `${apiContractType}: error proposal`);
         roundErrors.push(`${apiContractType}/${underlyingSymbol}: ${msg}`);
-        const limit = parseHighLowBarrierDecimalLimit(msg);
+        auditRows.push({ ...auditBase, status: "error", error: String(msg) });
+        const limit = barrierMode === "relative" ? parseHighLowBarrierDecimalLimit(msg) : null;
         if (safeBarrier && limit !== null) {
           retryWithPrecision = limit >= 0 ? Math.min(activePrecision - 1, limit) : activePrecision - 1;
           break;
@@ -4690,6 +4829,7 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
       }
     }
 
+    saveHighLowProposalAttemptAudit(safeSymbol, safeSide, auditRows);
     allErrors.push(...roundErrors);
     if (safeBarrier && Number.isFinite(Number(retryWithPrecision)) && retryWithPrecision >= 0 && retryWithPrecision < activePrecision && precisionRetries < HIGHLOW_API_MAX_BARRIER_DECIMALS) {
       rememberHighLowBarrierMaxDecimals(safeSymbol, retryWithPrecision);
@@ -4703,7 +4843,7 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
       precisionRetries += 1;
       continue;
     }
-    throw new Error(allErrors.filter(Boolean).join(" | ") || "Deriv no devolvió proposal Higher/Lower");
+    throw new Error(allErrors.filter(Boolean).join(" | ") || "Deriv no devolvió proposal Higher/Lower completa");
   }
 }
 
@@ -4722,13 +4862,13 @@ async function getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs = A
   }
   return isHighLowPlanWithinPayoutCap(plan) ? plan : null;
 }
-async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, preferredUnderlyingSymbol = "") {
+async function getHighLowProposalQuote(symbol, side, barrierCandidate, precisionIgnored, stake, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS, preferredUnderlyingSymbol = "", spotHint = NaN) {
   const candidate = typeof barrierCandidate === "object" && barrierCandidate
     ? barrierCandidate
     : makeBarrierCandidateFromAbsolute(side, Math.abs(Number(barrierCandidate || 0)));
   if (!candidate?.barrier) return null;
   const normalizedBarrier = normalizeHighLowBarrierForApi(candidate.barrier, side, symbol);
-  const raw = await requestHighLowProposalRaw(symbol, side, stake, normalizedBarrier, timeoutMs, true, preferredUnderlyingSymbol);
+  const raw = await requestHighLowProposalRaw(symbol, side, stake, normalizedBarrier, timeoutMs, true, preferredUnderlyingSymbol, spotHint);
   const effectiveBarrier = String(raw?.barrier || normalizedBarrier);
   const normalizedParsed = parseRelativeBarrierString(effectiveBarrier);
   const plan = parseProposalToExecution({
@@ -4739,6 +4879,8 @@ async function getHighLowProposalQuote(symbol, side, barrierCandidate, precision
     apiContractType: raw?.apiContractType,
     underlyingSymbol: raw?.underlyingSymbol,
     payloadMode: raw?.payloadMode,
+    barrierMode: raw?.barrierMode,
+    apiBarrier: raw?.apiBarrier,
   }, side, normalizedParsed?.precision ?? candidate.precision);
   return isHighLowPlanWithinPayoutCap(plan) ? plan : null;
 }
@@ -4792,7 +4934,7 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
       : candidate;
     quotesUsed++;
     try {
-      const plan = await getHighLowProposalQuote(symbol, side, effectiveCandidate, effectiveCandidate.precision, stake, timeoutMs);
+      const plan = await getHighLowProposalQuote(symbol, side, effectiveCandidate, effectiveCandidate.precision, stake, timeoutMs, "", getLatestSignalQuoteForBarrier(item));
       return remember(plan, effectiveCandidate);
     } catch (e) {
       const msg = e?.message || String(e || "");
@@ -4900,7 +5042,8 @@ async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPla
     candidate.precision,
     stake,
     timeoutMs,
-    String(barrierPlan?.underlyingSymbol || "")
+    String(barrierPlan?.underlyingSymbol || ""),
+    Number(lastQuoteBySymbol?.[symbol]) || getLatestSignalQuoteForBarrier({ symbol })
   );
   if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
     throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
@@ -5017,6 +5160,7 @@ function getHighLowEntryDiagnostics(item, side) {
     precalc_attempts: Number(cache?.precalcAttempts || 0),
     accepted_plan: summarize(plan),
     best_candidate: summarize(candidate),
+    recent_proposal_attempts: readHighLowProposalAttemptAudit(item?.symbol, side),
     cache_error: String(cache?.error || ""),
   };
 }
@@ -5151,7 +5295,7 @@ async function findBestHighLowPlan(item, side, opts = {}) {
   for (const candidate of candidates) {
     if (isHighLowProposalCooldownActive()) return null;
     try {
-      const plan = await getHighLowProposalQuote(symbol, side, candidate, candidate?.precision || 0, stake, timeoutMs);
+      const plan = await getHighLowProposalQuote(symbol, side, candidate, candidate?.precision || 0, stake, timeoutMs, "", getLatestSignalQuoteForBarrier(item));
       if (plan) {
         if (candidate.fixedBarrier) {
           plan.fixedBarrier = true;
@@ -5202,7 +5346,7 @@ async function findMirroredHighLowPlan(item, side, referencePlan, opts = {}) {
   const stake = Number(opts.stake || getEffectiveTradeStake());
   const timeoutMs = opts.fast ? AUTO_FAST_PROPOSAL_TIMEOUT_MS : AUTO_FULL_PROPOSAL_TIMEOUT_MS;
   try {
-    const plan = await getHighLowProposalQuote(item.symbol, wanted, candidate, precision, stake, timeoutMs);
+    const plan = await getHighLowProposalQuote(item.symbol, wanted, candidate, precision, stake, timeoutMs, "", getLatestSignalQuoteForBarrier(item));
     if (plan) {
       plan.mirroredBarrier = true;
       plan.mirroredFrom = wanted === "CALL" ? "PUT" : "CALL";

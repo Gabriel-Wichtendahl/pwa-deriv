@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.7 (fix API nueva CALL/PUT + barrier) */
+/* sw.js — Deriv Signals v113.8 (fix barrera relativa/absoluta + proposal completa) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-7-fix-custom-barrier-new-api";
+const CACHE = "deriv-assets-v113-8-fix-relative-absolute-barrier";
 
 const CORE_ASSETS = [
   "./",
