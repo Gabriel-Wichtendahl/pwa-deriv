@@ -1,4 +1,4 @@
-// v113.5: corrige AUTO Higher/Lower cuando los puntos eligen el lado opuesto: prioriza y serializa la barrera elegida, recupera planes persistidos y agrega espejo rápido de último recurso.
+// v113.6: corrige AUTO Higher/Lower cuando no terminó la búsqueda de barrera antes del segundo 58. Reduce proposals, prepara un solo lado, conserva el mejor candidato y usa semilla/hint con ajuste rápido al entrar.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
@@ -103,8 +103,9 @@
 // ✅ V64: AUTO 58 con timing de próxima vela: intenta date_start+date_expiry y fallback date_expiry para cerrar en el segundo 60
 // ✅ V65: AUTO post-tick 58 → cierre 60: no compra hasta recibir el tick >=58s y cancela si llega tarde.
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
-
 "use strict";
+
+const APP_BUILD_VERSION = "v113.6";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -231,9 +232,10 @@ const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 130;
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
 const HIGHLOW_TARGET_ACCEPT_MIN_PCT = 125;
 const HIGHLOW_TARGET_ACCEPT_MAX_PCT = 135;
-const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 14;
-const AUTO_PRECALC_REFRESH_MS = 8000;
+const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 4;
+const AUTO_PRECALC_REFRESH_MS = 10000;
 const AUTO_PRECALC_STALE_MS = 120000;
+const HIGHLOW_PRECALC_MAX_ATTEMPTS = 1;
 const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v8_target130_dual_125_135";
 const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v1";
 const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
@@ -4852,7 +4854,17 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     .sort((a, b) => getHighLowTargetDistance(a) - getHighLowTargetDistance(b))[0] || null;
   if (acceptable && Number.isFinite(Number(acceptable.barrierNum)) && Math.abs(Number(acceptable.barrierNum)) > 0) {
     rememberExecutionBarrierHint(symbol, side, acceptable, acceptable.precision || 0);
+    acceptable.searchAcceptable = true;
     return acceptable;
+  }
+
+  // V113.6: aunque todavía no haya quedado entre 125–135%, conservamos la
+  // mejor barrera cotizada. Sirve como punto de partida para un ajuste rápido
+  // al segundo 58 y evita terminar con "no hay barrera preparada".
+  if (best && makeHighLowCandidateFromPlan(best, side)) {
+    best.searchAcceptable = false;
+    best.source = best.source || "signal_best_candidate_outside_range";
+    return best;
   }
   return null;
 }
@@ -4880,101 +4892,198 @@ async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPla
   return plan;
 }
 
+
+function getHighLowProvisionalBarrierPlan(item, side) {
+  const symbol = String(item?.symbol || "");
+  const cache = item?.id ? executionPlanCache.get(String(item.id)) : null;
+  const candidateFromCache = side === "CALL" ? cache?.callCandidate : cache?.putCandidate;
+  if (candidateFromCache && makeHighLowCandidateFromPlan(candidateFromCache, side)) {
+    return { ...candidateFromCache, source: candidateFromCache.source || "entry_best_candidate" };
+  }
+
+  const persistedCandidate = side === "CALL" ? item?.autoHighLow?.callCandidate : item?.autoHighLow?.putCandidate;
+  if (persistedCandidate && makeHighLowCandidateFromPlan(persistedCandidate, side)) {
+    return { ...persistedCandidate, source: persistedCandidate.source || "entry_persisted_candidate" };
+  }
+
+  const hint = getExecutionBarrierHint(symbol, side);
+  if (hint && Number.isFinite(Number(hint.barrierAbs)) && Number(hint.barrierAbs) > 0) {
+    const c = makeBarrierCandidateFromAbsolute(side, Math.abs(Number(hint.barrierAbs)), Number(hint.precision || 0));
+    if (c?.barrier) {
+      return {
+        ...c,
+        payoutTotalPct: Number(hint.payoutTotalPct || 0),
+        source: "entry_cached_barrier_hint",
+        targetSearch: true,
+        targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+      };
+    }
+  }
+
+  // La semilla por símbolo se usa aunque todavía no tenga payout guardado.
+  // Antes la PWA la descartaba y cancelaba sin hacer ni una proposal al segundo 58.
+  const fixed = makeHighLowFixedBarrierCandidate(symbol, side);
+  if (fixed?.barrier) {
+    return {
+      ...fixed,
+      source: "entry_fixed_symbol_seed",
+      targetSearch: true,
+      targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+    };
+  }
+
+  const opposite = side === "CALL"
+    ? (cache?.put || cache?.putCandidate || item?.autoHighLow?.put || item?.autoHighLow?.putCandidate)
+    : (cache?.call || cache?.callCandidate || item?.autoHighLow?.call || item?.autoHighLow?.callCandidate);
+  const mirroredCandidate = makeHighLowCandidateFromPlan(opposite, side);
+  if (mirroredCandidate?.barrier) {
+    return {
+      ...mirroredCandidate,
+      source: "entry_mirrored_candidate",
+      targetSearch: true,
+      targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+    };
+  }
+  return null;
+}
+
+function adjustHighLowBarrierToward130(plan, side) {
+  const payoutPct = Number(plan?.payoutTotalPct);
+  const candidate = makeHighLowCandidateFromPlan(plan, side);
+  const abs = Math.abs(Number(candidate?.barrierNum || 0));
+  if (!Number.isFinite(payoutPct) || payoutPct <= 0 || !Number.isFinite(abs) || abs <= 0) return null;
+
+  let factor = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT / payoutPct;
+  if (payoutPct < HIGHLOW_TARGET_ACCEPT_MIN_PCT) {
+    // Payout bajo: alejamos la barrera para subir el pago.
+    factor = Math.max(1.08, Math.min(1.80, factor));
+  } else if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
+    // Payout alto: acercamos la barrera para bajar el pago.
+    factor = Math.min(0.92, Math.max(0.50, factor));
+  } else {
+    return null;
+  }
+
+  const next = makeBarrierCandidateFromAbsolute(side, abs * factor, getBarrierPrecisionForAbs(abs * factor));
+  if (!next?.barrier || next.barrier === candidate.barrier) return null;
+  return {
+    ...next,
+    source: "entry_adaptive_retry_130",
+    targetSearch: true,
+    targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+    adjustedFromBarrier: candidate.barrier,
+    adjustedFromPayoutTotalPct: payoutPct,
+  };
+}
+
+function getHighLowEntryDiagnostics(item, side) {
+  const cache = item?.id ? executionPlanCache.get(String(item.id)) : null;
+  const plan = side === "CALL" ? cache?.call : cache?.put;
+  const candidate = side === "CALL" ? cache?.callCandidate : cache?.putCandidate;
+  const summarize = (x) => x ? {
+    barrier: String(x.barrier || ""),
+    payout_total_pct: Number.isFinite(Number(x.payoutTotalPct)) ? Number(x.payoutTotalPct) : null,
+    source: String(x.source || ""),
+    acceptable: isHighLowPlanAcceptable(x),
+    updated_at: Number(x.updatedAt || 0) || null,
+  } : null;
+  return {
+    app_version: APP_BUILD_VERSION,
+    side: normalizeSignalConfirmationSide(side) || "",
+    cooldown_active: isHighLowProposalCooldownActive(),
+    cooldown_remaining_ms: Math.round(highLowCooldownRemainingMs()),
+    search_running: !!cache?.running,
+    precalc_attempts: Number(cache?.precalcAttempts || 0),
+    accepted_plan: summarize(plan),
+    best_candidate: summarize(candidate),
+    cache_error: String(cache?.error || ""),
+  };
+}
+
 async function buyFreshHighLowLikeWindows(item, side, stake) {
   const symbol = String(item?.symbol || "");
   let lastError = null;
   let prepared = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 3);
   if (!isHighLowPlanAcceptable(prepared)) prepared = null;
 
-  // V113.5: recupera también el plan persistido dentro de la señal.
+  // Recupera un plan aceptado persistido dentro de la señal.
   if (!prepared) {
     const persisted = side === "CALL" ? item?.autoHighLow?.call : item?.autoHighLow?.put;
     if (isHighLowPlanAcceptable(persisted)) prepared = { ...persisted, source: persisted.source || "entry_persisted_130_plan" };
   }
 
-  // V113.5: último recurso rápido. Si quedó preparada la dirección de la señal pero
-  // los puntos habilitaron el lado opuesto, espejamos esa barrera y hacemos una sola
-  // consulta fresca antes de cancelar.
-  if (!prepared && !isHighLowProposalCooldownActive()) {
-    const mirrorRef = getHighLowMirrorReferencePlan(item, side);
-    if (mirrorRef) {
-      const mirrored = await findMirroredHighLowPlan(item, side, mirrorRef, { fast: true, stake });
-      if (isHighLowPlanAcceptable(mirrored)) {
-        prepared = mirrored;
+  // V113.6: si la búsqueda todavía no terminó, no cancelamos. Usamos el mejor
+  // candidato, un hint previo o la semilla fija del símbolo y cotizamos al instante.
+  if (!prepared) prepared = getHighLowProvisionalBarrierPlan(item, side);
+
+  if (!prepared || !makeHighLowCandidateFromPlan(prepared, side)) {
+    const cooldownTxt = isHighLowProposalCooldownActive()
+      ? ` · cooldown proposals ${Math.ceil(highLowCooldownRemainingMs() / 1000)}s`
+      : "";
+    throw new Error(`AUTO ${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: no existe ni barrera candidata para ${symbol}${cooldownTxt}.`);
+  }
+
+  let closestQuoted = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const plan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, prepared, 4500);
+      if (plan && (!closestQuoted || getHighLowTargetDistance(plan) < getHighLowTargetDistance(closestQuoted))) {
+        closestQuoted = plan;
+      }
+
+      if (plan && isHighLowPlanAcceptable(plan)) {
         const cache = getOrCreateExecutionPlan(item);
         if (cache) {
-          if (side === "CALL") cache.call = mirrored;
-          else cache.put = mirrored;
+          if (side === "CALL") cache.call = plan;
+          else cache.put = plan;
           cache.updatedAt = Date.now();
         }
         item.autoHighLow ||= {};
-        item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...mirrored };
+        item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...plan };
         item.autoHighLow.updatedAt = Date.now();
         try { saveHistory(history); } catch {}
+
+        const entryMsNow = getSignalConfirmationMs(item);
+        if (entryMsNow > SIGNAL_AUTO_POST58_MAX_MS) {
+          throw new Error(`AUTO ${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: la cotización terminó tarde (${(entryMsNow / 1000).toFixed(2)}s).`);
+        }
+        const buyPayload = {
+          buy: String(plan.proposalId),
+          price: Number(plan.askPrice),
+        };
+        window.DerivDebug?.log?.("HIGHLOW_BUY_ATTEMPT", {
+          proposal_id: buyPayload.buy,
+          price: buyPayload.price,
+          apiContractType: plan.apiContractType,
+          underlyingSymbol: plan.underlyingSymbol || symbol,
+          barrier: plan.barrier,
+          payoutTotalPct: plan.payoutTotalPct,
+          attempt,
+          preparedSource: prepared?.source || "",
+        });
+        const res = await wsRequest(buyPayload, 20000);
+        if (res?.buy?.contract_id) return { res, plan, attempt, preparedPlan: prepared };
+        lastError = new Error(res?.error?.message || "Deriv no confirmó la compra Higher/Lower");
+        continue;
       }
+
+      if (plan) {
+        lastError = new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: pago ${Number(plan.payoutTotalPct || 0).toFixed(1)}% fuera de ${getHighLowAcceptableRangeText()}.`);
+        const adjusted = attempt < 2 ? adjustHighLowBarrierToward130(plan, side) : null;
+        if (adjusted) {
+          prepared = adjusted;
+          continue;
+        }
+      }
+      break;
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e || "Higher/Lower error"));
+      break;
     }
   }
 
-  // La búsqueda completa de 130% debe hacerse cuando nace la señal para AMBOS lados.
-  // Si por algún motivo no quedó en memoria, usamos primero el último hint válido o
-  // la barrera base del par y hacemos una sola proposal fresca para no entrar tarde.
-  if (!prepared) {
-    const hint = getExecutionBarrierHint(symbol, side);
-    if (hint && Number(hint.payoutTotalPct) >= HIGHLOW_TARGET_ACCEPT_MIN_PCT && Number(hint.payoutTotalPct) <= HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
-      const hintedCandidate = makeBarrierCandidateFromAbsolute(side, Math.abs(Number(hint.barrierAbs)), Number(hint.precision || 0));
-      if (hintedCandidate?.barrier) {
-        prepared = {
-          barrier: hintedCandidate.barrier,
-          barrierNum: hintedCandidate.barrierNum,
-          precision: hintedCandidate.precision,
-          payoutTotalPct: Number(hint.payoutTotalPct),
-          source: "entry_cached_130_hint",
-          targetSearch: true,
-          targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
-        };
-      }
-    }
-  }
-  if (!prepared) {
-    throw new Error(`AUTO ${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: no hay barrera preparada dentro de ${getHighLowAcceptableRangeText()}.`);
-  }
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      let plan = null;
-      const usableBarrier = makeHighLowCandidateFromPlan(prepared, side);
-      if (usableBarrier) {
-        try {
-          plan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, prepared, 12000);
-        } catch (e) {
-          lastError = e instanceof Error ? e : new Error(String(e || "Higher/Lower barrera error"));
-        }
-      }
-      if (plan && !isHighLowPlanAcceptable(plan)) {
-        lastError = new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: pago ${Number(plan.payoutTotalPct || 0).toFixed(1)}% fuera de ${getHighLowAcceptableRangeText()}.`);
-        plan = null;
-      }
-      if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
-        throw lastError || new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
-      }
-      // BUY nunca debe recibir symbol/underlying_symbol: solo proposal_id y precio.
-      const buyPayload = {
-        buy: String(plan.proposalId),
-        price: Number(plan.askPrice),
-      };
-      window.DerivDebug?.log?.("HIGHLOW_BUY_ATTEMPT", {
-        proposal_id: buyPayload.buy,
-        price: buyPayload.price,
-        apiContractType: plan.apiContractType,
-        underlyingSymbol: plan.underlyingSymbol || symbol,
-        barrier: plan.barrier,
-        payoutTotalPct: plan.payoutTotalPct,
-      });
-      const res = await wsRequest(buyPayload, 20000);
-      if (res?.buy?.contract_id) return { res, plan, attempt, preparedPlan: prepared };
-      lastError = new Error(res?.error?.message || "Deriv no confirmó la compra Higher/Lower");
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e || "Higher/Lower error"));
-    }
+  if (closestQuoted) {
+    throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"} no comprado: la barrera más cercana dio ${Number(closestQuoted.payoutTotalPct || 0).toFixed(1)}% (objetivo ${getHighLowAcceptableRangeText()}).`);
   }
   throw lastError || new Error("No se pudo comprar Higher/Lower.");
 }
@@ -5159,6 +5268,9 @@ function getOrCreateExecutionPlan(item) {
       running: null,
       active: false,
       prioritySide: "",
+      callCandidate: savedCall ? { ...savedCall } : (item?.autoHighLow?.callCandidate ? { ...item.autoHighLow.callCandidate } : null),
+      putCandidate: savedPut ? { ...savedPut } : (item?.autoHighLow?.putCandidate ? { ...item.autoHighLow.putCandidate } : null),
+      precalcAttempts: 0,
     };
     executionPlanCache.set(item.id, cache);
   }
@@ -5224,9 +5336,10 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
       const wanted = normalizeSignalConfirmationSide(cache.prioritySide) || requested || enabledSide;
       cache.prioritySide = "";
 
-      // Con puntos ya orientados, se prepara primero y únicamente el lado que realmente
-      // se va a comprar. Sin puntos, conserva la preparación de ambos lados.
-      const sides = wanted ? [wanted] : [signalSide, signalSide === "CALL" ? "PUT" : "CALL"];
+      // V113.6: nunca buscamos ambos lados automáticamente. Sin puntos se prepara
+      // solo la dirección de la señal; desde el primer punto se prioriza ese lado.
+      // Esto evita 20–30 proposals por señal y el bloqueo de Deriv antes de 58s.
+      const sides = wanted ? [wanted] : [signalSide];
       const errors = [];
 
       for (const side of sides) {
@@ -5246,9 +5359,18 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
           });
         }
 
-        if (side === "CALL") cache.call = isHighLowPlanAcceptable(plan) ? plan : null;
-        else cache.put = isHighLowPlanAcceptable(plan) ? plan : null;
-        if (!plan) errors.push(`${side === "CALL" ? "HIGHER" : "LOWER"} sin barrera ${getHighLowAcceptableRangeText()}`);
+        const usableCandidate = plan && makeHighLowCandidateFromPlan(plan, side) ? plan : null;
+        if (side === "CALL") {
+          cache.callCandidate = usableCandidate || cache.callCandidate || null;
+          cache.call = isHighLowPlanAcceptable(plan) ? plan : null;
+        } else {
+          cache.putCandidate = usableCandidate || cache.putCandidate || null;
+          cache.put = isHighLowPlanAcceptable(plan) ? plan : null;
+        }
+        if (!isHighLowPlanAcceptable(plan)) {
+          const pctTxt = Number.isFinite(Number(plan?.payoutTotalPct)) ? ` (mejor ${Number(plan.payoutTotalPct).toFixed(1)}%)` : "";
+          errors.push(`${side === "CALL" ? "HIGHER" : "LOWER"} sin barrera ${getHighLowAcceptableRangeText()}${pctTxt}`);
+        }
       }
 
       cache.updatedAt = Date.now();
@@ -5256,6 +5378,8 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
       item.autoHighLow ||= {};
       item.autoHighLow.call = cache.call ? { ...cache.call } : null;
       item.autoHighLow.put = cache.put ? { ...cache.put } : null;
+      item.autoHighLow.callCandidate = cache.callCandidate ? { ...cache.callCandidate } : null;
+      item.autoHighLow.putCandidate = cache.putCandidate ? { ...cache.putCandidate } : null;
       item.autoHighLow.updatedAt = cache.updatedAt;
       item.autoHighLow.targetPayoutTotalPct = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
       item.autoHighLow.acceptableRange = getHighLowAcceptableRangeText();
@@ -5273,7 +5397,8 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
       const queuedSide = normalizeSignalConfirmationSide(cache.prioritySide);
       if (queuedSide) {
         const queuedPlan = queuedSide === "CALL" ? cache.call : cache.put;
-        if (!isHighLowPlanAcceptable(queuedPlan) && isTradeEntryOpen(item) && !item?.trade?.badge && !item?.signalAutoEntry?.attempted) {
+        const queuedCandidate = queuedSide === "CALL" ? cache.callCandidate : cache.putCandidate;
+        if (!isHighLowPlanAcceptable(queuedPlan) && !makeHighLowCandidateFromPlan(queuedCandidate, queuedSide) && isTradeEntryOpen(item) && !item?.trade?.badge && !item?.signalAutoEntry?.attempted) {
           const retryDelay = isHighLowProposalCooldownActive()
             ? Math.max(250, highLowCooldownRemainingMs() + 120)
             : 0;
@@ -5306,26 +5431,27 @@ function ensureSignalAutoPrecalc(item) {
       stopExecutionPlanLoop(item.id);
       return;
     }
-    const callReady = isHighLowPlanAcceptable(cache.call) && !!cache.call?.proposalId;
-    const putReady = isHighLowPlanAcceptable(cache.put) && !!cache.put?.proposalId;
-    if (callReady && putReady) {
+
+    const desiredSide = normalizeSignalConfirmationSide(getSignalEnabledTradeSide(currentItem))
+      || (String(currentItem.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL");
+    const desiredPlan = desiredSide === "CALL" ? cache.call : cache.put;
+    if (isHighLowPlanAcceptable(desiredPlan)) {
       stopExecutionPlanLoop(item.id);
       return;
     }
-    // V113.5: cuando ya hay una orientación manual, esa barrera tiene prioridad.
-    await refreshExecutionPlanForSignal(currentItem, true, getSignalEnabledTradeSide(currentItem) || "");
-    if (!cache.active) return;
-    const callAfter = isHighLowPlanAcceptable(cache.call) && !!cache.call?.proposalId;
-    const putAfter = isHighLowPlanAcceptable(cache.put) && !!cache.put?.proposalId;
-    if (callAfter && putAfter) {
+
+    if (Number(cache.precalcAttempts || 0) >= HIGHLOW_PRECALC_MAX_ATTEMPTS) {
       stopExecutionPlanLoop(item.id);
       return;
     }
-    cache.timer = setTimeout(loop, AUTO_PRECALC_REFRESH_MS);
+    cache.precalcAttempts = Number(cache.precalcAttempts || 0) + 1;
+    await refreshExecutionPlanForSignal(currentItem, true, desiredSide);
+    stopExecutionPlanLoop(item.id);
   };
 
   void loop();
 }
+
 function getCachedExecutionPlan(item, side, maxAgeMs = AUTO_PRECALC_STALE_MS) {
   if (!item?.id) return null;
   const cache = executionPlanCache.get(item.id);
@@ -9972,6 +10098,7 @@ function buildExportPayloadVoted() {
       nextOutcome: it.nextOutcome || "",
       trade: it.trade || null,
       signalAutoEntry: it.signalAutoEntry || null,
+      autoHighLow: it.autoHighLow || null,
       giroPolaridad: getSignalLevelMeta(it),
       snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
@@ -10045,6 +10172,7 @@ function buildExportPayloadTrades() {
   const aprendizajeStats = getGiroAprendizajeStats();
   return {
     exported_at: new Date().toISOString(),
+    app_version: APP_BUILD_VERSION,
     export_scope: "trades_feedback_practice_clear_and_giro_aprendizaje",
     count_trades_total: (journalForExport || []).length,
     count_marked_trades: markedTrades.length,
@@ -10070,6 +10198,7 @@ function buildExportPayloadTrades() {
       minuteComplete: !!it.minuteComplete,
       trade: it.trade || null,
       signalAutoEntry: it.signalAutoEntry || null,
+      autoHighLow: it.autoHighLow || null,
       giroPolaridad: getSignalLevelMeta(it),
       snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
@@ -12677,6 +12806,8 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
     confirmation_status: getSignalConfirmationStatusText(item),
     snr_entry_gate: gate,
     post58_readiness: post58,
+    app_version: APP_BUILD_VERSION,
+    highlow_prepare_debug: shouldUseAutoHighLowExecution() ? getHighLowEntryDiagnostics(item, side) : null,
   };
   saveHistory(history);
   if (modalCurrentItem && modalCurrentItem.id === item.id) updateSignalConfirmationUI();
@@ -12699,6 +12830,7 @@ function trySignalAutoEntryAt57(reason = "AUTO_58", itemOverride = null) {
       item.signalAutoEntry.status = "error";
       item.signalAutoEntry.error = e?.message || String(e);
       item.signalAutoEntry.error_at = Date.now();
+      if (shouldUseAutoHighLowExecution()) item.signalAutoEntry.highlow_prepare_debug_after = getHighLowEntryDiagnostics(item, side);
       saveHistory(history);
       toast(`⚠️ AUTO ${label} falló: ${e?.message || e}`, 2600);
     })
