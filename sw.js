@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.6 (fix barrera no preparada + cooldown 45s) */
+/* sw.js — Deriv Signals v113.7 (fix API nueva CALL/PUT + barrier) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-6-fix-barrera-no-preparada";
+const CACHE = "deriv-assets-v113-7-fix-custom-barrier-new-api";
 
 const CORE_ASSETS = [
   "./",

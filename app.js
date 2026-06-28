@@ -1,4 +1,4 @@
-// v113.6: corrige AUTO Higher/Lower cuando no terminó la búsqueda de barrera antes del segundo 58. Reduce proposals, prepara un solo lado, conserva el mejor candidato y usa semilla/hint con ajuste rápido al entrar.
+// v113.7: corrige las proposals con barrera personalizada en la API nueva. En modo PAT prueba CALL/PUT con barrier antes de HIGHER/LOWER, evitando “Single barrier input is expected”.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
@@ -105,7 +105,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.6";
+const APP_BUILD_VERSION = "v113.7";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -4579,19 +4579,40 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
         String(preferredUnderlyingSymbol || "").trim(),
         ...getNewApiUnderlyingSymbolCandidates(safeSymbol),
       ]);
-      for (const underlyingSymbol of symbolCandidates) {
-        const req = {
-          proposal: 1,
-          amount: Number(stake),
-          basis: "stake",
-          contract_type: primaryType,
-          currency: DEFAULT_CURRENCY,
-          duration: Number(DEFAULT_DURATION) || 1,
-          duration_unit: DEFAULT_DURATION_UNIT || "m",
-          underlying_symbol: underlyingSymbol,
-        };
-        if (safeBarrier) req.barrier = safeBarrier;
-        attempts.push({ req, apiContractType: primaryType, underlyingSymbol, payloadMode: "new_underlying_symbol" });
+
+      // V113.7 — API nueva:
+      // HIGHER/LOWER sin `barrier` devuelve correctamente la barrera automática.
+      // Para una barrera elegida por la PWA, algunas cuentas rechazan
+      // HIGHER/LOWER + barrier con “Single barrier input is expected”.
+      // En esas cuentas el contrato configurable se solicita como CALL/PUT + barrier;
+      // Deriv lo describe y compra igualmente como Higher/Lower.
+      const legacyType = getHighLowLegacyApiContractType(safeSide);
+      const apiTypes = safeBarrier && allowLegacy
+        ? uniqList([legacyType, primaryType])
+        : [primaryType];
+
+      for (const apiContractType of apiTypes) {
+        for (const underlyingSymbol of symbolCandidates) {
+          const req = {
+            proposal: 1,
+            amount: Number(stake),
+            basis: "stake",
+            contract_type: apiContractType,
+            currency: DEFAULT_CURRENCY,
+            duration: Number(DEFAULT_DURATION) || 1,
+            duration_unit: DEFAULT_DURATION_UNIT || "m",
+            underlying_symbol: underlyingSymbol,
+          };
+          if (safeBarrier) req.barrier = safeBarrier;
+          attempts.push({
+            req,
+            apiContractType,
+            underlyingSymbol,
+            payloadMode: safeBarrier && apiContractType === legacyType
+              ? "new_underlying_symbol_callput_barrier"
+              : "new_underlying_symbol",
+          });
+        }
       }
     } else {
       const apiTypes = allowLegacy ? getHighLowApiContractTypeCandidates(safeSide) : [primaryType];
