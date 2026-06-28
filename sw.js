@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.1 (Higher/Lower 130 estricto) */
+/* sw.js — Deriv Signals v113.1 (Higher/Lower 130 dual CALL PUT) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-1-highlow-130-strict";
+const CACHE = "deriv-assets-v113-1-highlow-dual-side-130";
 
 const CORE_ASSETS = [
   "./",
