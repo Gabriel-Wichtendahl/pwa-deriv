@@ -1,3 +1,4 @@
+// v113.1: Higher/Lower 130% estricto: solo compra con payout total 125–135%, sin fallback lejano; prepara también el lado elegido por los puntos.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
 // v112.9: corrige candado persistente: la formación flotante se cierra y habilita el gráfico a los 60s aunque el trade ya tenga ITM/OTM.
 // v112.8: Higher/Lower aprende la precisión de barrera por índice; reintenta con menos decimales y guarda el límite aceptado.
@@ -226,6 +227,8 @@ let entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
 const AUTO_TARGET_RETURN_PCT = 130; // pago total objetivo para Higher/Lower (payout / stake × 100).
 const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 130;
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
+const HIGHLOW_EXECUTION_MIN_PAYOUT_TOTAL_PCT = 125;
+const HIGHLOW_EXECUTION_MAX_PAYOUT_TOTAL_PCT = 135;
 const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 10;
 const AUTO_PRECALC_REFRESH_MS = 8000;
 const AUTO_PRECALC_STALE_MS = 120000;
@@ -244,8 +247,8 @@ const HIGHLOW_DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
 // Objetivo fijo de pago total para High/Low: 130% (por ejemplo, stake 5 => payout cercano a 6.50).
 // Las distancias siguientes son solo SEMILLAS iniciales por símbolo. La PWA las ajusta al aparecer cada señal.
-const HIGHLOW_MAX_PAYOUT_TOTAL_PCT = Number.POSITIVE_INFINITY;
-const HIGHLOW_MIN_PAYOUT_TOTAL_PCT = 0;
+const HIGHLOW_MAX_PAYOUT_TOTAL_PCT = HIGHLOW_EXECUTION_MAX_PAYOUT_TOTAL_PCT;
+const HIGHLOW_MIN_PAYOUT_TOTAL_PCT = HIGHLOW_EXECUTION_MIN_PAYOUT_TOTAL_PCT;
 // Semillas de barrera relativa por símbolo/par.
 // COMPRA/HIGHER => +valor. VENTA/LOWER => -valor.
 const HIGHLOW_FIXED_RELATIVE_BARRIERS = {
@@ -4533,6 +4536,15 @@ function getHighLowTargetDistance(plan) {
 function isHighLowPlanAtTarget(plan, tolerance = HIGHLOW_TARGET_TOLERANCE_PCT) {
   return !!plan && getHighLowTargetDistance(plan) <= Math.max(0, Number(tolerance || 0));
 }
+function isHighLowPlanWithinExecutionRange(plan) {
+  const pct = Number(plan?.payoutTotalPct);
+  return !!plan && Number.isFinite(pct)
+    && pct >= HIGHLOW_EXECUTION_MIN_PAYOUT_TOTAL_PCT
+    && pct <= HIGHLOW_EXECUTION_MAX_PAYOUT_TOTAL_PCT;
+}
+function getHighLowExecutionRangeText() {
+  return `${HIGHLOW_EXECUTION_MIN_PAYOUT_TOTAL_PCT}–${HIGHLOW_EXECUTION_MAX_PAYOUT_TOTAL_PCT}%`;
+}
 
 function getHighLowPrimaryApiContractType(side) {
   return String(side || "CALL").toUpperCase() === "PUT" ? "LOWER" : "HIGHER";
@@ -4834,12 +4846,22 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     if (Number(mid.payoutTotalPct) < target) below = mid;
     else above = mid;
   }
-  if (best && Number.isFinite(Number(best.barrierNum)) && Math.abs(Number(best.barrierNum)) > 0) {
+  if (best && isHighLowPlanWithinExecutionRange(best)
+      && Number.isFinite(Number(best.barrierNum)) && Math.abs(Number(best.barrierNum)) > 0) {
     rememberExecutionBarrierHint(symbol, side, best, best.precision || 0);
   }
-  if (best) {
+  if (best && isHighLowPlanWithinExecutionRange(best)) {
     best.searchLastError = lastError;
     return best;
+  }
+  if (best) {
+    window.DerivDebug?.log?.("HIGHLOW_TARGET_REJECTED", {
+      symbol,
+      side,
+      payoutTotalPct: Number(best.payoutTotalPct),
+      allowedRange: getHighLowExecutionRangeText(),
+      barrier: best.barrier || "",
+    });
   }
   return null;
 }
@@ -4859,6 +4881,9 @@ async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPla
   if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
     throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
   }
+  if (!isHighLowPlanWithinExecutionRange(plan)) {
+    throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: pago total ${Number(plan.payoutTotalPct).toFixed(1)}% fuera del rango ${getHighLowExecutionRangeText()}.`);
+  }
   plan.targetPayoutTotalPct = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
   plan.targetDistancePct = getHighLowTargetDistance(plan);
   plan.targetSearch = true;
@@ -4872,24 +4897,11 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   let lastError = null;
   let prepared = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 3);
 
-  // La búsqueda completa de 130% debe hacerse cuando nace la señal, no al segundo 58.
-  // Si por algún motivo no quedó en memoria, usamos primero el último hint válido o
-  // la barrera base del par y hacemos una sola proposal fresca para no entrar tarde.
-  if (!prepared) {
-    const hint = getExecutionBarrierHint(symbol, side);
-    const hintedCandidate = hint && Number.isFinite(Number(hint.barrierAbs)) && Number(hint.barrierAbs) > 0
-      ? makeBarrierCandidateFromAbsolute(side, Math.abs(Number(hint.barrierAbs)), Number(hint.precision || 0))
-      : makeHighLowFixedBarrierCandidate(symbol, side);
-    if (hintedCandidate?.barrier) {
-      prepared = {
-        barrier: hintedCandidate.barrier,
-        barrierNum: hintedCandidate.barrierNum,
-        precision: hintedCandidate.precision,
-        source: hint ? "entry_cached_130_hint" : "entry_pair_seed",
-        targetSearch: true,
-        targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
-      };
-    }
+  // La búsqueda completa debe quedar preparada antes del segundo 58.
+  // Nunca usamos una barrera base, un hint sin payout comprobado ni una proposal
+  // por defecto: si no existe un plan dentro de 125–135%, la entrada se cancela.
+  if (!prepared || !isHighLowPlanWithinExecutionRange(prepared)) {
+    throw new Error(`AUTO ${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: no hay barrera preparada dentro de ${getHighLowExecutionRangeText()}.`);
   }
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
@@ -4903,14 +4915,10 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
         }
       }
       if (!plan) {
-        plan = await getHighLowDefaultProposalQuote(symbol, side, stake, 12000);
-        if (plan) {
-          plan.targetPayoutTotalPct = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
-          plan.targetDistancePct = getHighLowTargetDistance(plan);
-          plan.targetSearch = true;
-          plan.targetFallbackDefault = true;
-          plan.source = "fresh_default_fallback";
-        }
+        throw lastError || new Error(`No se obtuvo una proposal fresca dentro de ${getHighLowExecutionRangeText()}.`);
+      }
+      if (!isHighLowPlanWithinExecutionRange(plan)) {
+        throw new Error(`Compra cancelada: pago total ${Number(plan.payoutTotalPct).toFixed(1)}% fuera de ${getHighLowExecutionRangeText()}.`);
       }
       if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
         throw lastError || new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
@@ -5047,7 +5055,10 @@ function loadExecutionBarrierHintCache() {
     for (const [key, value] of Object.entries(raw || {})) {
       if (!value || now - Number(value.updatedAt || 0) > HIGHLOW_BARRIER_CACHE_TTL_MS) continue;
       if (!Number.isFinite(Number(value.barrierAbs)) || Number(value.barrierAbs) <= 0) continue;
-      if (Number.isFinite(Number(value.payoutTotalPct)) && Number(value.payoutTotalPct) > HIGHLOW_MAX_PAYOUT_TOTAL_PCT) continue;
+      const payoutTotalPct = Number(value.payoutTotalPct);
+      if (!Number.isFinite(payoutTotalPct)
+          || payoutTotalPct < HIGHLOW_MIN_PAYOUT_TOTAL_PCT
+          || payoutTotalPct > HIGHLOW_MAX_PAYOUT_TOTAL_PCT) continue;
       map.set(key, value);
     }
     return map;
@@ -5072,11 +5083,13 @@ function getExecutionBarrierHint(symbol, side) {
   const hint = executionBarrierHintCache.get(getExecutionHintKey(symbol, side)) || null;
   if (!hint) return null;
   if (Date.now() - Number(hint.updatedAt || 0) > HIGHLOW_BARRIER_CACHE_TTL_MS) return null;
+  const pct = Number(hint.payoutTotalPct);
+  if (!Number.isFinite(pct) || pct < HIGHLOW_EXECUTION_MIN_PAYOUT_TOTAL_PCT || pct > HIGHLOW_EXECUTION_MAX_PAYOUT_TOTAL_PCT) return null;
   return hint;
 }
 function rememberExecutionBarrierHint(symbol, side, plan, precision = 3) {
   if (!symbol || !side || !plan) return;
-  if (!isHighLowPlanWithinPayoutCap(plan)) return;
+  if (!isHighLowPlanWithinExecutionRange(plan)) return;
   const abs = Math.abs(Number(plan.barrierNum || 0));
   if (!Number.isFinite(abs) || abs <= 0) return;
   executionBarrierHintCache.set(getExecutionHintKey(symbol, side), {
@@ -5123,7 +5136,7 @@ function cleanupExecutionPlanCache() {
     }
   }
 }
-async function refreshExecutionPlanForSignal(item, force = false) {
+async function refreshExecutionPlanForSignal(item, force = false, sideOverride = "") {
   if (!shouldUseAutoHighLowExecution() || !item?.id) return null;
   const cache = getOrCreateExecutionPlan(item);
   if (!cache) return null;
@@ -5144,7 +5157,11 @@ async function refreshExecutionPlanForSignal(item, force = false) {
         cache.error = `Cooldown proposals ${Math.ceil(highLowCooldownRemainingMs() / 1000)}s`;
         return cache;
       }
-      const targetSide = String(item.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL";
+      const score = getSignalConfirmationScore(item);
+      const scoreSide = score > 0 ? "CALL" : score < 0 ? "PUT" : "";
+      const targetSide = normalizeSignalConfirmationSide(sideOverride)
+        || scoreSide
+        || (String(item.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL");
       const plan = await findHighLowPlanNear130(item, targetSide, {
         fast: false,
         maxQuotes: HIGHLOW_TARGET_MAX_SEARCH_QUOTES,
@@ -5153,7 +5170,7 @@ async function refreshExecutionPlanForSignal(item, force = false) {
       if (targetSide === "CALL") cache.call = plan;
       else cache.put = plan;
       cache.updatedAt = Date.now();
-      cache.error = plan ? "" : `Sin barrera cercana a ${HIGHLOW_TARGET_PAYOUT_TOTAL_PCT}%`;
+      cache.error = plan ? "" : `Sin barrera dentro de ${getHighLowExecutionRangeText()}`;
       item.autoHighLow ||= {};
       item.autoHighLow[targetSide === "CALL" ? "call" : "put"] = plan ? { ...plan } : null;
       item.autoHighLow.updatedAt = cache.updatedAt;
@@ -5185,7 +5202,8 @@ function ensureSignalAutoPrecalc(item) {
       stopExecutionPlanLoop(item.id);
       return;
     }
-    const targetSide = String(currentItem.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL";
+    const score = getSignalConfirmationScore(currentItem);
+    const targetSide = score > 0 ? "CALL" : score < 0 ? "PUT" : (String(currentItem.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL");
     const readyPlan = targetSide === "CALL" ? cache.call : cache.put;
     if (readyPlan?.proposalId) {
       stopExecutionPlanLoop(item.id);
@@ -5206,11 +5224,13 @@ function ensureSignalAutoPrecalc(item) {
 function getCachedExecutionPlan(item, side, maxAgeMs = AUTO_PRECALC_STALE_MS) {
   if (!item?.id) return null;
   const cache = executionPlanCache.get(item.id);
-  if (!cache) return null;
-  const plan = side === "CALL" ? cache.call : cache.put;
+  const memoryPlan = cache ? (side === "CALL" ? cache.call : cache.put) : null;
+  const savedPlan = side === "CALL" ? item?.autoHighLow?.call : item?.autoHighLow?.put;
+  const plan = memoryPlan || savedPlan || null;
   if (!plan) return null;
-  if (Date.now() - Number(plan.updatedAt || cache.updatedAt || 0) > maxAgeMs) return null;
-  if (!isHighLowPlanWithinPayoutCap(plan)) return null;
+  const updatedAt = Number(plan.updatedAt || cache?.updatedAt || item?.autoHighLow?.updatedAt || 0);
+  if (Date.now() - updatedAt > maxAgeMs) return null;
+  if (!isHighLowPlanWithinExecutionRange(plan)) return null;
   if (isC100Active()) {
     const expectedStake = getC100Stake();
     if (Math.abs(Number(plan.askPrice || 0) - expectedStake) > 0.02) return null;
@@ -5240,7 +5260,7 @@ async function ensureExecutionPlanForTrade(item, side) {
     item.autoHighLow.updatedAt = cache.updatedAt;
     return plan;
   }
-  cache.error = `Sin barrera cercana a ${HIGHLOW_TARGET_PAYOUT_TOTAL_PCT}% para ${side === "CALL" ? "HIGHER" : "LOWER"}`;
+  cache.error = `Sin barrera dentro de ${getHighLowExecutionRangeText()} para ${side === "CALL" ? "HIGHER" : "LOWER"}`;
   return null;
 }
 function formatExecutionPlanMini(plan) {
@@ -11877,19 +11897,31 @@ function addSignalConfirmation(side = "CALL") {
   updateModalCandleStatusUI();
 
   const enabled = getSignalEnabledTradeSide(modalCurrentItem);
+  const score = getSignalConfirmationScore(modalCurrentItem);
+  const preferredHighLowSide = score > 0 ? "CALL" : score < 0 ? "PUT" : safeSide;
+  let highLowPrep = null;
+  if (shouldUseAutoHighLowExecution() && preferredHighLowSide) {
+    // La dirección operativa la deciden los puntos. Empezamos a buscar el 130%
+    // para ese lado apenas se inclina el puntaje, aunque todavía no haya llegado a 5.
+    highLowPrep = refreshExecutionPlanForSignal(modalCurrentItem, true, preferredHighLowSide);
+  }
   if (enabled === "CALL") {
-    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
+    if (!shouldUseAutoHighLowExecution()) void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else if (enabled === "PUT") {
-    void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
+    if (!shouldUseAutoHighLowExecution()) void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario alcanza los 5 puntos netos cuando la formación ya pasó 58s,
-  // también se dispara la auto-entrada sin esperar otro tick/timer.
-  trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
+  // Si los 5 puntos se alcanzan después de 58s, en Higher/Lower esperamos primero
+  // que termine la búsqueda estricta 125–135%; luego intentamos la entrada.
+  if (shouldUseAutoHighLowExecution() && enabled && highLowPrep && getSignalConfirmationMs(modalCurrentItem) >= SIGNAL_AUTO_ENTRY_MS) {
+    void Promise.resolve(highLowPrep).finally(() => trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57"));
+  } else {
+    trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
+  }
 }
 function removeSignalConfirmation() {
   if (!modalCurrentItem || !isTradeEntryOpen(modalCurrentItem)) return;
@@ -11898,6 +11930,11 @@ function removeSignalConfirmation() {
   saveHistory(history);
   updateSignalConfirmationUI();
   updateModalCandleStatusUI();
+  if (shouldUseAutoHighLowExecution()) {
+    const score = getSignalConfirmationScore(modalCurrentItem);
+    const side = score > 0 ? "CALL" : score < 0 ? "PUT" : "";
+    if (side) void refreshExecutionPlanForSignal(modalCurrentItem, true, side);
+  }
 }
 function updateSignalConfirmationUI() {
   ensureSignalConfirmationControls();
@@ -16168,7 +16205,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       const hlName = side === "CALL" ? "HIGHER" : "LOWER";
       const prepared130 = getCachedExecutionPlan(itemCtx, side, AUTO_PRECALC_STALE_MS * 3);
       const barrierTxt = prepared130?.barrier || "buscando";
-      toast(`⏳ ${hlName} objetivo 130% · ${barrierTxt}…`, 1200);
+      toast(`⏳ ${hlName} objetivo 130% (${getHighLowExecutionRangeText()}) · ${barrierTxt}…`, 1200);
 
       // V112.0: al salir la señal consulta HIGHER/LOWER y busca la barrera más cercana al 130%.
       // Al operar pide una proposal nueva con esa barrera y compra inmediatamente.
@@ -16189,9 +16226,11 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         fixed_barrier: false,
         barrier_searched_on_signal: true,
         target_payout_total_pct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+        accepted_payout_total_min_pct: HIGHLOW_EXECUTION_MIN_PAYOUT_TOTAL_PCT,
+        accepted_payout_total_max_pct: HIGHLOW_EXECUTION_MAX_PAYOUT_TOTAL_PCT,
         target_distance_pct: Number(plan.targetDistancePct || getHighLowTargetDistance(plan)),
         proposal_fresh: true,
-        barrier_search_fallback_default: !!plan.targetFallbackDefault,
+        barrier_search_fallback_default: false,
         proposal_attempt: Number(highLowBuy.attempt || 1),
         payout_pct: Number(plan.profitPct),
         actual_return_pct: Math.round(plan.profitPct),

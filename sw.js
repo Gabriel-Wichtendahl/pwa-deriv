@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.0 (reanclaje visual y doble estructura MGM) */
+/* sw.js — Deriv Signals v113.1 (Higher/Lower 130 estricto) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-0-mgm-reanchor-double-structure";
+const CACHE = "deriv-assets-v113-1-highlow-130-strict";
 
 const CORE_ASSETS = [
   "./",
