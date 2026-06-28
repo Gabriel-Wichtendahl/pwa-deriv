@@ -1,4 +1,4 @@
-// v113.9: corrige la búsqueda del 130%: permite cruzar el spot (LOWER con barrera positiva / HIGHER con barrera negativa), conserva el signo real y ajusta de forma adaptativa.
+// v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
@@ -105,7 +105,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.9";
+const APP_BUILD_VERSION = "v113.10";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -232,11 +232,11 @@ const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 130;
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
 const HIGHLOW_TARGET_ACCEPT_MIN_PCT = 125;
 const HIGHLOW_TARGET_ACCEPT_MAX_PCT = 135;
-const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 5;
+const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 8;
 const AUTO_PRECALC_REFRESH_MS = 10000;
 const AUTO_PRECALC_STALE_MS = 120000;
 const HIGHLOW_PRECALC_MAX_ATTEMPTS = 1;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v9_target130_cross_spot_125_135";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v10_target130_bisection_125_135";
 const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v2_absolute_fallback";
 const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
 const HIGHLOW_DEFAULT_MAX_BARRIER_DECIMALS_BY_SYMBOL = {
@@ -4213,6 +4213,17 @@ function isHighLowProposalLimitError(message) {
   const txt = String(message || "").toLowerCase();
   return txt.includes("proposal") && (txt.includes("limit") || txt.includes("too many") || txt.includes("rate"));
 }
+function isHighLowNoReturnMessage(message) {
+  const txt = String(message || "").toLowerCase();
+  return txt.includes("offers no return") || txt.includes("no return");
+}
+function makeHighLowNoReturnError(message, meta = {}) {
+  const err = new Error(String(message || "This contract offers no return."));
+  err.code = "HIGHLOW_NO_RETURN";
+  err.highLowNoReturn = true;
+  Object.assign(err, meta || {});
+  return err;
+}
 function getHighLowDiscoveryAttemptKey(symbol, side) {
   return `${String(symbol || "")}|${String(side || "")}`;
 }
@@ -4807,6 +4818,22 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
         }
 
         const msg = res?.error?.message || `${apiContractType}/${underlyingSymbol}: proposal vacía`;
+        // V113.10: “This contract offers no return” no significa payload inválido.
+        // Significa que la barrera quedó demasiado fácil. Se usa como límite de
+        // la bisección y no se desperdician otras 3 requests con formatos que ya
+        // sabemos que no cambiarán ese resultado.
+        if (safeBarrier && barrierMode === "absolute" && apiContractType === primaryType && isHighLowNoReturnMessage(msg)) {
+          auditRows.push({ ...auditBase, status: "no_return", error: String(msg) });
+          saveHighLowProposalAttemptAudit(safeSymbol, safeSide, auditRows);
+          throw makeHighLowNoReturnError(msg, {
+            symbol: safeSymbol,
+            side: safeSide,
+            barrier: safeBarrier,
+            apiBarrier: String(req.barrier || ""),
+            payloadMode,
+            barrierMode,
+          });
+        }
         roundErrors.push(`${apiContractType}/${underlyingSymbol}: ${msg}`);
         auditRows.push({ ...auditBase, status: "error", error: String(msg) });
         const limit = barrierMode === "relative" ? parseHighLowBarrierDecimalLimit(msg) : null;
@@ -4819,6 +4846,7 @@ async function requestHighLowProposalRaw(symbol, side, stake, barrier = "", time
           break;
         }
       } catch (e) {
+        if (e?.highLowNoReturn || e?.code === "HIGHLOW_NO_RETURN") throw e;
         const msg = e?.message || String(e || `${apiContractType}: error proposal`);
         roundErrors.push(`${apiContractType}/${underlyingSymbol}: ${msg}`);
         auditRows.push({ ...auditBase, status: "error", error: String(msg) });
@@ -4913,25 +4941,29 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
   let quotesUsed = 0;
   let best = null;
   let lastError = "";
+
   const remember = (plan, candidate = null) => {
     if (!plan) return null;
     plan.targetPayoutTotalPct = target;
     plan.targetDistancePct = getHighLowTargetDistance(plan);
     plan.targetSearch = true;
     plan.fixedBarrier = false;
-    plan.source = candidate?.barrier ? "signal_target_130_search" : "signal_default_probe";
-    // Conserva la barrera realmente aceptada por Deriv después del redondeo adaptativo.
+    plan.source = candidate?.barrier ? "signal_target_130_bisection" : "signal_default_probe";
     if (!plan.barrier && candidate?.barrier) plan.barrier = candidate.barrier;
     if (!Number.isFinite(Number(plan.barrierNum)) && candidate && Number.isFinite(Number(candidate.barrierNum))) plan.barrierNum = Number(candidate.barrierNum);
     if (!Number.isFinite(Number(plan.precision)) && candidate && Number.isFinite(Number(candidate.precision))) plan.precision = Number(candidate.precision);
     samples.push(plan);
-    if (!best || getHighLowTargetDistance(plan) < getHighLowTargetDistance(best)) best = plan;
+    // Solo una propuesta con barrera reproducible sirve como candidato de entrada.
+    if (makeHighLowCandidateFromPlan(plan, side)) {
+      if (!best || getHighLowTargetDistance(plan) < getHighLowTargetDistance(best)) best = plan;
+    }
     return plan;
   };
+
   const quoteCandidate = async (candidate) => {
-    if (!candidate?.barrier || quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) return null;
+    if (!candidate?.barrier || quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) return { kind: "skip", candidate };
     const apiBarrier = normalizeHighLowBarrierForApi(candidate.barrier, side, symbol);
-    if (!apiBarrier || seen.has(apiBarrier)) return null;
+    if (!apiBarrier || seen.has(apiBarrier)) return { kind: "skip", candidate };
     seen.add(apiBarrier);
     const parsedApiBarrier = parseRelativeBarrierString(apiBarrier);
     const effectiveCandidate = parsedApiBarrier
@@ -4940,109 +4972,166 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     quotesUsed++;
     try {
       const plan = await getHighLowProposalQuote(symbol, side, effectiveCandidate, effectiveCandidate.precision, stake, timeoutMs, "", getLatestSignalQuoteForBarrier(item));
-      return remember(plan, effectiveCandidate);
+      return { kind: "plan", plan: remember(plan, effectiveCandidate), candidate: effectiveCandidate };
     } catch (e) {
       const msg = e?.message || String(e || "");
       lastError = msg;
+      if (e?.highLowNoReturn || e?.code === "HIGHLOW_NO_RETURN" || isHighLowNoReturnMessage(msg)) {
+        return { kind: "no_return", candidate: effectiveCandidate, error: msg };
+      }
       if (isHighLowProposalLimitError(msg)) writeHighLowProposalCooldown();
-      return null;
+      return { kind: "error", candidate: effectiveCandidate, error: msg };
     }
   };
+
+  // La propuesta default aporta contexto, pero no se usa para comprar salvo que
+  // Deriv exponga una barrera reproducible y ya quede dentro de 125–135%.
   let defaultPlan = null;
   try {
     defaultPlan = await getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs);
     if (defaultPlan) remember(defaultPlan, null);
-    if (defaultPlan && isHighLowPlanAtTarget(defaultPlan)) {
-      const defaultCandidate = makeHighLowCandidateFromPlan(defaultPlan, side);
-      if (defaultCandidate) rememberExecutionBarrierHint(symbol, side, defaultPlan, defaultCandidate.precision || 0);
+    if (defaultPlan && isHighLowPlanAcceptable(defaultPlan) && makeHighLowCandidateFromPlan(defaultPlan, side)) {
+      rememberExecutionBarrierHint(symbol, side, defaultPlan, defaultPlan.precision || 0);
       return defaultPlan;
     }
   } catch (e) {
     lastError = e?.message || String(e || "");
   }
+
   const hint = getExecutionBarrierHint(symbol, side);
   const fixedRaw = Math.abs(Number(getHighLowFixedBarrierRaw(symbol) || 0));
   const defaultCandidate = makeHighLowCandidateFromPlan(defaultPlan, side);
   const latestQuote = getLatestSignalQuoteForBarrier(item);
-
-  // V113.9: para obtener un pago total cercano a 130%, Higher/Lower debe poder
-  // cruzar el spot. LOWER suele necesitar una barrera positiva (más fácil) y
-  // HIGHER una barrera negativa. La versión anterior forzaba siempre el signo
-  // contrario y quedaba atrapada alrededor de 200–230%.
   const baseOptions = [
     Math.abs(Number(hint?.barrierNum || hint?.barrierAbs || 0)),
-    Math.abs(Number(defaultCandidate?.barrierNum || 0)),
     fixedRaw,
+    Math.abs(Number(defaultCandidate?.barrierNum || 0)),
     Number.isFinite(latestQuote) && latestQuote > 0 ? Math.abs(latestQuote * 0.000145) : 0,
     Number.isFinite(latestQuote) && latestQuote > 0 ? Math.abs(latestQuote * 0.00010) : 0,
   ].filter((v) => Number.isFinite(v) && v > 0);
-  let baseAbs = baseOptions[0] || HIGHLOW_API_MIN_RELATIVE_BARRIER;
-  baseAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, baseAbs);
+  const baseAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, baseOptions[0] || HIGHLOW_API_MIN_RELATIVE_BARRIER);
 
+  // Coordenada orientada: u aumenta siempre hacia el lado que hace el contrato
+  // más fácil. LOWER: u positivo => barrera arriba. HIGHER: u positivo => abajo.
   const easySign = String(side || "CALL").toUpperCase() === "PUT" ? 1 : -1;
-  let harderEdgeAbs = 0; // cerca del spot el pago suele seguir por encima de 130%.
-  let easierEdgeAbs = null;
-  let probeAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, baseAbs * 6);
-  let searchSteps = 0;
-
-  while (quotesUsed < maxQuotes && searchSteps < maxQuotes + 4 && !isHighLowProposalCooldownActive()) {
-    searchSteps += 1;
-    const candidate = makeBarrierCandidateFromSignedValue(
-      easySign * probeAbs,
-      getBarrierPrecisionForAbs(probeAbs)
-    );
-    if (!candidate?.barrier) break;
-
-    const beforeQuotes = quotesUsed;
-    const plan = await quoteCandidate(candidate);
-    if (!plan) {
-      // Si el valor redondeó a una barrera ya probada, avanzamos sin consumir
-      // la ventana completa en el mismo punto.
-      if (quotesUsed === beforeQuotes) probeAbs *= 1.35;
-      continue;
+  const quoteU = async (u) => {
+    const uNum = Number(u || 0);
+    let signed = easySign * uNum;
+    if (!Number.isFinite(signed)) return { kind: "skip" };
+    if (Math.abs(signed) < HIGHLOW_API_MIN_RELATIVE_BARRIER) {
+      signed = easySign * (uNum >= 0 ? HIGHLOW_API_MIN_RELATIVE_BARRIER : -HIGHLOW_API_MIN_RELATIVE_BARRIER);
     }
-    if (isHighLowPlanAcceptable(plan)) {
-      rememberExecutionBarrierHint(symbol, side, plan, plan.precision || candidate.precision || 0);
-      plan.searchAcceptable = true;
-      return plan;
-    }
+    const candidate = makeBarrierCandidateFromSignedValue(signed, getBarrierPrecisionForAbs(Math.abs(signed)));
+    return await quoteCandidate(candidate);
+  };
+  const resultPct = (result) => Number(result?.plan?.payoutTotalPct);
 
-    const pct = Number(plan.payoutTotalPct);
-    if (!Number.isFinite(pct)) {
-      probeAbs *= 1.5;
-      continue;
-    }
+  let hardU = null; // propuesta real con payout > 130.
+  let easyU = null; // propuesta con payout < 130 o “no return”.
 
-    if (pct > target) {
-      // Todavía paga demasiado: hacemos el contrato más fácil alejando la
-      // barrera por el lado favorable (LOWER arriba / HIGHER abajo).
-      harderEdgeAbs = Math.max(harderEdgeAbs, probeAbs);
-      probeAbs = easierEdgeAbs !== null
-        ? (harderEdgeAbs + easierEdgeAbs) / 2
-        : probeAbs * 2;
-    } else {
-      // Paga menos de 130%: quedó demasiado fácil. Volvemos hacia el spot.
-      easierEdgeAbs = probeAbs;
-      probeAbs = (harderEdgeAbs + easierEdgeAbs) / 2;
+  // 1) Busca el límite difícil con el signo tradicional: LOWER abajo / HIGHER arriba.
+  let hardProbeU = -baseAbs;
+  while (quotesUsed < maxQuotes && hardU === null && !isHighLowProposalCooldownActive()) {
+    const r = await quoteU(hardProbeU);
+    if (r.kind === "plan" && r.plan) {
+      if (isHighLowPlanAcceptable(r.plan)) {
+        rememberExecutionBarrierHint(symbol, side, r.plan, r.plan.precision || 0);
+        r.plan.searchAcceptable = true;
+        return r.plan;
+      }
+      const pct = resultPct(r);
+      if (Number.isFinite(pct) && pct > target) {
+        hardU = hardProbeU;
+        break;
+      }
+      if (Number.isFinite(pct) && pct < target) {
+        easyU = hardProbeU;
+        hardProbeU *= 2;
+        continue;
+      }
     }
-    probeAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, probeAbs);
+    if (r.kind === "no_return") easyU = hardProbeU;
+    hardProbeU *= 2;
+    if (Math.abs(hardProbeU) > baseAbs * 16) break;
   }
 
-  // Si no entró exactamente en el rango, conservamos el mejor candidato real
-  // de ambos lados para el ajuste rápido del segundo 58.
+  // 2) Busca el límite fácil. “No return” es un dato útil: la barrera ya pasó
+  // del objetivo y permite cerrar la horquilla sin probar formatos alternativos.
+  let easyProbeU = baseAbs;
+  while (quotesUsed < maxQuotes && easyU === null && !isHighLowProposalCooldownActive()) {
+    const r = await quoteU(easyProbeU);
+    if (r.kind === "no_return") {
+      easyU = easyProbeU;
+      break;
+    }
+    if (r.kind === "plan" && r.plan) {
+      if (isHighLowPlanAcceptable(r.plan)) {
+        rememberExecutionBarrierHint(symbol, side, r.plan, r.plan.precision || 0);
+        r.plan.searchAcceptable = true;
+        return r.plan;
+      }
+      const pct = resultPct(r);
+      if (Number.isFinite(pct) && pct < target) {
+        easyU = easyProbeU;
+        break;
+      }
+      if (Number.isFinite(pct) && pct > target) {
+        hardU = hardU === null ? easyProbeU : Math.max(hardU, easyProbeU);
+      }
+    }
+    easyProbeU *= 2;
+    if (easyProbeU > baseAbs * 32) break;
+  }
+
+  // 3) Bisección entre una barrera que paga demasiado y otra demasiado fácil.
+  while (quotesUsed < maxQuotes && hardU !== null && easyU !== null && easyU > hardU && !isHighLowProposalCooldownActive()) {
+    let midU = (hardU + easyU) / 2;
+    // La API no admite barrera relativa cero. Al cruzar el spot probamos el
+    // mínimo del lado fácil para no perder una iteración en un valor inválido.
+    if (Math.abs(midU) < HIGHLOW_API_MIN_RELATIVE_BARRIER) midU = HIGHLOW_API_MIN_RELATIVE_BARRIER;
+    const r = await quoteU(midU);
+    if (r.kind === "skip") {
+      const nudged = midU + Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, Math.abs(easyU - hardU) * 0.08);
+      if (nudged >= easyU) break;
+      const rn = await quoteU(nudged);
+      if (rn.kind === "no_return") easyU = nudged;
+      else if (rn.kind === "plan" && rn.plan) {
+        if (isHighLowPlanAcceptable(rn.plan)) {
+          rememberExecutionBarrierHint(symbol, side, rn.plan, rn.plan.precision || 0);
+          rn.plan.searchAcceptable = true;
+          return rn.plan;
+        }
+        const pct = resultPct(rn);
+        if (Number.isFinite(pct) && pct > target) hardU = nudged;
+        else if (Number.isFinite(pct)) easyU = nudged;
+      }
+      continue;
+    }
+    if (r.kind === "no_return") {
+      easyU = midU;
+      continue;
+    }
+    if (r.kind !== "plan" || !r.plan) continue;
+    if (isHighLowPlanAcceptable(r.plan)) {
+      rememberExecutionBarrierHint(symbol, side, r.plan, r.plan.precision || 0);
+      r.plan.searchAcceptable = true;
+      return r.plan;
+    }
+    const pct = resultPct(r);
+    if (!Number.isFinite(pct)) continue;
+    if (pct > target) hardU = midU;
+    else easyU = midU;
+  }
+
   if (best) best.searchLastError = lastError;
   const acceptable = samples
-    .filter((plan) => isHighLowPlanAcceptable(plan))
+    .filter((plan) => isHighLowPlanAcceptable(plan) && makeHighLowCandidateFromPlan(plan, side))
     .sort((a, b) => getHighLowTargetDistance(a) - getHighLowTargetDistance(b))[0] || null;
-  if (acceptable && Number.isFinite(Number(acceptable.barrierNum)) && Math.abs(Number(acceptable.barrierNum)) > 0) {
+  if (acceptable) {
     rememberExecutionBarrierHint(symbol, side, acceptable, acceptable.precision || 0);
     acceptable.searchAcceptable = true;
     return acceptable;
   }
-
-  // V113.6: aunque todavía no haya quedado entre 125–135%, conservamos la
-  // mejor barrera cotizada. Sirve como punto de partida para un ajuste rápido
-  // al segundo 58 y evita terminar con "no hay barrera preparada".
   if (best && makeHighLowCandidateFromPlan(best, side)) {
     best.searchAcceptable = false;
     best.source = best.source || "signal_best_candidate_outside_range";
@@ -5144,8 +5233,11 @@ function adjustHighLowBarrierToward130(plan, side) {
   const easySign = String(side || "CALL").toUpperCase() === "PUT" ? 1 : -1;
   let nextSigned;
   if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
-    // Pago demasiado alto: cruzamos o avanzamos por el lado favorable.
-    const nextAbs = Math.max(abs * (Math.sign(signed) === easySign ? 1.8 : 6), HIGHLOW_API_MIN_RELATIVE_BARRIER);
+    // V113.10: no saltar de -0.15 a +0.90. Ese salto volvía el contrato tan
+    // fácil que Deriv respondía “no return”. Al cruzar el spot empezamos con
+    // media distancia; si ya estamos del lado fácil avanzamos gradualmente.
+    const sameEasySide = Math.sign(signed) === easySign;
+    const nextAbs = Math.max(abs * (sameEasySide ? 1.35 : 0.5), HIGHLOW_API_MIN_RELATIVE_BARRIER);
     nextSigned = easySign * nextAbs;
   } else {
     // Pago demasiado bajo: la barrera favorable quedó demasiado lejos; la
@@ -5193,6 +5285,18 @@ function getHighLowEntryDiagnostics(item, side) {
 async function buyFreshHighLowLikeWindows(item, side, stake) {
   const symbol = String(item?.symbol || "");
   let lastError = null;
+  // Si la última bisección comenzó justo antes del segundo 58, le damos una
+  // espera breve. Sigue dentro del límite 59.2 s y evita competir con otra
+  // tanda de proposals sobre la misma señal.
+  const entryCache = item?.id ? executionPlanCache.get(String(item.id)) : null;
+  if (entryCache?.running) {
+    try {
+      await Promise.race([
+        entryCache.running,
+        new Promise((resolve) => setTimeout(resolve, 450)),
+      ]);
+    } catch {}
+  }
   let prepared = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 3);
   if (!isHighLowPlanAcceptable(prepared)) prepared = null;
 

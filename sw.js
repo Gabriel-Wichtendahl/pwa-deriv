@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.9 (barrera 130% cruzando spot + signo persistente) */
+/* sw.js — Deriv Signals v113.10 (barrera 130% por bisección + no-return como límite) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-9-cross-spot-target130";
+const CACHE = "deriv-assets-v113-10-bisection-target130";
 
 const CORE_ASSETS = [
   "./",
