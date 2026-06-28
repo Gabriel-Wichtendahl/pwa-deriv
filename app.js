@@ -1,3 +1,4 @@
+// v113.5: corrige AUTO Higher/Lower cuando los puntos eligen el lado opuesto: prioriza y serializa la barrera elegida, recupera planes persistidos y agrega espejo rápido de último recurso.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
@@ -4885,6 +4886,35 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   let prepared = getCachedExecutionPlan(item, side, AUTO_PRECALC_STALE_MS * 3);
   if (!isHighLowPlanAcceptable(prepared)) prepared = null;
 
+  // V113.5: recupera también el plan persistido dentro de la señal.
+  if (!prepared) {
+    const persisted = side === "CALL" ? item?.autoHighLow?.call : item?.autoHighLow?.put;
+    if (isHighLowPlanAcceptable(persisted)) prepared = { ...persisted, source: persisted.source || "entry_persisted_130_plan" };
+  }
+
+  // V113.5: último recurso rápido. Si quedó preparada la dirección de la señal pero
+  // los puntos habilitaron el lado opuesto, espejamos esa barrera y hacemos una sola
+  // consulta fresca antes de cancelar.
+  if (!prepared && !isHighLowProposalCooldownActive()) {
+    const mirrorRef = getHighLowMirrorReferencePlan(item, side);
+    if (mirrorRef) {
+      const mirrored = await findMirroredHighLowPlan(item, side, mirrorRef, { fast: true, stake });
+      if (isHighLowPlanAcceptable(mirrored)) {
+        prepared = mirrored;
+        const cache = getOrCreateExecutionPlan(item);
+        if (cache) {
+          if (side === "CALL") cache.call = mirrored;
+          else cache.put = mirrored;
+          cache.updatedAt = Date.now();
+        }
+        item.autoHighLow ||= {};
+        item.autoHighLow[side === "CALL" ? "call" : "put"] = { ...mirrored };
+        item.autoHighLow.updatedAt = Date.now();
+        try { saveHistory(history); } catch {}
+      }
+    }
+  }
+
   // La búsqueda completa de 130% debe hacerse cuando nace la señal para AMBOS lados.
   // Si por algún motivo no quedó en memoria, usamos primero el último hint válido o
   // la barrera base del par y hacemos una sola proposal fresca para no entrar tarde.
@@ -5115,10 +5145,25 @@ function getOrCreateExecutionPlan(item) {
   if (!item?.id) return null;
   let cache = executionPlanCache.get(item.id);
   if (!cache) {
-    cache = { item, call: null, put: null, updatedAt: 0, error: "", timer: null, running: null, active: false };
+    // V113.5: si la PWA se recargó o el caché en memoria se reconstruyó,
+    // reutilizamos las barreras que ya habían quedado guardadas dentro de la señal.
+    const savedCall = isHighLowPlanAcceptable(item?.autoHighLow?.call) ? { ...item.autoHighLow.call } : null;
+    const savedPut = isHighLowPlanAcceptable(item?.autoHighLow?.put) ? { ...item.autoHighLow.put } : null;
+    cache = {
+      item,
+      call: savedCall,
+      put: savedPut,
+      updatedAt: Number(item?.autoHighLow?.updatedAt || Date.now()),
+      error: "",
+      timer: null,
+      running: null,
+      active: false,
+      prioritySide: "",
+    };
     executionPlanCache.set(item.id, cache);
   }
   cache.item = item;
+  if (typeof cache.prioritySide !== "string") cache.prioritySide = "";
   return cache;
 }
 function stopExecutionPlanLoop(itemId) {
@@ -5149,18 +5194,25 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
   if (!shouldUseAutoHighLowExecution() || !item?.id) return null;
   const cache = getOrCreateExecutionPlan(item);
   if (!cache) return null;
-  if (cache.running && !force) return cache.running;
+
+  const requested = normalizeSignalConfirmationSide(requestedSide);
+  if (requested) cache.prioritySide = requested;
+
+  // V113.5: jamás lanzar dos búsquedas Higher/Lower simultáneas para la misma señal.
+  // La versión anterior permitía otra búsqueda con force=true y terminaba agotando
+  // el límite de proposals justo cuando los puntos elegían el lado contrario.
+  if (cache.running) return cache.running;
 
   cache.running = (async () => {
-    if (!getDerivToken()) {
-      cache.error = `Sin token ${getTradingAccountLabel()}`;
-      return cache;
-    }
-    if (!ws || ws.readyState !== 1) {
-      cache.error = "WS desconectado";
-      return cache;
-    }
     try {
+      if (!getDerivToken()) {
+        cache.error = `Sin token ${getTradingAccountLabel()}`;
+        return cache;
+      }
+      if (!ws || ws.readyState !== 1) {
+        cache.error = "WS desconectado";
+        return cache;
+      }
       await ensureAuthorized();
       if (isHighLowProposalCooldownActive()) {
         cache.error = `Cooldown proposals ${Math.ceil(highLowCooldownRemainingMs() / 1000)}s`;
@@ -5168,7 +5220,12 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
       }
 
       const signalSide = String(item.direction || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL";
-      const wanted = normalizeSignalConfirmationSide(requestedSide);
+      const enabledSide = normalizeSignalConfirmationSide(getSignalEnabledTradeSide(item));
+      const wanted = normalizeSignalConfirmationSide(cache.prioritySide) || requested || enabledSide;
+      cache.prioritySide = "";
+
+      // Con puntos ya orientados, se prepara primero y únicamente el lado que realmente
+      // se va a comprar. Sin puntos, conserva la preparación de ambos lados.
       const sides = wanted ? [wanted] : [signalSide, signalSide === "CALL" ? "PUT" : "CALL"];
       const errors = [];
 
@@ -5210,6 +5267,26 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
     } finally {
       cache.running = null;
       if (modalCurrentItem && item.id === modalCurrentItem.id) updateModalCandleStatusUI();
+
+      // Si mientras corría la búsqueda el usuario inclinó los puntos hacia otro lado,
+      // ejecutamos esa prioridad inmediatamente después, sin superponer proposals.
+      const queuedSide = normalizeSignalConfirmationSide(cache.prioritySide);
+      if (queuedSide) {
+        const queuedPlan = queuedSide === "CALL" ? cache.call : cache.put;
+        if (!isHighLowPlanAcceptable(queuedPlan) && isTradeEntryOpen(item) && !item?.trade?.badge && !item?.signalAutoEntry?.attempted) {
+          const retryDelay = isHighLowProposalCooldownActive()
+            ? Math.max(250, highLowCooldownRemainingMs() + 120)
+            : 0;
+          cache.prioritySide = "";
+          setTimeout(() => {
+            if (isTradeEntryOpen(item) && !item?.trade?.badge && !item?.signalAutoEntry?.attempted) {
+              void refreshExecutionPlanForSignal(item, true, queuedSide);
+            }
+          }, retryDelay);
+        } else {
+          cache.prioritySide = "";
+        }
+      }
     }
   })();
   return cache.running;
@@ -5235,7 +5312,8 @@ function ensureSignalAutoPrecalc(item) {
       stopExecutionPlanLoop(item.id);
       return;
     }
-    await refreshExecutionPlanForSignal(currentItem, true);
+    // V113.5: cuando ya hay una orientación manual, esa barrera tiene prioridad.
+    await refreshExecutionPlanForSignal(currentItem, true, getSignalEnabledTradeSide(currentItem) || "");
     if (!cache.active) return;
     const callAfter = isHighLowPlanAcceptable(cache.call) && !!cache.call?.proposalId;
     const putAfter = isHighLowPlanAcceptable(cache.put) && !!cache.put?.proposalId;
@@ -12099,14 +12177,18 @@ function addSignalConfirmation(side = "CALL") {
   updateSignalConfirmationUI();
   updateModalCandleStatusUI();
 
+  // V113.5: desde el primer punto empezamos a preparar el lado que el usuario está
+  // marcando. Antes esperaba a llegar a 5 puntos y podía quedarse sin tiempo.
+  if (shouldUseAutoHighLowExecution()) {
+    void refreshExecutionPlanForSignal(modalCurrentItem, true, safeSide);
+  }
+
   const enabled = getSignalEnabledTradeSide(modalCurrentItem);
   if (enabled === "CALL") {
-    if (shouldUseAutoHighLowExecution()) void refreshExecutionPlanForSignal(modalCurrentItem, true, enabled);
-    else void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
+    if (!shouldUseAutoHighLowExecution()) void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ COMPRA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else if (enabled === "PUT") {
-    if (shouldUseAutoHighLowExecution()) void refreshExecutionPlanForSignal(modalCurrentItem, true, enabled);
-    else void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
+    if (!shouldUseAutoHighLowExecution()) void prepareRiseFallAutoPreProposal(modalCurrentItem, enabled, "signal_points_enabled");
     toast(`✅ VENTA habilitada: ${getSignalConfirmationStatusText(modalCurrentItem)}`, 1400);
   } else {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);

@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.4 (cooldown de señales 45s + fixes anteriores) */
+/* sw.js — Deriv Signals v113.5 (fix barrera lado opuesto + cooldown 45s) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-4-signal-cooldown-45s";
+const CACHE = "deriv-assets-v113-5-fix-barrera-lado-opuesto";
 
 const CORE_ASSETS = [
   "./",
