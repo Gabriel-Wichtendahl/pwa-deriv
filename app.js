@@ -1,3 +1,4 @@
+// v113.11: conexión resistente en segundo plano: no cierra el WS al ocultarse, heartbeat, watchdog de ticks y reconexión inmediata al volver/recuperar internet.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
@@ -105,7 +106,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.10";
+const APP_BUILD_VERSION = "v113.11";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -2347,6 +2348,19 @@ function ensureResetCacheButton() {
 let ws;
 let tradeWs = null;
 let tradeWsConnectPromise = null;
+
+// V113.11: supervisión del WebSocket público. Mantiene una sola conexión,
+// manda heartbeat y recupera ticks/suscripciones al volver del background.
+let publicWsReconnectTimer = null;
+let publicWsHeartbeatTimer = null;
+let publicWsHealthTimer = null;
+let publicWsConnectStartedAt = 0;
+let publicWsLastOpenAt = 0;
+let publicWsLastMessageAt = 0;
+let publicWsReconnectAttempts = 0;
+let publicWsReconnectTotal = 0;
+let publicWsLastReconnectReason = "startup";
+let publicWsGeneration = 0;
 
 let soundEnabled = false;
 let vibrateEnabled = true;
@@ -6200,8 +6214,10 @@ function ensureLowPowerButton() {
     saveLowPowerMode();
     applyLowPowerModeUI();
     toast(lowPowerMode ? "🪫 Bajo consumo ON" : "🔋 Bajo consumo OFF");
+    // V113.11: Bajo consumo solo reduce repintado/histórico. Nunca corta
+    // la conexión, porque eso hacía perder formaciones en segundo plano.
     try {
-      if (lowPowerMode && ws && ws.readyState === 1 && document.visibilityState !== "visible") ws.close();
+      if (ws && ws.readyState === WebSocket.OPEN) sendPublicWsHeartbeat("low_power_toggle");
     } catch {}
   };
 
@@ -6213,8 +6229,8 @@ function applyLowPowerModeUI() {
     btn.textContent = lowPowerMode ? "🪫 Bajo consumo ON" : "🔋 Bajo consumo OFF";
     btn.classList.toggle("active", lowPowerMode);
     btn.title = lowPowerMode
-      ? "Ahorra batería: UI más lenta, histórico más liviano, WS se corta en background"
-      : "Modo normal";
+      ? "Ahorra batería: UI más lenta e histórico más liviano; la conexión permanece activa"
+      : "Modo normal: conexión supervisada";
   }
   startUiTimers();
 }
@@ -10470,6 +10486,7 @@ function buildExportPayloadTrades() {
   return {
     exported_at: new Date().toISOString(),
     app_version: APP_BUILD_VERSION,
+    connection_recovery_debug: getPublicWsDiagnostics(),
     export_scope: "trades_feedback_practice_clear_and_giro_aprendizaje",
     count_trades_total: (journalForExport || []).length,
     count_marked_trades: markedTrades.length,
@@ -27238,6 +27255,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
    WebSocket Deriv
 ========================= */
 function handleDerivWsMessage(data, source = "public") {
+  if (source === "public") publicWsLastMessageAt = Date.now();
   if (data && data.req_id && pending.has(data.req_id)) {
     const p = pending.get(data.req_id);
     clearTimeout(p.t);
@@ -27274,28 +27292,156 @@ function handleDerivWsMessage(data, source = "public") {
   if (data.tick) onTick(data.tick);
 }
 
-function connect() {
+function getPublicWsReadyStateLabel() {
+  const state = ws?.readyState;
+  if (state === WebSocket.CONNECTING) return "CONNECTING";
+  if (state === WebSocket.OPEN) return "OPEN";
+  if (state === WebSocket.CLOSING) return "CLOSING";
+  if (state === WebSocket.CLOSED) return "CLOSED";
+  return "NONE";
+}
+
+function isPublicWsOpen() {
+  return !!ws && ws.readyState === WebSocket.OPEN;
+}
+
+function clearPublicWsReconnectTimer() {
+  if (publicWsReconnectTimer) clearTimeout(publicWsReconnectTimer);
+  publicWsReconnectTimer = null;
+}
+
+function getPublicWsDiagnostics() {
+  const now = Date.now();
+  return {
+    app_version: APP_BUILD_VERSION,
+    ws_state: getPublicWsReadyStateLabel(),
+    online: typeof navigator.onLine === "boolean" ? navigator.onLine : null,
+    visibility: document.visibilityState || "unknown",
+    low_power_mode: !!lowPowerMode,
+    last_tick_age_ms: lastTickLocalNowMs ? Math.max(0, now - lastTickLocalNowMs) : null,
+    last_ws_message_age_ms: publicWsLastMessageAt ? Math.max(0, now - publicWsLastMessageAt) : null,
+    last_open_at: publicWsLastOpenAt || null,
+    reconnect_attempts_current: publicWsReconnectAttempts,
+    reconnects_total: publicWsReconnectTotal,
+    last_reconnect_reason: publicWsLastReconnectReason || "",
+  };
+}
+
+function schedulePublicWsReconnect(reason = "unknown", delayMs = 1200) {
+  publicWsLastReconnectReason = String(reason || "unknown");
+  if (typeof navigator.onLine === "boolean" && !navigator.onLine) {
+    setStatus("Sin internet – esperando conexión…");
+    return;
+  }
+  if (publicWsReconnectTimer) return;
+  const wait = Math.max(100, Number(delayMs) || 0);
+  publicWsReconnectTimer = setTimeout(() => {
+    publicWsReconnectTimer = null;
+    connect(publicWsLastReconnectReason);
+  }, wait);
+}
+
+function sendPublicWsHeartbeat(reason = "timer") {
+  if (!isPublicWsOpen()) return false;
   try {
-    setStatus("Conectando…");
-    ws = new WebSocket(WS_URL);
+    ws.send(JSON.stringify({ ping: 1 }));
+    return true;
   } catch {
-    setStatus("Error WS – no se pudo iniciar");
+    schedulePublicWsReconnect(`heartbeat_send_failed:${reason}`, 250);
+    return false;
+  }
+}
+
+function forcePublicWsReconnect(reason = "forced") {
+  publicWsLastReconnectReason = String(reason || "forced");
+  clearPublicWsReconnectTimer();
+  const current = ws;
+  if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) {
+    try { current.close(4000, String(reason || "reconnect").slice(0, 100)); } catch {}
+  }
+  // No esperamos únicamente al onclose: algunos Android dejan el socket en
+  // estado zombi al volver del background.
+  setTimeout(() => {
+    if (!isPublicWsOpen()) schedulePublicWsReconnect(reason, 100);
+  }, 180);
+}
+
+function startPublicWsSupervision() {
+  if (publicWsHeartbeatTimer) clearInterval(publicWsHeartbeatTimer);
+  if (publicWsHealthTimer) clearInterval(publicWsHealthTimer);
+
+  publicWsHeartbeatTimer = setInterval(() => {
+    if (isPublicWsOpen()) sendPublicWsHeartbeat("interval");
+    else schedulePublicWsReconnect("heartbeat_socket_not_open", 250);
+  }, 20000);
+
+  publicWsHealthTimer = setInterval(() => {
+    const now = Date.now();
+    const visible = document.visibilityState === "visible";
+    const tickAge = lastTickLocalNowMs ? now - lastTickLocalNowMs : Infinity;
+    const messageAge = publicWsLastMessageAt ? now - publicWsLastMessageAt : Infinity;
+
+    if (!ws || ws.readyState === WebSocket.CLOSED) {
+      schedulePublicWsReconnect("health_socket_closed", 200);
+      return;
+    }
+    if (ws.readyState === WebSocket.CONNECTING && now - publicWsConnectStartedAt > 12000) {
+      forcePublicWsReconnect("health_connect_timeout");
+      return;
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+
+    // Con cinco índices suscriptos deberían llegar ticks continuamente. En
+    // background damos más margen porque Android puede agrupar eventos.
+    const staleLimit = visible ? 12000 : 45000;
+    if (tickAge > staleLimit && messageAge > staleLimit) {
+      forcePublicWsReconnect(visible ? "health_stale_foreground" : "health_stale_background");
+    }
+  }, 5000);
+}
+
+function connect(reason = "connect") {
+  if (typeof navigator.onLine === "boolean" && !navigator.onLine) {
+    setStatus("Sin internet – esperando conexión…");
+    return;
+  }
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  clearPublicWsReconnectTimer();
+  const generation = ++publicWsGeneration;
+  publicWsConnectStartedAt = Date.now();
+  publicWsReconnectAttempts += reason === "startup" ? 0 : 1;
+  if (reason !== "startup") publicWsReconnectTotal += 1;
+  publicWsLastReconnectReason = String(reason || "connect");
+
+  let socket;
+  try {
+    setStatus(publicWsReconnectAttempts ? "Reconectando…" : "Conectando…");
+    socket = new WebSocket(WS_URL);
+    ws = socket;
+  } catch {
+    setStatus("Error WS – reintentando…");
+    schedulePublicWsReconnect("constructor_error", 1500);
     return;
   }
 
-  ws.onopen = async () => {
+  socket.onopen = async () => {
+    if (generation !== publicWsGeneration || ws !== socket) return;
+    publicWsLastOpenAt = Date.now();
+    publicWsLastMessageAt = Date.now();
+    publicWsReconnectAttempts = 0;
+
     try {
       resetAuthState();
       if (isNewPatApiMode()) resetNewApiTradingSocket();
     } catch {}
 
     setStatus("Conectado – Suscribiendo…");
-    SYMBOLS.forEach((sym) => ws.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+    SYMBOLS.forEach((sym) => socket.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+    sendPublicWsHeartbeat("open");
 
     setTimeout(() => {
-      try {
-        rehydrateHistoryOnBoot();
-      } catch {}
+      try { rehydrateHistoryOnBoot(); } catch {}
     }, 350);
 
     updateDisciplineLockUI(false);
@@ -27309,7 +27455,9 @@ function connect() {
     await resubscribePendingContracts();
   };
 
-  ws.onmessage = (e) => {
+  socket.onmessage = (e) => {
+    if (generation !== publicWsGeneration || ws !== socket) return;
+    publicWsLastMessageAt = Date.now();
     try {
       const data = JSON.parse(e.data);
       handleDerivWsMessage(data, "public");
@@ -27318,11 +27466,14 @@ function connect() {
     }
   };
 
-  ws.onerror = () => {
+  socket.onerror = () => {
+    if (generation !== publicWsGeneration || ws !== socket) return;
     setStatus("Error WS – reconectando…");
   };
 
-  ws.onclose = (ev) => {
+  socket.onclose = (ev) => {
+    if (generation !== publicWsGeneration || ws !== socket) return;
+    ws = null;
     try {
       resetAuthState();
       resetNewApiTradingSocket();
@@ -27333,41 +27484,50 @@ function connect() {
       pending.delete(id);
       p.reject(new Error("closed"));
     }
-
     contractSubs.clear();
 
     const code = ev?.code || 0;
-    const reason = ev?.reason || "";
-    setStatus(`Desconectado (${code}) ${reason ? "– " + reason : ""} – reconectando…`);
-
-    if (lowPowerMode && document.visibilityState && document.visibilityState !== "visible") return;
-    setTimeout(connect, 1500);
+    const closeReason = ev?.reason || "";
+    setStatus(`Desconectado (${code}) ${closeReason ? "– " + closeReason : ""} – reconectando…`);
+    schedulePublicWsReconnect(`onclose_${code}`, document.visibilityState === "visible" ? 500 : 1500);
   };
 }
 
 /* =========================
-   🪫 Behavior en background/foreground
+   🔄 Resistencia background/foreground
 ========================= */
+function recoverPublicConnection(reason = "resume") {
+  const now = Date.now();
+  const tickAge = lastTickLocalNowMs ? now - lastTickLocalNowMs : Infinity;
+  if (!isPublicWsOpen() || tickAge > 9000) {
+    forcePublicWsReconnect(reason);
+  } else {
+    sendPublicWsHeartbeat(reason);
+  }
+  startPendingContractWatchdog({ immediate: true });
+  try {
+    finalizeExpiredFloatingSignalRows();
+    scanSignalAutoPreProposals();
+    scanSignalAutoEntriesAt57();
+  } catch {}
+}
+
 document.addEventListener("visibilitychange", () => {
   if (!("visibilityState" in document)) return;
-
   if (document.visibilityState === "hidden") {
-    if (lowPowerMode && ws && ws.readyState === 1) {
-      try {
-        ws.close();
-      } catch {}
-    }
+    // V113.11: nunca cerramos el socket al ocultarse. El navegador puede
+    // suspender JS, pero si no lo hace el motor sigue recibiendo y analizando.
+    sendPublicWsHeartbeat("hidden");
     return;
   }
+  recoverPublicConnection("visibility_visible");
+});
 
-  if (document.visibilityState === "visible") {
-    if (!ws || ws.readyState === 3) {
-      try {
-        
-      } catch {}
-    }
-    startPendingContractWatchdog({ immediate: true });
-  }
+window.addEventListener("online", () => recoverPublicConnection("network_online"));
+window.addEventListener("offline", () => setStatus("Sin internet – esperando conexión…"));
+window.addEventListener("pageshow", () => recoverPublicConnection("pageshow"));
+window.addEventListener("focus", () => {
+  if (document.visibilityState === "visible") recoverPublicConnection("window_focus");
 });
 
 if (practice40Btn) {
@@ -27555,4 +27715,5 @@ updatePracticeExportSaveButtonUI();
 initProcessView();
 updateExportTradesButtonUI();
 
-connect();
+startPublicWsSupervision();
+connect("startup");
