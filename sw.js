@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.8 (fix barrera relativa/absoluta + proposal completa) */
+/* sw.js — Deriv Signals v113.9 (barrera 130% cruzando spot + signo persistente) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-8-fix-relative-absolute-barrier";
+const CACHE = "deriv-assets-v113-9-cross-spot-target130";
 
 const CORE_ASSETS = [
   "./",

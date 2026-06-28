@@ -1,4 +1,4 @@
-// v113.8: corrige el fallback real de barreras en API nueva: no acepta proposals incompletas, conserva el símbolo exacto y prueba barrera relativa/absoluta con auditoría detallada.
+// v113.9: corrige la búsqueda del 130%: permite cruzar el spot (LOWER con barrera positiva / HIGHER con barrera negativa), conserva el signo real y ajusta de forma adaptativa.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
@@ -105,7 +105,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.8";
+const APP_BUILD_VERSION = "v113.9";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -232,11 +232,11 @@ const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 130;
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
 const HIGHLOW_TARGET_ACCEPT_MIN_PCT = 125;
 const HIGHLOW_TARGET_ACCEPT_MAX_PCT = 135;
-const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 4;
+const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 5;
 const AUTO_PRECALC_REFRESH_MS = 10000;
 const AUTO_PRECALC_STALE_MS = 120000;
 const HIGHLOW_PRECALC_MAX_ATTEMPTS = 1;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v8_target130_dual_125_135";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v9_target130_cross_spot_125_135";
 const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v2_absolute_fallback";
 const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
 const HIGHLOW_DEFAULT_MAX_BARRIER_DECIMALS_BY_SYMBOL = {
@@ -4310,9 +4310,10 @@ function normalizeHighLowBarrierForApi(rawBarrier, side = "CALL", symbol = "", f
   if (!formatted) return "";
   return `${sign >= 0 ? "+" : "-"}${formatted}`;
 }
-function makeBarrierCandidateFromAbsolute(side, absValue, forcedPrecision = null) {
-  const sign = side === "CALL" ? 1 : -1;
-  const raw0 = Math.abs(Number(absValue || 0));
+function makeBarrierCandidateFromSignedValue(signedValue, forcedPrecision = null) {
+  const signed0 = Number(signedValue || 0);
+  const sign = signed0 < 0 ? -1 : 1;
+  const raw0 = Math.abs(signed0);
   if (!Number.isFinite(raw0) || raw0 <= 0) return null;
 
   const hasForcedPrecision = forcedPrecision !== null && forcedPrecision !== undefined && String(forcedPrecision).trim() !== "" && Number.isFinite(Number(forcedPrecision));
@@ -4329,6 +4330,10 @@ function makeBarrierCandidateFromAbsolute(side, absValue, forcedPrecision = null
   const barrierNum = sign * raw;
   const barrier = `${sign > 0 ? "+" : "-"}${raw.toFixed(precision)}`;
   return { barrierNum, precision, barrier, relativeBarrier: true };
+}
+function makeBarrierCandidateFromAbsolute(side, absValue, forcedPrecision = null) {
+  const sign = side === "CALL" ? 1 : -1;
+  return makeBarrierCandidateFromSignedValue(sign * Math.abs(Number(absValue || 0)), forcedPrecision);
 }
 function normalizeHighLowSymbolKey(symbol) {
   return String(symbol || "").trim().toUpperCase();
@@ -4889,11 +4894,11 @@ async function getHighLowProposalQuote(symbol, side, barrierCandidate, precision
 function makeHighLowCandidateFromPlan(plan, side) {
   const parsed = parseRelativeBarrierString(plan?.barrier);
   if (parsed && Number.isFinite(Number(parsed.barrierNum)) && Math.abs(Number(parsed.barrierNum)) > 0) {
-    return makeBarrierCandidateFromAbsolute(side, Math.abs(Number(parsed.barrierNum)), Number(parsed.precision || 0));
+    return makeBarrierCandidateFromSignedValue(Number(parsed.barrierNum), Number(parsed.precision || 0));
   }
-  const abs = Math.abs(Number(plan?.barrierNum || 0));
-  if (!Number.isFinite(abs) || abs <= 0) return null;
-  return makeBarrierCandidateFromAbsolute(side, abs, Number(plan?.precision || getBarrierPrecisionForAbs(abs)));
+  const signed = Number(plan?.barrierNum || 0);
+  if (!Number.isFinite(signed) || Math.abs(signed) <= 0) return null;
+  return makeBarrierCandidateFromSignedValue(signed, Number(plan?.precision || getBarrierPrecisionForAbs(Math.abs(signed))));
 }
 
 async function findHighLowPlanNear130(item, side, opts = {}) {
@@ -4956,61 +4961,75 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     lastError = e?.message || String(e || "");
   }
   const hint = getExecutionBarrierHint(symbol, side);
-  const seeds = [];
-  if (Number.isFinite(Number(hint?.barrierAbs)) && Number(hint.barrierAbs) > 0) {
-    seeds.push({ abs: Math.abs(Number(hint.barrierAbs)), precision: Number(hint.precision || getBarrierPrecisionForAbs(hint.barrierAbs)) });
-  }
   const fixedRaw = Math.abs(Number(getHighLowFixedBarrierRaw(symbol) || 0));
-  if (Number.isFinite(fixedRaw) && fixedRaw > 0) {
-    seeds.push({ abs: fixedRaw, precision: Math.max(0, (String(getHighLowFixedBarrierRaw(symbol) || "").split(".")[1] || "").length) });
-  }
   const defaultCandidate = makeHighLowCandidateFromPlan(defaultPlan, side);
-  if (defaultCandidate) seeds.push({ abs: Math.abs(Number(defaultCandidate.barrierNum)), precision: Number(defaultCandidate.precision || 0) });
   const latestQuote = getLatestSignalQuoteForBarrier(item);
-  if (Number.isFinite(latestQuote) && latestQuote > 0) {
-    for (const f of [0.00003, 0.00006, 0.00010, 0.000145, 0.00020, 0.00030]) {
-      seeds.push({ abs: Math.abs(latestQuote * f), precision: getBarrierPrecisionForAbs(latestQuote * f) });
+
+  // V113.9: para obtener un pago total cercano a 130%, Higher/Lower debe poder
+  // cruzar el spot. LOWER suele necesitar una barrera positiva (más fácil) y
+  // HIGHER una barrera negativa. La versión anterior forzaba siempre el signo
+  // contrario y quedaba atrapada alrededor de 200–230%.
+  const baseOptions = [
+    Math.abs(Number(hint?.barrierNum || hint?.barrierAbs || 0)),
+    Math.abs(Number(defaultCandidate?.barrierNum || 0)),
+    fixedRaw,
+    Number.isFinite(latestQuote) && latestQuote > 0 ? Math.abs(latestQuote * 0.000145) : 0,
+    Number.isFinite(latestQuote) && latestQuote > 0 ? Math.abs(latestQuote * 0.00010) : 0,
+  ].filter((v) => Number.isFinite(v) && v > 0);
+  let baseAbs = baseOptions[0] || HIGHLOW_API_MIN_RELATIVE_BARRIER;
+  baseAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, baseAbs);
+
+  const easySign = String(side || "CALL").toUpperCase() === "PUT" ? 1 : -1;
+  let harderEdgeAbs = 0; // cerca del spot el pago suele seguir por encima de 130%.
+  let easierEdgeAbs = null;
+  let probeAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, baseAbs * 6);
+  let searchSteps = 0;
+
+  while (quotesUsed < maxQuotes && searchSteps < maxQuotes + 4 && !isHighLowProposalCooldownActive()) {
+    searchSteps += 1;
+    const candidate = makeBarrierCandidateFromSignedValue(
+      easySign * probeAbs,
+      getBarrierPrecisionForAbs(probeAbs)
+    );
+    if (!candidate?.barrier) break;
+
+    const beforeQuotes = quotesUsed;
+    const plan = await quoteCandidate(candidate);
+    if (!plan) {
+      // Si el valor redondeó a una barrera ya probada, avanzamos sin consumir
+      // la ventana completa en el mismo punto.
+      if (quotesUsed === beforeQuotes) probeAbs *= 1.35;
+      continue;
     }
-  }
-  const uniqueBases = [];
-  const baseSeen = new Set();
-  for (const seed of seeds) {
-    const abs = Math.abs(Number(seed?.abs || 0));
-    if (!Number.isFinite(abs) || abs <= 0) continue;
-    const key = abs.toPrecision(8);
-    if (baseSeen.has(key)) continue;
-    baseSeen.add(key);
-    uniqueBases.push({ abs, precision: Number(seed.precision || getBarrierPrecisionForAbs(abs)) });
-  }
-  const scaleOrder = [1, 0.72, 1.35, 0.50, 2.0, 0.30, 3.5, 0.18, 5.5];
-  for (const base of uniqueBases) {
-    for (const factor of scaleOrder) {
-      if (quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) break;
-      const abs = base.abs * factor;
-      const candidate = makeBarrierCandidateFromAbsolute(side, abs, factor === 1 ? base.precision : getBarrierPrecisionForAbs(abs));
-      const plan = await quoteCandidate(candidate);
-      if (plan && isHighLowPlanAtTarget(plan)) {
-        rememberExecutionBarrierHint(symbol, side, plan, plan.precision || candidate.precision || 0);
-        return plan;
-      }
+    if (isHighLowPlanAcceptable(plan)) {
+      rememberExecutionBarrierHint(symbol, side, plan, plan.precision || candidate.precision || 0);
+      plan.searchAcceptable = true;
+      return plan;
     }
-    if (quotesUsed >= maxQuotes || isHighLowProposalCooldownActive()) break;
+
+    const pct = Number(plan.payoutTotalPct);
+    if (!Number.isFinite(pct)) {
+      probeAbs *= 1.5;
+      continue;
+    }
+
+    if (pct > target) {
+      // Todavía paga demasiado: hacemos el contrato más fácil alejando la
+      // barrera por el lado favorable (LOWER arriba / HIGHER abajo).
+      harderEdgeAbs = Math.max(harderEdgeAbs, probeAbs);
+      probeAbs = easierEdgeAbs !== null
+        ? (harderEdgeAbs + easierEdgeAbs) / 2
+        : probeAbs * 2;
+    } else {
+      // Paga menos de 130%: quedó demasiado fácil. Volvemos hacia el spot.
+      easierEdgeAbs = probeAbs;
+      probeAbs = (harderEdgeAbs + easierEdgeAbs) / 2;
+    }
+    probeAbs = Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, probeAbs);
   }
-  const explicit = samples.filter((p) => Number.isFinite(Number(p?.barrierNum)) && Math.abs(Number(p.barrierNum)) > 0 && Number.isFinite(Number(p?.payoutTotalPct)));
-  let below = explicit.filter((p) => Number(p.payoutTotalPct) < target).sort((a, b) => Number(b.payoutTotalPct) - Number(a.payoutTotalPct))[0] || null;
-  let above = explicit.filter((p) => Number(p.payoutTotalPct) > target).sort((a, b) => Number(a.payoutTotalPct) - Number(b.payoutTotalPct))[0] || null;
-  while (below && above && quotesUsed < maxQuotes && !isHighLowProposalCooldownActive()) {
-    const a = Math.abs(Number(below.barrierNum));
-    const b = Math.abs(Number(above.barrierNum));
-    if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a - b) < 1e-8) break;
-    const midAbs = (a + b) / 2;
-    const midCandidate = makeBarrierCandidateFromAbsolute(side, midAbs, getBarrierPrecisionForAbs(midAbs));
-    const mid = await quoteCandidate(midCandidate);
-    if (!mid) break;
-    if (isHighLowPlanAtTarget(mid)) break;
-    if (Number(mid.payoutTotalPct) < target) below = mid;
-    else above = mid;
-  }
+
+  // Si no entró exactamente en el rango, conservamos el mejor candidato real
+  // de ambos lados para el ajuste rápido del segundo 58.
   if (best) best.searchLastError = lastError;
   const acceptable = samples
     .filter((plan) => isHighLowPlanAcceptable(plan))
@@ -5072,7 +5091,10 @@ function getHighLowProvisionalBarrierPlan(item, side) {
 
   const hint = getExecutionBarrierHint(symbol, side);
   if (hint && Number.isFinite(Number(hint.barrierAbs)) && Number(hint.barrierAbs) > 0) {
-    const c = makeBarrierCandidateFromAbsolute(side, Math.abs(Number(hint.barrierAbs)), Number(hint.precision || 0));
+    const hintSigned = Number.isFinite(Number(hint.barrierNum)) && Math.abs(Number(hint.barrierNum)) > 0
+      ? Number(hint.barrierNum)
+      : (side === "CALL" ? 1 : -1) * Math.abs(Number(hint.barrierAbs));
+    const c = makeBarrierCandidateFromSignedValue(hintSigned, Number(hint.precision || 0));
     if (c?.barrier) {
       return {
         ...c,
@@ -5114,25 +5136,28 @@ function getHighLowProvisionalBarrierPlan(item, side) {
 function adjustHighLowBarrierToward130(plan, side) {
   const payoutPct = Number(plan?.payoutTotalPct);
   const candidate = makeHighLowCandidateFromPlan(plan, side);
-  const abs = Math.abs(Number(candidate?.barrierNum || 0));
+  const signed = Number(candidate?.barrierNum || 0);
+  const abs = Math.abs(signed);
   if (!Number.isFinite(payoutPct) || payoutPct <= 0 || !Number.isFinite(abs) || abs <= 0) return null;
+  if (isHighLowPlanAcceptable(plan)) return null;
 
-  let factor = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT / payoutPct;
-  if (payoutPct < HIGHLOW_TARGET_ACCEPT_MIN_PCT) {
-    // Payout bajo: alejamos la barrera para subir el pago.
-    factor = Math.max(1.08, Math.min(1.80, factor));
-  } else if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
-    // Payout alto: acercamos la barrera para bajar el pago.
-    factor = Math.min(0.92, Math.max(0.50, factor));
+  const easySign = String(side || "CALL").toUpperCase() === "PUT" ? 1 : -1;
+  let nextSigned;
+  if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
+    // Pago demasiado alto: cruzamos o avanzamos por el lado favorable.
+    const nextAbs = Math.max(abs * (Math.sign(signed) === easySign ? 1.8 : 6), HIGHLOW_API_MIN_RELATIVE_BARRIER);
+    nextSigned = easySign * nextAbs;
   } else {
-    return null;
+    // Pago demasiado bajo: la barrera favorable quedó demasiado lejos; la
+    // acercamos al spot conservando el signo real.
+    nextSigned = signed * 0.62;
   }
 
-  const next = makeBarrierCandidateFromAbsolute(side, abs * factor, getBarrierPrecisionForAbs(abs * factor));
+  const next = makeBarrierCandidateFromSignedValue(nextSigned, getBarrierPrecisionForAbs(Math.abs(nextSigned)));
   if (!next?.barrier || next.barrier === candidate.barrier) return null;
   return {
     ...next,
-    source: "entry_adaptive_retry_130",
+    source: "entry_adaptive_retry_130_cross_spot",
     targetSearch: true,
     targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
     adjustedFromBarrier: candidate.barrier,
@@ -5271,7 +5296,10 @@ async function findBestHighLowPlan(item, side, opts = {}) {
   } else {
     const hint = getExecutionBarrierHint(symbol, side);
     if (hint && Number.isFinite(Number(hint.barrierAbs)) && Number(hint.barrierAbs) > 0) {
-      const c = makeBarrierCandidateFromAbsolute(side, Math.abs(Number(hint.barrierAbs)), Math.max(0, Number(hint.precision || 0)));
+      const hintSigned = Number.isFinite(Number(hint.barrierNum)) && Math.abs(Number(hint.barrierNum)) > 0
+        ? Number(hint.barrierNum)
+        : (side === "CALL" ? 1 : -1) * Math.abs(Number(hint.barrierAbs));
+      const c = makeBarrierCandidateFromSignedValue(hintSigned, Math.max(0, Number(hint.precision || 0)));
       if (c) candidates.push(c);
     }
 
