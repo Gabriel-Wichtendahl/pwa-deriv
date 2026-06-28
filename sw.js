@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.11 (conexión resistente background + heartbeat + reconexión) */
+/* sw.js — Deriv Signals v113.12 (bisección final de barrera 130% + conexión resistente) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-11-background-resilient";
+const CACHE = "deriv-assets-v113-12-entry-bisection";
 
 const CORE_ASSETS = [
   "./",

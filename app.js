@@ -1,4 +1,4 @@
-// v113.11: conexión resistente en segundo plano: no cierra el WS al ocultarse, heartbeat, watchdog de ticks y reconexión inmediata al volver/recuperar internet.
+// v113.12: ajuste final de barrera por bisección entre cotizaciones que quedan por debajo y por encima de 125–135%, con hasta 5 intentos rápidos antes de 59.2 s. Mantiene la conexión resistente de v113.11.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
@@ -106,7 +106,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.11";
+const APP_BUILD_VERSION = "v113.12";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -5247,15 +5247,12 @@ function adjustHighLowBarrierToward130(plan, side) {
   const easySign = String(side || "CALL").toUpperCase() === "PUT" ? 1 : -1;
   let nextSigned;
   if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
-    // V113.10: no saltar de -0.15 a +0.90. Ese salto volvía el contrato tan
-    // fácil que Deriv respondía “no return”. Al cruzar el spot empezamos con
-    // media distancia; si ya estamos del lado fácil avanzamos gradualmente.
+    // Pago demasiado alto: mover la barrera hacia el lado fácil.
     const sameEasySide = Math.sign(signed) === easySign;
     const nextAbs = Math.max(abs * (sameEasySide ? 1.35 : 0.5), HIGHLOW_API_MIN_RELATIVE_BARRIER);
     nextSigned = easySign * nextAbs;
   } else {
-    // Pago demasiado bajo: la barrera favorable quedó demasiado lejos; la
-    // acercamos al spot conservando el signo real.
+    // Pago demasiado bajo: acercar la barrera al lado difícil.
     nextSigned = signed * 0.62;
   }
 
@@ -5269,6 +5266,59 @@ function adjustHighLowBarrierToward130(plan, side) {
     adjustedFromBarrier: candidate.barrier,
     adjustedFromPayoutTotalPct: payoutPct,
   };
+}
+
+function getHighLowBarrierEaseCoordinate(plan, side) {
+  const candidate = makeHighLowCandidateFromPlan(plan, side);
+  const signed = Number(candidate?.barrierNum);
+  if (!Number.isFinite(signed)) return NaN;
+  // En LOWER, un valor más positivo hace el contrato más fácil.
+  // En HIGHER, un valor más negativo hace el contrato más fácil.
+  return String(side || "CALL").toUpperCase() === "PUT" ? signed : -signed;
+}
+
+function makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, side, triedBarriers = new Set()) {
+  if (!hardPlan || !easyPlan) return null;
+  const hardPct = Number(hardPlan?.payoutTotalPct);
+  const easyPct = Number(easyPlan?.payoutTotalPct);
+  const hardU = getHighLowBarrierEaseCoordinate(hardPlan, side);
+  const easyU = getHighLowBarrierEaseCoordinate(easyPlan, side);
+  if (!Number.isFinite(hardPct) || !Number.isFinite(easyPct) || !Number.isFinite(hardU) || !Number.isFinite(easyU)) return null;
+  if (!(hardPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) || !(easyPct < HIGHLOW_TARGET_ACCEPT_MIN_PCT)) return null;
+
+  const lo = Math.min(hardU, easyU);
+  const hi = Math.max(hardU, easyU);
+  if (!(hi > lo)) return null;
+
+  // Bisección pura. Si el redondeo repite una barrera ya probada, usamos una
+  // interpolación lineal hacia 130% y, como último recurso, dos puntos internos.
+  const target = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
+  const linearRatioRaw = (hardPct - target) / Math.max(1e-9, hardPct - easyPct);
+  const linearRatio = Math.max(0.20, Math.min(0.80, linearRatioRaw));
+  const trialU = [
+    (lo + hi) / 2,
+    lo + (hi - lo) * linearRatio,
+    lo + (hi - lo) * 0.375,
+    lo + (hi - lo) * 0.625,
+  ];
+
+  for (const u of trialU) {
+    const signed = String(side || "CALL").toUpperCase() === "PUT" ? u : -u;
+    const precision = Math.max(3, getBarrierPrecisionForAbs(Math.abs(signed)));
+    const next = makeBarrierCandidateFromSignedValue(signed, precision);
+    if (!next?.barrier || triedBarriers.has(String(next.barrier))) continue;
+    return {
+      ...next,
+      source: "entry_final_bisection_130",
+      targetSearch: true,
+      targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+      hardBarrier: String(makeHighLowCandidateFromPlan(hardPlan, side)?.barrier || ""),
+      hardPayoutTotalPct: hardPct,
+      easyBarrier: String(makeHighLowCandidateFromPlan(easyPlan, side)?.barrier || ""),
+      easyPayoutTotalPct: easyPct,
+    };
+  }
+  return null;
 }
 
 function getHighLowEntryDiagnostics(item, side) {
@@ -5320,7 +5370,7 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
     if (isHighLowPlanAcceptable(persisted)) prepared = { ...persisted, source: persisted.source || "entry_persisted_130_plan" };
   }
 
-  // V113.6: si la búsqueda todavía no terminó, no cancelamos. Usamos el mejor
+  // Si la búsqueda todavía no terminó, no cancelamos. Usamos el mejor
   // candidato, un hint previo o la semilla fija del símbolo y cotizamos al instante.
   if (!prepared) prepared = getHighLowProvisionalBarrierPlan(item, side);
 
@@ -5332,9 +5382,24 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   }
 
   let closestQuoted = null;
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  let hardPlan = null; // pago > 135%: contrato demasiado difícil
+  let easyPlan = null; // pago < 125%: contrato demasiado fácil
+  const triedBarriers = new Set();
+  const maxEntryQuotes = 5;
+
+  for (let attempt = 1; attempt <= maxEntryQuotes; attempt++) {
+    const msBeforeQuote = getSignalConfirmationMs(item);
+    if (msBeforeQuote > SIGNAL_AUTO_POST58_MAX_MS) {
+      lastError = new Error(`AUTO ${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: se agotó la ventana post-58 (${(msBeforeQuote / 1000).toFixed(2)}s).`);
+      break;
+    }
+
+    const preparedCandidate = makeHighLowCandidateFromPlan(prepared, side);
+    if (preparedCandidate?.barrier) triedBarriers.add(String(preparedCandidate.barrier));
+
     try {
-      const plan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, prepared, 4500);
+      const remainingMs = Math.max(450, SIGNAL_AUTO_POST58_MAX_MS - msBeforeQuote + 180);
+      const plan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, prepared, Math.min(1200, remainingMs));
       if (plan && (!closestQuoted || getHighLowTargetDistance(plan) < getHighLowTargetDistance(closestQuoted))) {
         closestQuoted = plan;
       }
@@ -5376,9 +5441,21 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       }
 
       if (plan) {
-        lastError = new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: pago ${Number(plan.payoutTotalPct || 0).toFixed(1)}% fuera de ${getHighLowAcceptableRangeText()}.`);
-        const adjusted = attempt < 2 ? adjustHighLowBarrierToward130(plan, side) : null;
-        if (adjusted) {
+        const pct = Number(plan.payoutTotalPct || 0);
+        lastError = new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: pago ${pct.toFixed(1)}% fuera de ${getHighLowAcceptableRangeText()}.`);
+
+        if (pct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
+          if (!hardPlan || pct < Number(hardPlan.payoutTotalPct || Infinity)) hardPlan = plan;
+        } else if (pct < HIGHLOW_TARGET_ACCEPT_MIN_PCT) {
+          if (!easyPlan || pct > Number(easyPlan.payoutTotalPct || -Infinity)) easyPlan = plan;
+        }
+
+        // V113.12: apenas tenemos una cotización por encima y otra por debajo
+        // del rango, probamos el punto medio. Esto evita saltar 122% → 140%
+        // y cancelar sin consultar la barrera intermedia.
+        let adjusted = makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, side, triedBarriers);
+        if (!adjusted) adjusted = adjustHighLowBarrierToward130(plan, side);
+        if (adjusted?.barrier && !triedBarriers.has(String(adjusted.barrier)) && attempt < maxEntryQuotes) {
           prepared = adjusted;
           continue;
         }
