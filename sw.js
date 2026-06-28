@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.1 (payout 130 estricto y Trades corregidos) */
+/* sw.js — Deriv Signals v113.2 (fix próxima vela Trades) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-1-strict130-trades-clean";
+const CACHE = "deriv-assets-v113-2-trades-next-candle";
 
 const CORE_ASSETS = [
   "./",
