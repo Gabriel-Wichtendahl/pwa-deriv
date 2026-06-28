@@ -1,4 +1,4 @@
-// v113.2: corrige Próx. vela en Trades: conserva la ventana flotante, sincroniza signalResult60 y recupera resultados pendientes desde Deriv.
+// v113.3: conserva el precálculo Higher/Lower durante toda la ventana flotante de 60s, aunque cruce el minuto UTC; mantiene el fix de Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
 // v112.9: corrige candado persistente: la formación flotante se cierra y habilita el gráfico a los 60s aunque el trade ya tenga ITM/OTM.
@@ -5133,10 +5133,12 @@ function stopAllExecutionPlanLoops() {
   for (const key of Array.from(executionPlanCache.keys())) stopExecutionPlanLoop(key);
 }
 function cleanupExecutionPlanCache() {
-  const nowMin = currentServerMinute();
   for (const [key, cache] of executionPlanCache.entries()) {
     const item = cache?.item;
-    const expired = !item || (typeof item.minute === "number" && item.minute < nowMin) || !!item?.trade?.badge;
+    // Las señales FLOAT pueden empezar en cualquier segundo y cruzar al minuto UTC siguiente.
+    // No se debe borrar la barrera preparada por comparar item.minute con el minuto del reloj:
+    // se conserva hasta que termine la ventana real de 60 s o exista un trade cerrado.
+    const expired = !item || !isTradeEntryOpen(item) || !!item?.trade?.badge;
     if (expired) {
       stopExecutionPlanLoop(key);
       executionPlanCache.delete(key);

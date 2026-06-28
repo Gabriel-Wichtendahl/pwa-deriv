@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.2 (fix próxima vela Trades) */
+/* sw.js — Deriv Signals v113.3 (fix barrera FLOAT + próxima vela Trades) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-2-trades-next-candle";
+const CACHE = "deriv-assets-v113-3-float-barrier-cache";
 
 const CORE_ASSETS = [
   "./",
