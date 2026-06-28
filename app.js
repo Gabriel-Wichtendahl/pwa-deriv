@@ -1,4 +1,4 @@
-// v113.3: conserva el precálculo Higher/Lower durante toda la ventana flotante de 60s, aunque cruce el minuto UTC; mantiene el fix de Próx. vela en Trades.
+// v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
 // v113.0: sincroniza por completo el reanclaje visual M→G→M y exige una segunda estructura M→G→M, G→M→P o G→M más respuesta contraria antes de señal.
 // v112.9: corrige candado persistente: la formación flotante se cierra y habilita el gráfico a los 60s aunque el trade ya tenga ITM/OTM.
@@ -2532,7 +2532,7 @@ const CONSTRUCTIVE_FLOATING_WINDOW_MS = 40000;
 const CONSTRUCTIVE_ROLLING_KEEP_MS = 95000;
 const CONSTRUCTIVE_SCAN_MIN_WINDOW_MS = 7000;
 const CONSTRUCTIVE_SCAN_STEP_MS = 1400;
-const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 90000;
+const CONSTRUCTIVE_SIGNAL_COOLDOWN_MS = 45000;
 // V109.1: el último tramo de la segunda reducción es provisional hasta que
 // una respuesta contraria real confirme que terminó. Un micro-diente no alcanza.
 const CONSTRUCTIVE_CLOSE_RETRACE_RATIO = 0.24;

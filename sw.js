@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.3 (fix barrera FLOAT + próxima vela Trades) */
+/* sw.js — Deriv Signals v113.4 (cooldown de señales 45s + fixes anteriores) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-3-float-barrier-cache";
+const CACHE = "deriv-assets-v113-4-signal-cooldown-45s";
 
 const CORE_ASSETS = [
   "./",
