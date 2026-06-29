@@ -1,4 +1,4 @@
-// v113.12: ajuste final de barrera por bisección entre cotizaciones que quedan por debajo y por encima de 125–135%, con hasta 5 intentos rápidos antes de 59.2 s. Mantiene la conexión resistente de v113.11.
+// v113.13: evita bloqueo total de la interfaz si la bisección repite una barrera redondeada; agrega límite de iteraciones, salida sin progreso y pausas para ceder el hilo a la UI. Mantiene la bisección final y la conexión resistente.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
 // v113.1: Higher/Lower prepara barreras 130% para CALL y PUT por separado; evita cancelar cuando los 5 puntos eligen el lado opuesto a la dirección de la señal.
@@ -106,7 +106,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.12";
+const APP_BUILD_VERSION = "v113.13";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -5098,7 +5098,28 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
   }
 
   // 3) Bisección entre una barrera que paga demasiado y otra demasiado fácil.
-  while (quotesUsed < maxQuotes && hardU !== null && easyU !== null && easyU > hardU && !isHighLowProposalCooldownActive()) {
+  // V113.13: la barrera se redondea según la precisión del índice. Dos puntos
+  // distintos pueden terminar convertidos en la misma barrera API. Antes, si
+  // el punto medio y el punto alternativo ya estaban en `seen`, quoteU devolvía
+  // `skip` sin aumentar quotesUsed ni mover la horquilla; el while podía girar
+  // para siempre en microtareas y dejar toda la PWA sin responder.
+  let bisectionIterations = 0;
+  const bisectionIterationLimit = Math.max(10, maxQuotes * 4);
+  while (
+    quotesUsed < maxQuotes &&
+    hardU !== null &&
+    easyU !== null &&
+    easyU > hardU &&
+    !isHighLowProposalCooldownActive() &&
+    bisectionIterations < bisectionIterationLimit
+  ) {
+    bisectionIterations++;
+    // Cede periódicamente el hilo principal para que botones, scroll y render
+    // sigan respondiendo incluso durante varias cotizaciones consecutivas.
+    if (bisectionIterations % 3 === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     let midU = (hardU + easyU) / 2;
     // La API no admite barrera relativa cero. Al cruzar el spot probamos el
     // mínimo del lado fácil para no perder una iteración en un valor inválido.
@@ -5108,6 +5129,12 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
       const nudged = midU + Math.max(HIGHLOW_API_MIN_RELATIVE_BARRIER, Math.abs(easyU - hardU) * 0.08);
       if (nudged >= easyU) break;
       const rn = await quoteU(nudged);
+      if (rn.kind === "skip") {
+        // No hubo una barrera nueva después del redondeo. Salimos y usamos el
+        // mejor candidato ya obtenido; nunca repetimos la misma vuelta.
+        lastError = lastError || "Bisección detenida: barreras repetidas por redondeo.";
+        break;
+      }
       if (rn.kind === "no_return") easyU = nudged;
       else if (rn.kind === "plan" && rn.plan) {
         if (isHighLowPlanAcceptable(rn.plan)) {
@@ -5118,6 +5145,11 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
         const pct = resultPct(rn);
         if (Number.isFinite(pct) && pct > target) hardU = nudged;
         else if (Number.isFinite(pct)) easyU = nudged;
+        else break;
+      } else {
+        // Error sin propuesta: quoteCandidate ya consumió una cotización. Si
+        // no podemos actualizar la horquilla, no tiene sentido repetir igual.
+        break;
       }
       continue;
     }
@@ -5125,14 +5157,18 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
       easyU = midU;
       continue;
     }
-    if (r.kind !== "plan" || !r.plan) continue;
+    if (r.kind !== "plan" || !r.plan) {
+      // Los errores consumen quotesUsed; dejamos continuar solo mientras haya
+      // presupuesto real de cotizaciones, pero el guard evita cualquier ciclo.
+      continue;
+    }
     if (isHighLowPlanAcceptable(r.plan)) {
       rememberExecutionBarrierHint(symbol, side, r.plan, r.plan.precision || 0);
       r.plan.searchAcceptable = true;
       return r.plan;
     }
     const pct = resultPct(r);
-    if (!Number.isFinite(pct)) continue;
+    if (!Number.isFinite(pct)) break;
     if (pct > target) hardU = midU;
     else easyU = midU;
   }
