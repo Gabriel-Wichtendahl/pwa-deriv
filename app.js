@@ -1,3 +1,4 @@
+// v113.14: restaura el objetivo histórico correcto de Higher/Lower: 130% de ganancia neta sobre la inversión (pago total cercano a 230%). Rango admitido: 125–135% de ganancia (225–235% de pago total). Mantiene el guard anti-bloqueo, la bisección final y la conexión resistente.
 // v113.13: evita bloqueo total de la interfaz si la bisección repite una barrera redondeada; agrega límite de iteraciones, salida sin progreso y pausas para ceder el hilo a la UI. Mantiene la bisección final y la conexión resistente.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
@@ -106,7 +107,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.13";
+const APP_BUILD_VERSION = "v113.14";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -228,16 +229,16 @@ const ENTRY_TIMING_AUTO58_NEXT_CANDLE_EXPIRY = "AUTO58_NEXT_CANDLE_EXPIRY";
 const ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY = "AUTO58_VISUAL_58_EXPIRY";
 const ENTRY_TIMING_AUTO58_DURATION_1M = "AUTO58_DURATION_1M";
 let entryTimingMode = ENTRY_TIMING_AUTO58_VISUAL_58_EXPIRY;
-const AUTO_TARGET_RETURN_PCT = 130; // pago total objetivo para Higher/Lower (payout / stake × 100).
-const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 130;
+const AUTO_TARGET_RETURN_PCT = 130; // ganancia neta objetivo sobre el stake: (payout - stake) / stake × 100.
+const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 100 + AUTO_TARGET_RETURN_PCT; // 230% total = stake + 130% de ganancia.
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
-const HIGHLOW_TARGET_ACCEPT_MIN_PCT = 125;
-const HIGHLOW_TARGET_ACCEPT_MAX_PCT = 135;
+const HIGHLOW_TARGET_ACCEPT_MIN_PCT = 225; // 125% de ganancia neta.
+const HIGHLOW_TARGET_ACCEPT_MAX_PCT = 235; // 135% de ganancia neta.
 const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 8;
 const AUTO_PRECALC_REFRESH_MS = 10000;
 const AUTO_PRECALC_STALE_MS = 120000;
 const HIGHLOW_PRECALC_MAX_ATTEMPTS = 1;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v10_target130_bisection_125_135";
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v11_profit130_total225_235";
 const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v2_absolute_fallback";
 const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
 const HIGHLOW_DEFAULT_MAX_BARRIER_DECIMALS_BY_SYMBOL = {
@@ -250,7 +251,7 @@ const HIGHLOW_PROPOSAL_LIMIT_COOLDOWN_MS = 90 * 1000;
 const HIGHLOW_DISCOVERY_ATTEMPT_KEY = "highLowDiscoveryAttempt_v1";
 const HIGHLOW_DISCOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const HIGHLOW_DISCOVERY_CANDIDATES_PER_ATTEMPT = 5;
-// Objetivo fijo de pago total para High/Low: 130% (por ejemplo, stake 5 => payout cercano a 6.50).
+// Objetivo histórico: 130% de ganancia neta. Equivale a pago total 230% (por ejemplo, stake 5 => payout cercano a 11.50 y ganancia 6.50).
 // Las distancias siguientes son solo SEMILLAS iniciales por símbolo. La PWA las ajusta al aparecer cada señal.
 const HIGHLOW_MAX_PAYOUT_TOTAL_PCT = Number.POSITIVE_INFINITY;
 const HIGHLOW_MIN_PAYOUT_TOTAL_PCT = 0;
@@ -3512,7 +3513,7 @@ function shouldUseAutoHighLowExecution() {
   return executionMode === EXECUTION_MODE_HIGHLOW_AUTO;
 }
 function getExecutionModeLabel() {
-  return shouldUseAutoHighLowExecution() ? "🎯 Higher/Lower 130%" : "↕️ Rise/Fall 1m";
+  return shouldUseAutoHighLowExecution() ? "🎯 Higher/Lower +130%" : "↕️ Rise/Fall 1m";
 }
 function applyExecutionModeUI() {
   const btn = pickEl("executionModeBtn");
@@ -3520,7 +3521,7 @@ function applyExecutionModeUI() {
   btn.textContent = getExecutionModeLabel();
   btn.classList.toggle("active", shouldUseAutoHighLowExecution());
   btn.title = shouldUseAutoHighLowExecution()
-    ? "Al salir cada señal busca la barrera del par para un pago total cercano al 130%. Al operar pide una proposal fresca y compra inmediatamente. COMPRA = HIGHER; VENTA = LOWER."
+    ? "Al salir cada señal busca una barrera con ganancia neta cercana al 130% sobre el stake (pago total cercano al 230%). COMPRA = HIGHER; VENTA = LOWER."
     : "Usa Rise/Fall de 1 minuto como hasta ahora.";
 }
 function ensureExecutionModeButton() {
@@ -4559,11 +4560,11 @@ function parseProposalToExecution(planRaw, side, precision) {
   };
 }
 function isHighLowPlanWithinPayoutCap(plan) {
-  // La búsqueda necesita ver proposals por debajo y por encima de 130% para poder ajustar la barrera.
+  // La búsqueda necesita proposals a ambos lados del objetivo de pago total 230% para ajustar la barrera.
   return !!plan;
 }
 function getHighLowPayoutCapText() {
-  return `objetivo ${Math.round(HIGHLOW_TARGET_PAYOUT_TOTAL_PCT)}%`;
+  return `objetivo ganancia ${Math.round(AUTO_TARGET_RETURN_PCT)}% · pago total ${Math.round(HIGHLOW_TARGET_PAYOUT_TOTAL_PCT)}%`;
 }
 function getHighLowTargetDistance(plan) {
   const pct = Number(plan?.payoutTotalPct);
@@ -4577,7 +4578,9 @@ function isHighLowPlanAcceptable(plan) {
   return !!plan && Number.isFinite(pct) && pct >= HIGHLOW_TARGET_ACCEPT_MIN_PCT && pct <= HIGHLOW_TARGET_ACCEPT_MAX_PCT;
 }
 function getHighLowAcceptableRangeText() {
-  return `${HIGHLOW_TARGET_ACCEPT_MIN_PCT}–${HIGHLOW_TARGET_ACCEPT_MAX_PCT}%`;
+  const minProfit = HIGHLOW_TARGET_ACCEPT_MIN_PCT - 100;
+  const maxProfit = HIGHLOW_TARGET_ACCEPT_MAX_PCT - 100;
+  return `ganancia ${minProfit}–${maxProfit}% (pago total ${HIGHLOW_TARGET_ACCEPT_MIN_PCT}–${HIGHLOW_TARGET_ACCEPT_MAX_PCT}%)`;
 }
 
 function getHighLowPrimaryApiContractType(side) {
@@ -4962,7 +4965,7 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     plan.targetDistancePct = getHighLowTargetDistance(plan);
     plan.targetSearch = true;
     plan.fixedBarrier = false;
-    plan.source = candidate?.barrier ? "signal_target_130_bisection" : "signal_default_probe";
+    plan.source = candidate?.barrier ? "signal_target_profit_130_bisection" : "signal_default_probe";
     if (!plan.barrier && candidate?.barrier) plan.barrier = candidate.barrier;
     if (!Number.isFinite(Number(plan.barrierNum)) && candidate && Number.isFinite(Number(candidate.barrierNum))) plan.barrierNum = Number(candidate.barrierNum);
     if (!Number.isFinite(Number(plan.precision)) && candidate && Number.isFinite(Number(candidate.precision))) plan.precision = Number(candidate.precision);
@@ -4999,7 +5002,7 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
   };
 
   // La propuesta default aporta contexto, pero no se usa para comprar salvo que
-  // Deriv exponga una barrera reproducible y ya quede dentro de 125–135%.
+  // Deriv exponga una barrera reproducible y ya quede dentro de 125–135% de ganancia neta (225–235% total).
   let defaultPlan = null;
   try {
     defaultPlan = await getHighLowDefaultProposalQuote(symbol, side, stake, timeoutMs);
@@ -5192,7 +5195,7 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
 
 async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPlan, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
   const candidate = makeHighLowCandidateFromPlan(barrierPlan, side);
-  if (!candidate?.barrier) throw new Error(`Higher/Lower sin barrera 130% preparada para ${symbol}.`);
+  if (!candidate?.barrier) throw new Error(`Higher/Lower sin barrera de +130% de ganancia preparada para ${symbol}.`);
   const plan = await getHighLowProposalQuote(
     symbol,
     side,
@@ -5210,7 +5213,7 @@ async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPla
   plan.targetDistancePct = getHighLowTargetDistance(plan);
   plan.targetSearch = true;
   plan.fixedBarrier = false;
-  plan.source = "fresh_target_130_barrier";
+  plan.source = "fresh_target_profit_130_barrier";
   return plan;
 }
 
@@ -5296,7 +5299,7 @@ function adjustHighLowBarrierToward130(plan, side) {
   if (!next?.barrier || next.barrier === candidate.barrier) return null;
   return {
     ...next,
-    source: "entry_adaptive_retry_130_cross_spot",
+    source: "entry_adaptive_retry_profit_130_cross_spot",
     targetSearch: true,
     targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
     adjustedFromBarrier: candidate.barrier,
@@ -5327,7 +5330,7 @@ function makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, side, triedBarri
   if (!(hi > lo)) return null;
 
   // Bisección pura. Si el redondeo repite una barrera ya probada, usamos una
-  // interpolación lineal hacia 130% y, como último recurso, dos puntos internos.
+  // interpolación lineal hacia el objetivo de 230% total (130% neto) y, como último recurso, dos puntos internos.
   const target = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
   const linearRatioRaw = (hardPct - target) / Math.max(1e-9, hardPct - easyPct);
   const linearRatio = Math.max(0.20, Math.min(0.80, linearRatioRaw));
@@ -5345,7 +5348,7 @@ function makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, side, triedBarri
     if (!next?.barrier || triedBarriers.has(String(next.barrier))) continue;
     return {
       ...next,
-      source: "entry_final_bisection_130",
+      source: "entry_final_bisection_profit_130",
       targetSearch: true,
       targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
       hardBarrier: String(makeHighLowCandidateFromPlan(hardPlan, side)?.barrier || ""),
@@ -5805,6 +5808,7 @@ async function refreshExecutionPlanForSignal(item, force = false, requestedSide 
       item.autoHighLow.callCandidate = cache.callCandidate ? { ...cache.callCandidate } : null;
       item.autoHighLow.putCandidate = cache.putCandidate ? { ...cache.putCandidate } : null;
       item.autoHighLow.updatedAt = cache.updatedAt;
+      item.autoHighLow.targetProfitPct = AUTO_TARGET_RETURN_PCT;
       item.autoHighLow.targetPayoutTotalPct = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
       item.autoHighLow.acceptableRange = getHighLowAcceptableRangeText();
       saveHistory(history);
@@ -5919,8 +5923,10 @@ async function ensureExecutionPlanForTrade(item, side) {
 }
 function formatExecutionPlanMini(plan) {
   if (!plan) return "…";
-  const mirror = plan.targetSearch ? " · 130" : plan.mirroredBarrier ? " ↔" : plan.symbolDefaultBarrier ? " auto" : " · cache";
-  const pct = Number.isFinite(Number(plan.payoutTotalPct)) ? ` · pago ${Math.round(plan.payoutTotalPct)}%` : (Number.isFinite(Number(plan.profitPct)) ? ` · gan ${Math.round(plan.profitPct)}%` : "");
+  const mirror = plan.targetSearch ? " · +130%" : plan.mirroredBarrier ? " ↔" : plan.symbolDefaultBarrier ? " auto" : " · cache";
+  const pct = Number.isFinite(Number(plan.payoutTotalPct))
+    ? ` · gan ${Math.round(Number(plan.payoutTotalPct) - 100)}% · pago ${Math.round(plan.payoutTotalPct)}%`
+    : (Number.isFinite(Number(plan.profitPct)) ? ` · gan ${Math.round(plan.profitPct)}%` : "");
   return `${plan.barrier || "auto"}${mirror}${pct}`;
 }
 function buildTradeButtonLabel(side, plan = null) {
@@ -17034,9 +17040,9 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       const hlName = side === "CALL" ? "HIGHER" : "LOWER";
       const prepared130 = getCachedExecutionPlan(itemCtx, side, AUTO_PRECALC_STALE_MS * 3);
       const barrierTxt = prepared130?.barrier || "buscando";
-      toast(`⏳ ${hlName} objetivo 130% · ${barrierTxt}…`, 1200);
+      toast(`⏳ ${hlName} · objetivo +130% ganancia · ${barrierTxt}…`, 1200);
 
-      // V112.0: al salir la señal consulta HIGHER/LOWER y busca la barrera más cercana al 130%.
+      // Al salir la señal consulta HIGHER/LOWER y busca la barrera más cercana a 130% de ganancia neta (230% de pago total).
       // Al operar pide una proposal nueva con esa barrera y compra inmediatamente.
       const highLowBuy = await buyFreshHighLowLikeWindows(itemCtx || { symbol }, side, stake);
       const plan = highLowBuy.plan;
@@ -17045,7 +17051,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
       tradeExtra = {
         ...tradeExtra,
-        exec_mode: "HIGHLOW_TARGET_130_SIGNAL_SEARCH_FRESH_BUY",
+        exec_mode: "HIGHLOW_TARGET_PROFIT_130_SIGNAL_SEARCH_FRESH_BUY",
         contract_type: contractLabel,
         api_contract_type: plan.apiContractType || getHighLowPrimaryApiContractType(side),
         api_symbol_field: isNewPatApiMode() ? "underlying_symbol" : "symbol",
@@ -17054,6 +17060,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         barrier: plan.barrier,
         fixed_barrier: false,
         barrier_searched_on_signal: true,
+        target_profit_pct: AUTO_TARGET_RETURN_PCT,
         target_payout_total_pct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
         target_distance_pct: Number(plan.targetDistancePct || getHighLowTargetDistance(plan)),
         proposal_fresh: true,

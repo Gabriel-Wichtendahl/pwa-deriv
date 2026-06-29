@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.13 (guard anti-bloqueo de bisección + conexión resistente) */
+/* sw.js — Deriv Signals v113.14 (ganancia neta +130% restaurada + guard de bisección + conexión resistente) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-13-bisection-ui-guard";
+const CACHE = "deriv-assets-v113-14-profit130-total230";
 
 const CORE_ASSETS = [
   "./",
