@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.14 (ganancia neta +130% restaurada + guard de bisección + conexión resistente) */
+/* sw.js — Deriv Signals v113.15 (proposal final pre-58 + buy inmediato + diagnóstico temporal) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-14-profit130-total230";
+const CACHE = "deriv-assets-v113-15-pre58-prepared-buy";
 
 const CORE_ASSETS = [
   "./",
