@@ -1,4 +1,4 @@
-// v113.15: prepara una proposal Higher/Lower final entre 56.5–57.5s y en AUTO 58 envía buy(proposal_id) sin volver a cotizar. Agrega temporizadores dedicados, evita refrescar saldo en el instante de entrada y registra si hubo confirmación tardía, timer demorado o proposal final ausente.
+// v113.16: prepara la proposal Higher/Lower final alrededor de 57.6s para que llegue casi pegada al AUTO 58. Si Deriv rechaza el buy porque el mercado se movió, recotiza una sola vez con el spot actual y reintenta antes de 58.9s, siempre dentro de 125–135% de ganancia neta.
 // v113.13: evita bloqueo total de la interfaz si la bisección repite una barrera redondeada; agrega límite de iteraciones, salida sin progreso y pausas para ceder el hilo a la UI. Mantiene la bisección final y la conexión resistente.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
@@ -107,7 +107,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.15";
+const APP_BUILD_VERSION = "v113.16";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -2159,11 +2159,14 @@ const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 const SIGNAL_AUTO_PREPROPOSAL_START_MS = 44000;
 const SIGNAL_AUTO_PREPROPOSAL_END_MS = 57500;
 const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 20000;
-// V113.15: Higher/Lower prepara una proposal FINAL muy cerca de la entrada.
-// En el segundo 58 solo se envía buy(proposal_id), sin esperar otra cotización.
-const SIGNAL_HIGHLOW_FINAL_REFRESH_START_MS = 56500;
-const SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS = 57500;
-const SIGNAL_HIGHLOW_FINAL_PLAN_MAX_AGE_MS = 5000;
+// V113.16: Higher/Lower prepara la proposal FINAL alrededor de 57.6s.
+// El objetivo es que al segundo 58 tenga menos de ~400ms de antigüedad.
+// Si Deriv informa que el mercado se movió, se permite una única recotización
+// inmediata y un segundo buy, siempre enviado antes de 58.9s.
+const SIGNAL_HIGHLOW_FINAL_REFRESH_START_MS = 57600;
+const SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS = 57950;
+const SIGNAL_HIGHLOW_FINAL_PLAN_MAX_AGE_MS = 900;
+const SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS = 58900;
 const SIGNAL_AUTO_TIMER_DELAY_WARN_MS = 350;
 // V112.1: modo estricto. Si al tick 58 no hay proposal válida, se cancela.
 // Nunca se pide una proposal nueva después de 58 porque eso genera entradas tardías.
@@ -5476,12 +5479,12 @@ async function prepareHighLowFinalEntryProposal(item, side, reason = "pre58_fina
       const tried = new Set();
       let closest = null;
       const symbol = String(item.symbol || "");
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      for (let attempt = 1; attempt <= 2; attempt++) {
         const nowMs = getSignalConfirmationMs(item);
-        if (nowMs > SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS + 900) break;
+        if (nowMs > SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS + 250) break;
         const candidate = makeHighLowCandidateFromPlan(prepared, safeSide);
         if (candidate?.barrier) tried.add(String(candidate.barrier));
-        const plan = await requestFreshHighLowPlanForBarrier(symbol, safeSide, stake, prepared, 1200);
+        const plan = await requestFreshHighLowPlanForBarrier(symbol, safeSide, stake, prepared, 850);
         if (plan && (!closest || getHighLowTargetDistance(plan) < getHighLowTargetDistance(closest))) closest = plan;
         if (plan && isHighLowPlanAcceptable(plan)) {
           const finalPlan = saveHighLowFinalEntryPlan(item, safeSide, plan, reason);
@@ -5533,12 +5536,12 @@ function scheduleHighLowFinalEntryTimers(item) {
       cache.finalRefreshTimer = null;
       const current = findHistoryItemById(item.id) || item;
       const side = normalizeSignalConfirmationSide(getSignalEnabledTradeSide(current));
-      if (side) void prepareHighLowFinalEntryProposal(current, side, "exact_timer_56_5");
+      if (side) void prepareHighLowFinalEntryProposal(current, side, "exact_timer_57_6");
       else {
         cache.finalRefreshStatus = {
           status: "waiting_points",
           side: "",
-          reason: "exact_timer_56_5",
+          reason: "exact_timer_57_6",
           at: Date.now(),
           ms: Math.round(getSignalConfirmationMs(current)),
         };
@@ -5617,15 +5620,15 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   let lastError = null;
   const isAutoSignalExecution = !!(item?.signalAutoEntry?.attempted && item?.signalAutoEntry?.status === "sending");
 
-  // V113.15: en AUTO 58 no cotizamos después de 58. Compramos directamente la
-  // proposal final preparada entre 56.5 y 57.5s. Así evitamos que una respuesta
-  // de proposal llegue después de 59.2s aunque la barrera fuera correcta.
+  // V113.16: la proposal final se genera alrededor de 57.6s para llegar fresca
+  // al AUTO 58. Si el primer buy es rechazado porque el mercado se movió,
+  // recotizamos una sola vez con el spot actual y reintentamos antes de 58.9s.
   if (isAutoSignalExecution) {
     const triggerMs = getSignalConfirmationMs(item);
     const autoCache = item?.id ? executionPlanCache.get(String(item.id)) : null;
     let finalPlan = getHighLowFinalEntryPlan(item, side, stake);
     // Si la consulta iniciada antes de 58 todavía está regresando, esperamos solo
-    // ese resultado en curso. No se lanza ninguna proposal nueva después de 58.
+    // ese resultado en curso. No iniciamos una búsqueda completa nueva.
     if (!finalPlan && autoCache?.finalRefreshRunning) {
       const waitBudget = Math.max(0, Math.min(550, SIGNAL_AUTO_POST58_MAX_MS - triggerMs - 80));
       if (waitBudget > 0) {
@@ -5663,12 +5666,7 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       throw new Error(`AUTO ${side === "CALL" ? "HIGHER" : "LOWER"} cancelado: ${diagnosis.message}`);
     }
 
-    const buyPayload = { buy: String(finalPlan.proposalId), price: Number(finalPlan.askPrice) };
-    item.signalAutoEntry.timing_diagnosis = {
-      code: triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS ? "TIMER_DELAYED_BUT_PREPARED_BUY_USED" : "PREPARED_BUY_ON_TIME",
-      message: triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS
-        ? "El timer despertó demorado, pero se compró sin recotizar usando la proposal final pre-58."
-        : "Compra enviada usando la proposal final preparada antes de 58s.",
+    const diagnosisBase = {
       points_enabled_at_ms: getSignalSideEnabledAtMs(item, side),
       auto_trigger_ms: Math.round(triggerMs),
       auto_trigger_delay_ms: Math.max(0, Math.round(triggerMs - SIGNAL_AUTO_ENTRY_MS)),
@@ -5677,10 +5675,20 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       barrier: String(finalPlan.barrier || ""),
       payout_total_pct: Number(finalPlan.payoutTotalPct || 0),
     };
-    try { saveHistory(history); } catch {}
+    const saveDiagnosis = (patch) => {
+      item.signalAutoEntry.timing_diagnosis = { ...diagnosisBase, ...(patch || {}) };
+      try { saveHistory(history); } catch {}
+    };
+
+    const firstBuyPayload = { buy: String(finalPlan.proposalId), price: Number(finalPlan.askPrice) };
+    saveDiagnosis({
+      code: triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS ? "TIMER_DELAYED_PREPARED_BUY_SENT" : "PREPARED_BUY_SENT",
+      message: "Buy enviado con la proposal final preparada cerca del segundo 58; esperando aceptación de Deriv.",
+      first_proposal_id: String(finalPlan.proposalId || ""),
+    });
     window.DerivDebug?.log?.("HIGHLOW_PRE58_PREPARED_BUY_ATTEMPT", {
-      proposal_id: buyPayload.buy,
-      price: buyPayload.price,
+      proposal_id: firstBuyPayload.buy,
+      price: firstBuyPayload.price,
       side,
       symbol,
       barrier: finalPlan.barrier,
@@ -5688,18 +5696,164 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       triggerMs,
       finalPlanAgeMs: finalPlan.finalPlanAgeMs,
     });
-    const res = await wsRequest(buyPayload, 20000);
-    if (res?.buy?.contract_id) {
+
+    const firstRes = await wsRequest(firstBuyPayload, 20000);
+    if (firstRes?.buy?.contract_id) {
+      saveDiagnosis({
+        code: "PREPARED_BUY_ACCEPTED",
+        message: "Deriv aceptó la compra con la proposal final fresca preparada antes del segundo 58.",
+        accepted_at_ms: Math.round(getSignalConfirmationMs(item)),
+        first_proposal_id: String(finalPlan.proposalId || ""),
+      });
       return {
-        res,
+        res: firstRes,
         plan: finalPlan,
-        attempt: 0,
+        attempt: 1,
         preparedPlan: finalPlan,
         usedFinalPreproposal: true,
+        repriceUsed: false,
         finalPlanAgeMs: Math.round(finalPlan.finalPlanAgeMs || 0),
       };
     }
-    throw new Error(res?.error?.message || "Deriv no confirmó la compra con la proposal final pre-58.");
+
+    const firstError = String(firstRes?.error?.message || "Deriv no confirmó la compra con la proposal final pre-58.");
+    const marketMoved = /underlying market has moved too much|contract payout has changed/i.test(firstError);
+    if (!marketMoved) {
+      saveDiagnosis({
+        code: "PREPARED_BUY_REJECTED",
+        message: firstError,
+        first_proposal_id: String(finalPlan.proposalId || ""),
+      });
+      throw new Error(firstError);
+    }
+
+    const afterFirstBuyMs = getSignalConfirmationMs(item);
+    if (afterFirstBuyMs > SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS) {
+      saveDiagnosis({
+        code: "MARKET_MOVED_REPRICE_TOO_LATE",
+        message: `Deriv rechazó la proposal porque cambió el mercado y ya eran ${(afterFirstBuyMs / 1000).toFixed(2)}s; no se reintentó tarde.`,
+        first_error: firstError,
+        first_proposal_id: String(finalPlan.proposalId || ""),
+        first_reject_ms: Math.round(afterFirstBuyMs),
+      });
+      throw new Error(`Compra rechazada por movimiento del mercado y sin tiempo seguro para recotizar: ${firstError}`);
+    }
+
+    saveDiagnosis({
+      code: "MARKET_MOVED_REPRICE_STARTED",
+      message: "Deriv rechazó la proposal por movimiento del mercado; recotizando una vez con el spot actual.",
+      first_error: firstError,
+      first_proposal_id: String(finalPlan.proposalId || ""),
+      first_reject_ms: Math.round(afterFirstBuyMs),
+    });
+
+    let retryPlan = null;
+    try {
+      const remaining = Math.max(350, Math.min(850, SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS - afterFirstBuyMs + 120));
+      retryPlan = await requestFreshHighLowPlanForBarrier(symbol, side, stake, finalPlan, remaining);
+      if (retryPlan) {
+        retryPlan.source = "market_moved_reprice_profit_130";
+        retryPlan.repricedFromProposalId = String(finalPlan.proposalId || "");
+        retryPlan.repricedAtMs = Math.round(getSignalConfirmationMs(item));
+      }
+    } catch (e) {
+      const msg = e?.message || String(e);
+      saveDiagnosis({
+        code: "MARKET_MOVED_REPRICE_PROPOSAL_ERROR",
+        message: msg,
+        first_error: firstError,
+        first_proposal_id: String(finalPlan.proposalId || ""),
+        reprice_error_at_ms: Math.round(getSignalConfirmationMs(item)),
+      });
+      throw new Error(`No se pudo recotizar después del movimiento del mercado: ${msg}`);
+    }
+
+    const retryReadyMs = getSignalConfirmationMs(item);
+    if (!retryPlan || !isHighLowPlanAcceptable(retryPlan)) {
+      const retryPct = Number(retryPlan?.payoutTotalPct);
+      const pctTxt = Number.isFinite(retryPct) ? `${retryPct.toFixed(1)}% total` : "sin pago válido";
+      saveDiagnosis({
+        code: "MARKET_MOVED_REPRICE_OUT_OF_RANGE",
+        message: `La recotización quedó fuera del rango: ${pctTxt}.`,
+        first_error: firstError,
+        first_proposal_id: String(finalPlan.proposalId || ""),
+        retry_proposal_id: String(retryPlan?.proposalId || ""),
+        retry_payout_total_pct: Number.isFinite(retryPct) ? retryPct : null,
+        retry_ready_ms: Math.round(retryReadyMs),
+      });
+      throw new Error(`Recotización fuera del rango ${getHighLowAcceptableRangeText()}: ${pctTxt}.`);
+    }
+    if (retryReadyMs > SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS) {
+      saveDiagnosis({
+        code: "MARKET_MOVED_REPRICE_READY_TOO_LATE",
+        message: `La recotización válida llegó a ${(retryReadyMs / 1000).toFixed(2)}s; no se envió un buy tardío.`,
+        first_error: firstError,
+        first_proposal_id: String(finalPlan.proposalId || ""),
+        retry_proposal_id: String(retryPlan.proposalId || ""),
+        retry_payout_total_pct: Number(retryPlan.payoutTotalPct || 0),
+        retry_ready_ms: Math.round(retryReadyMs),
+      });
+      throw new Error("La recotización llegó después del límite seguro de 58.9s.");
+    }
+
+    const retryBuyPayload = { buy: String(retryPlan.proposalId), price: Number(retryPlan.askPrice) };
+    saveDiagnosis({
+      code: "MARKET_MOVED_REPRICE_BUY_SENT",
+      message: "Recotización válida; segundo buy enviado antes de 58.9s.",
+      first_error: firstError,
+      first_proposal_id: String(finalPlan.proposalId || ""),
+      retry_proposal_id: String(retryPlan.proposalId || ""),
+      retry_barrier: String(retryPlan.barrier || ""),
+      retry_payout_total_pct: Number(retryPlan.payoutTotalPct || 0),
+      retry_buy_sent_ms: Math.round(retryReadyMs),
+    });
+    window.DerivDebug?.log?.("HIGHLOW_MARKET_MOVED_REPRICE_BUY_ATTEMPT", {
+      proposal_id: retryBuyPayload.buy,
+      price: retryBuyPayload.price,
+      side,
+      symbol,
+      barrier: retryPlan.barrier,
+      payoutTotalPct: retryPlan.payoutTotalPct,
+      retryReadyMs,
+      firstError,
+    });
+
+    const retryRes = await wsRequest(retryBuyPayload, 20000);
+    if (retryRes?.buy?.contract_id) {
+      saveDiagnosis({
+        code: "MARKET_MOVED_REPRICE_BUY_ACCEPTED",
+        message: "Deriv aceptó la compra después de una recotización inmediata con el spot actual.",
+        first_error: firstError,
+        first_proposal_id: String(finalPlan.proposalId || ""),
+        retry_proposal_id: String(retryPlan.proposalId || ""),
+        retry_barrier: String(retryPlan.barrier || ""),
+        retry_payout_total_pct: Number(retryPlan.payoutTotalPct || 0),
+        retry_buy_sent_ms: Math.round(retryReadyMs),
+        accepted_at_ms: Math.round(getSignalConfirmationMs(item)),
+      });
+      return {
+        res: retryRes,
+        plan: retryPlan,
+        attempt: 2,
+        preparedPlan: finalPlan,
+        usedFinalPreproposal: true,
+        repriceUsed: true,
+        firstBuyError: firstError,
+        finalPlanAgeMs: Math.round(finalPlan.finalPlanAgeMs || 0),
+      };
+    }
+
+    const retryError = String(retryRes?.error?.message || "Deriv no confirmó el segundo buy.");
+    saveDiagnosis({
+      code: "MARKET_MOVED_REPRICE_BUY_REJECTED",
+      message: retryError,
+      first_error: firstError,
+      first_proposal_id: String(finalPlan.proposalId || ""),
+      retry_proposal_id: String(retryPlan.proposalId || ""),
+      retry_payout_total_pct: Number(retryPlan.payoutTotalPct || 0),
+      retry_buy_sent_ms: Math.round(retryReadyMs),
+    });
+    throw new Error(retryError);
   }
 
   // Si la última bisección comenzó justo antes del segundo 58, le damos una
@@ -17353,7 +17507,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       !shouldUseAutoHighLowExecution()
     );
 
-    // V113.15: toda autoentrada usa autorización/preparación previa. No se consulta
+    // V113.16: toda autoentrada usa autorización/preparación previa. No se consulta
     // el saldo en el segundo 58 porque esa llamada puede retrasar el buy cientos de ms.
     await ensureAuthorized();
     if (!isAutoSignalExecution) {
@@ -17399,9 +17553,11 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
 
       tradeExtra = {
         ...tradeExtra,
-        exec_mode: highLowBuy.usedFinalPreproposal
-          ? "HIGHLOW_TARGET_PROFIT_130_PRE58_PROPOSAL_BUY"
-          : "HIGHLOW_TARGET_PROFIT_130_SIGNAL_SEARCH_FRESH_BUY",
+        exec_mode: highLowBuy.repriceUsed
+          ? "HIGHLOW_TARGET_PROFIT_130_MARKET_MOVED_REPRICE_BUY"
+          : highLowBuy.usedFinalPreproposal
+            ? "HIGHLOW_TARGET_PROFIT_130_PRE58_PROPOSAL_BUY"
+            : "HIGHLOW_TARGET_PROFIT_130_SIGNAL_SEARCH_FRESH_BUY",
         contract_type: contractLabel,
         api_contract_type: plan.apiContractType || getHighLowPrimaryApiContractType(side),
         api_symbol_field: isNewPatApiMode() ? "underlying_symbol" : "symbol",
@@ -17417,6 +17573,8 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
         entry_preproposal_used: !!highLowBuy.usedFinalPreproposal,
         entry_preproposal_prepared_ms: Number(plan.finalPreparedMs || null),
         entry_preproposal_age_ms: Number(highLowBuy.finalPlanAgeMs ?? null),
+        entry_reprice_used: !!highLowBuy.repriceUsed,
+        entry_first_buy_error: String(highLowBuy.firstBuyError || ""),
         entry_timing_diagnosis: itemCtx?.signalAutoEntry?.timing_diagnosis || null,
         barrier_search_fallback_default: !!plan.targetFallbackDefault,
         proposal_attempt: Number(highLowBuy.attempt || 1),

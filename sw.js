@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.15 (proposal final pre-58 + buy inmediato + diagnóstico temporal) */
+/* sw.js — Deriv Signals v113.16 (proposal final 57.6s + recotización única por market moved) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-15-pre58-prepared-buy";
+const CACHE = "deriv-assets-v113-16-fresh-pre58-reprice-once";
 
 const CORE_ASSETS = [
   "./",
