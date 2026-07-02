@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.17 (precisión real + rescate tardío + refinamiento fino) */
+/* sw.js — Deriv Signals v113.18 (GIRO+ paralelo + precisión real + rescate tardío) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-17-real-precision-late-rescue";
+const CACHE = "deriv-assets-v113-18-giro-plus-parallel";
 
 const CORE_ASSETS = [
   "./",

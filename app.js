@@ -1,3 +1,4 @@
+// v113.18: agrega GIRO+ en paralelo al motor actual: identifica candidatas, confirma Ruta A/B en 58s, muestra insignia sin duplicar señales ni órdenes y exporta todas sus métricas.
 // v113.17: corrige precisión real de barreras por símbolo, agrega refinamiento fino cerca del rango 125–135% neto y recupera confirmaciones tardías hasta 58.30s cuando ya existe una proposal válida y fresca.
 // v113.13: evita bloqueo total de la interfaz si la bisección repite una barrera redondeada; agrega límite de iteraciones, salida sin progreso y pausas para ceder el hilo a la UI. Mantiene la bisección final y la conexión resistente.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
@@ -107,7 +108,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.17";
+const APP_BUILD_VERSION = "v113.18";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -1944,6 +1945,7 @@ function upsertTradeJournalFromSignal(it) {
     signalAnchorEpochMs: it.signalAnchorEpochMs || null,
     signalDetectedEpochMs: it.signalDetectedEpochMs || null,
     signalResult60: it.signalResult60 && typeof it.signalResult60 === "object" ? { ...it.signalResult60 } : null,
+    giroPlus: it.giroPlus && typeof it.giroPlus === "object" ? stripForAnalysisCopy(it.giroPlus) : null,
 
     // snapshot trade
     trade: { ...(it.trade || {}) },
@@ -2681,7 +2683,9 @@ function setCompactModalHeader(item, ticksCount = null) {
   if (!item) return;
   if (modalTitle) {
     const scope = formatCompactScopeLabel();
-    modalTitle.textContent = `${item.symbol || "—"} · ${labelDir(item.direction)}${scope ? " · " + scope : ""}`;
+    const gp = getGiroPlusLabelInfo(item);
+    const gpTitle = gp.key === "confirmed" ? ` · ⭐ GIRO+ ${item?.giroPlus?.route || ""}` : gp.key === "candidate" ? " · ✨ GIRO+" : "";
+    modalTitle.textContent = `${item.symbol || "—"} · ${labelDir(item.direction)}${scope ? " · " + scope : ""}${gpTitle}`;
   }
   if (modalSub) {
     const mode = formatCompactModeLabel(item.mode || "NORMAL");
@@ -2702,7 +2706,8 @@ function setCompactModalHeader(item, ticksCount = null) {
       if (item?.minuteComplete && outcomeValue) signalOrResultTxt = formatNextCandleOutcomeLabel(item, true).replace("PROX VELA", "RESULTADO");
       else signalOrResultTxt = formatNextCandleDirectionLabel(item.direction);
     }
-    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${signalOrResultTxt ? " · " + signalOrResultTxt : ""}${live}`;
+    const gpSub = getGiroPlusModalSummary(item);
+    modalSub.textContent = `${item.time || "—"} · ${mode} · ticks ${n} · AUTO ${SIGNAL_AUTO_ENTRY_SEC}s${signalOrResultTxt ? " · " + signalOrResultTxt : ""}${gpSub ? " · " + gpSub : ""}${live}`;
   }
 }
 
@@ -8396,6 +8401,7 @@ function compactSignalForAnalysis(item) {
     snrLevel: compactVisualLevelForAnalysis(item.snrLevel),
     manualGiro: item.manualGiro ? stripForAnalysisCopy(item.manualGiro) : null,
     visualRead: item.visualRead ? stripForAnalysisCopy(item.visualRead) : null,
+    giroPlus: item.giroPlus ? stripForAnalysisCopy(item.giroPlus) : null,
     ticks: Array.isArray(item.ticks)
       ? item.ticks.map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) })).filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
       : [],
@@ -8423,6 +8429,7 @@ function compactTradeJournalForAnalysis(entry) {
     giroPolaridad: compactVisualLevelForAnalysis(entry.giroPolaridad),
     snrLevel: compactVisualLevelForAnalysis(entry.snrLevel),
     visualRead: entry.visualRead ? stripForAnalysisCopy(entry.visualRead) : null,
+    giroPlus: entry.giroPlus ? stripForAnalysisCopy(entry.giroPlus) : null,
     ticks: Array.isArray(entry.ticks)
       ? entry.ticks.map((t) => ({ ms: Number(t.ms), quote: Number(t.quote) })).filter((t) => Number.isFinite(t.ms) && Number.isFinite(t.quote))
       : [],
@@ -8439,12 +8446,16 @@ function buildSignalsAnalysisExport() {
   return {
     exported_at: new Date().toISOString(),
     export_scope: "analisis_dos_reducciones_visual_signals_all_ticks",
-    app_version: "v106.9.4.15_history_1000_visible_200",
+    app_version: APP_BUILD_VERSION,
     description: "Export para analizar patrones de dos reducciones claras antes del segundo 30: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
       signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
       trades_total: trades.length,
+      giro_plus_candidates: signals.filter((s) => !!s?.giroPlus?.candidateEver).length,
+      giro_plus_confirmed: signals.filter((s) => !!s?.giroPlus?.confirmed).length,
+      giro_plus_route_a: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("A")).length,
+      giro_plus_route_b: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("B")).length,
     },
     notes_for_analysis: {
       target_window_ms: [0, 30000],
@@ -11190,6 +11201,7 @@ function buildExportPayloadVoted() {
       giroPolaridad: getSignalLevelMeta(it),
       snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
+      giroPlus: it.giroPlus || null,
       minuteComplete: !!it.minuteComplete,
       ticks: Array.isArray(it.ticks) ? it.ticks : [],
     })),
@@ -11291,6 +11303,7 @@ function buildExportPayloadTrades() {
       giroPolaridad: getSignalLevelMeta(it),
       snrLevel: getSignalLevelMeta(it),
       manualGiro: normalizeManualGiroState(it.manualGiro),
+      giroPlus: it.giroPlus || null,
       ticks: Array.isArray(it.ticks) ? it.ticks : [],
     })),
 
@@ -11315,6 +11328,7 @@ function buildExportPayloadTrades() {
       giroPolaridad: getSignalLevelMeta(x),
       snrLevel: getSignalLevelMeta(x),
       manualGiro: normalizeManualGiroState(x.manualGiro),
+      giroPlus: x.giroPlus || null,
       ticks: Array.isArray(x.ticks) ? x.ticks : [],
     })),
 
@@ -13090,9 +13104,11 @@ function updateModalFooterReadingUI() {
     if (modalSequenceText) {
       if (read) {
         const dir = read.direction === "PUT" ? "VENTA" : read.direction === "CALL" ? "COMPRA" : "—";
-        modalSequenceText.textContent = `👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern && read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
+        const gpSummary = getGiroPlusModalSummary(modalCurrentItem);
+        modalSequenceText.textContent = `${gpSummary ? gpSummary + " · " : ""}👁️ ${read.quality} · ${read.dominant} ${read.primaryPattern}${read.contraryPattern && read.contraryPattern !== "—" ? ` · ${read.contrary} ${read.contraryPattern}` : ""} → ${dir}`;
       } else {
-        modalSequenceText.textContent = getModalVisualSequenceSummary(modalCurrentItem);
+        const gpSummary = getGiroPlusModalSummary(modalCurrentItem);
+        modalSequenceText.textContent = `${gpSummary ? gpSummary + " · " : ""}${getModalVisualSequenceSummary(modalCurrentItem)}`;
       }
     }
     if (modalSequenceDetail) {
@@ -13104,9 +13120,12 @@ function updateModalFooterReadingUI() {
               ? `${getSignalResult60DirectionText(modalCurrentItem)} · inicio ${Number(r.startQuote).toFixed(6)} · final ${Number(r.endQuote).toFixed(6)}`
               : `Próximos 60s pendientes · faltan ${getSignalResult60RemainingSec(modalCurrentItem)}s`)
           : "";
-        modalSequenceDetail.textContent = resultDetail ? `${baseDetail} · ${resultDetail}` : baseDetail;
+        const gpDetail = getGiroPlusModalSummary(modalCurrentItem);
+        const combinedDetail = resultDetail ? `${baseDetail} · ${resultDetail}` : baseDetail;
+        modalSequenceDetail.textContent = gpDetail ? `${gpDetail} · ${combinedDetail}` : combinedDetail;
       } else {
-        modalSequenceDetail.textContent = baseDetail;
+        const gpDetail = getGiroPlusModalSummary(modalCurrentItem);
+        modalSequenceDetail.textContent = gpDetail ? `${gpDetail} · ${baseDetail}` : baseDetail;
       }
     }
   } else {
@@ -16111,6 +16130,7 @@ function buildModalItemFromTradeEntry(entry) {
     signalAnchorEpochMs: entry.signalAnchorEpochMs || live?.signalAnchorEpochMs || null,
     signalDetectedEpochMs: entry.signalDetectedEpochMs || live?.signalDetectedEpochMs || null,
     signalResult60: entry.signalResult60 || live?.signalResult60 || null,
+    giroPlus: entry.giroPlus || live?.giroPlus || null,
     trade: entry.trade || live?.trade || null,
     study_capture_id: entry.study_capture_id || entry?.trade?.study_capture_id || live?.study_capture_id || live?.trade?.study_capture_id || "",
     manualGiro: normalizeManualGiroState(entry.manualGiro || live?.manualGiro),
@@ -16411,6 +16431,11 @@ function updateRowNextArrow(item) {
   if (!row) return;
   updateRowNextArrowOnRow(row, item);
 }
+function updateRowGiroPlusBadge(item) {
+  const row = document.querySelector(`.row[data-id="${cssEscape(item.id)}"]`);
+  if (!row) return;
+  updateRowGiroPlusBadgeOnRow(row, item);
+}
 
 /* =========================
    Row helpers (LOCAL onRow)
@@ -16438,6 +16463,49 @@ function updateRowChartBtnOnRow(row, item) {
   if (candleBtn) {
     candleBtn.disabled = !ready;
     candleBtn.title = ready ? "Ver mini gráfico de velas de 1 minuto" : (isFloatingSignalItem(item) ? "Esperando los 60s de la formación…" : "Esperando cierre del minuto…");
+  }
+}
+function updateRowGiroPlusBadgeOnRow(row, item) {
+  if (!row) return;
+  const el = row.querySelector(".giroPlusBadge");
+  if (!el) return;
+  const info = getGiroPlusLabelInfo(item);
+  if (!info.label) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    el.title = "";
+    el.dataset.giroPlus = "";
+    return;
+  }
+  el.classList.remove("hidden");
+  el.textContent = info.label;
+  el.title = info.title;
+  el.dataset.giroPlus = info.key;
+  el.style.display = "inline-flex";
+  el.style.alignItems = "center";
+  el.style.justifyContent = "center";
+  el.style.marginLeft = "6px";
+  el.style.padding = "4px 8px";
+  el.style.borderRadius = "999px";
+  el.style.fontSize = "10.5px";
+  el.style.fontWeight = "950";
+  el.style.letterSpacing = ".15px";
+  el.style.whiteSpace = "nowrap";
+  if (info.key === "confirmed") {
+    el.style.border = "1px solid rgba(250,204,21,.72)";
+    el.style.background = "linear-gradient(180deg, rgba(250,204,21,.22), rgba(14,165,233,.14))";
+    el.style.color = "#fef9c3";
+    el.style.boxShadow = "0 0 14px rgba(250,204,21,.22)";
+  } else if (info.key === "candidate") {
+    el.style.border = "1px solid rgba(168,85,247,.55)";
+    el.style.background = "rgba(168,85,247,.13)";
+    el.style.color = "#f3e8ff";
+    el.style.boxShadow = "none";
+  } else {
+    el.style.border = "1px solid rgba(148,163,184,.30)";
+    el.style.background = "rgba(148,163,184,.08)";
+    el.style.color = "rgba(226,232,240,.72)";
+    el.style.boxShadow = "none";
   }
 }
 function updateRowTradeBadgeOnRow(row, item) {
@@ -16514,6 +16582,7 @@ function animateFailShake(item) {
 function setNextOutcome(item, outcome) {
   const prevOutcome = item.nextOutcome || "";
   item.nextOutcome = outcome;
+  try { updateGiroPlusOutcome(item); } catch {}
   saveHistory(history);
 
   updateRowNextArrow(item);
@@ -16948,6 +17017,7 @@ function buildRow(item, opts = {}) {
     <div class="row-main">
       <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
       <span class="signalStageBadge" title=""></span>
+      <span class="giroPlusBadge hidden" title=""></span>
       <button class="chartBtn" type="button"></button>
       <button class="rowCandleBtn" type="button" title="Ver mini gráfico de velas 1m">🕯️</button>
       <span class="tradeBadge hidden" title=""></span>
@@ -17000,6 +17070,7 @@ function buildRow(item, opts = {}) {
   updateRowTradeBadgeOnRow(row, item);
   updateRowNextArrowOnRow(row, item);
   updateRowSignalStageOnRow(row, item);
+  updateRowGiroPlusBadgeOnRow(row, item);
 
   // acciones: señales + Trades de estudio
   if (!opts.hideActions) {
@@ -17118,6 +17189,9 @@ function renderHistory() {
       const normalizedFamily = normalizeSignalMode(rawMode);
       it.mode = normalizedFamily !== MODE_NORMAL || /^normal$/i.test(rawMode) ? normalizedFamily : rawMode.toUpperCase();
     }
+  }
+  for (const it of history || []) {
+    try { updateGiroPlusClassification(it, { persist: false, notify: false }); } catch {}
   }
   saveHistory(history);
 
@@ -25198,6 +25272,324 @@ function rememberConstructiveRollingTick(symbol, epochMs, quote) {
     while (arr.length && Number(arr[0].epochMs) < minEpoch) arr.shift();
   } catch {}
 }
+
+/* =========================
+   V113.18 — GIRO+ paralelo
+   - No reemplaza ni duplica la señal actual.
+   - No crea una segunda orden.
+   - Clasifica la misma señal como CANDIDATA y, con datos 0–58s,
+     la confirma por Ruta A / Ruta B.
+   - Reglas congeladas desde el backtest unificado: 52 señales,
+     44 giros (84,6%) sobre 775 señales únicas. Es resultado retrospectivo.
+========================= */
+const GIRO_PLUS_VERSION = "GIRO_PLUS_RUTAS_AB_V113_18_20260701";
+const GIRO_PLUS_FINAL_MS = 58000;
+const GIRO_PLUS_SAMPLE_MS = 2000;
+
+function getGiroPlusDominantSide(item) {
+  // La señal apunta al giro; el movimiento dominante de la primera vela es el opuesto.
+  return String(item?.direction || "").toUpperCase() === "PUT" ? 1 : -1;
+}
+function getGiroPlusEvalSec(item) {
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  const direct = Number(meta?.evalSec ?? meta?.signalFromSec);
+  if (Number.isFinite(direct)) return direct;
+  const txt = String(meta?.logic || "");
+  const m = txt.match(/Validaci[oó]n final en\s*([0-9.]+)s/i);
+  return m ? Number(m[1]) : null;
+}
+function getGiroPlusSampledPoints(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
+  const raw = (Array.isArray(item?.ticks) ? item.ticks : [])
+    .map((p) => ({ ms: Number(p?.ms), quote: Number(p?.quote) }))
+    .filter((p) => Number.isFinite(p.ms) && Number.isFinite(p.quote) && p.ms >= 0)
+    .sort((a, b) => a.ms - b.ms);
+  if (!raw.length) return [];
+  const lastMs = Math.max(0, Math.min(GIRO_PLUS_FINAL_MS, Number(raw[raw.length - 1]?.ms || 0)));
+  const endMs = Math.max(0, Math.min(Number(requestedEndMs || 0), Math.floor(lastMs / GIRO_PLUS_SAMPLE_MS) * GIRO_PLUS_SAMPLE_MS));
+  if (endMs < 0) return [];
+
+  const out = [];
+  let idx = 0;
+  let lastQuote = Number(raw[0].quote);
+  for (let ms = 0; ms <= endMs; ms += GIRO_PLUS_SAMPLE_MS) {
+    while (idx < raw.length && Number(raw[idx].ms) <= ms + 0.001) {
+      lastQuote = Number(raw[idx].quote);
+      idx += 1;
+    }
+    if (Number.isFinite(lastQuote)) out.push({ ms, quote: lastQuote });
+  }
+  return out;
+}
+function buildGiroPlusDirectionalRuns(alignedDeltas) {
+  const runs = [];
+  let active = null;
+  (Array.isArray(alignedDeltas) ? alignedDeltas : []).forEach((rawDelta, i) => {
+    const delta = Number(rawDelta || 0);
+    const sign = delta > 0 ? 1 : delta < 0 ? -1 : 0;
+    if (!sign) return;
+    if (active && active.sign === sign) {
+      active.move += Math.abs(delta);
+      active.steps += 1;
+      active.endIndex = i + 1;
+      return;
+    }
+    active = {
+      sign,
+      move: Math.abs(delta),
+      steps: 1,
+      startIndex: i,
+      endIndex: i + 1,
+    };
+    runs.push(active);
+  });
+  return runs;
+}
+function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
+  const points = getGiroPlusSampledPoints(item, requestedEndMs);
+  const availableThroughMs = Number(points[points.length - 1]?.ms || 0);
+  if (points.length < 13 || availableThroughMs < 24000) {
+    return {
+      availableThroughMs,
+      ready: false,
+      candidate: false,
+      candidateRoutes: [],
+      evaluated: false,
+      confirmed: false,
+      route: "",
+      blockedReasons: ["DATOS_INSUFICIENTES"],
+      metrics: {},
+    };
+  }
+
+  const quotes = points.map((p) => Number(p.quote));
+  const open = Number(quotes[0]);
+  const high = Math.max(...quotes);
+  const low = Math.min(...quotes);
+  const range = Math.max(high - low, Math.abs(open) * 1e-12, 1e-12);
+  const side = getGiroPlusDominantSide(item);
+  const aligned = quotes.map((q) => (q - open) * side);
+  const deltas = quotes.slice(1).map((q, i) => (q - quotes[i]) * side);
+  const runs = buildGiroPlusDirectionalRuns(deltas);
+  const oppositeRuns = runs.filter((r) => Number(r.sign) < 0);
+  const secondCorrectionRatio = oppositeRuns.length >= 2
+    ? Number(oppositeRuns[1].move || 0) / range
+    : null;
+  const indexOfMs = (ms) => Math.max(0, Math.min(points.length - 1, Math.round(ms / GIRO_PLUS_SAMPLE_MS)));
+  const q20Aligned = aligned[indexOfMs(20000)];
+  const q24Aligned = aligned[indexOfMs(24000)];
+  const q40 = quotes[indexOfMs(40000)];
+  const qEnd = quotes[quotes.length - 1];
+  const progress24Ratio = Math.max(0, Number(q24Aligned || 0)) / range;
+  const oppositeSteps = deltas.filter((d) => Number(d) < 0).length;
+  const nonZeroSteps = deltas.filter((d) => Number(d) !== 0).length;
+  const oppositeStepsRatio = nonZeroSteps ? oppositeSteps / nonZeroSteps : 0;
+  const bodyRatio = Math.abs(qEnd - open) / range;
+
+  const colorStates = [];
+  aligned.forEach((value, idx) => {
+    const state = value > 0 ? 1 : value < 0 ? -1 : 0;
+    if (!state) return;
+    if (!colorStates.length || colorStates[colorStates.length - 1].state !== state) {
+      colorStates.push({ state, ms: Number(points[idx]?.ms || 0) });
+    }
+  });
+  const totalCrosses = Math.max(0, colorStates.length - 1);
+  const noCrossAfter20 = !aligned.some((value, idx) => Number(points[idx]?.ms || 0) >= 20000 && Number(value) < 0);
+  const cleanSoFar = Number(q20Aligned) > 0 && Number(aligned[aligned.length - 1]) > 0 && noCrossAfter20 && totalCrosses <= 1;
+
+  const evalSec = getGiroPlusEvalSec(item);
+  const openIsOppositeExtreme = side > 0 ? open === low : open === high;
+  const dominantExtreme = side > 0 ? high : low;
+  const extremeIndex = quotes.findIndex((q) => q === dominantExtreme);
+  const extremeReachedAtMs = extremeIndex >= 0 ? Number(points[extremeIndex]?.ms || 0) : null;
+  const progress40ToEndRatio = availableThroughMs >= 40000
+    ? ((qEnd - q40) * side) / range
+    : null;
+
+  // Candidata: umbrales deliberadamente algo más amplios; la decisión final
+  // usa exactamente los umbrales congelados al llegar a 58s.
+  const routeACandidate = cleanSoFar && secondCorrectionRatio != null &&
+    secondCorrectionRatio <= 0.040 && progress24Ratio <= 0.80 && oppositeStepsRatio >= 0.25;
+  const routeBCandidate = cleanSoFar && Math.round(Number(evalSec)) === 36 && openIsOppositeExtreme;
+  const candidateRoutes = [routeACandidate ? "A" : "", routeBCandidate ? "B" : ""].filter(Boolean);
+
+  const evaluated = availableThroughMs >= GIRO_PLUS_FINAL_MS;
+  let routeA = false;
+  let routeB = false;
+  let confirmed = false;
+  let route = "";
+  const blockedReasons = [];
+
+  if (evaluated) {
+    routeA = secondCorrectionRatio != null &&
+      secondCorrectionRatio <= 0.025 &&
+      progress24Ratio <= 0.70 &&
+      oppositeStepsRatio >= 0.30;
+
+    routeB = Math.round(Number(evalSec)) === 36 &&
+      openIsOppositeExtreme &&
+      Number(extremeReachedAtMs) <= 50000 &&
+      Number(progress40ToEndRatio) <= 0.05;
+
+    const bodySafe = bodyRatio >= 0.20;
+    confirmed = cleanSoFar && bodySafe && (routeA || routeB);
+    route = routeA && routeB ? "A+B" : routeA ? "A" : routeB ? "B" : "";
+
+    if (!cleanSoFar) blockedReasons.push("VELA_NO_LIMPIA_0_58");
+    if (!bodySafe) blockedReasons.push("CUERPO_58_MENOR_20");
+    if (!routeA) blockedReasons.push("RUTA_A_NO_CUMPLE");
+    if (!routeB) blockedReasons.push("RUTA_B_NO_CUMPLE");
+  }
+
+  return {
+    availableThroughMs,
+    ready: true,
+    candidate: candidateRoutes.length > 0,
+    candidateRoutes,
+    evaluated,
+    confirmed,
+    route,
+    blockedReasons,
+    metrics: {
+      open,
+      high,
+      low,
+      range,
+      dominantSide: side > 0 ? "ALCISTA" : "BAJISTA",
+      evalSec: Number.isFinite(Number(evalSec)) ? Number(evalSec) : null,
+      secondCorrectionRatio,
+      progress24Ratio,
+      oppositeStepsRatio,
+      body58Ratio: evaluated ? bodyRatio : null,
+      bodyCurrentRatio: bodyRatio,
+      totalCrosses,
+      noCrossAfter20,
+      cleanThrough58: evaluated ? cleanSoFar : null,
+      openIsOppositeExtreme,
+      extremeReachedAtMs,
+      progress40To58Ratio: evaluated ? progress40ToEndRatio : null,
+      routeA,
+      routeB,
+      sampleStepMs: GIRO_PLUS_SAMPLE_MS,
+      availableThroughMs,
+    },
+  };
+}
+function getGiroPlusOutcomeInfo(item) {
+  const out = String(item?.nextOutcome || item?.signalResult60?.outcome || "").toLowerCase();
+  if (!out || !["up", "down", "flat"].includes(out)) return { outcome: "", giroCorrecto: null };
+  const side = String(item?.direction || "").toUpperCase();
+  const giroCorrecto = out === "flat" ? null : ((side === "CALL" && out === "up") || (side === "PUT" && out === "down"));
+  return { outcome: out, giroCorrecto };
+}
+function updateGiroPlusOutcome(item) {
+  if (!item?.giroPlus || typeof item.giroPlus !== "object") return false;
+  const info = getGiroPlusOutcomeInfo(item);
+  const before = JSON.stringify({ outcome: item.giroPlus.outcome || "", giroCorrecto: item.giroPlus.giroCorrecto });
+  item.giroPlus.outcome = info.outcome;
+  item.giroPlus.giroCorrecto = info.giroCorrecto;
+  return before !== JSON.stringify({ outcome: item.giroPlus.outcome || "", giroCorrecto: item.giroPlus.giroCorrecto });
+}
+function updateGiroPlusClassification(item, opts = {}) {
+  if (!item || !isFloatingSignalItem(item)) return false;
+  const previous = item.giroPlus && typeof item.giroPlus === "object" ? item.giroPlus : {};
+  if (previous.version === GIRO_PLUS_VERSION && previous.evaluated && Number(previous.evaluatedAtMs) >= GIRO_PLUS_FINAL_MS) {
+    return updateGiroPlusOutcome(item);
+  }
+
+  const analysis = analyzeGiroPlusSignal(item, GIRO_PLUS_FINAL_MS);
+  const candidateEver = !!(previous.candidateEver || analysis.candidate || analysis.confirmed);
+  const candidateSec = previous.candidateSec != null
+    ? Number(previous.candidateSec)
+    : (analysis.candidate || analysis.confirmed ? Math.round(Number(analysis.availableThroughMs || 0) / 1000) : null);
+  const status = analysis.confirmed
+    ? "confirmed"
+    : analysis.evaluated
+      ? (candidateEver ? "discarded" : "evaluated")
+      : analysis.candidate
+        ? "candidate"
+        : "analyzing";
+
+  const next = {
+    version: GIRO_PLUS_VERSION,
+    mode: "PARALELO_SIN_DUPLICAR_ORDEN",
+    status,
+    candidate: !!analysis.candidate,
+    candidateEver,
+    candidateRoutes: Array.isArray(analysis.candidateRoutes) ? analysis.candidateRoutes.slice() : [],
+    candidateSec,
+    evaluated: !!analysis.evaluated,
+    evaluatedAtMs: analysis.evaluated ? GIRO_PLUS_FINAL_MS : Number(analysis.availableThroughMs || 0),
+    confirmed: !!analysis.confirmed,
+    route: String(analysis.route || ""),
+    confirmedSec: analysis.confirmed ? 58 : null,
+    blockedReasons: Array.isArray(analysis.blockedReasons) ? analysis.blockedReasons.slice() : [],
+    metrics: analysis.metrics || {},
+    historicalReference: {
+      sampleSignals: 52,
+      turns: 44,
+      effectivenessPct: 84.6,
+      note: "Referencia retrospectiva; validar con señales nuevas.",
+    },
+    outcome: previous.outcome || "",
+    giroCorrecto: previous.giroCorrecto ?? null,
+  };
+  item.giroPlus = next;
+  updateGiroPlusOutcome(item);
+
+  const changed = JSON.stringify(previous) !== JSON.stringify(item.giroPlus);
+  if (!changed) return false;
+
+  try { updateRowGiroPlusBadge(item); } catch {}
+  if (modalCurrentItem && String(modalCurrentItem.id || "") === String(item.id || "")) {
+    modalCurrentItem.giroPlus = item.giroPlus;
+    try { setCompactModalHeader(modalCurrentItem); } catch {}
+    try { updateModalFooterReadingUI(); } catch {}
+  }
+
+  if (analysis.confirmed && !previous.confirmed && opts.notify !== false) {
+    try { toast(`⭐ ${item.symbol}: GIRO+ CONFIRMADA · RUTA ${analysis.route}`, 2300); } catch {}
+    try { if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120, 70, 120]); } catch {}
+  }
+  if (opts.persist !== false) {
+    try { saveHistory(history); } catch {}
+  }
+  return true;
+}
+function getGiroPlusLabelInfo(item) {
+  const gp = item?.giroPlus || {};
+  if (gp.confirmed) {
+    return {
+      key: "confirmed",
+      label: `⭐ GIRO+ · RUTA ${String(gp.route || "—")}`,
+      title: `GIRO+ confirmada en 58s · Ruta ${String(gp.route || "—")} · misma señal, sin orden duplicada. Referencia histórica retrospectiva: 44/52 (84,6%).`,
+    };
+  }
+  if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) {
+    const routes = Array.isArray(gp.candidateRoutes) && gp.candidateRoutes.length ? gp.candidateRoutes.join("/") : "A/B";
+    return {
+      key: "candidate",
+      label: `✨ GIRO+ CANDIDATA · ${routes}`,
+      title: "La señal actual también está formando GIRO+. Se confirma o descarta con el recorrido completo hasta 58s.",
+    };
+  }
+  if (gp.status === "discarded" && gp.candidateEver) {
+    return {
+      key: "discarded",
+      label: "GIRO+ DESCARTADA",
+      title: `Fue candidata, pero no completó el filtro en 58s: ${(gp.blockedReasons || []).join(" · ") || "sin confirmación final"}. La señal normal se conserva.`,
+    };
+  }
+  return { key: "", label: "", title: "" };
+}
+function getGiroPlusModalSummary(item) {
+  const gp = item?.giroPlus || {};
+  if (gp.confirmed) return `⭐ GIRO+ CONFIRMADA · RUTA ${gp.route || "—"} · 58s`;
+  if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) return `✨ GIRO+ CANDIDATA · esperando 58s`;
+  if (gp.status === "discarded" && gp.candidateEver) return `GIRO+ descartada · ${(gp.blockedReasons || []).join(" / ") || "no completó Ruta A/B"}`;
+  return "";
+}
+
 function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
   try {
     const sym = String(symbol || "");
@@ -25256,6 +25648,10 @@ function updateConstructiveFloatingSignalsOnTick(symbol, epochMs, quote) {
           updateRowChartBtn(it);
         }
       }
+
+      try {
+        if (updateGiroPlusClassification(it, { persist: false, notify: true })) changed = true;
+      } catch {}
 
       if (modalCurrentItem && modalCurrentItem.id === it.id) {
         modalCurrentItem.ticks = Array.isArray(it.ticks) ? it.ticks.slice() : [];
@@ -28008,6 +28404,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
   };
 
   item.manualGiro = normalizeManualGiroState(item.manualGiro);
+  try { updateGiroPlusClassification(item, { persist: false, notify: false }); } catch {}
 
   if (history.some((x) => x.id === item.id)) return null;
 
