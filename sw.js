@@ -1,26 +1,31 @@
-/* sw.js — Deriv Signals v108.0.0-proceso-reduccion-constructiva (network-first core + notificaciones abren PWA sin recargar si ya está abierta) */
+/* sw.js — Deriv Signals v113.20 (GIRO+ A/B/C/D/E + signo de barrera bloqueado + microajuste final) */
 "use strict";
 
-const CACHE = "deriv-assets-v108-0-0-proceso-reduccion-constructiva";
+const CACHE = "deriv-assets-v113-20-signo-barrera-microajuste";
 
-const ASSETS = [
+const CORE_ASSETS = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
   "./manifest.json",
+  "./alert.mp3",
+];
+
+const OPTIONAL_ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
-  "./alert.mp3",
   "./bg-neon.png",
-  "./despeje-mental-bg.png",
   "./pausa-visual-bg.png",
 ];
 
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
     const cache = await caches.open(CACHE);
-    await cache.addAll(ASSETS);
+    // Los archivos esenciales sí deben quedar disponibles.
+    await cache.addAll(CORE_ASSETS);
+    // Un asset visual ausente no puede impedir la instalación de la versión nueva.
+    await Promise.allSettled(OPTIONAL_ASSETS.map((asset) => cache.add(asset)));
   })());
   self.skipWaiting();
 });
