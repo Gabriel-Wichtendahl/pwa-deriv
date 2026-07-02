@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.18 (GIRO+ paralelo + precisión real + rescate tardío) */
+/* sw.js — Deriv Signals v113.20 (GIRO+ A/B/C/D/E + signo de barrera bloqueado + microajuste final) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-18-giro-plus-parallel";
+const CACHE = "deriv-assets-v113-20-signo-barrera-microajuste";
 
 const CORE_ASSETS = [
   "./",

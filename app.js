@@ -1,3 +1,4 @@
+// v113.20: mantiene GIRO+ A/B/C/D/E y corrige el refresco final Higher/Lower: conserva el signo de la barrera, microajusta sin cruzar el spot y comienza con más margen.
 // v113.18: agrega GIRO+ en paralelo al motor actual: identifica candidatas, confirma Ruta A/B en 58s, muestra insignia sin duplicar señales ni órdenes y exporta todas sus métricas.
 // v113.17: corrige precisión real de barreras por símbolo, agrega refinamiento fino cerca del rango 125–135% neto y recupera confirmaciones tardías hasta 58.30s cuando ya existe una proposal válida y fresca.
 // v113.13: evita bloqueo total de la interfaz si la bisección repite una barrera redondeada; agrega límite de iteraciones, salida sin progreso y pausas para ceder el hilo a la UI. Mantiene la bisección final y la conexión resistente.
@@ -108,7 +109,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.18";
+const APP_BUILD_VERSION = "v113.20";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -2165,11 +2166,12 @@ const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 const SIGNAL_AUTO_PREPROPOSAL_START_MS = 44000;
 const SIGNAL_AUTO_PREPROPOSAL_END_MS = 57500;
 const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 20000;
-// V113.17: Higher/Lower prepara la proposal FINAL alrededor de 57.6s y recupera propuestas frescas hasta 58.30s.
-// El objetivo es que al segundo 58 tenga menos de ~400ms de antigüedad.
-// Si Deriv informa que el mercado se movió, se permite una única recotización
-// inmediata y un segundo buy, siempre enviado antes de 58.9s.
-const SIGNAL_HIGHLOW_FINAL_REFRESH_START_MS = 57600;
+// V113.20: Higher/Lower comienza el refresco final alrededor de 57.25s.
+// Primero recotiza la misma distancia relativa aceptada y, si el pago se mueve,
+// hace microajustes del mismo lado del spot: CALL siempre + y PUT siempre -.
+// Nunca cruza por cero durante la preparación final. Si Deriv informa que el
+// mercado se movió, conserva una única recotización y segundo buy antes de 58.9s.
+const SIGNAL_HIGHLOW_FINAL_REFRESH_START_MS = 57250;
 const SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS = 57950;
 const SIGNAL_HIGHLOW_FINAL_PLAN_MAX_AGE_MS = 900;
 const SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS = 58900;
@@ -4968,6 +4970,69 @@ function makeHighLowCandidateFromPlan(plan, side) {
   return makeBarrierCandidateFromSignedValue(signed, Number(plan?.precision || getBarrierPrecisionForAbs(Math.abs(signed))));
 }
 
+function getHighLowRequiredBarrierSign(side) {
+  return String(side || "CALL").toUpperCase() === "PUT" ? -1 : 1;
+}
+
+function makeHighLowSameSideCandidate(plan, side, symbol = "", forcedAbs = NaN) {
+  const source = makeHighLowCandidateFromPlan(plan, side);
+  const sourceAbs = Math.abs(Number(source?.barrierNum || plan?.barrierNum || 0));
+  const abs = Number.isFinite(Number(forcedAbs)) && Number(forcedAbs) > 0
+    ? Math.abs(Number(forcedAbs))
+    : sourceAbs;
+  if (!Number.isFinite(abs) || abs <= 0) return null;
+  const precision = getHighLowBarrierMaxDecimals(symbol);
+  const minStep = Math.pow(10, -Math.max(0, precision));
+  const safeAbs = Math.max(abs, Number.isFinite(minStep) && minStep > 0 ? minStep : HIGHLOW_API_MIN_RELATIVE_BARRIER);
+  return makeBarrierCandidateFromSignedValue(getHighLowRequiredBarrierSign(side) * safeAbs, precision);
+}
+
+function isHighLowBarrierOnRequiredSide(plan, side) {
+  const candidate = makeHighLowCandidateFromPlan(plan, side);
+  const signed = Number(candidate?.barrierNum);
+  return Number.isFinite(signed) && signed !== 0 && Math.sign(signed) === getHighLowRequiredBarrierSign(side);
+}
+
+function adjustHighLowBarrierSameSideTowardTarget(plan, side, symbol = "") {
+  const payoutPct = Number(plan?.payoutTotalPct);
+  const candidate = makeHighLowSameSideCandidate(plan, side, symbol);
+  const currentAbs = Math.abs(Number(candidate?.barrierNum || 0));
+  if (!Number.isFinite(payoutPct) || payoutPct <= 0 || !Number.isFinite(currentAbs) || currentAbs <= 0) return null;
+  if (isHighLowPlanAcceptable(plan)) return null;
+
+  const precision = getHighLowBarrierMaxDecimals(symbol);
+  const step = Math.pow(10, -Math.max(0, precision));
+  let factor;
+  if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
+    // Pago alto: contrato demasiado difícil. Acerca la barrera al spot,
+    // reduciendo la magnitud pero conservando CALL + / PUT -.
+    factor = Math.max(0.65, Math.min(0.985, HIGHLOW_TARGET_PAYOUT_TOTAL_PCT / payoutPct));
+  } else {
+    // Pago bajo: contrato demasiado fácil. Aleja la barrera del spot,
+    // aumentando la magnitud sin cambiar de signo.
+    factor = Math.max(1.015, Math.min(1.50, HIGHLOW_TARGET_PAYOUT_TOTAL_PCT / payoutPct));
+  }
+
+  let nextAbs = currentAbs * factor;
+  if (Number.isFinite(step) && step > 0) {
+    nextAbs = Math.max(step, Math.round(nextAbs / step) * step);
+    if (Math.abs(nextAbs - currentAbs) < step * 0.5) {
+      nextAbs = Math.max(step, currentAbs + (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT ? -step : step));
+    }
+  }
+  const next = makeHighLowSameSideCandidate(candidate, side, symbol, nextAbs);
+  if (!next?.barrier || next.barrier === candidate.barrier) return null;
+  return {
+    ...next,
+    source: "entry_same_side_microadjust_profit_130",
+    targetSearch: true,
+    targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
+    adjustedFromBarrier: candidate.barrier,
+    adjustedFromPayoutTotalPct: payoutPct,
+    signLocked: true,
+  };
+}
+
 async function findHighLowPlanNear130(item, side, opts = {}) {
   const symbol = String(item?.symbol || "");
   if (!symbol || isHighLowProposalCooldownActive()) return null;
@@ -5252,7 +5317,9 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
 }
 
 async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPlan, timeoutMs = AUTO_FULL_PROPOSAL_TIMEOUT_MS) {
-  const candidate = makeHighLowCandidateFromPlan(barrierPlan, side);
+  // Las recotizaciones de entrada siempre respetan el lado del contrato:
+  // HIGHER/CALL usa barrera positiva y LOWER/PUT usa barrera negativa.
+  const candidate = makeHighLowSameSideCandidate(barrierPlan, side, symbol);
   if (!candidate?.barrier) throw new Error(`Higher/Lower sin barrera de +130% de ganancia preparada para ${symbol}.`);
   const plan = await getHighLowProposalQuote(
     symbol,
@@ -5267,11 +5334,15 @@ async function requestFreshHighLowPlanForBarrier(symbol, side, stake, barrierPla
   if (!plan?.proposalId || !Number.isFinite(Number(plan.askPrice))) {
     throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: Deriv no devolvió una proposal válida.`);
   }
+  if (!isHighLowBarrierOnRequiredSide(plan, side)) {
+    throw new Error(`${side === "CALL" ? "HIGHER" : "LOWER"}: la proposal devolvió una barrera del lado incorrecto.`);
+  }
   plan.targetPayoutTotalPct = HIGHLOW_TARGET_PAYOUT_TOTAL_PCT;
   plan.targetDistancePct = getHighLowTargetDistance(plan);
   plan.targetSearch = true;
   plan.fixedBarrier = false;
-  plan.source = "fresh_target_profit_130_barrier";
+  plan.source = "fresh_target_profit_130_same_side_barrier";
+  plan.signLocked = true;
   return plan;
 }
 
@@ -5333,37 +5404,10 @@ function getHighLowProvisionalBarrierPlan(item, side) {
   return null;
 }
 
-function adjustHighLowBarrierToward130(plan, side) {
-  const payoutPct = Number(plan?.payoutTotalPct);
-  const candidate = makeHighLowCandidateFromPlan(plan, side);
-  const signed = Number(candidate?.barrierNum || 0);
-  const abs = Math.abs(signed);
-  if (!Number.isFinite(payoutPct) || payoutPct <= 0 || !Number.isFinite(abs) || abs <= 0) return null;
-  if (isHighLowPlanAcceptable(plan)) return null;
-
-  const easySign = String(side || "CALL").toUpperCase() === "PUT" ? 1 : -1;
-  let nextSigned;
-  if (payoutPct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) {
-    // Pago demasiado alto: mover la barrera hacia el lado fácil.
-    const sameEasySide = Math.sign(signed) === easySign;
-    const nextAbs = Math.max(abs * (sameEasySide ? 1.35 : 0.5), HIGHLOW_API_MIN_RELATIVE_BARRIER);
-    nextSigned = easySign * nextAbs;
-  } else {
-    // Pago demasiado bajo: acercar la barrera al lado difícil.
-    nextSigned = signed * 0.62;
-  }
-
-  const next = makeBarrierCandidateFromSignedValue(nextSigned, getBarrierPrecisionForAbs(Math.abs(nextSigned)));
-  if (!next?.barrier || next.barrier === candidate.barrier) return null;
-  return {
-    ...next,
-    source: "entry_adaptive_retry_profit_130_cross_spot",
-    targetSearch: true,
-    targetPayoutTotalPct: HIGHLOW_TARGET_PAYOUT_TOTAL_PCT,
-    adjustedFromBarrier: candidate.barrier,
-    adjustedFromPayoutTotalPct: payoutPct,
-  };
+function adjustHighLowBarrierToward130(plan, side, symbol = "") {
+  return adjustHighLowBarrierSameSideTowardTarget(plan, side, symbol);
 }
+
 
 function getHighLowBarrierEaseCoordinate(plan, side) {
   const candidate = makeHighLowCandidateFromPlan(plan, side);
@@ -5400,7 +5444,7 @@ function makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, side, triedBarri
   ];
 
   for (const u of trialU) {
-    const signed = String(side || "CALL").toUpperCase() === "PUT" ? u : -u;
+    const signed = getHighLowRequiredBarrierSign(side) * Math.abs(u);
     const precision = Math.max(3, getBarrierPrecisionForAbs(Math.abs(signed)));
     const next = makeBarrierCandidateFromSignedValue(signed, precision);
     if (!next?.barrier || triedBarriers.has(String(next.barrier))) continue;
@@ -5442,7 +5486,7 @@ function getHighLowFinalEntryPlan(item, side, stake, maxAgeMs = SIGNAL_HIGHLOW_F
   const key = side === "CALL" ? "finalEntryCall" : "finalEntryPut";
   const persistedKey = side === "CALL" ? "finalEntryCall" : "finalEntryPut";
   let plan = cache?.[key] || item?.autoHighLow?.[persistedKey] || null;
-  if (!plan || !isHighLowPlanAcceptable(plan) || !plan.proposalId) return null;
+  if (!plan || !isHighLowPlanAcceptable(plan) || !plan.proposalId || !isHighLowBarrierOnRequiredSide(plan, side)) return null;
   const ask = Number(plan.askPrice);
   if (!Number.isFinite(ask) || ask <= 0 || Math.abs(ask - Number(stake)) > 0.02) return null;
   const preparedAt = Number(plan.finalPreparedAt || plan.updatedAt || 0);
@@ -5501,6 +5545,7 @@ async function prepareHighLowFinalEntryProposal(item, side, reason = "pre58_fina
     reason: String(reason || "pre58_final_refresh"),
     started_at: Date.now(),
     started_ms: Math.round(ms),
+    sign_lock: safeSide === "CALL" ? "+" : "-",
   };
   item.autoHighLow ||= {};
   item.autoHighLow.finalRefreshStatus = { ...cache.finalRefreshStatus };
@@ -5510,50 +5555,66 @@ async function prepareHighLowFinalEntryProposal(item, side, reason = "pre58_fina
       await ensureAuthorized();
       if (cache.running) {
         try {
-          await Promise.race([cache.running, new Promise((resolve) => setTimeout(resolve, 500))]);
+          await Promise.race([cache.running, new Promise((resolve) => setTimeout(resolve, 250))]);
         } catch {}
       }
+
       let prepared = getCachedExecutionPlan(item, safeSide, AUTO_PRECALC_STALE_MS * 3);
       if (!prepared) {
         const persisted = safeSide === "CALL" ? item?.autoHighLow?.call : item?.autoHighLow?.put;
         if (isHighLowPlanAcceptable(persisted)) prepared = persisted;
       }
       if (!prepared) prepared = getHighLowProvisionalBarrierPlan(item, safeSide);
-      if (!prepared || !makeHighLowCandidateFromPlan(prepared, safeSide)) {
-        throw new Error("No había barrera preparada para refrescar antes de 58s.");
+      const symbol = String(item.symbol || "");
+      let candidate = makeHighLowSameSideCandidate(prepared, safeSide, symbol);
+      if (!prepared || !candidate?.barrier) {
+        throw new Error("No había barrera preparada del lado correcto para refrescar antes de 58s.");
       }
 
-      let hardPlan = null;
-      let easyPlan = null;
-      const tried = new Set();
       let closest = null;
-      const symbol = String(item.symbol || "");
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      const tried = new Set();
+      // Primera consulta: misma distancia relativa aceptada, recalculada con el spot actual.
+      // Luego se permiten hasta dos microajustes del mismo lado; nunca una búsqueda amplia.
+      for (let attempt = 1; attempt <= 3; attempt++) {
         const nowMs = getSignalConfirmationMs(item);
         if (nowMs > SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS + 250) break;
-        const candidate = makeHighLowCandidateFromPlan(prepared, safeSide);
-        if (candidate?.barrier) tried.add(String(candidate.barrier));
-        const plan = await requestFreshHighLowPlanForBarrier(symbol, safeSide, stake, prepared, 850);
+        if (!candidate?.barrier || tried.has(String(candidate.barrier))) break;
+        tried.add(String(candidate.barrier));
+
+        const remaining = Math.max(300, Math.min(800, SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS + 250 - nowMs + 120));
+        const plan = await requestFreshHighLowPlanForBarrier(symbol, safeSide, stake, candidate, remaining);
         if (plan && (!closest || getHighLowTargetDistance(plan) < getHighLowTargetDistance(closest))) closest = plan;
         if (plan && isHighLowPlanAcceptable(plan)) {
           const finalPlan = saveHighLowFinalEntryPlan(item, safeSide, plan, reason);
+          finalPlan.signLocked = true;
+          finalPlan.finalRefreshAttempt = attempt;
           const regularCache = getOrCreateExecutionPlan(item);
           if (safeSide === "CALL") regularCache.call = finalPlan;
           else regularCache.put = finalPlan;
           regularCache.updatedAt = Date.now();
+          regularCache.finalRefreshStatus = {
+            ...(regularCache.finalRefreshStatus || {}),
+            sign_lock: safeSide === "CALL" ? "+" : "-",
+            attempt,
+            microadjust_used: attempt > 1,
+          };
+          item.autoHighLow ||= {};
+          item.autoHighLow[safeSide === "CALL" ? "finalEntryCall" : "finalEntryPut"] = { ...finalPlan };
+          item.autoHighLow.finalRefreshStatus = { ...regularCache.finalRefreshStatus };
           return true;
         }
         if (!plan) break;
-        const pct = Number(plan.payoutTotalPct || 0);
-        if (pct > HIGHLOW_TARGET_ACCEPT_MAX_PCT) hardPlan = plan;
-        else if (pct < HIGHLOW_TARGET_ACCEPT_MIN_PCT) easyPlan = plan;
-        let adjusted = makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, safeSide, tried);
-        if (!adjusted) adjusted = adjustHighLowBarrierToward130(plan, safeSide);
+
+        const adjusted = adjustHighLowBarrierSameSideTowardTarget(plan, safeSide, symbol);
         if (!adjusted?.barrier || tried.has(String(adjusted.barrier))) break;
-        prepared = adjusted;
+        candidate = adjusted;
       }
-      const pctTxt = Number.isFinite(Number(closest?.payoutTotalPct)) ? `; mejor ${Number(closest.payoutTotalPct).toFixed(1)}% total` : "";
-      throw new Error(`No se obtuvo proposal final dentro del rango antes de 58s${pctTxt}.`);
+
+      const pctTxt = Number.isFinite(Number(closest?.payoutTotalPct))
+        ? `; mejor ${Number(closest.payoutTotalPct).toFixed(1)}% total`
+        : "";
+      const barrierTxt = closest?.barrier ? ` con barrera ${closest.barrier}` : "";
+      throw new Error(`No se obtuvo proposal final dentro del rango antes de 58s sin cruzar el spot${pctTxt}${barrierTxt}.`);
     } catch (e) {
       cache.finalRefreshStatus = {
         status: "error",
@@ -5562,6 +5623,7 @@ async function prepareHighLowFinalEntryProposal(item, side, reason = "pre58_fina
         error: e?.message || String(e),
         error_at: Date.now(),
         error_ms: Math.round(getSignalConfirmationMs(item)),
+        sign_lock: safeSide === "CALL" ? "+" : "-",
       };
       item.autoHighLow ||= {};
       item.autoHighLow.finalRefreshStatus = { ...cache.finalRefreshStatus };
@@ -5574,6 +5636,7 @@ async function prepareHighLowFinalEntryProposal(item, side, reason = "pre58_fina
   return cache.finalRefreshRunning;
 }
 
+
 function scheduleHighLowFinalEntryTimers(item) {
   if (!shouldUseAutoHighLowExecution() || !item?.id || !isTradeEntryOpen(item) || item?.signalAutoEntry?.attempted) return;
   const cache = getOrCreateExecutionPlan(item);
@@ -5585,12 +5648,12 @@ function scheduleHighLowFinalEntryTimers(item) {
       cache.finalRefreshTimer = null;
       const current = findHistoryItemById(item.id) || item;
       const side = normalizeSignalConfirmationSide(getSignalEnabledTradeSide(current));
-      if (side) void prepareHighLowFinalEntryProposal(current, side, "exact_timer_57_6");
+      if (side) void prepareHighLowFinalEntryProposal(current, side, "exact_timer_57_25");
       else {
         cache.finalRefreshStatus = {
           status: "waiting_points",
           side: "",
-          reason: "exact_timer_57_6",
+          reason: "exact_timer_57_25",
           at: Date.now(),
           ms: Math.round(getSignalConfirmationMs(current)),
         };
@@ -5620,7 +5683,7 @@ function promoteFreshHighLowPlanForLateConfirmation(item, side, stake) {
     ? [cache?.call, cache?.callCandidate, item?.autoHighLow?.call, item?.autoHighLow?.callCandidate]
     : [cache?.put, cache?.putCandidate, item?.autoHighLow?.put, item?.autoHighLow?.putCandidate];
   const usable = candidates
-    .filter((plan) => plan && isHighLowPlanAcceptable(plan) && plan.proposalId)
+    .filter((plan) => plan && isHighLowPlanAcceptable(plan) && plan.proposalId && isHighLowBarrierOnRequiredSide(plan, side))
     .map((plan) => {
       const preparedAt = Number(plan.updatedAt || 0);
       const age = Date.now() - preparedAt;
@@ -5771,7 +5834,7 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   let lastError = null;
   const isAutoSignalExecution = !!(item?.signalAutoEntry?.attempted && item?.signalAutoEntry?.status === "sending");
 
-  // V113.17: la proposal final se genera alrededor de 57.6s para llegar fresca
+  // V113.20: la proposal final se genera alrededor de 57.25s para llegar fresca
   // al AUTO 58. Si el primer buy es rechazado porque el mercado se movió,
   // recotizamos una sola vez con el spot actual y reintentamos antes de 58.9s.
   if (isAutoSignalExecution) {
@@ -6134,7 +6197,7 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
         // del rango, probamos el punto medio. Esto evita saltar 122% → 140%
         // y cancelar sin consultar la barrera intermedia.
         let adjusted = makeHighLowEntryBisectionCandidate(hardPlan, easyPlan, side, triedBarriers);
-        if (!adjusted) adjusted = adjustHighLowBarrierToward130(plan, side);
+        if (!adjusted) adjusted = adjustHighLowBarrierToward130(plan, side, symbol);
         if (adjusted?.barrier && !triedBarriers.has(String(adjusted.barrier)) && attempt < maxEntryQuotes) {
           prepared = adjusted;
           continue;
@@ -8447,7 +8510,7 @@ function buildSignalsAnalysisExport() {
     exported_at: new Date().toISOString(),
     export_scope: "analisis_dos_reducciones_visual_signals_all_ticks",
     app_version: APP_BUILD_VERSION,
-    description: "Export para analizar patrones de dos reducciones claras antes del segundo 30: incluye señales visibles de Reducción visual con ticks, resultado nextOutcome, feedback y trades asociados. No incluye tokens ni datos sensibles.",
+    description: "Export para analizar patrones de Doble Reducción y GIRO+ A/B/C/D/E: incluye señales visibles, ticks 0–60, resultado nextOutcome, métricas giroPlus, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
       signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
@@ -8456,11 +8519,14 @@ function buildSignalsAnalysisExport() {
       giro_plus_confirmed: signals.filter((s) => !!s?.giroPlus?.confirmed).length,
       giro_plus_route_a: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("A")).length,
       giro_plus_route_b: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("B")).length,
+      giro_plus_route_c: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("C")).length,
+      giro_plus_route_d: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("D")).length,
+      giro_plus_route_e: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("E")).length,
     },
     notes_for_analysis: {
       target_window_ms: [0, 30000],
       also_review_window_ms: [0, 25000],
-      desired_output: "buscar secuencias G/M/P y patrones repetidos que anticipan giro de la vela siguiente",
+      desired_output: "validar secuencias G/M/P y rutas GIRO+ A/B/C/D/E que anticipan giro de la vela siguiente",
     },
     signals_all: signals,
     trades_all: trades,
@@ -25274,15 +25340,18 @@ function rememberConstructiveRollingTick(symbol, epochMs, quote) {
 }
 
 /* =========================
-   V113.18 — GIRO+ paralelo
+   V113.19 — GIRO+ paralelo A/B/C/D/E
+   - Mantiene intactas las señales normales y las Rutas A/B de v113.18.
    - No reemplaza ni duplica la señal actual.
    - No crea una segunda orden.
-   - Clasifica la misma señal como CANDIDATA y, con datos 0–58s,
-     la confirma por Ruta A / Ruta B.
-   - Reglas congeladas desde el backtest unificado: 52 señales,
-     44 giros (84,6%) sobre 775 señales únicas. Es resultado retrospectivo.
+   - Agrega tres rutas tardías sobre el recorrido 0–58s:
+     C = P relativo seguido de cuarto impulso dominante muy grande.
+     D = G→M + G→P oficiales y último G dominante cerca del cierre.
+     E = latigazo dominante entre 48 y 52s.
+   - Backtest unificado (solo desenlaces direccionales): 85 señales,
+     72 giros (84,7%) sobre 775 señales únicas. Resultado retrospectivo.
 ========================= */
-const GIRO_PLUS_VERSION = "GIRO_PLUS_RUTAS_AB_V113_18_20260701";
+const GIRO_PLUS_VERSION = "GIRO_PLUS_RUTAS_ABCDE_V113_19_20260702";
 const GIRO_PLUS_FINAL_MS = 58000;
 const GIRO_PLUS_SAMPLE_MS = 2000;
 
@@ -25297,6 +25366,16 @@ function getGiroPlusEvalSec(item) {
   const txt = String(meta?.logic || "");
   const m = txt.match(/Validaci[oó]n final en\s*([0-9.]+)s/i);
   return m ? Number(m[1]) : null;
+}
+function getGiroPlusOfficialReductionPatterns(item) {
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  const txt = String(meta?.logic || "");
+  const first = txt.match(/1ª\s*reducci[oó]n[^:]*:\s*([GMP](?:→[GMP]){1,2})/i);
+  const second = txt.match(/2ª\s*reducci[oó]n[^:]*:\s*([GMP](?:→[GMP]){1,2})/i);
+  return {
+    first: first ? String(first[1] || "").toUpperCase() : "",
+    second: second ? String(second[1] || "").toUpperCase() : "",
+  };
 }
 function getGiroPlusSampledPoints(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const raw = (Array.isArray(item?.ticks) ? item.ticks : [])
@@ -25370,6 +25449,14 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const aligned = quotes.map((q) => (q - open) * side);
   const deltas = quotes.slice(1).map((q, i) => (q - quotes[i]) * side);
   const runs = buildGiroPlusDirectionalRuns(deltas);
+  const dominantRuns = runs
+    .filter((r) => Number(r.sign) > 0)
+    .map((r) => ({
+      ...r,
+      startMs: Number(points[Number(r.startIndex)]?.ms || 0),
+      endMs: Number(points[Number(r.endIndex)]?.ms || 0),
+      moveRatio: Number(r.move || 0) / range,
+    }));
   const oppositeRuns = runs.filter((r) => Number(r.sign) < 0);
   const secondCorrectionRatio = oppositeRuns.length >= 2
     ? Number(oppositeRuns[1].move || 0) / range
@@ -25377,9 +25464,15 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const indexOfMs = (ms) => Math.max(0, Math.min(points.length - 1, Math.round(ms / GIRO_PLUS_SAMPLE_MS)));
   const q20Aligned = aligned[indexOfMs(20000)];
   const q24Aligned = aligned[indexOfMs(24000)];
-  const q40 = quotes[indexOfMs(40000)];
+  const q36Aligned = availableThroughMs >= 36000 ? aligned[indexOfMs(36000)] : null;
+  const q40 = availableThroughMs >= 40000 ? quotes[indexOfMs(40000)] : null;
+  const q48Aligned = availableThroughMs >= 48000 ? aligned[indexOfMs(48000)] : null;
+  const q52Aligned = availableThroughMs >= 52000 ? aligned[indexOfMs(52000)] : null;
   const qEnd = quotes[quotes.length - 1];
   const progress24Ratio = Math.max(0, Number(q24Aligned || 0)) / range;
+  const progress48Ratio = q48Aligned == null ? null : Number(q48Aligned) / range;
+  const progress52Ratio = q52Aligned == null ? null : Number(q52Aligned) / range;
+  const progress36ToEndRatio = q36Aligned == null ? null : (Number(aligned[aligned.length - 1]) - Number(q36Aligned)) / range;
   const oppositeSteps = deltas.filter((d) => Number(d) < 0).length;
   const nonZeroSteps = deltas.filter((d) => Number(d) !== 0).length;
   const oppositeStepsRatio = nonZeroSteps ? oppositeSteps / nonZeroSteps : 0;
@@ -25398,47 +25491,104 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const cleanSoFar = Number(q20Aligned) > 0 && Number(aligned[aligned.length - 1]) > 0 && noCrossAfter20 && totalCrosses <= 1;
 
   const evalSec = getGiroPlusEvalSec(item);
+  const officialPatterns = getGiroPlusOfficialReductionPatterns(item);
   const openIsOppositeExtreme = side > 0 ? open === low : open === high;
   const dominantExtreme = side > 0 ? high : low;
   const extremeIndex = quotes.findIndex((q) => q === dominantExtreme);
   const extremeReachedAtMs = extremeIndex >= 0 ? Number(points[extremeIndex]?.ms || 0) : null;
   const progress40ToEndRatio = availableThroughMs >= 40000
-    ? ((qEnd - q40) * side) / range
+    ? ((qEnd - Number(q40)) * side) / range
     : null;
 
-  // Candidata: umbrales deliberadamente algo más amplios; la decisión final
-  // usa exactamente los umbrales congelados al llegar a 58s.
+  const thirdDominantRun = dominantRuns[2] || null;
+  const fourthDominantRun = dominantRuns[3] || null;
+  const fourthVsThirdRatio = thirdDominantRun && fourthDominantRun
+    ? Number(fourthDominantRun.move || 0) / Math.max(Number(thirdDominantRun.move || 0), 1e-12)
+    : null;
+  const lastDominantRun = dominantRuns[dominantRuns.length - 1] || null;
+  const lastDominantMoveRatio = lastDominantRun ? Number(lastDominantRun.moveRatio || 0) : null;
+  const lastDominantEndMs = lastDominantRun ? Number(lastDominantRun.endMs || 0) : null;
+
+  // Candidatas: son umbrales algo más amplios para avisar antes de la decisión final.
+  // La confirmación a 58s conserva exactamente los umbrales congelados del backtest.
   const routeACandidate = cleanSoFar && secondCorrectionRatio != null &&
     secondCorrectionRatio <= 0.040 && progress24Ratio <= 0.80 && oppositeStepsRatio >= 0.25;
   const routeBCandidate = cleanSoFar && Math.round(Number(evalSec)) === 36 && openIsOppositeExtreme;
-  const candidateRoutes = [routeACandidate ? "A" : "", routeBCandidate ? "B" : ""].filter(Boolean);
+  const routeCCandidate = cleanSoFar && availableThroughMs >= 50000 && dominantRuns.length >= 4 &&
+    Number(fourthVsThirdRatio) >= 3.0 && Number(progress36ToEndRatio) >= 0.20;
+  const routeDCandidate = cleanSoFar && availableThroughMs >= 48000 &&
+    officialPatterns.first === "G→M" && officialPatterns.second === "G→P" &&
+    Number(lastDominantMoveRatio) >= 0.25 && Number(lastDominantEndMs) >= 48000;
+  const routeECandidate = cleanSoFar && availableThroughMs >= 52000 &&
+    Number(progress48Ratio) <= 0.38 && Number(progress52Ratio) >= 0.42;
+  const candidateRoutes = [
+    routeACandidate ? "A" : "",
+    routeBCandidate ? "B" : "",
+    routeCCandidate ? "C" : "",
+    routeDCandidate ? "D" : "",
+    routeECandidate ? "E" : "",
+  ].filter(Boolean);
 
   const evaluated = availableThroughMs >= GIRO_PLUS_FINAL_MS;
   let routeA = false;
   let routeB = false;
+  let routeC = false;
+  let routeD = false;
+  let routeE = false;
   let confirmed = false;
   let route = "";
   const blockedReasons = [];
 
   if (evaluated) {
+    // Ruta A: avance con fricción interna y segunda corrección mínima.
     routeA = secondCorrectionRatio != null &&
       secondCorrectionRatio <= 0.025 &&
       progress24Ratio <= 0.70 &&
       oppositeStepsRatio >= 0.30;
 
+    // Ruta B: apertura en el extremo, validación en 36s y frenado final.
     routeB = Math.round(Number(evalSec)) === 36 &&
       openIsOppositeExtreme &&
       Number(extremeReachedAtMs) <= 50000 &&
       Number(progress40ToEndRatio) <= 0.05;
 
+    // Ruta C: el cuarto impulso dominante es al menos 4× el tercero
+    // y la vela todavía agrega >=30% de su rango entre 36 y 58s.
+    routeC = dominantRuns.length >= 4 &&
+      Number(fourthVsThirdRatio) >= 4.0 &&
+      Number(progress36ToEndRatio) >= 0.30;
+
+    // Ruta D: G→M + G→P oficiales y un último impulso dominante grande
+    // (>=33% del rango) que termina entre 50 y 58s.
+    routeD = officialPatterns.first === "G→M" &&
+      officialPatterns.second === "G→P" &&
+      Number(lastDominantMoveRatio) >= 0.33 &&
+      Number(lastDominantEndMs) >= 50000 &&
+      Number(lastDominantEndMs) <= 58000;
+
+    // Ruta E: latigazo tardío; hasta 48s llevaba <=34% del rango y
+    // para 52s ya alcanzó >=48% del rango.
+    routeE = Number(progress48Ratio) <= 0.34 &&
+      Number(progress52Ratio) >= 0.48;
+
     const bodySafe = bodyRatio >= 0.20;
-    confirmed = cleanSoFar && bodySafe && (routeA || routeB);
-    route = routeA && routeB ? "A+B" : routeA ? "A" : routeB ? "B" : "";
+    const confirmedRoutes = [
+      routeA ? "A" : "",
+      routeB ? "B" : "",
+      routeC ? "C" : "",
+      routeD ? "D" : "",
+      routeE ? "E" : "",
+    ].filter(Boolean);
+    confirmed = cleanSoFar && bodySafe && confirmedRoutes.length > 0;
+    route = confirmed ? confirmedRoutes.join("+") : "";
 
     if (!cleanSoFar) blockedReasons.push("VELA_NO_LIMPIA_0_58");
     if (!bodySafe) blockedReasons.push("CUERPO_58_MENOR_20");
     if (!routeA) blockedReasons.push("RUTA_A_NO_CUMPLE");
     if (!routeB) blockedReasons.push("RUTA_B_NO_CUMPLE");
+    if (!routeC) blockedReasons.push("RUTA_C_NO_CUMPLE");
+    if (!routeD) blockedReasons.push("RUTA_D_NO_CUMPLE");
+    if (!routeE) blockedReasons.push("RUTA_E_NO_CUMPLE");
   }
 
   return {
@@ -25457,6 +25607,8 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
       range,
       dominantSide: side > 0 ? "ALCISTA" : "BAJISTA",
       evalSec: Number.isFinite(Number(evalSec)) ? Number(evalSec) : null,
+      officialFirstReduction: officialPatterns.first || null,
+      officialSecondReduction: officialPatterns.second || null,
       secondCorrectionRatio,
       progress24Ratio,
       oppositeStepsRatio,
@@ -25468,8 +25620,23 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
       openIsOppositeExtreme,
       extremeReachedAtMs,
       progress40To58Ratio: evaluated ? progress40ToEndRatio : null,
+      dominantRunsCount: dominantRuns.length,
+      thirdDominantMoveRatio: thirdDominantRun ? Number(thirdDominantRun.moveRatio || 0) : null,
+      fourthDominantMoveRatio: fourthDominantRun ? Number(fourthDominantRun.moveRatio || 0) : null,
+      fourthVsThirdRatio,
+      progress36To58Ratio: evaluated ? progress36ToEndRatio : null,
+      lastDominantMoveRatio,
+      lastDominantEndMs,
+      progress48Ratio: availableThroughMs >= 48000 ? progress48Ratio : null,
+      progress52Ratio: availableThroughMs >= 52000 ? progress52Ratio : null,
+      progress48To52Ratio: availableThroughMs >= 52000 && progress48Ratio != null && progress52Ratio != null
+        ? Number(progress52Ratio) - Number(progress48Ratio)
+        : null,
       routeA,
       routeB,
+      routeC,
+      routeD,
+      routeE,
       sampleStepMs: GIRO_PLUS_SAMPLE_MS,
       availableThroughMs,
     },
@@ -25526,9 +25693,12 @@ function updateGiroPlusClassification(item, opts = {}) {
     blockedReasons: Array.isArray(analysis.blockedReasons) ? analysis.blockedReasons.slice() : [],
     metrics: analysis.metrics || {},
     historicalReference: {
-      sampleSignals: 52,
-      turns: 44,
-      effectivenessPct: 84.6,
+      sampleSignalsDirectional: 85,
+      turns: 72,
+      effectivenessPct: 84.7,
+      previousRoutesAB: { sampleSignals: 52, turns: 44, effectivenessPct: 84.6 },
+      addedRoutesCDE: { sampleSignals: 33, turns: 28, effectivenessPct: 84.8 },
+      flatOutcomesExcludedFromPct: 1,
       note: "Referencia retrospectiva; validar con señales nuevas.",
     },
     outcome: previous.outcome || "",
@@ -25562,11 +25732,11 @@ function getGiroPlusLabelInfo(item) {
     return {
       key: "confirmed",
       label: `⭐ GIRO+ · RUTA ${String(gp.route || "—")}`,
-      title: `GIRO+ confirmada en 58s · Ruta ${String(gp.route || "—")} · misma señal, sin orden duplicada. Referencia histórica retrospectiva: 44/52 (84,6%).`,
+      title: `GIRO+ confirmada en 58s · Ruta ${String(gp.route || "—")} · misma señal, sin orden duplicada. Referencia histórica combinada: 72/85 giros direccionales (84,7%).`,
     };
   }
   if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) {
-    const routes = Array.isArray(gp.candidateRoutes) && gp.candidateRoutes.length ? gp.candidateRoutes.join("/") : "A/B";
+    const routes = Array.isArray(gp.candidateRoutes) && gp.candidateRoutes.length ? gp.candidateRoutes.join("/") : "A/B/C/D/E";
     return {
       key: "candidate",
       label: `✨ GIRO+ CANDIDATA · ${routes}`,
@@ -25586,7 +25756,7 @@ function getGiroPlusModalSummary(item) {
   const gp = item?.giroPlus || {};
   if (gp.confirmed) return `⭐ GIRO+ CONFIRMADA · RUTA ${gp.route || "—"} · 58s`;
   if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) return `✨ GIRO+ CANDIDATA · esperando 58s`;
-  if (gp.status === "discarded" && gp.candidateEver) return `GIRO+ descartada · ${(gp.blockedReasons || []).join(" / ") || "no completó Ruta A/B"}`;
+  if (gp.status === "discarded" && gp.candidateEver) return `GIRO+ descartada · ${(gp.blockedReasons || []).join(" / ") || "no completó Ruta A/B/C/D/E"}`;
   return "";
 }
 

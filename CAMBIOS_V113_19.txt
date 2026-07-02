@@ -1,0 +1,38 @@
+PWA DERIV v113.19 — GIRO+ A/B/C/D/E EN PARALELO
+
+Se agregaron las Rutas C, D y E sobre la v113.18, manteniendo intactas:
+- Todas las señales normales del motor actual.
+- Las Rutas GIRO+ A y B ya implementadas.
+- La regla de 5 puntos y el AUTO58 existente.
+- Higher/Lower, precisión real y rescate tardío.
+
+No se crean señales ni órdenes duplicadas. Una misma señal puede recibir una o varias letras, por ejemplo:
+- GIRO+ · RUTA A
+- GIRO+ · RUTA C
+- GIRO+ · RUTA A+C+E
+
+Rutas conservadas:
+- A: fricción interna, segunda corrección <=2,5%, avance a 24s <=70% y >=30% de pasos contrarios.
+- B: validación en 36s, apertura como extremo opuesto, extremo antes de 50s y frenado 40→58 <=5%.
+
+Rutas nuevas:
+- C: al menos 4 impulsos dominantes; el cuarto mide >=4 veces el tercero y entre 36→58 agrega >=30% del rango.
+- D: reducciones oficiales G→M + G→P; último impulso dominante >=33% del rango y termina entre 50–58s.
+- E: latigazo tardío; avance a 48s <=34% del rango y a 52s >=48%.
+
+Condiciones comunes:
+- Vela direccional limpia: a 20s ya está del lado dominante y no vuelve a cruzar la apertura.
+- Máximo un cambio de lado total.
+- Cuerpo al segundo 58 >=20% del rango.
+- Confirmación definitiva al segundo 58.
+
+Validación retrospectiva sobre el JSON unificado:
+- Rutas A/B anteriores: 52 señales, 44 giros, 84,6%.
+- Rutas C/D/E nuevas y no duplicadas: 33 señales, 28 giros, 84,8%.
+- Total combinado direccional: 85 señales, 72 giros, 84,7%.
+- Hubo 1 caso adicional con resultado siguiente plano; no se incluyó en el porcentaje direccional.
+
+La app reevalúa automáticamente las señales guardadas con ticks, por lo que las señales pasadas A/B se conservan y las antiguas que cumplan C/D/E reciben también su nueva clasificación.
+
+Importante:
+Los porcentajes son retrospectivos y no garantizan resultados futuros. Cada export guarda giroPlus, las rutas cumplidas, las métricas y el resultado para validar las señales nuevas.

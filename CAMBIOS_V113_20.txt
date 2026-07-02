@@ -1,0 +1,21 @@
+PWA DERIV v113.20 — BARRERA FINAL SIN CRUZAR EL SPOT
+
+Base: v113.19 GIRO+ A/B/C/D/E.
+
+Correcciones Higher/Lower:
+- El refresco final comienza alrededor de 57,25 s para dejar margen a la cotización y a un microajuste.
+- CALL/HIGHER conserva siempre barrera relativa positiva.
+- PUT/LOWER conserva siempre barrera relativa negativa.
+- La primera cotización final reutiliza la distancia relativa previamente aceptada, recalculada con el spot actual.
+- Si el pago sale de 225–235% total, realiza hasta dos microajustes del mismo lado del spot.
+- Ya no hace una búsqueda amplia ni puede transformar, por ejemplo, PUT -10.595 en +5.2975.
+- La recotización por “market moved too much” también respeta el signo del contrato.
+- El rescate tardío solo puede usar proposals válidas del lado correcto.
+
+Se conserva sin cambios:
+- GIRO+ Rutas A/B/C/D/E.
+- Motor Doble Reducción.
+- Regla de 5 puntos.
+- AUTO 58 y límite de rescate tardío.
+- Ganancia neta objetivo 125–135% (pago total 225–235%).
+- Cooldown y recuperación de conexión.
