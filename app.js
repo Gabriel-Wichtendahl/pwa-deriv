@@ -1,4 +1,4 @@
-// v113.16: prepara la proposal Higher/Lower final alrededor de 57.6s para que llegue casi pegada al AUTO 58. Si Deriv rechaza el buy porque el mercado se movió, recotiza una sola vez con el spot actual y reintenta antes de 58.9s, siempre dentro de 125–135% de ganancia neta.
+// v113.17: corrige precisión real de barreras por símbolo, agrega refinamiento fino cerca del rango 125–135% neto y recupera confirmaciones tardías hasta 58.30s cuando ya existe una proposal válida y fresca.
 // v113.13: evita bloqueo total de la interfaz si la bisección repite una barrera redondeada; agrega límite de iteraciones, salida sin progreso y pausas para ceder el hilo a la UI. Mantiene la bisección final y la conexión resistente.
 // v113.10: búsqueda 130% con horquillado y bisección; interpreta “no return” como barrera demasiado fácil, evita fallbacks inútiles y termina antes del segundo 58.
 // v113.4: reduce a 45s el enfriamiento de nuevas señales por índice; conserva los fixes de barrera FLOAT y Próx. vela en Trades.
@@ -107,7 +107,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.16";
+const APP_BUILD_VERSION = "v113.17";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -234,14 +234,18 @@ const HIGHLOW_TARGET_PAYOUT_TOTAL_PCT = 100 + AUTO_TARGET_RETURN_PCT; // 230% to
 const HIGHLOW_TARGET_TOLERANCE_PCT = 2;
 const HIGHLOW_TARGET_ACCEPT_MIN_PCT = 225; // 125% de ganancia neta.
 const HIGHLOW_TARGET_ACCEPT_MAX_PCT = 235; // 135% de ganancia neta.
-const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 8;
+const HIGHLOW_TARGET_MAX_SEARCH_QUOTES = 10;
 const AUTO_PRECALC_REFRESH_MS = 10000;
 const AUTO_PRECALC_STALE_MS = 120000;
 const HIGHLOW_PRECALC_MAX_ATTEMPTS = 1;
-const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v11_profit130_total225_235";
-const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v2_absolute_fallback";
-const HIGHLOW_API_MAX_BARRIER_DECIMALS = 3;
+const HIGHLOW_BARRIER_CACHE_KEY = "highLowBarrierCache_v12_profit130_precision_real";
+const HIGHLOW_BARRIER_PRECISION_CACHE_KEY = "highLowBarrierPrecisionBySymbol_v3_real_symbol_precision";
+const HIGHLOW_API_MAX_BARRIER_DECIMALS = 4;
 const HIGHLOW_DEFAULT_MAX_BARRIER_DECIMALS_BY_SYMBOL = {
+  R_10: 3,
+  R_25: 3,
+  R_50: 4,
+  R_75: 4,
   R_100: 2,
 };
 const HIGHLOW_API_MIN_RELATIVE_BARRIER = 0.001;
@@ -2159,7 +2163,7 @@ const SIGNAL_AUTO_POST58_MAX_SEC = SIGNAL_AUTO_POST58_MAX_MS / 1000;
 const SIGNAL_AUTO_PREPROPOSAL_START_MS = 44000;
 const SIGNAL_AUTO_PREPROPOSAL_END_MS = 57500;
 const SIGNAL_AUTO_PREPROPOSAL_TTL_MS = 20000;
-// V113.16: Higher/Lower prepara la proposal FINAL alrededor de 57.6s.
+// V113.17: Higher/Lower prepara la proposal FINAL alrededor de 57.6s y recupera propuestas frescas hasta 58.30s.
 // El objetivo es que al segundo 58 tenga menos de ~400ms de antigüedad.
 // Si Deriv informa que el mercado se movió, se permite una única recotización
 // inmediata y un segundo buy, siempre enviado antes de 58.9s.
@@ -2167,6 +2171,10 @@ const SIGNAL_HIGHLOW_FINAL_REFRESH_START_MS = 57600;
 const SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS = 57950;
 const SIGNAL_HIGHLOW_FINAL_PLAN_MAX_AGE_MS = 900;
 const SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS = 58900;
+const SIGNAL_HIGHLOW_LATE_CONFIRMATION_MAX_MS = 58300;
+const SIGNAL_HIGHLOW_LATE_PLAN_MAX_AGE_MS = 750;
+const SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_MAX_MS = 58550;
+const SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_DISTANCE_PCT = 1.5;
 const SIGNAL_AUTO_TIMER_DELAY_WARN_MS = 350;
 // V112.1: modo estricto. Si al tick 58 no hay proposal válida, se cancela.
 // Nunca se pide una proposal nueva después de 58 porque eso genera entradas tardías.
@@ -4354,7 +4362,7 @@ function makeBarrierCandidateFromSignedValue(signedValue, forcedPrecision = null
   const hasForcedPrecision = forcedPrecision !== null && forcedPrecision !== undefined && String(forcedPrecision).trim() !== "" && Number.isFinite(Number(forcedPrecision));
   let precision = hasForcedPrecision ? Number(forcedPrecision) : getBarrierPrecisionForAbs(raw0);
   precision = Math.max(0, Math.min(HIGHLOW_API_MAX_BARRIER_DECIMALS, precision));
-  // La API acepta hasta 3 decimales. Evita que valores muy pequeños redondeen a cero.
+  // La precisión máxima depende del símbolo (hasta 4 decimales). Evita que valores muy pequeños redondeen a cero.
   let raw = Number(raw0.toFixed(precision));
   if ((!Number.isFinite(raw) || raw <= 0) && raw0 > 0) {
     precision = HIGHLOW_API_MAX_BARRIER_DECIMALS;
@@ -5117,8 +5125,10 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
   // para siempre en microtareas y dejar toda la PWA sin responder.
   let bisectionIterations = 0;
   const bisectionIterationLimit = Math.max(10, maxQuotes * 4);
+  // Reserva hasta dos cotizaciones para el ajuste fino de precisión al final.
+  const bisectionQuoteLimit = Math.max(1, maxQuotes - 2);
   while (
-    quotesUsed < maxQuotes &&
+    quotesUsed < bisectionQuoteLimit &&
     hardU !== null &&
     easyU !== null &&
     easyU > hardU &&
@@ -5183,6 +5193,40 @@ async function findHighLowPlanNear130(item, side, opts = {}) {
     if (!Number.isFinite(pct)) break;
     if (pct > target) hardU = midU;
     else easyU = midU;
+  }
+
+  // V113.17: si el mejor candidato quedó apenas afuera del rango por el
+  // redondeo de la barrera, usa pasos reales del símbolo. Ejemplo R_50:
+  // -0.0100 puede dar 224.4%; ahora también prueba -0.0101/-0.0102 en vez de
+  // abandonar por una diferencia de solo décimas.
+  if (best && quotesUsed < maxQuotes) {
+    const bestPct = Number(best.payoutTotalPct);
+    const bestCandidate = makeHighLowCandidateFromPlan(best, side);
+    const precision = getHighLowBarrierMaxDecimals(symbol);
+    const step = Math.pow(10, -Math.max(0, precision));
+    const belowDistance = Number.isFinite(bestPct) ? HIGHLOW_TARGET_ACCEPT_MIN_PCT - bestPct : Number.POSITIVE_INFINITY;
+    const aboveDistance = Number.isFinite(bestPct) ? bestPct - HIGHLOW_TARGET_ACCEPT_MAX_PCT : Number.POSITIVE_INFINITY;
+    const nearBelow = belowDistance > 0 && belowDistance <= SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_DISTANCE_PCT;
+    const nearAbove = aboveDistance > 0 && aboveDistance <= SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_DISTANCE_PCT;
+    if (bestCandidate && Number.isFinite(step) && step > 0 && (nearBelow || nearAbove)) {
+      const bestU = getHighLowBarrierEaseCoordinate(best, side);
+      // Payout bajo => contrato demasiado fácil => bajar u (más difícil).
+      // Payout alto => contrato demasiado difícil => subir u (más fácil).
+      const direction = nearBelow ? -1 : 1;
+      for (const mult of [1, 2, 4, 8]) {
+        if (quotesUsed >= maxQuotes || !Number.isFinite(bestU)) break;
+        const trialU = bestU + direction * step * mult;
+        const signed = String(side || "CALL").toUpperCase() === "PUT" ? trialU : -trialU;
+        const candidate = makeBarrierCandidateFromSignedValue(signed, precision);
+        const r = await quoteCandidate(candidate);
+        if (r.kind === "plan" && r.plan && isHighLowPlanAcceptable(r.plan)) {
+          rememberExecutionBarrierHint(symbol, side, r.plan, r.plan.precision || precision);
+          r.plan.searchAcceptable = true;
+          r.plan.source = "signal_target_profit_130_fine_precision";
+          return r.plan;
+        }
+      }
+    }
   }
 
   if (best) best.searchLastError = lastError;
@@ -5559,6 +5603,105 @@ function scheduleHighLowFinalEntryTimers(item) {
   }
 }
 
+function promoteFreshHighLowPlanForLateConfirmation(item, side, stake) {
+  if (!item?.id) return null;
+  const nowSignalMs = getSignalConfirmationMs(item);
+  const enabledAtMs = getSignalSideEnabledAtMs(item, side);
+  if (!Number.isFinite(enabledAtMs) || enabledAtMs > SIGNAL_HIGHLOW_LATE_CONFIRMATION_MAX_MS) return null;
+  if (nowSignalMs > SIGNAL_HIGHLOW_REPRICE_BUY_MAX_MS) return null;
+
+  const cache = getOrCreateExecutionPlan(item);
+  const candidates = side === "CALL"
+    ? [cache?.call, cache?.callCandidate, item?.autoHighLow?.call, item?.autoHighLow?.callCandidate]
+    : [cache?.put, cache?.putCandidate, item?.autoHighLow?.put, item?.autoHighLow?.putCandidate];
+  const usable = candidates
+    .filter((plan) => plan && isHighLowPlanAcceptable(plan) && plan.proposalId)
+    .map((plan) => {
+      const preparedAt = Number(plan.updatedAt || 0);
+      const age = Date.now() - preparedAt;
+      return { plan, preparedAt, age };
+    })
+    .filter((row) => Number.isFinite(row.preparedAt) && row.preparedAt > 0 && row.age >= 0 && row.age <= SIGNAL_HIGHLOW_LATE_PLAN_MAX_AGE_MS)
+    .filter((row) => Math.abs(Number(row.plan.askPrice || 0) - Number(stake)) <= 0.02)
+    .sort((a, b) => a.age - b.age || getHighLowTargetDistance(a.plan) - getHighLowTargetDistance(b.plan));
+  const picked = usable[0];
+  if (!picked) return null;
+
+  const finalPlan = {
+    ...picked.plan,
+    source: "late_confirmation_fresh_existing_plan",
+    finalPreparedAt: picked.preparedAt,
+    finalPreparedMs: Math.max(0, Math.round(nowSignalMs - picked.age)),
+    finalRefreshReason: "late_confirmation_fresh_existing_plan",
+    promotedAfterLateConfirmation: true,
+    searchAcceptable: true,
+    finalPlanAgeMs: Math.round(picked.age),
+  };
+  if (side === "CALL") cache.finalEntryCall = finalPlan;
+  else cache.finalEntryPut = finalPlan;
+  cache.finalRefreshStatus = {
+    status: "ready_late_confirmation",
+    side,
+    reason: "fresh_existing_plan",
+    prepared_at: finalPlan.finalPreparedAt,
+    prepared_ms: finalPlan.finalPreparedMs,
+    promoted_at_ms: Math.round(nowSignalMs),
+    age_ms: Math.round(picked.age),
+    barrier: String(finalPlan.barrier || ""),
+    payout_total_pct: Number(finalPlan.payoutTotalPct || 0),
+  };
+  item.autoHighLow ||= {};
+  item.autoHighLow[side === "CALL" ? "finalEntryCall" : "finalEntryPut"] = { ...finalPlan };
+  item.autoHighLow.finalRefreshStatus = { ...cache.finalRefreshStatus };
+  return finalPlan;
+}
+
+async function rescueNearRangeHighLowPlanAtEntry(item, side, stake) {
+  if (!item?.id || getSignalConfirmationMs(item) > SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_MAX_MS) return null;
+  const cache = getOrCreateExecutionPlan(item);
+  const candidates = side === "CALL"
+    ? [cache?.callCandidate, item?.autoHighLow?.callCandidate, cache?.call, item?.autoHighLow?.call]
+    : [cache?.putCandidate, item?.autoHighLow?.putCandidate, cache?.put, item?.autoHighLow?.put];
+  const base = candidates
+    .filter((plan) => plan && makeHighLowCandidateFromPlan(plan, side))
+    .sort((a, b) => getHighLowTargetDistance(a) - getHighLowTargetDistance(b))[0] || null;
+  const pct = Number(base?.payoutTotalPct);
+  if (!base || !Number.isFinite(pct)) return null;
+  const belowDistance = HIGHLOW_TARGET_ACCEPT_MIN_PCT - pct;
+  const aboveDistance = pct - HIGHLOW_TARGET_ACCEPT_MAX_PCT;
+  const nearBelow = belowDistance > 0 && belowDistance <= SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_DISTANCE_PCT;
+  const nearAbove = aboveDistance > 0 && aboveDistance <= SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_DISTANCE_PCT;
+  if (!nearBelow && !nearAbove) return null;
+
+  const precision = getHighLowBarrierMaxDecimals(item.symbol);
+  const step = Math.pow(10, -Math.max(0, precision));
+  const baseU = getHighLowBarrierEaseCoordinate(base, side);
+  if (!Number.isFinite(step) || step <= 0 || !Number.isFinite(baseU)) return null;
+  const direction = nearBelow ? -1 : 1;
+  let closest = base;
+
+  for (const mult of [1, 2, 4]) {
+    const nowMs = getSignalConfirmationMs(item);
+    if (nowMs > SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_MAX_MS) break;
+    const trialU = baseU + direction * step * mult;
+    const signed = side === "PUT" ? trialU : -trialU;
+    const candidate = makeBarrierCandidateFromSignedValue(signed, precision);
+    if (!candidate?.barrier) continue;
+    try {
+      const remaining = Math.max(250, Math.min(650, SIGNAL_HIGHLOW_NEAR_RANGE_RESCUE_MAX_MS - nowMs + 80));
+      const plan = await requestFreshHighLowPlanForBarrier(item.symbol, side, stake, candidate, remaining);
+      if (plan && getHighLowTargetDistance(plan) < getHighLowTargetDistance(closest)) closest = plan;
+      if (plan && isHighLowPlanAcceptable(plan)) {
+        plan.source = "entry_near_range_fine_precision_rescue";
+        const finalPlan = saveHighLowFinalEntryPlan(item, side, plan, "entry_near_range_fine_precision_rescue");
+        finalPlan.finalPlanAgeMs = Math.max(0, Date.now() - Number(finalPlan.finalPreparedAt || Date.now()));
+        return finalPlan;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 function classifyHighLowAutoTimingFailure(item, side) {
   const triggerMs = Number(item?.signalAutoEntry?.ms ?? getSignalConfirmationMs(item));
   const enabledAtMs = getSignalSideEnabledAtMs(item, side);
@@ -5566,9 +5709,12 @@ function classifyHighLowAutoTimingFailure(item, side) {
   const refresh = cache?.finalRefreshStatus || item?.autoHighLow?.finalRefreshStatus || null;
   let code = "FINAL_PROPOSAL_NOT_READY";
   let message = "La proposal final no quedó preparada antes del segundo 58.";
-  if (Number.isFinite(enabledAtMs) && enabledAtMs > SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS) {
-    code = "CONFIRMATION_LATE";
-    message = `Los 5 puntos quedaron habilitados tarde (${(enabledAtMs / 1000).toFixed(2)}s), después de la ventana de preparación final.`;
+  if (Number.isFinite(enabledAtMs) && enabledAtMs > SIGNAL_HIGHLOW_LATE_CONFIRMATION_MAX_MS) {
+    code = "CONFIRMATION_TOO_LATE";
+    message = `Los 5 puntos quedaron habilitados demasiado tarde (${(enabledAtMs / 1000).toFixed(2)}s); el rescate con proposal fresca solo llega hasta 58.30s.`;
+  } else if (Number.isFinite(enabledAtMs) && enabledAtMs > SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS) {
+    code = "CONFIRMATION_LATE_NO_FRESH_PLAN";
+    message = `Los 5 puntos quedaron habilitados a ${(enabledAtMs / 1000).toFixed(2)}s, pero no había una proposal válida y fresca para recuperar la entrada.`;
   } else if (triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS) {
     code = "TIMER_DELAYED_AND_FINAL_PROPOSAL_MISSING";
     message = `El AUTO despertó demorado (${(triggerMs / 1000).toFixed(2)}s) y no había proposal final lista.`;
@@ -5620,7 +5766,7 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
   let lastError = null;
   const isAutoSignalExecution = !!(item?.signalAutoEntry?.attempted && item?.signalAutoEntry?.status === "sending");
 
-  // V113.16: la proposal final se genera alrededor de 57.6s para llegar fresca
+  // V113.17: la proposal final se genera alrededor de 57.6s para llegar fresca
   // al AUTO 58. Si el primer buy es rechazado porque el mercado se movió,
   // recotizamos una sola vez con el spot actual y reintentamos antes de 58.9s.
   if (isAutoSignalExecution) {
@@ -5641,6 +5787,21 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
         finalPlan = getHighLowFinalEntryPlan(item, side, stake);
       }
     }
+
+    // V113.17: si los 5 puntos aparecen entre 57.95 y 58.30, todavía se puede
+    // usar una proposal aceptable generada hace menos de 750 ms. Esto recupera
+    // la entrada sin iniciar una búsqueda completa ni comprar tarde.
+    if (!finalPlan) {
+      finalPlan = promoteFreshHighLowPlanForLateConfirmation(item, side, stake);
+    }
+
+    // Si la mejor barrera quedó apenas afuera (por ejemplo 224.4% total), hace
+    // un microajuste con la precisión real del símbolo antes de cancelar.
+    if (!finalPlan && triggerMs <= SIGNAL_HIGHLOW_LATE_CONFIRMATION_MAX_MS) {
+      try { finalPlan = await rescueNearRangeHighLowPlanAtEntry(item, side, stake); }
+      catch {}
+    }
+
     item.signalAutoEntry ||= {};
     item.signalAutoEntry.points_enabled_at_ms = getSignalSideEnabledAtMs(item, side);
     item.signalAutoEntry.auto_trigger_delay_ms = Math.max(0, Math.round(triggerMs - SIGNAL_AUTO_ENTRY_MS));
@@ -5681,9 +5842,14 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
     };
 
     const firstBuyPayload = { buy: String(finalPlan.proposalId), price: Number(finalPlan.askPrice) };
+    const latePromotedPlan = !!finalPlan.promotedAfterLateConfirmation;
     saveDiagnosis({
-      code: triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS ? "TIMER_DELAYED_PREPARED_BUY_SENT" : "PREPARED_BUY_SENT",
-      message: "Buy enviado con la proposal final preparada cerca del segundo 58; esperando aceptación de Deriv.",
+      code: latePromotedPlan
+        ? "LATE_CONFIRMATION_FRESH_PLAN_BUY_SENT"
+        : (triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS ? "TIMER_DELAYED_PREPARED_BUY_SENT" : "PREPARED_BUY_SENT"),
+      message: latePromotedPlan
+        ? "Confirmación tardía recuperada con una proposal válida y fresca ya disponible."
+        : "Buy enviado con la proposal final preparada cerca del segundo 58; esperando aceptación de Deriv.",
       first_proposal_id: String(finalPlan.proposalId || ""),
     });
     window.DerivDebug?.log?.("HIGHLOW_PRE58_PREPARED_BUY_ATTEMPT", {
@@ -5700,8 +5866,10 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
     const firstRes = await wsRequest(firstBuyPayload, 20000);
     if (firstRes?.buy?.contract_id) {
       saveDiagnosis({
-        code: "PREPARED_BUY_ACCEPTED",
-        message: "Deriv aceptó la compra con la proposal final fresca preparada antes del segundo 58.",
+        code: latePromotedPlan ? "LATE_CONFIRMATION_FRESH_PLAN_BUY_ACCEPTED" : "PREPARED_BUY_ACCEPTED",
+        message: latePromotedPlan
+          ? "Deriv aceptó la compra recuperada después de una confirmación tardía, usando una proposal fresca."
+          : "Deriv aceptó la compra con la proposal final fresca preparada antes del segundo 58.",
         accepted_at_ms: Math.round(getSignalConfirmationMs(item)),
         first_proposal_id: String(finalPlan.proposalId || ""),
       });
@@ -17507,7 +17675,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
       !shouldUseAutoHighLowExecution()
     );
 
-    // V113.16: toda autoentrada usa autorización/preparación previa. No se consulta
+    // V113.17: toda autoentrada usa autorización/preparación previa. No se consulta
     // el saldo en el segundo 58 porque esa llamada puede retrasar el buy cientos de ms.
     await ensureAuthorized();
     if (!isAutoSignalExecution) {

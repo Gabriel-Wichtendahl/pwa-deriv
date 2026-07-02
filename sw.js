@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.16 (proposal final 57.6s + recotización única por market moved) */
+/* sw.js — Deriv Signals v113.17 (precisión real + rescate tardío + refinamiento fino) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-16-fresh-pre58-reprice-once";
+const CACHE = "deriv-assets-v113-17-real-precision-late-rescue";
 
 const CORE_ASSETS = [
   "./",
