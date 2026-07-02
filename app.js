@@ -1,3 +1,5 @@
+// v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
+// v113.21: mejora la UI móvil de Señales/Trades para que las tarjetas no se encimen y la lectura sea más limpia.
 // v113.20: mantiene GIRO+ A/B/C/D/E y corrige el refresco final Higher/Lower: conserva el signo de la barrera, microajusta sin cruzar el spot y comienza con más margen.
 // v113.18: agrega GIRO+ en paralelo al motor actual: identifica candidatas, confirma Ruta A/B en 58s, muestra insignia sin duplicar señales ni órdenes y exporta todas sus métricas.
 // v113.17: corrige precisión real de barreras por símbolo, agrega refinamiento fino cerca del rango 125–135% neto y recupera confirmaciones tardías hasta 58.30s cuando ya existe una proposal válida y fresca.
@@ -109,7 +111,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.20";
+const APP_BUILD_VERSION = "v113.22";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -17066,7 +17068,7 @@ function buildRow(item, opts = {}) {
   // En Señales también se puede destildar/cambiar 👍 👎. Solo se bloquea si una llamada futura pide voteLocked explícito.
   const voteIsLocked = !!opts.voteLocked && !!item.vote && !opts.allowVoteChange;
   const commentPlaceholder = opts.source === "trades" ? "por qué" : "comentario";
-  const commentStyle = opts.source === "trades" ? "max-width:190px; min-width:130px;" : "max-width:118px; min-width:90px;";
+  const commentStyle = "";
   const actionsHtml = opts.hideActions
     ? ""
     : `
@@ -17081,13 +17083,20 @@ function buildRow(item, opts = {}) {
 
   row.innerHTML = `
     <div class="row-main">
-      <span class="row-text">${item.time} | ${item.symbol} | ${labelDir(item.direction)} | [${modeLabel}]</span>
-      <span class="signalStageBadge" title=""></span>
-      <span class="giroPlusBadge hidden" title=""></span>
-      <button class="chartBtn" type="button"></button>
-      <button class="rowCandleBtn" type="button" title="Ver mini gráfico de velas 1m">🕯️</button>
-      <span class="tradeBadge hidden" title=""></span>
-      <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
+      <span class="row-text">
+        <span class="row-time">${item.time}</span>
+        <span class="row-subtext">${item.symbol} · ${labelDir(item.direction)}</span>
+      </span>
+      <div class="row-tools">
+        <button class="chartBtn" type="button"></button>
+        <button class="rowCandleBtn" type="button" title="Ver mini gráfico de velas 1m">🕯️</button>
+      </div>
+      <div class="row-badges">
+        <span class="signalStageBadge" title=""></span>
+        <span class="giroPlusBadge hidden" title=""></span>
+        <span class="tradeBadge hidden" title=""></span>
+        <span class="nextArrow pending" title="Próxima vela: esperando…">⏳</span>
+      </div>
     </div>
     ${actionsHtml}
   `;

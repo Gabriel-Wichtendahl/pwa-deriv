@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.20 (GIRO+ A/B/C/D/E + signo de barrera bloqueado + microajuste final) */
+/* sw.js — Deriv Signals v113.22 (UI móvil premium compacta) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-20-signo-barrera-microajuste";
+const CACHE = "deriv-assets-v113-22-ui-movil-premium";
 
 const CORE_ASSETS = [
   "./",

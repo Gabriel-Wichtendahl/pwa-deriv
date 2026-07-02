@@ -2282,3 +2282,320 @@ body.light .processMiniTitle{color:#312e81}
   .processMiniBtns{grid-template-columns:1fr}
   .processScoreNum{font-size:32px}
 }
+
+
+/* =========================
+   V113.21 — UI móvil compacta Señales/Trades
+========================= */
+.row{
+  padding:12px;
+}
+
+.row-main{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:10px 8px;
+  align-items:start;
+}
+
+.row-text{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  min-width:0;
+  cursor:pointer;
+  user-select:none;
+  white-space:normal;
+  overflow:visible;
+  -webkit-line-clamp:unset;
+  -webkit-box-orient:initial;
+}
+
+.row-time{
+  font-size:18px;
+  line-height:1.08;
+  font-weight:900;
+  letter-spacing:.2px;
+  color:#f8fafc;
+}
+
+.row-subtext{
+  font-size:13px;
+  line-height:1.25;
+  color:var(--muted);
+  font-weight:700;
+}
+
+.row-tools{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  justify-content:flex-end;
+}
+
+.row-badges{
+  grid-column:1 / -1;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:center;
+}
+
+.signalStageBadge,
+.giroPlusBadge,
+.tradeBadge{
+  margin-left:0 !important;
+}
+
+.chartBtn,
+.savePracticeBtn,
+.rowCandleBtn,
+.studyCaptureBtn,
+.voteBtn{
+  width:42px;
+  min-width:42px;
+  height:42px;
+  padding:0;
+  display:grid;
+  place-items:center;
+  border-radius:12px;
+}
+
+.row-actions{
+  display:grid;
+  grid-template-columns:repeat(4, 42px);
+  gap:8px;
+  margin-top:10px;
+  align-items:center;
+}
+
+.row-actions button{
+  padding:0;
+}
+
+.row-comment{
+  grid-column:1 / -1;
+  width:100%;
+  min-height:42px;
+  padding:10px 12px;
+  font-size:14px;
+  background:rgba(255,255,255,.03);
+}
+
+.nextArrow{
+  width:auto;
+  min-width:30px;
+  text-align:center;
+  font-size:18px;
+  padding:4px 6px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.1);
+  background:rgba(255,255,255,.04);
+}
+
+.tradeBadge{
+  margin-left:0;
+}
+
+@media (min-width: 560px){
+  .row-actions{
+    grid-template-columns:repeat(4, 42px) minmax(140px, 1fr);
+  }
+  .row-comment{
+    grid-column:auto;
+  }
+}
+
+@media (max-width: 420px){
+  .row{
+    padding:10px;
+    border-radius:14px;
+  }
+  .row-time{
+    font-size:16px;
+  }
+  .row-subtext{
+    font-size:12.5px;
+  }
+  .chartBtn,
+  .savePracticeBtn,
+  .rowCandleBtn,
+  .studyCaptureBtn,
+  .voteBtn{
+    width:40px;
+    min-width:40px;
+    height:40px;
+  }
+  .row-actions{
+    grid-template-columns:repeat(4, 40px);
+    gap:7px;
+  }
+}
+
+
+/* =========================
+   V113.22 — Segunda pasada visual móvil
+========================= */
+.signals{
+  gap:10px;
+}
+
+.row{
+  padding:9px 10px;
+  border-radius:14px;
+}
+
+.row.dir-call{
+  box-shadow:
+    0 0 0 1px rgba(34,197,94,.11),
+    0 0 12px rgba(34,197,94,.18),
+    0 0 30px rgba(34,197,94,.07),
+    inset 0 0 12px rgba(34,197,94,.055);
+}
+
+.row.dir-put{
+  box-shadow:
+    0 0 0 1px rgba(239,68,68,.11),
+    0 0 12px rgba(239,68,68,.17),
+    0 0 30px rgba(239,68,68,.065),
+    inset 0 0 12px rgba(239,68,68,.05);
+}
+
+.row-main{
+  gap:7px 8px;
+}
+
+.row-time{
+  font-size:15.5px;
+  line-height:1.05;
+}
+
+.row-subtext{
+  font-size:12px;
+  line-height:1.15;
+}
+
+.row-tools{
+  gap:6px;
+}
+
+.row-badges{
+  gap:6px;
+}
+
+.signalStageBadge,
+.giroPlusBadge,
+.tradeBadge{
+  padding:3px 7px !important;
+  font-size:9.8px !important;
+  line-height:1.15 !important;
+  letter-spacing:.08px !important;
+  box-shadow:none !important;
+}
+
+.row-badges .nextArrow{
+  margin-left:auto;
+}
+
+.chartBtn,
+.savePracticeBtn,
+.rowCandleBtn,
+.studyCaptureBtn,
+.voteBtn{
+  width:38px;
+  min-width:38px;
+  height:38px;
+  border-radius:11px;
+  font-size:16px;
+}
+
+.chartBtn svg{
+  width:19px;
+  height:19px;
+}
+
+.row-actions{
+  grid-template-columns:repeat(4, 38px);
+  gap:7px;
+  margin-top:8px;
+}
+
+.row-comment{
+  min-height:38px;
+  padding:8px 10px;
+  border-radius:11px;
+  font-size:13px;
+}
+
+.nextArrow{
+  min-width:28px;
+  font-size:16px;
+  padding:3px 6px;
+}
+
+.counter{
+  margin:7px 0 3px;
+}
+
+#clearSignalsInlineBtnWrap{
+  display:grid !important;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  gap:8px !important;
+  margin:8px 0 12px !important;
+  align-items:stretch !important;
+}
+
+#copySignalsAnalysisBtn,
+#downloadSignalsAnalysisBtn,
+#clearSignalsInlineBtn{
+  width:100% !important;
+  min-width:0 !important;
+  min-height:38px !important;
+  padding:8px 9px !important;
+  font-size:13px !important;
+  line-height:1.1 !important;
+  border-radius:11px !important;
+  white-space:normal !important;
+}
+
+#clearSignalsInlineBtn{
+  grid-column:1 / -1;
+  justify-self:stretch;
+}
+
+@media (min-width:560px){
+  .row-actions{
+    grid-template-columns:repeat(4, 38px) minmax(160px,1fr);
+  }
+}
+
+@media (max-width:420px){
+  .row{
+    padding:9px;
+    border-radius:13px;
+  }
+  .row-time{
+    font-size:15px;
+  }
+  .row-subtext{
+    font-size:11.5px;
+  }
+  .chartBtn,
+  .savePracticeBtn,
+  .rowCandleBtn,
+  .studyCaptureBtn,
+  .voteBtn{
+    width:37px;
+    min-width:37px;
+    height:37px;
+  }
+  .row-actions{
+    grid-template-columns:repeat(4, 37px);
+    gap:6px;
+  }
+  .signalStageBadge,
+  .giroPlusBadge,
+  .tradeBadge{
+    font-size:9.4px !important;
+  }
+}
