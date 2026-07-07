@@ -1,3 +1,4 @@
+// v113.23: aplica GIRO++ F/G/H+/I/J/L+ y A+/B estricta sobre la UI móvil premium v113.22.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
 // v113.21: mejora la UI móvil de Señales/Trades para que las tarjetas no se encimen y la lectura sea más limpia.
 // v113.20: mantiene GIRO+ A/B/C/D/E y corrige el refresco final Higher/Lower: conserva el signo de la barrera, microajusta sin cruzar el spot y comienza con más margen.
@@ -111,7 +112,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.22";
+const APP_BUILD_VERSION = "v113.23";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -8512,7 +8513,7 @@ function buildSignalsAnalysisExport() {
     exported_at: new Date().toISOString(),
     export_scope: "analisis_dos_reducciones_visual_signals_all_ticks",
     app_version: APP_BUILD_VERSION,
-    description: "Export para analizar patrones de Doble Reducción y GIRO+ A/B/C/D/E: incluye señales visibles, ticks 0–60, resultado nextOutcome, métricas giroPlus, feedback y trades asociados. No incluye tokens ni datos sensibles.",
+    description: "Export para analizar patrones de Doble Reducción y GIRO++ A+/B estricta/C/E/F/G/H+/I/J/L+: incluye señales visibles, ticks 0–60, resultado nextOutcome, métricas giroPlus, feedback y trades asociados. No incluye tokens ni datos sensibles.",
     counts: {
       signals_total: signals.length,
       signals_with_next_outcome: signals.filter((s) => !!s.nextOutcome).length,
@@ -8524,11 +8525,18 @@ function buildSignalsAnalysisExport() {
       giro_plus_route_c: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("C")).length,
       giro_plus_route_d: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("D")).length,
       giro_plus_route_e: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("E")).length,
+      giro_plus_route_f: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("F")).length,
+      giro_plus_route_g: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("G")).length,
+      giro_plus_route_h: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("H")).length,
+      giro_plus_route_i: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("I")).length,
+      giro_plus_route_j: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("J")).length,
+      giro_plus_route_k: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("K")).length,
+      giro_plus_route_l: signals.filter((s) => !!s?.giroPlus?.confirmed && String(s?.giroPlus?.route || "").includes("L")).length,
     },
     notes_for_analysis: {
       target_window_ms: [0, 30000],
       also_review_window_ms: [0, 25000],
-      desired_output: "validar secuencias G/M/P y rutas GIRO+ A/B/C/D/E que anticipan giro de la vela siguiente",
+      desired_output: "validar secuencias G/M/P y rutas GIRO++ A+/B estricta/C/E/F/G/H+/I/J/L+ que anticipan giro de la vela siguiente",
     },
     signals_all: signals,
     trades_all: trades,
@@ -25349,18 +25357,15 @@ function rememberConstructiveRollingTick(symbol, epochMs, quote) {
 }
 
 /* =========================
-   V113.19 — GIRO+ paralelo A/B/C/D/E
-   - Mantiene intactas las señales normales y las Rutas A/B de v113.18.
-   - No reemplaza ni duplica la señal actual.
-   - No crea una segunda orden.
-   - Agrega tres rutas tardías sobre el recorrido 0–58s:
-     C = P relativo seguido de cuarto impulso dominante muy grande.
-     D = G→M + G→P oficiales y último G dominante cerca del cierre.
-     E = latigazo dominante entre 48 y 52s.
-   - Backtest unificado (solo desenlaces direccionales): 85 señales,
-     72 giros (84,7%) sobre 775 señales únicas. Resultado retrospectivo.
+   V113.23 — GIRO++ paralelo A/B/C/E/F/G/H/I/J/L
+   - Conserva C/E del backtest anterior.
+   - Ruta D queda apagada hasta juntar más muestra.
+   - A pasa a A+ (solo si el dominante pierde avance de 40 a 58).
+   - B pasa a B estricta (freno final + cuerpo medio + no iniciar en M→P).
+   - Agrega F/G/H/I/J/L con filtros de tamaño, avance, freno y ángulo.
+   - No reemplaza señales normales y no duplica órdenes.
 ========================= */
-const GIRO_PLUS_VERSION = "GIRO_PLUS_RUTAS_ABCDE_V113_19_20260702";
+const GIRO_PLUS_VERSION = "GIRO_PLUS_RUTAS_A_BESTRICTA_CE_FGHIJL_V113_23_20260706";
 const GIRO_PLUS_FINAL_MS = 58000;
 const GIRO_PLUS_SAMPLE_MS = 2000;
 
@@ -25458,30 +25463,50 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const aligned = quotes.map((q) => (q - open) * side);
   const deltas = quotes.slice(1).map((q, i) => (q - quotes[i]) * side);
   const runs = buildGiroPlusDirectionalRuns(deltas);
-  const dominantRuns = runs
-    .filter((r) => Number(r.sign) > 0)
-    .map((r) => ({
+  const runToInfo = (r) => {
+    if (!r) return null;
+    const startMs = Number(points[Number(r.startIndex)]?.ms || 0);
+    const endMs = Number(points[Number(r.endIndex)]?.ms || 0);
+    const moveRatio = Number(r.move || 0) / range;
+    const durationSec = Math.max((endMs - startMs) / 1000, GIRO_PLUS_SAMPLE_MS / 1000);
+    return {
       ...r,
-      startMs: Number(points[Number(r.startIndex)]?.ms || 0),
-      endMs: Number(points[Number(r.endIndex)]?.ms || 0),
-      moveRatio: Number(r.move || 0) / range,
-    }));
-  const oppositeRuns = runs.filter((r) => Number(r.sign) < 0);
+      startMs,
+      endMs,
+      moveRatio,
+      durationSec,
+      angleRatioPerSec: moveRatio / durationSec,
+    };
+  };
+  const dominantRuns = runs.filter((r) => Number(r.sign) > 0).map(runToInfo);
+  const oppositeRuns = runs.filter((r) => Number(r.sign) < 0).map(runToInfo);
   const secondCorrectionRatio = oppositeRuns.length >= 2
     ? Number(oppositeRuns[1].move || 0) / range
     : null;
   const indexOfMs = (ms) => Math.max(0, Math.min(points.length - 1, Math.round(ms / GIRO_PLUS_SAMPLE_MS)));
-  const q20Aligned = aligned[indexOfMs(20000)];
-  const q24Aligned = aligned[indexOfMs(24000)];
-  const q36Aligned = availableThroughMs >= 36000 ? aligned[indexOfMs(36000)] : null;
-  const q40 = availableThroughMs >= 40000 ? quotes[indexOfMs(40000)] : null;
-  const q48Aligned = availableThroughMs >= 48000 ? aligned[indexOfMs(48000)] : null;
-  const q52Aligned = availableThroughMs >= 52000 ? aligned[indexOfMs(52000)] : null;
+  const alignedAtMs = (ms) => availableThroughMs >= ms ? Number(aligned[indexOfMs(ms)]) : null;
+  const progressAtMs = (ms) => {
+    const v = alignedAtMs(ms);
+    return v == null ? null : Number(v) / range;
+  };
+  const q20Aligned = alignedAtMs(20000);
+  const q24Aligned = alignedAtMs(24000);
+  const q32Aligned = alignedAtMs(32000);
+  const q36Aligned = alignedAtMs(36000);
+  const q40Aligned = alignedAtMs(40000);
+  const q44Aligned = alignedAtMs(44000);
+  const q48Aligned = alignedAtMs(48000);
+  const q52Aligned = alignedAtMs(52000);
   const qEnd = quotes[quotes.length - 1];
+  const endAligned = Number(aligned[aligned.length - 1]);
   const progress24Ratio = Math.max(0, Number(q24Aligned || 0)) / range;
+  const progress32Ratio = q32Aligned == null ? null : Number(q32Aligned) / range;
+  const progress40Ratio = q40Aligned == null ? null : Number(q40Aligned) / range;
+  const progress44Ratio = q44Aligned == null ? null : Number(q44Aligned) / range;
   const progress48Ratio = q48Aligned == null ? null : Number(q48Aligned) / range;
   const progress52Ratio = q52Aligned == null ? null : Number(q52Aligned) / range;
-  const progress36ToEndRatio = q36Aligned == null ? null : (Number(aligned[aligned.length - 1]) - Number(q36Aligned)) / range;
+  const progress36ToEndRatio = q36Aligned == null ? null : (endAligned - Number(q36Aligned)) / range;
+  const progress40ToEndRatio = q40Aligned == null ? null : (endAligned - Number(q40Aligned)) / range;
   const oppositeSteps = deltas.filter((d) => Number(d) < 0).length;
   const nonZeroSteps = deltas.filter((d) => Number(d) !== 0).length;
   const oppositeStepsRatio = nonZeroSteps ? oppositeSteps / nonZeroSteps : 0;
@@ -25497,7 +25522,7 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   });
   const totalCrosses = Math.max(0, colorStates.length - 1);
   const noCrossAfter20 = !aligned.some((value, idx) => Number(points[idx]?.ms || 0) >= 20000 && Number(value) < 0);
-  const cleanSoFar = Number(q20Aligned) > 0 && Number(aligned[aligned.length - 1]) > 0 && noCrossAfter20 && totalCrosses <= 1;
+  const cleanSoFar = Number(q20Aligned) > 0 && endAligned > 0 && noCrossAfter20 && totalCrosses <= 1;
 
   const evalSec = getGiroPlusEvalSec(item);
   const officialPatterns = getGiroPlusOfficialReductionPatterns(item);
@@ -25505,9 +25530,6 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const dominantExtreme = side > 0 ? high : low;
   const extremeIndex = quotes.findIndex((q) => q === dominantExtreme);
   const extremeReachedAtMs = extremeIndex >= 0 ? Number(points[extremeIndex]?.ms || 0) : null;
-  const progress40ToEndRatio = availableThroughMs >= 40000
-    ? ((qEnd - Number(q40)) * side) / range
-    : null;
 
   const thirdDominantRun = dominantRuns[2] || null;
   const fourthDominantRun = dominantRuns[3] || null;
@@ -25517,25 +25539,70 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   const lastDominantRun = dominantRuns[dominantRuns.length - 1] || null;
   const lastDominantMoveRatio = lastDominantRun ? Number(lastDominantRun.moveRatio || 0) : null;
   const lastDominantEndMs = lastDominantRun ? Number(lastDominantRun.endMs || 0) : null;
+  let previousOppositeBeforeLastDominant = null;
+  if (lastDominantRun) {
+    const lastDomStartIdx = Number(lastDominantRun.startIndex);
+    for (let i = runs.length - 1; i >= 0; i -= 1) {
+      const r = runs[i];
+      if (Number(r?.sign) < 0 && Number(r?.endIndex) <= lastDomStartIdx) {
+        previousOppositeBeforeLastDominant = runToInfo(r);
+        break;
+      }
+    }
+  }
+  const lastDominantAngleRatio = lastDominantRun ? Number(lastDominantRun.angleRatioPerSec || 0) : null;
+  const previousOppositeAngleRatio = previousOppositeBeforeLastDominant ? Number(previousOppositeBeforeLastDominant.angleRatioPerSec || 0) : null;
+  const previousOppositeMoveRatio = previousOppositeBeforeLastDominant ? Number(previousOppositeBeforeLastDominant.moveRatio || 0) : null;
 
-  // Candidatas: son umbrales algo más amplios para avisar antes de la decisión final.
-  // La confirmación a 58s conserva exactamente los umbrales congelados del backtest.
-  const routeACandidate = cleanSoFar && secondCorrectionRatio != null &&
-    secondCorrectionRatio <= 0.040 && progress24Ratio <= 0.80 && oppositeStepsRatio >= 0.25;
-  const routeBCandidate = cleanSoFar && Math.round(Number(evalSec)) === 36 && openIsOppositeExtreme;
-  const routeCCandidate = cleanSoFar && availableThroughMs >= 50000 && dominantRuns.length >= 4 &&
-    Number(fourthVsThirdRatio) >= 3.0 && Number(progress36ToEndRatio) >= 0.20;
-  const routeDCandidate = cleanSoFar && availableThroughMs >= 48000 &&
-    officialPatterns.first === "G→M" && officialPatterns.second === "G→P" &&
-    Number(lastDominantMoveRatio) >= 0.25 && Number(lastDominantEndMs) >= 48000;
-  const routeECandidate = cleanSoFar && availableThroughMs >= 52000 &&
-    Number(progress48Ratio) <= 0.38 && Number(progress52Ratio) >= 0.42;
+  // Rutas base antiguas mejoradas o conservadas.
+  const routeAPlusBase = secondCorrectionRatio != null &&
+    secondCorrectionRatio <= 0.025 &&
+    progress24Ratio <= 0.70 &&
+    oppositeStepsRatio >= 0.30;
+  const routeBStrictBase = Math.round(Number(evalSec)) === 36 &&
+    openIsOppositeExtreme &&
+    Number(extremeReachedAtMs) <= 50000 &&
+    Number(progress40ToEndRatio) <= -0.18 &&
+    bodyRatio >= 0.45 &&
+    bodyRatio <= 0.70 &&
+    officialPatterns.first !== "M→P";
+  const routeCBase = dominantRuns.length >= 4 &&
+    Number(fourthVsThirdRatio) >= 4.0 &&
+    Number(progress36ToEndRatio) >= 0.30;
+  const routeEBase = Number(progress48Ratio) <= 0.34 &&
+    Number(progress52Ratio) >= 0.48;
+
+  // GIRO++ nuevas.
+  const routeFBase = Number(progress32Ratio) <= 0.13 &&
+    Number(progress40Ratio) >= 0.30 &&
+    Number(progress52Ratio) - Number(progress48Ratio) <= 0.10;
+  const routeGBase = officialPatterns.first === "M→P" &&
+    Number(evalSec) >= 38 &&
+    previousOppositeAngleRatio != null &&
+    lastDominantAngleRatio != null &&
+    Number(lastDominantAngleRatio) <= Number(previousOppositeAngleRatio) * 1.20;
+  const routeHPlusBase = Number(progress32Ratio) >= 0.731 &&
+    Number(progress40Ratio) <= 0.893;
+  const routeIBase = Number(progress40Ratio) - Number(progress32Ratio) >= 0.30 &&
+    bodyRatio <= 0.50;
+  const routeJBase = officialPatterns.first === "M→P" &&
+    Number(evalSec) >= 38 &&
+    Number(endAligned) / range <= Number(progress44Ratio) + 1e-9;
+  const routeLPlusBase = Number(progress32Ratio) <= -0.30 &&
+    bodyRatio >= 0.20;
+
+  // Candidatas: sirven para mostrar que se está formando una ruta. La confirmación real sigue congelada a 58s.
   const candidateRoutes = [
-    routeACandidate ? "A" : "",
-    routeBCandidate ? "B" : "",
-    routeCCandidate ? "C" : "",
-    routeDCandidate ? "D" : "",
-    routeECandidate ? "E" : "",
+    availableThroughMs >= 40000 && routeAPlusBase ? "A" : "",
+    availableThroughMs >= 40000 && routeBStrictBase ? "B" : "",
+    availableThroughMs >= 50000 && routeCBase ? "C" : "",
+    availableThroughMs >= 52000 && routeEBase ? "E" : "",
+    availableThroughMs >= 52000 && routeFBase ? "F" : "",
+    availableThroughMs >= 38000 && routeGBase ? "G" : "",
+    availableThroughMs >= 40000 && routeHPlusBase ? "H" : "",
+    availableThroughMs >= 40000 && routeIBase ? "I" : "",
+    availableThroughMs >= 44000 && routeJBase ? "J" : "",
+    availableThroughMs >= 32000 && routeLPlusBase ? "L" : "",
   ].filter(Boolean);
 
   const evaluated = availableThroughMs >= GIRO_PLUS_FINAL_MS;
@@ -25544,41 +25611,30 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
   let routeC = false;
   let routeD = false;
   let routeE = false;
+  let routeF = false;
+  let routeG = false;
+  let routeH = false;
+  let routeI = false;
+  let routeJ = false;
+  let routeK = false;
+  let routeL = false;
   let confirmed = false;
   let route = "";
   const blockedReasons = [];
 
   if (evaluated) {
-    // Ruta A: avance con fricción interna y segunda corrección mínima.
-    routeA = secondCorrectionRatio != null &&
-      secondCorrectionRatio <= 0.025 &&
-      progress24Ratio <= 0.70 &&
-      oppositeStepsRatio >= 0.30;
-
-    // Ruta B: apertura en el extremo, validación en 36s y frenado final.
-    routeB = Math.round(Number(evalSec)) === 36 &&
-      openIsOppositeExtreme &&
-      Number(extremeReachedAtMs) <= 50000 &&
-      Number(progress40ToEndRatio) <= 0.05;
-
-    // Ruta C: el cuarto impulso dominante es al menos 4× el tercero
-    // y la vela todavía agrega >=30% de su rango entre 36 y 58s.
-    routeC = dominantRuns.length >= 4 &&
-      Number(fourthVsThirdRatio) >= 4.0 &&
-      Number(progress36ToEndRatio) >= 0.30;
-
-    // Ruta D: G→M + G→P oficiales y un último impulso dominante grande
-    // (>=33% del rango) que termina entre 50 y 58s.
-    routeD = officialPatterns.first === "G→M" &&
-      officialPatterns.second === "G→P" &&
-      Number(lastDominantMoveRatio) >= 0.33 &&
-      Number(lastDominantEndMs) >= 50000 &&
-      Number(lastDominantEndMs) <= 58000;
-
-    // Ruta E: latigazo tardío; hasta 48s llevaba <=34% del rango y
-    // para 52s ya alcanzó >=48% del rango.
-    routeE = Number(progress48Ratio) <= 0.34 &&
-      Number(progress52Ratio) >= 0.48;
+    routeA = routeAPlusBase && Number(progress40ToEndRatio) < 0;
+    routeB = routeBStrictBase;
+    routeC = routeCBase;
+    routeD = false; // Apagada: 0/2 en la muestra, queda solo para observación futura.
+    routeE = routeEBase;
+    routeF = routeFBase;
+    routeG = routeGBase;
+    routeH = routeHPlusBase;
+    routeI = routeIBase;
+    routeJ = routeJBase;
+    routeK = false; // K no se agrega a operación por baja efectividad.
+    routeL = routeLPlusBase;
 
     const bodySafe = bodyRatio >= 0.20;
     const confirmedRoutes = [
@@ -25587,17 +25643,30 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
       routeC ? "C" : "",
       routeD ? "D" : "",
       routeE ? "E" : "",
+      routeF ? "F" : "",
+      routeG ? "G" : "",
+      routeH ? "H" : "",
+      routeI ? "I" : "",
+      routeJ ? "J" : "",
+      routeK ? "K" : "",
+      routeL ? "L" : "",
     ].filter(Boolean);
-    confirmed = cleanSoFar && bodySafe && confirmedRoutes.length > 0;
+    confirmed = bodySafe && confirmedRoutes.length > 0;
     route = confirmed ? confirmedRoutes.join("+") : "";
 
-    if (!cleanSoFar) blockedReasons.push("VELA_NO_LIMPIA_0_58");
     if (!bodySafe) blockedReasons.push("CUERPO_58_MENOR_20");
-    if (!routeA) blockedReasons.push("RUTA_A_NO_CUMPLE");
-    if (!routeB) blockedReasons.push("RUTA_B_NO_CUMPLE");
+    if (!routeA) blockedReasons.push("RUTA_A_PLUS_NO_CUMPLE");
+    if (!routeB) blockedReasons.push("RUTA_B_ESTRICTA_NO_CUMPLE");
     if (!routeC) blockedReasons.push("RUTA_C_NO_CUMPLE");
-    if (!routeD) blockedReasons.push("RUTA_D_NO_CUMPLE");
+    blockedReasons.push("RUTA_D_APAGADA");
     if (!routeE) blockedReasons.push("RUTA_E_NO_CUMPLE");
+    if (!routeF) blockedReasons.push("RUTA_F_NO_CUMPLE");
+    if (!routeG) blockedReasons.push("RUTA_G_NO_CUMPLE");
+    if (!routeH) blockedReasons.push("RUTA_H_PLUS_NO_CUMPLE");
+    if (!routeI) blockedReasons.push("RUTA_I_NO_CUMPLE");
+    if (!routeJ) blockedReasons.push("RUTA_J_NO_CUMPLE");
+    blockedReasons.push("RUTA_K_NO_OPERATIVA");
+    if (!routeL) blockedReasons.push("RUTA_L_PLUS_NO_CUMPLE");
   }
 
   return {
@@ -25620,6 +25689,11 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
       officialSecondReduction: officialPatterns.second || null,
       secondCorrectionRatio,
       progress24Ratio,
+      progress32Ratio,
+      progress40Ratio,
+      progress44Ratio,
+      progress48Ratio: availableThroughMs >= 48000 ? progress48Ratio : null,
+      progress52Ratio: availableThroughMs >= 52000 ? progress52Ratio : null,
       oppositeStepsRatio,
       body58Ratio: evaluated ? bodyRatio : null,
       bodyCurrentRatio: bodyRatio,
@@ -25636,8 +25710,9 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
       progress36To58Ratio: evaluated ? progress36ToEndRatio : null,
       lastDominantMoveRatio,
       lastDominantEndMs,
-      progress48Ratio: availableThroughMs >= 48000 ? progress48Ratio : null,
-      progress52Ratio: availableThroughMs >= 52000 ? progress52Ratio : null,
+      lastDominantAngleRatio,
+      previousOppositeMoveRatio,
+      previousOppositeAngleRatio,
       progress48To52Ratio: availableThroughMs >= 52000 && progress48Ratio != null && progress52Ratio != null
         ? Number(progress52Ratio) - Number(progress48Ratio)
         : null,
@@ -25646,6 +25721,13 @@ function analyzeGiroPlusSignal(item, requestedEndMs = GIRO_PLUS_FINAL_MS) {
       routeC,
       routeD,
       routeE,
+      routeF,
+      routeG,
+      routeH,
+      routeI,
+      routeJ,
+      routeK,
+      routeL,
       sampleStepMs: GIRO_PLUS_SAMPLE_MS,
       availableThroughMs,
     },
@@ -25702,13 +25784,13 @@ function updateGiroPlusClassification(item, opts = {}) {
     blockedReasons: Array.isArray(analysis.blockedReasons) ? analysis.blockedReasons.slice() : [],
     metrics: analysis.metrics || {},
     historicalReference: {
-      sampleSignalsDirectional: 85,
-      turns: 72,
-      effectivenessPct: 84.7,
-      previousRoutesAB: { sampleSignals: 52, turns: 44, effectivenessPct: 84.6 },
-      addedRoutesCDE: { sampleSignals: 33, turns: 28, effectivenessPct: 84.8 },
-      flatOutcomesExcludedFromPct: 1,
-      note: "Referencia retrospectiva; validar con señales nuevas.",
+      coreRoutes: "G/J/F/I/C/E + A+/B estricta/H+/L+",
+      disabledRoutes: "D apagada, K no operativa",
+      routeGReference: { sampleSignals: 10, turns: 9, effectivenessPct: 90.0 },
+      routeJReference: { sampleSignals: 14, turns: 11, effectivenessPct: 78.6 },
+      routeFReference: { sampleSignals: 24, turns: 18, effectivenessPct: 75.0 },
+      routeIReference: { sampleSignals: 83, turns: 61, effectivenessPct: 73.5 },
+      note: "Referencia retrospectiva sobre el JSON unificado; validar con señales nuevas.",
     },
     outcome: previous.outcome || "",
     giroCorrecto: previous.giroCorrecto ?? null,
@@ -25727,7 +25809,7 @@ function updateGiroPlusClassification(item, opts = {}) {
   }
 
   if (analysis.confirmed && !previous.confirmed && opts.notify !== false) {
-    try { toast(`⭐ ${item.symbol}: GIRO+ CONFIRMADA · RUTA ${analysis.route}`, 2300); } catch {}
+    try { toast(`⭐ ${item.symbol}: GIRO++ CONFIRMADA · RUTA ${analysis.route}`, 2300); } catch {}
     try { if (vibrateEnabled && "vibrate" in navigator) navigator.vibrate([120, 70, 120]); } catch {}
   }
   if (opts.persist !== false) {
@@ -25740,22 +25822,22 @@ function getGiroPlusLabelInfo(item) {
   if (gp.confirmed) {
     return {
       key: "confirmed",
-      label: `⭐ GIRO+ · RUTA ${String(gp.route || "—")}`,
-      title: `GIRO+ confirmada en 58s · Ruta ${String(gp.route || "—")} · misma señal, sin orden duplicada. Referencia histórica combinada: 72/85 giros direccionales (84,7%).`,
+      label: `⭐ GIRO++ · RUTA ${String(gp.route || "—")}`,
+      title: `GIRO++ confirmada en 58s · Ruta ${String(gp.route || "—")} · misma señal, sin orden duplicada. Referencia histórica combinada: rutas actuales A+/B estricta/C/E/F/G/H+/I/J/L+; validar con señales nuevas.`,
     };
   }
   if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) {
-    const routes = Array.isArray(gp.candidateRoutes) && gp.candidateRoutes.length ? gp.candidateRoutes.join("/") : "A/B/C/D/E";
+    const routes = Array.isArray(gp.candidateRoutes) && gp.candidateRoutes.length ? gp.candidateRoutes.join("/") : "A/B/C/E/F/G/H/I/J/L";
     return {
       key: "candidate",
-      label: `✨ GIRO+ CANDIDATA · ${routes}`,
-      title: "La señal actual también está formando GIRO+. Se confirma o descarta con el recorrido completo hasta 58s.",
+      label: `✨ GIRO++ CANDIDATA · ${routes}`,
+      title: "La señal actual también está formando GIRO++. Se confirma o descarta con el recorrido completo hasta 58s.",
     };
   }
   if (gp.status === "discarded" && gp.candidateEver) {
     return {
       key: "discarded",
-      label: "GIRO+ DESCARTADA",
+      label: "GIRO++ DESCARTADA",
       title: `Fue candidata, pero no completó el filtro en 58s: ${(gp.blockedReasons || []).join(" · ") || "sin confirmación final"}. La señal normal se conserva.`,
     };
   }
@@ -25763,9 +25845,9 @@ function getGiroPlusLabelInfo(item) {
 }
 function getGiroPlusModalSummary(item) {
   const gp = item?.giroPlus || {};
-  if (gp.confirmed) return `⭐ GIRO+ CONFIRMADA · RUTA ${gp.route || "—"} · 58s`;
-  if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) return `✨ GIRO+ CANDIDATA · esperando 58s`;
-  if (gp.status === "discarded" && gp.candidateEver) return `GIRO+ descartada · ${(gp.blockedReasons || []).join(" / ") || "no completó Ruta A/B/C/D/E"}`;
+  if (gp.confirmed) return `⭐ GIRO++ CONFIRMADA · RUTA ${gp.route || "—"} · 58s`;
+  if (gp.status === "candidate" || (!gp.evaluated && gp.candidate)) return `✨ GIRO++ CANDIDATA · esperando 58s`;
+  if (gp.status === "discarded" && gp.candidateEver) return `GIRO++ descartada · ${(gp.blockedReasons || []).join(" / ") || "no completó Ruta A/B/C/E/F/G/H/I/J/L"}`;
   return "";
 }
 
