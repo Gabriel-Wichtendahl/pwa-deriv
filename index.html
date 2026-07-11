@@ -10,7 +10,7 @@
   <title>Deriv Signals</title>
 
   <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="style.css?v=113.23" />
+  <link rel="stylesheet" href="style.css?v=113.24" />
 </head>
 
 <body class="neon">
@@ -68,7 +68,7 @@
           <div id="liveConfirmPanel" class="liveConfirmPanel" aria-label="Puntos para operar en vivo">
             <div class="liveConfirmTop">
               <div id="liveConfirmCount" class="liveConfirmCount">COMPRA 0/4 · VENTA 0/4</div>
-              <div id="liveConfirmHint" class="liveConfirmHint">Modo en vivo · 5 puntos · AUTO 58s</div>
+              <div id="liveConfirmHint" class="liveConfirmHint">Modo en vivo · 6 puntos · AUTO 58s</div>
             </div>
             <div class="liveConfirmRow">
               <button id="liveConfirmBuyBtn" class="btn liveConfirmBtn liveConfirmBuy" type="button">🟢 + COMPRA 0/4</button>
@@ -81,7 +81,7 @@
             <button id="liveBuyCallBtn" class="btn liveTradeBtn liveTradeCall" type="button">🟢 AUTO 58 COMPRA</button>
             <button id="liveBuyPutBtn" class="btn liveTradeBtn liveTradePut" type="button">🔴 AUTO 58 VENTA</button>
           </div>
-          <div id="liveTradeStatus" class="liveTradeStatus">Modo en vivo: sumá 5 puntos netos; se ejecuta automáticamente al segundo 58.</div>
+          <div id="liveTradeStatus" class="liveTradeStatus">Modo en vivo: sumá 6 puntos netos; se ejecuta automáticamente al segundo 58.</div>
           <div id="liveReplayInfo" class="modalReplayInfo liveReplayInfo">Esperando ticks…</div>
         </div>
       </div>
@@ -166,7 +166,7 @@
       <div class="modalHeader settingsModalHeader">
         <div class="modalHeaderText">
           <div id="settingsTitle" class="modalTitle">Configuración</div>
-          <div class="modalSub">Preferencias, cuenta y token · v113.23</div>
+          <div class="modalSub">Preferencias, cuenta y token · v113.24</div>
         </div>
         <button id="settingsCloseBtn" class="btnIcon" type="button" aria-label="Cerrar">✖</button>
       </div>
@@ -214,10 +214,10 @@
     </div>
   </div>
 
-  <script src="app.js?v=113.23"></script>
+  <script src="app.js?v=113.24"></script>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js?v=113.23", { updateViaCache: "none" }).then(function (reg) { reg.update().catch(function () {}); }).catch(function () {});
+      navigator.serviceWorker.register("./sw.js?v=113.24", { updateViaCache: "none" }).then(function (reg) { reg.update().catch(function () {}); }).catch(function () {});
     }
   </script>
 </body>

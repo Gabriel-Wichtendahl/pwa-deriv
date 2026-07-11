@@ -1,0 +1,8 @@
+PWA DERIV v113.24 — ENTRADA CON 6 PUNTOS
+
+- Basada sobre v113.23 UI móvil premium + GIRO++.
+- Señales reales requieren 6 puntos netos para habilitar el trade.
+- En vivo requiere 6 puntos netos para habilitar el trade.
+- La ejecución automática continúa en el segundo 58.
+- Práctica conserva su regla independiente de 4 puntos.
+- Se actualizan textos visibles, mensajes de diagnóstico, versión y caché del service worker.

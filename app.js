@@ -1,4 +1,4 @@
-// v113.23: aplica GIRO++ F/G/H+/I/J/L+ y A+/B estricta sobre la UI móvil premium v113.22.
+// v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
 // v113.21: mejora la UI móvil de Señales/Trades para que las tarjetas no se encimen y la lectura sea más limpia.
 // v113.20: mantiene GIRO+ A/B/C/D/E y corrige el refresco final Higher/Lower: conserva el signo de la barrera, microajusta sin cruzar el spot y comienza con más margen.
@@ -112,7 +112,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.23";
+const APP_BUILD_VERSION = "v113.24";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -2156,7 +2156,7 @@ let manualGiroPanelEl = null;
 let manualGiroSummaryEl = null;
 let manualGiroStateEl = null;
 let manualGiroButtonsEl = null;
-const SIGNAL_CONFIRM_MIN = 5;
+const SIGNAL_CONFIRM_MIN = 6;
 const SIGNAL_AUTO_ENTRY_MS = 58000;
 const SIGNAL_AUTO_ENTRY_SEC = Math.round(SIGNAL_AUTO_ENTRY_MS / 1000);
 // V65: en el timing de próxima vela no compramos apenas el reloj marca 58s.
@@ -5782,10 +5782,10 @@ function classifyHighLowAutoTimingFailure(item, side) {
   let message = "La proposal final no quedó preparada antes del segundo 58.";
   if (Number.isFinite(enabledAtMs) && enabledAtMs > SIGNAL_HIGHLOW_LATE_CONFIRMATION_MAX_MS) {
     code = "CONFIRMATION_TOO_LATE";
-    message = `Los 5 puntos quedaron habilitados demasiado tarde (${(enabledAtMs / 1000).toFixed(2)}s); el rescate con proposal fresca solo llega hasta 58.30s.`;
+    message = `Los ${SIGNAL_CONFIRM_MIN} puntos quedaron habilitados demasiado tarde (${(enabledAtMs / 1000).toFixed(2)}s); el rescate con proposal fresca solo llega hasta 58.30s.`;
   } else if (Number.isFinite(enabledAtMs) && enabledAtMs > SIGNAL_HIGHLOW_FINAL_REFRESH_END_MS) {
     code = "CONFIRMATION_LATE_NO_FRESH_PLAN";
-    message = `Los 5 puntos quedaron habilitados a ${(enabledAtMs / 1000).toFixed(2)}s, pero no había una proposal válida y fresca para recuperar la entrada.`;
+    message = `Los ${SIGNAL_CONFIRM_MIN} puntos quedaron habilitados a ${(enabledAtMs / 1000).toFixed(2)}s, pero no había una proposal válida y fresca para recuperar la entrada.`;
   } else if (triggerMs - SIGNAL_AUTO_ENTRY_MS > SIGNAL_AUTO_TIMER_DELAY_WARN_MS) {
     code = "TIMER_DELAYED_AND_FINAL_PROPOSAL_MISSING";
     message = `El AUTO despertó demorado (${(triggerMs / 1000).toFixed(2)}s) y no había proposal final lista.`;
@@ -5859,7 +5859,7 @@ async function buyFreshHighLowLikeWindows(item, side, stake) {
       }
     }
 
-    // V113.17: si los 5 puntos aparecen entre 57.95 y 58.30, todavía se puede
+    // V113.17: si los puntos requeridos aparecen entre 57.95 y 58.30, todavía se puede
     // usar una proposal aceptable generada hace menos de 750 ms. Esto recupera
     // la entrada sin iniciar una búsqueda completa ni comprar tarde.
     if (!finalPlan) {
@@ -13491,7 +13491,7 @@ function addSignalConfirmation(side = "CALL") {
   updateModalCandleStatusUI();
 
   // V113.5: desde el primer punto empezamos a preparar el lado que el usuario está
-  // marcando. Antes esperaba a llegar a 5 puntos y podía quedarse sin tiempo.
+  // marcando. Antes esperaba a completar todos los puntos y podía quedarse sin tiempo.
   if (shouldUseAutoHighLowExecution()) {
     void refreshExecutionPlanForSignal(modalCurrentItem, true, safeSide);
     scheduleHighLowFinalEntryTimers(modalCurrentItem);
@@ -13514,7 +13514,7 @@ function addSignalConfirmation(side = "CALL") {
     toast(`🧠 ${getSignalConfirmationStatusText(modalCurrentItem)}. Faltan puntos para operar.`, 1300);
   }
 
-  // Si el usuario alcanza los 5 puntos netos cuando la formación ya pasó 58s,
+  // Si el usuario alcanza los puntos netos requeridos cuando la formación ya pasó 58s,
   // también se dispara la auto-entrada sin esperar otro tick/timer.
   trySignalAutoEntryAt57("CONFIRMACION_DESPUES_DE_57");
 }
@@ -13904,7 +13904,7 @@ function assertSignalSNREntryGateAt57(side = null, item = modalCurrentItem) {
 
   // V46: en modos SNR/SNR polaridad NO se exige que la vela cierre dentro del SNR
   // ni se bloquea la autoentrada por estar lejos de la zona al check de 58s.
-  // La operación se decide por: formación viva + 5 puntos netos + disciplina OK.
+  // La operación se decide por: formación viva + puntos netos requeridos + disciplina OK.
   // Igual calculamos el gate SNR para registrar si el precio estaba dentro/cerca/lejos,
   // pero no lo usamos como bloqueo operativo.
   const gate = buildSignalSNREntryGate(item, side, SIGNAL_AUTO_SNR_CHECK_MS);
@@ -14200,7 +14200,7 @@ function updateModalCandleStatusUI() {
   applyBrainProcessTradeGate(locked, candleClosed);
   updateVisualReadPanelUI();
 
-  // Auto-entrada real: al segundo 58 si ya hay 5 puntos netos.
+  // Auto-entrada real: al segundo 58 si ya están completos los puntos netos requeridos.
   if (!locked && !candleClosed && !brainBlocked) trySignalAutoEntryAt57("TIMER_58");
 }
 
@@ -17812,7 +17812,7 @@ async function buyOneClick(side /* "CALL" | "PUT" */, symbolOverride = null, ite
   assertEntryWindowOpen(itemCtx);
   assertBrainProcessCanTrade(itemCtx);
   assertSignalMinimumConfirmations(side, itemCtx);
-  // V46: en SNR/SNR polaridad, la operación se permite por 5 puntos + AUTO 58.
+  // V46: en SNR/SNR polaridad, la operación se permite por puntos completos + AUTO 58.
   // El cierre final fuera de SNR y la distancia al SNR quedan registrados, pero no bloquean.
   // En Línea dinámica se mantiene su validación específica.
   const snrEntryGate = assertSignalSNREntryGateAt57(side, itemCtx);
@@ -18974,7 +18974,7 @@ function onTick(tick) {
       // 0-15s queda como observación interna, pero NO se muestra señal todavía.
       // La señal visible recién puede salir entre 20-30s, si la vela sigue alcista
       // y no perdió el open con fuerza antes de los 20s.
-      // La operación no sale sola por radar: requiere 5 puntos manuales como el resto.
+      // La operación no sale sola por radar: requiere los puntos manuales completos como el resto.
       const ruptureStartSec = 20;
       const ruptureEndSec = 30;
       if (sec >= ruptureStartSec && sec <= ruptureEndSec && lastEvaluatedMinute !== minute) {
@@ -27506,7 +27506,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
     : (isIrregularRoute
         ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
         : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`);
-  const logicText = `Motor V113.0: M→G→M exige desplazamiento real, correcciones internas menores, eficiencia direccional y extremos crecientes; ignora el ruido previo y reancla todo el gráfico en el primer M válido. La ruta solo confirma si después aparece otra estructura M→G→M, G→M→P o G→M y, luego, una entrada real del grupo contrario. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de 5 puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const logicText = `Motor V113.0: M→G→M exige desplazamiento real, correcciones internas menores, eficiencia direccional y extremos crecientes; ignora el ruido previo y reancla todo el gráfico en el primer M válido. La ruta solo confirma si después aparece otra estructura M→G→M, G→M→P o G→M y, luego, una entrada real del grupo contrario. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de ${SIGNAL_CONFIRM_MIN} puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
