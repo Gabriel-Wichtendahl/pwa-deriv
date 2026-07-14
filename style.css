@@ -2599,3 +2599,161 @@ body.light .processMiniTitle{color:#312e81}
     font-size:9.4px !important;
   }
 }
+
+
+/* =========================
+   v113.25 · Trades por día
+========================= */
+#tradesActions.tradesActions{
+  justify-content:flex-start;
+  align-items:stretch;
+  flex-wrap:wrap;
+  width:100%;
+  margin:8px 0 10px;
+}
+
+.tradesDateFilterBar{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  flex-wrap:wrap;
+  padding:7px;
+  border:1px solid rgba(34,211,238,.20);
+  border-radius:15px;
+  background:rgba(2,6,23,.62);
+  backdrop-filter:blur(16px);
+  box-shadow:0 8px 24px rgba(0,0,0,.18);
+}
+
+.tradesDateFilterBtn,
+.tradesDatePickerLabel{
+  min-height:36px;
+  border-radius:11px;
+  border:1px solid var(--border);
+  background:var(--btn-bg);
+  color:var(--muted);
+  font-weight:850;
+  font-size:13px;
+}
+
+.tradesDateFilterBtn{
+  flex:1 1 70px;
+  padding:7px 10px;
+}
+
+.tradesDateFilterBtn.active,
+.tradesDatePickerLabel.active{
+  color:var(--text);
+  border-color:rgba(34,211,238,.72);
+  box-shadow:0 0 14px rgba(34,211,238,.35);
+  background:rgba(8,47,73,.44);
+}
+
+.tradesDatePickerLabel{
+  flex:1 1 145px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:7px;
+  padding:5px 8px 5px 10px;
+  cursor:pointer;
+  overflow:hidden;
+}
+
+.tradesDatePickerLabel span{
+  white-space:nowrap;
+}
+
+.tradesDateInput{
+  min-width:0;
+  width:108px;
+  max-width:52%;
+  border:0;
+  outline:0;
+  padding:4px 2px;
+  border-radius:8px;
+  color:var(--text);
+  background:transparent;
+  font-size:12px;
+  font-weight:800;
+  color-scheme:dark;
+}
+
+body.light .tradesDateInput{color-scheme:light}
+body.light .tradesDateFilterBar{background:rgba(255,255,255,.78)}
+
+#tradesList{
+  position:relative;
+  isolation:isolate;
+}
+
+.tradesDayHeader{
+  position:sticky;
+  top:calc(7px + env(safe-area-inset-top));
+  z-index:14;
+  width:100%;
+  min-height:40px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:9px 12px;
+  margin:4px 0 1px;
+  border:1px solid rgba(34,211,238,.38);
+  border-radius:13px;
+  color:#ecfeff;
+  background:linear-gradient(180deg, rgba(8,47,73,.96), rgba(2,22,39,.96));
+  box-shadow:0 7px 20px rgba(0,0,0,.34), 0 0 14px rgba(34,211,238,.12);
+  backdrop-filter:blur(18px);
+}
+
+.tradesDayTitle{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:13px;
+  font-weight:950;
+  letter-spacing:.18px;
+}
+
+.tradesDayCount{
+  flex:0 0 auto;
+  padding:4px 8px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.14);
+  color:rgba(236,254,255,.86);
+  background:rgba(255,255,255,.07);
+  font-size:11px;
+  font-weight:900;
+  white-space:nowrap;
+}
+
+.tradesEmptyState{
+  padding:18px 12px;
+  border:1px dashed var(--border);
+  border-radius:14px;
+  color:var(--muted);
+  text-align:center;
+  font-weight:750;
+}
+
+body.light .tradesDayHeader{
+  color:#083344;
+  background:linear-gradient(180deg, rgba(207,250,254,.98), rgba(236,254,255,.98));
+  box-shadow:0 7px 20px rgba(15,23,42,.15), 0 0 12px rgba(6,182,212,.12);
+}
+body.light .tradesDayCount{
+  color:#164e63;
+  border-color:rgba(8,145,178,.18);
+  background:rgba(8,145,178,.08);
+}
+
+@media (max-width:430px){
+  .tradesDateFilterBar{gap:6px;padding:6px}
+  .tradesDateFilterBtn{padding:7px 8px;font-size:12px}
+  .tradesDatePickerLabel{flex-basis:100%;max-width:none}
+  .tradesDateInput{width:132px;max-width:60%}
+  .tradesDayTitle{font-size:12px}
+}

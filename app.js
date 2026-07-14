@@ -1,3 +1,4 @@
+// v113.25: agrupa Trades por día con encabezados pegajosos y filtro Todos/Hoy/Ayer/Fecha; sin métricas ITM/OTM.
 // v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
 // v113.21: mejora la UI móvil de Señales/Trades para que las tarjetas no se encimen y la lectura sea más limpia.
@@ -112,7 +113,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.24";
+const APP_BUILD_VERSION = "v113.25";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -1195,6 +1196,202 @@ function saveTradesJournal(arr) {
   } catch {}
 }
 let tradesJournal = loadTradesJournal();
+
+// v113.25: navegación del journal por día, usando siempre la fecha de Argentina.
+const TRADES_DATE_FILTER_STORE_KEY = "tradesDateFilter_v1";
+const TRADES_TIME_ZONE = "America/Argentina/Buenos_Aires";
+const TRADES_DATE_FILTER_MODES = new Set(["all", "today", "yesterday", "custom"]);
+
+function normalizeTradesDateFilterState(raw) {
+  const mode = TRADES_DATE_FILTER_MODES.has(String(raw?.mode || "")) ? String(raw.mode) : "all";
+  const customDate = /^\d{4}-\d{2}-\d{2}$/.test(String(raw?.customDate || "")) ? String(raw.customDate) : "";
+  return { mode: mode === "custom" && !customDate ? "all" : mode, customDate };
+}
+function loadTradesDateFilterState() {
+  try {
+    return normalizeTradesDateFilterState(JSON.parse(localStorage.getItem(TRADES_DATE_FILTER_STORE_KEY) || "{}"));
+  } catch {
+    return { mode: "all", customDate: "" };
+  }
+}
+function saveTradesDateFilterState() {
+  try { localStorage.setItem(TRADES_DATE_FILTER_STORE_KEY, JSON.stringify(tradesDateFilterState)); } catch {}
+}
+let tradesDateFilterState = loadTradesDateFilterState();
+
+function getTradesArgentinaDateParts(epochMs) {
+  const n = Number(epochMs);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: TRADES_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(n));
+    const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+    if (!map.year || !map.month || !map.day) return null;
+    return { year: map.year, month: map.month, day: map.day };
+  } catch {
+    const d = new Date(n);
+    if (!Number.isFinite(d.getTime())) return null;
+    return {
+      year: String(d.getFullYear()),
+      month: String(d.getMonth() + 1).padStart(2, "0"),
+      day: String(d.getDate()).padStart(2, "0"),
+    };
+  }
+}
+function getTradesArgentinaDateKey(epochMs) {
+  const p = getTradesArgentinaDateParts(epochMs);
+  return p ? `${p.year}-${p.month}-${p.day}` : "";
+}
+function shiftTradesDateKey(dateKey, deltaDays) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || ""));
+  if (!m) return "";
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + Number(deltaDays || 0), 12));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+function getTradesTodayDateKey() {
+  return getTradesArgentinaDateKey(Date.now());
+}
+function getTradesYesterdayDateKey() {
+  return shiftTradesDateKey(getTradesTodayDateKey(), -1);
+}
+function getTradeJournalEntryEpochMs(entry) {
+  const trade = entry?.trade || {};
+  const exactTradeCandidates = [
+    trade.purchase_time,
+    trade.buy_time,
+    trade.entry_spot_time,
+    trade.start_time,
+  ];
+  for (const candidate of exactTradeCandidates) {
+    const n = studyEpochMs(candidate);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+
+  const signalCandidates = [entry?.signalAnchorEpochMs, entry?.signalDetectedEpochMs];
+  for (const candidate of signalCandidates) {
+    const n = studyEpochMs(candidate);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+
+  const minute = Number(entry?.minute);
+  if (Number.isFinite(minute) && minute > 0) return minute * 60000;
+
+  const saved = studyEpochMs(entry?.saved_at);
+  return Number.isFinite(saved) && saved > 0 ? saved : 0;
+}
+function getTradeJournalEntryDateKey(entry) {
+  return getTradesArgentinaDateKey(getTradeJournalEntryEpochMs(entry));
+}
+function getTradesDateFilterTargetKey() {
+  if (tradesDateFilterState.mode === "today") return getTradesTodayDateKey();
+  if (tradesDateFilterState.mode === "yesterday") return getTradesYesterdayDateKey();
+  if (tradesDateFilterState.mode === "custom") return tradesDateFilterState.customDate || "";
+  return "";
+}
+function getTradesDateFilterLabel() {
+  if (tradesDateFilterState.mode === "today") return "Hoy";
+  if (tradesDateFilterState.mode === "yesterday") return "Ayer";
+  if (tradesDateFilterState.mode === "custom") return formatTradesDayLabel(tradesDateFilterState.customDate, { compact: true });
+  return "Todos";
+}
+function setTradesDateFilter(mode, customDate = "") {
+  const safeMode = TRADES_DATE_FILTER_MODES.has(String(mode || "")) ? String(mode) : "all";
+  tradesDateFilterState = normalizeTradesDateFilterState({ mode: safeMode, customDate });
+  saveTradesDateFilterState();
+  updateTradesDateFilterControls();
+  renderTradesView();
+}
+function filterTradesBySelectedDate(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const target = getTradesDateFilterTargetKey();
+  if (!target) return list.slice();
+  return list.filter((entry) => getTradeJournalEntryDateKey(entry) === target);
+}
+function formatTradesDayLabel(dateKey, opts = {}) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateKey || ""));
+  if (!m) return opts.compact ? "Fecha desconocida" : "FECHA NO DISPONIBLE";
+  const noonUtc = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 15));
+  let full = "";
+  try {
+    full = new Intl.DateTimeFormat("es-AR", {
+      timeZone: TRADES_TIME_ZONE,
+      weekday: opts.compact ? undefined : "long",
+      day: "numeric",
+      month: opts.compact ? "short" : "long",
+      year: String(m[1]) === String(getTradesTodayDateKey()).slice(0, 4) ? undefined : "numeric",
+    }).format(noonUtc).replace(/[.,]/g, "");
+  } catch {
+    full = `${m[3]}/${m[2]}/${m[1]}`;
+  }
+  if (opts.compact) return full;
+  const prefix = dateKey === getTradesTodayDateKey() ? "HOY · " : dateKey === getTradesYesterdayDateKey() ? "AYER · " : "";
+  return `${prefix}${full}`.toLocaleUpperCase("es-AR");
+}
+function createTradesDayHeader(dateKey, count) {
+  const header = document.createElement("div");
+  header.className = "tradesDayHeader";
+  header.dataset.date = dateKey || "unknown";
+
+  const title = document.createElement("span");
+  title.className = "tradesDayTitle";
+  title.textContent = formatTradesDayLabel(dateKey);
+
+  const total = document.createElement("span");
+  total.className = "tradesDayCount";
+  total.textContent = `${Number(count || 0)} ${Number(count || 0) === 1 ? "trade" : "trades"}`;
+
+  header.append(title, total);
+  return header;
+}
+function updateTradesDateFilterControls() {
+  const bar = document.getElementById("tradesDateFilterBar");
+  if (!bar) return;
+  bar.querySelectorAll("[data-trades-date-mode]").forEach((btn) => {
+    const active = String(btn.dataset.tradesDateMode || "") === tradesDateFilterState.mode;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  const input = document.getElementById("tradesDateInput");
+  if (input) input.value = tradesDateFilterState.customDate || "";
+  const label = document.getElementById("tradesDatePickerLabel");
+  if (label) label.classList.toggle("active", tradesDateFilterState.mode === "custom");
+}
+function ensureTradesDateFilterControls(actions = document.getElementById("tradesActions")) {
+  if (!actions) return null;
+  let bar = document.getElementById("tradesDateFilterBar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "tradesDateFilterBar";
+    bar.className = "tradesDateFilterBar";
+    bar.setAttribute("aria-label", "Filtrar trades por día");
+    bar.innerHTML = `
+      <button type="button" class="tradesDateFilterBtn" data-trades-date-mode="all" aria-pressed="true">Todos</button>
+      <button type="button" class="tradesDateFilterBtn" data-trades-date-mode="today" aria-pressed="false">Hoy</button>
+      <button type="button" class="tradesDateFilterBtn" data-trades-date-mode="yesterday" aria-pressed="false">Ayer</button>
+      <label id="tradesDatePickerLabel" class="tradesDatePickerLabel" title="Elegir una fecha">
+        <span>📅 Fecha</span>
+        <input id="tradesDateInput" class="tradesDateInput" type="date" aria-label="Elegir fecha de trades">
+      </label>`;
+    actions.prepend(bar);
+
+    bar.querySelectorAll("[data-trades-date-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => setTradesDateFilter(btn.dataset.tradesDateMode || "all"));
+    });
+    const input = bar.querySelector("#tradesDateInput");
+    if (input) {
+      input.addEventListener("change", () => {
+        const value = String(input.value || "");
+        if (value) setTradesDateFilter("custom", value);
+      });
+    }
+  }
+  updateTradesDateFilterControls();
+  return bar;
+}
 
 // V99: la pestaña Trades se separa por cuenta activa.
 // Los trades nuevos guardan account_mode dentro del trade y en el journal.
@@ -7658,14 +7855,10 @@ function ensureTradesView() {
   if (!actions) {
     actions = document.createElement("div");
     actions.id = "tradesActions";
-    actions.style.display = "flex";
-    actions.style.justifyContent = "flex-end";
-    actions.style.alignItems = "center";
-    actions.style.gap = "10px";
-    actions.style.margin = "10px 0 0 0";
-    actions.style.width = "100%";
     el.appendChild(actions);
   }
+  actions.classList.add("viewActions", "tradesActions");
+  ensureTradesDateFilterControls(actions);
 
   // ✅ Lista (esta SÍ se limpia)
   let list = $("tradesList");
@@ -7853,10 +8046,21 @@ function renderTradesView() {
   updateCounter("trades");
   list.innerHTML = "";
 
-  const visibleTrades = getTradeJournalVisibleList();
+  const allVisibleTrades = getTradeJournalVisibleList();
+  const visibleTrades = filterTradesBySelectedDate(allVisibleTrades);
   const otherCount = getTradeJournalHiddenOtherCount();
   const scopeLabel = getTradingAccountLabel();
   const scopeIcon = getTradingAccountIcon();
+  const hasDateFilter = tradesDateFilterState.mode !== "all";
+  const sortedVisibleTrades = visibleTrades
+    .map((entry, index) => ({ entry, index, epochMs: getTradeJournalEntryEpochMs(entry) }))
+    .sort((a, b) => (b.epochMs - a.epochMs) || (a.index - b.index))
+    .map((x) => x.entry);
+  const tradesPerDay = new Map();
+  for (const entry of sortedVisibleTrades) {
+    const key = getTradeJournalEntryDateKey(entry) || "";
+    tradesPerDay.set(key, (tradesPerDay.get(key) || 0) + 1);
+  }
 
   const header = document.createElement("div");
   header.className = "tradesScopeNotice";
@@ -7868,13 +8072,20 @@ function renderTradesView() {
   header.style.fontWeight = "900";
   header.style.fontSize = "13px";
   header.style.color = "rgba(255,255,255,.88)";
-  header.textContent = `${scopeIcon} Trades ${scopeLabel}: ${visibleTrades.length}${otherCount ? ` · ocultos de la otra cuenta: ${otherCount}` : ""}`;
+  header.textContent = `${scopeIcon} Trades ${scopeLabel}: ${visibleTrades.length}${hasDateFilter ? ` de ${allVisibleTrades.length} · ${getTradesDateFilterLabel()}` : ""}${otherCount ? ` · ocultos de la otra cuenta: ${otherCount}` : ""}`;
   list.appendChild(header);
 
   if (!visibleTrades.length) {
-    list.insertAdjacentHTML("beforeend", `<div style="padding:12px; opacity:.9;">Todavía no hay trades ${scopeLabel} guardados para estudio.</div>`);
+    const filterText = hasDateFilter ? ` para ${getTradesDateFilterLabel()}` : "";
+    list.insertAdjacentHTML("beforeend", `<div class="tradesEmptyState">Todavía no hay trades ${scopeLabel}${filterText}.</div>`);
   } else {
-    for (const entry of visibleTrades) {
+    let previousDateKey = null;
+    for (const entry of sortedVisibleTrades) {
+      const entryDateKey = getTradeJournalEntryDateKey(entry) || "";
+      if (entryDateKey !== previousDateKey) {
+        list.appendChild(createTradesDayHeader(entryDateKey, tradesPerDay.get(entryDateKey) || 0));
+        previousDateKey = entryDateKey;
+      }
       const merged = buildModalItemFromTradeEntry(entry) || {};
       const item = {
         ...merged,
