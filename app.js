@@ -1,4 +1,4 @@
-// v113.25: agrupa Trades por día con encabezados pegajosos y filtro Todos/Hoy/Ayer/Fecha; sin métricas ITM/OTM.
+// v113.26: agrega en Trades la descarga JSON de todos los trades, independiente del filtro por día.
 // v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
 // v113.21: mejora la UI móvil de Señales/Trades para que las tarjetas no se encimen y la lectura sea más limpia.
@@ -113,7 +113,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.25";
+const APP_BUILD_VERSION = "v113.26";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -8712,6 +8712,51 @@ function compactTradeJournalForAnalysis(entry) {
       : [],
   });
 }
+function buildAllTradesAnalysisExport() {
+  const trades = getTradesJournalExportList()
+    .map((entry) => stripForAnalysisCopy(entry))
+    .filter(Boolean);
+
+  return {
+    exported_at: new Date().toISOString(),
+    export_scope: "trades_all_ticks",
+    app_version: APP_BUILD_VERSION,
+    description: "Export completo del journal de Trades: incluye todos los trades guardados, sin aplicar el filtro Todos/Hoy/Ayer/Fecha, con ticks, datos de operación, resultado y feedback disponible. No incluye tokens ni datos sensibles.",
+    counts: {
+      trades_total: trades.length,
+      trades_with_ticks: trades.filter((t) => Array.isArray(t.ticks) && t.ticks.length > 0).length,
+      trades_with_next_outcome: trades.filter((t) => !!t.nextOutcome).length,
+    },
+    trades_all: trades,
+  };
+}
+function buildAllTradesAnalysisFileName(data) {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-").replace("T", "_").slice(0, 19);
+  const count = Number(data?.counts?.trades_total || 0);
+  return `todos-los-trades-${count}-${ts}.json`;
+}
+function downloadAllTradesForAnalysis() {
+  try {
+    // Toma cualquier comentario/voto que esté abierto en Trades y actualiza
+    // resultados ya resueltos antes de construir el archivo completo.
+    syncTradesFeedbackFromOpenRows();
+    syncTradeJournalNextOutcomesFromHistory();
+    const data = buildAllTradesAnalysisExport();
+    if (!data.counts.trades_total) {
+      toast("Todavía no hay trades para descargar.", 2800);
+      return;
+    }
+    const text = JSON.stringify(data, null, 2);
+    const kb = Math.max(1, Math.round(text.length / 1024));
+    const filename = buildAllTradesAnalysisFileName(data);
+    downloadTextFile(filename, text, "application/json;charset=utf-8");
+    toast(`💾 JSON generado: ${data.counts.trades_total} trades · ${kb} KB`, 3200);
+  } catch (err) {
+    console.error("downloadAllTradesForAnalysis", err);
+    toast(`⚠️ No pude generar JSON: ${err?.message || err}`, 3500);
+  }
+}
+
 function buildSignalsAnalysisExport() {
   const signals = getCleanVisualHistory().map(compactSignalForAnalysis).filter(Boolean);
   const signalIds = new Set(signals.map((s) => s.id).filter(Boolean));
@@ -9602,6 +9647,13 @@ function ensureInlineClearButtons() {
     },
   });
   ensureCopyAllSignalsAnalysisButton();
+
+  ensureViewActionButton("trades", {
+    id: "downloadAllTradesAnalysisBtn",
+    text: "💾 Descargar JSON",
+    title: "Descarga todos los trades guardados en un JSON, sin aplicar el filtro por día",
+    onClick: downloadAllTradesForAnalysis,
+  });
 
   ensureKeepClosedAwaySignalsToggle();
 
