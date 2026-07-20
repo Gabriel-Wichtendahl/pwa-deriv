@@ -1,4 +1,4 @@
-// v113.26: agrega en Trades la descarga JSON de todos los trades, independiente del filtro por día.
+// v113.27: el JSON de Trades incorpora ticks 0–60, siguientes 60s y serie unificada 0–120.
 // v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
 // v113.21: mejora la UI móvil de Señales/Trades para que las tarjetas no se encimen y la lectura sea más limpia.
@@ -113,7 +113,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.26";
+const APP_BUILD_VERSION = "v113.27";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -8712,19 +8712,179 @@ function compactTradeJournalForAnalysis(entry) {
       : [],
   });
 }
-function buildAllTradesAnalysisExport() {
-  const trades = getTradesJournalExportList()
+function normalizeTradeExportTickList(value, minMs = 0, maxMs = 120000) {
+  const map = new Map();
+  for (const raw of Array.isArray(value) ? value : []) {
+    const ms = Number(raw?.ms);
+    const quote = Number(raw?.quote);
+    if (!Number.isFinite(ms) || !Number.isFinite(quote) || ms < minMs || ms > maxMs) continue;
+    const roundedMs = Math.round(ms);
+    map.set(roundedMs, { ms: Math.max(minMs, Math.min(maxMs, ms)), quote });
+  }
+  return Array.from(map.values()).sort((a, b) => Number(a.ms) - Number(b.ms));
+}
+function mergeTradeExportTicks(savedTicks, fetchedTicks) {
+  const saved = normalizeTradeExportTickList(savedTicks, 0, 120000);
+  const fetched = normalizeTradeExportTickList(fetchedTicks, 0, 120000);
+  const map = new Map();
+  // Lo descargado desde ticks_history es la fuente principal.
+  for (const p of fetched) map.set(Math.round(Number(p.ms)), p);
+  // Conserva puntos ya guardados cuando la consulta histórica no cubrió algún tramo.
+  for (const p of saved) {
+    const key = Math.round(Number(p.ms));
+    if (!map.has(key)) map.set(key, p);
+  }
+  return Array.from(map.values()).sort((a, b) => Number(a.ms) - Number(b.ms));
+}
+function getTradeExportNearestTickDistance(ticks, targetMs) {
+  let best = Infinity;
+  for (const p of Array.isArray(ticks) ? ticks : []) {
+    const ms = Number(p?.ms);
+    if (!Number.isFinite(ms)) continue;
+    best = Math.min(best, Math.abs(ms - Number(targetMs)));
+  }
+  return Number.isFinite(best) ? best : null;
+}
+async function fetchTradeExportTicks0To120(entry) {
+  const anchorEpochMs = Number(getStudyCaptureAnchorEpochMs(entry) || 0);
+  const symbol = String(entry?.symbol || '');
+  const savedTicks = normalizeTradeExportTickList(entry?.ticks, 0, 120000);
+  let fetchedTicks = [];
+  let fetchError = '';
+
+  if (symbol && Number.isFinite(anchorEpochMs) && anchorEpochMs > 0) {
+    try {
+      const timeline = {
+        ...getStudyCaptureTimeline(entry),
+        anchorEpochMs,
+        windowEndMs: 120000,
+      };
+      fetchedTicks = normalizeTradeExportTickList(
+        await fetchStudyCaptureExactTicks(entry, timeline),
+        0,
+        120000
+      );
+    } catch (err) {
+      fetchError = String(err?.message || err || 'ticks_history_error');
+    }
+  } else {
+    fetchError = !symbol ? 'missing_symbol' : 'missing_anchor_epoch_ms';
+  }
+
+  const ticks0To120 = mergeTradeExportTicks(savedTicks, fetchedTicks);
+  const formationTicks = ticks0To120.filter((p) => Number(p.ms) >= 0 && Number(p.ms) <= 60000);
+  const nextTicksAbsolute = ticks0To120.filter((p) => Number(p.ms) >= 60000 && Number(p.ms) <= 120000);
+  const nextTicksRelative = nextTicksAbsolute.map((p) => ({
+    ms: Math.max(0, Math.min(60000, Number(p.ms) - 60000)),
+    ms_from_anchor: Number(p.ms),
+    quote: Number(p.quote),
+  }));
+
+  const d0 = getTradeExportNearestTickDistance(ticks0To120, 0);
+  const d60 = getTradeExportNearestTickDistance(ticks0To120, 60000);
+  const d120 = getTradeExportNearestTickDistance(ticks0To120, 120000);
+  const firstWindowComplete = formationTicks.length >= 2 && d0 !== null && d0 <= 5000 && d60 !== null && d60 <= 5000;
+  const nextWindowComplete = nextTicksAbsolute.length >= 2 && d60 !== null && d60 <= 5000 && d120 !== null && d120 <= 5000;
+  const source = fetchedTicks.length
+    ? (savedTicks.length ? 'deriv_ticks_history_plus_saved' : 'deriv_ticks_history')
+    : (savedTicks.length ? 'saved_only' : 'unavailable');
+
+  return {
+    anchorEpochMs,
+    ticks0To120,
+    formationTicks,
+    nextTicksRelative,
+    coverage: {
+      source,
+      fetch_error: fetchError,
+      ticks_total_0_120: ticks0To120.length,
+      ticks_formation_0_60: formationTicks.length,
+      ticks_next_60_120: nextTicksAbsolute.length,
+      nearest_0_ms_distance: d0,
+      nearest_60s_distance_ms: d60,
+      nearest_120s_distance_ms: d120,
+      formation_complete: firstWindowComplete,
+      next_60_complete: nextWindowComplete,
+      full_0_120_complete: firstWindowComplete && nextWindowComplete,
+    },
+  };
+}
+async function mapTradesForExportWithConcurrency(entries, concurrency, worker, onProgress) {
+  const items = Array.isArray(entries) ? entries : [];
+  const out = new Array(items.length);
+  let cursor = 0;
+  let done = 0;
+  const runners = Array.from({ length: Math.max(1, Math.min(Number(concurrency) || 1, items.length || 1)) }, async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) break;
+      out[idx] = await worker(items[idx], idx);
+      done += 1;
+      try { onProgress?.(done, items.length); } catch {}
+    }
+  });
+  await Promise.all(runners);
+  return out;
+}
+function symbolAnchorExportCacheKey(entry, anchorEpochMs) {
+  const symbol = String(entry?.symbol || '');
+  if (symbol && Number.isFinite(Number(anchorEpochMs)) && Number(anchorEpochMs) > 0) {
+    return `${symbol}::${Number(anchorEpochMs)}`;
+  }
+  return `entry::${String(entry?.journal_id || entry?.id || Math.random())}`;
+}
+async function buildAllTradesAnalysisExport(onProgress = null) {
+  const sourceTrades = getTradesJournalExportList()
     .map((entry) => stripForAnalysisCopy(entry))
     .filter(Boolean);
+  const tickCache = new Map();
+
+  const trades = await mapTradesForExportWithConcurrency(sourceTrades, 3, async (entry) => {
+    const anchorEpochMs = Number(getStudyCaptureAnchorEpochMs(entry) || 0);
+    const key = symbolAnchorExportCacheKey(entry, anchorEpochMs);
+    let tickPackPromise = tickCache.get(key);
+    if (!tickPackPromise) {
+      tickPackPromise = fetchTradeExportTicks0To120(entry);
+      tickCache.set(key, tickPackPromise);
+    }
+    const tickPack = await tickPackPromise;
+    const clean = stripForAnalysisCopy(entry);
+
+    // Compatibilidad: ticks sigue representando la formación inicial 0–60s.
+    clean.ticks = tickPack.formationTicks;
+    // Ventana completa para reconstruir el gráfico sin unir campos manualmente.
+    clean.ticks_0_120 = tickPack.ticks0To120;
+    // Segunda ventana con reloj reiniciado en 0–60s y referencia absoluta al ancla.
+    clean.ticks_next_60 = tickPack.nextTicksRelative;
+    clean.tick_windows = {
+      anchor_epoch_ms: tickPack.anchorEpochMs || null,
+      anchor_iso: tickPack.anchorEpochMs ? new Date(tickPack.anchorEpochMs).toISOString() : null,
+      formation_from_ms: 0,
+      formation_to_ms: 60000,
+      next_from_anchor_ms: 60000,
+      next_to_anchor_ms: 120000,
+      ticks_next_60_ms_basis: '0_ms_equals_anchor_plus_60000_ms',
+      coverage: tickPack.coverage,
+    };
+    return clean;
+  }, onProgress);
 
   return {
     exported_at: new Date().toISOString(),
-    export_scope: "trades_all_ticks",
+    export_scope: "trades_all_ticks_0_120",
     app_version: APP_BUILD_VERSION,
-    description: "Export completo del journal de Trades: incluye todos los trades guardados, sin aplicar el filtro Todos/Hoy/Ayer/Fecha, con ticks, datos de operación, resultado y feedback disponible. No incluye tokens ni datos sensibles.",
+    description: "Export completo del journal de Trades. Cada trade incluye ticks de la formación 0–60s, los 60s siguientes y la serie unificada 0–120s para reconstruir ambas ventanas. La descarga intenta completar trades anteriores consultando ticks_history de Deriv. No incluye tokens ni datos sensibles.",
+    tick_schema: {
+      ticks: "formación inicial, ms 0–60000 desde el ancla",
+      ticks_next_60: "ventana posterior, ms 0–60000 donde 0 equivale a ancla+60000; ms_from_anchor conserva 60000–120000",
+      ticks_0_120: "serie unificada, ms 0–120000 desde el ancla",
+    },
     counts: {
       trades_total: trades.length,
       trades_with_ticks: trades.filter((t) => Array.isArray(t.ticks) && t.ticks.length > 0).length,
+      trades_with_next_60_ticks: trades.filter((t) => Array.isArray(t.ticks_next_60) && t.ticks_next_60.length > 0).length,
+      trades_with_complete_next_60: trades.filter((t) => !!t?.tick_windows?.coverage?.next_60_complete).length,
+      trades_with_complete_0_120: trades.filter((t) => !!t?.tick_windows?.coverage?.full_0_120_complete).length,
       trades_with_next_outcome: trades.filter((t) => !!t.nextOutcome).length,
     },
     trades_all: trades,
@@ -8735,25 +8895,56 @@ function buildAllTradesAnalysisFileName(data) {
   const count = Number(data?.counts?.trades_total || 0);
   return `todos-los-trades-${count}-${ts}.json`;
 }
-function downloadAllTradesForAnalysis() {
+async function ensureTradesExportPublicWsReady(timeoutMs = 12000) {
+  if (ws && ws.readyState === 1) return true;
+  try { connect("trades_json_export"); } catch {}
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < Math.max(1000, Number(timeoutMs) || 12000)) {
+    if (ws && ws.readyState === 1) return true;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  return !!ws && ws.readyState === 1;
+}
+async function downloadAllTradesForAnalysis() {
+  const btn = document.getElementById("downloadAllTradesAnalysisBtn");
+  const originalText = btn?.textContent || "💾 Descargar JSON";
   try {
     // Toma cualquier comentario/voto que esté abierto en Trades y actualiza
     // resultados ya resueltos antes de construir el archivo completo.
     syncTradesFeedbackFromOpenRows();
     syncTradeJournalNextOutcomesFromHistory();
-    const data = buildAllTradesAnalysisExport();
-    if (!data.counts.trades_total) {
+    const total = getTradesJournalExportList().length;
+    if (!total) {
       toast("Todavía no hay trades para descargar.", 2800);
       return;
     }
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "⏳ Conectando…";
+      btn.style.opacity = "0.72";
+    }
+    const wsReady = await ensureTradesExportPublicWsReady();
+    if (!wsReady) throw new Error("No hay conexión con Deriv para recuperar los 60 segundos posteriores.");
+    if (btn) btn.textContent = `⏳ Ticks 0/${total}`;
+    toast(`⏳ Completando ticks 0–120s de ${total} trades...`, 3000);
+    const data = await buildAllTradesAnalysisExport((done, count) => {
+      if (btn) btn.textContent = `⏳ Ticks ${done}/${count}`;
+    });
     const text = JSON.stringify(data, null, 2);
     const kb = Math.max(1, Math.round(text.length / 1024));
     const filename = buildAllTradesAnalysisFileName(data);
     downloadTextFile(filename, text, "application/json;charset=utf-8");
-    toast(`💾 JSON generado: ${data.counts.trades_total} trades · ${kb} KB`, 3200);
+    const complete = Number(data?.counts?.trades_with_complete_0_120 || 0);
+    toast(`💾 JSON: ${data.counts.trades_total} trades · 0–120s completos ${complete}/${data.counts.trades_total} · ${kb} KB`, 4500);
   } catch (err) {
     console.error("downloadAllTradesForAnalysis", err);
     toast(`⚠️ No pude generar JSON: ${err?.message || err}`, 3500);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      btn.style.opacity = "0.95";
+    }
   }
 }
 
@@ -9651,7 +9842,7 @@ function ensureInlineClearButtons() {
   ensureViewActionButton("trades", {
     id: "downloadAllTradesAnalysisBtn",
     text: "💾 Descargar JSON",
-    title: "Descarga todos los trades guardados en un JSON, sin aplicar el filtro por día",
+    title: "Descarga todos los trades con ticks de la formación 0–60s y de los 60s siguientes",
     onClick: downloadAllTradesForAnalysis,
   });
 
