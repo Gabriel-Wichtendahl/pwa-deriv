@@ -1,4 +1,4 @@
-// v113.29: feed de ticks autenticado; autoriza token/OTP antes de active_symbols y ticks, sin cambiar índices normales por (1s).
+// v113.30: feed autenticado estable; active_symbols adapta parámetros según API Legacy o PAT/OTP.
 // v113.27: el JSON de Trades incorpora ticks 0–60, siguientes 60s y serie unificada 0–120.
 // v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
@@ -114,7 +114,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.29";
+const APP_BUILD_VERSION = "v113.30";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -2569,7 +2569,7 @@ function ensureResetCacheButton() {
 /* =========================
    State
 ========================= */
-let ws; // V113.29: socket del feed autenticado (legacy autorizado u OTP autenticado)
+let ws; // V113.30: socket del feed autenticado (legacy autorizado u OTP autenticado)
 let tradeWs = null;
 let tradeWsConnectPromise = null;
 let publicWsUrlInFlight = false;
@@ -29179,7 +29179,7 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 }
 
 /* =========================
-   V113.29 · Feed autenticado y resolución segura de símbolos
+   V113.30 · Feed autenticado y resolución segura de símbolos
    - LEGACY: autoriza el token antes de solicitar símbolos/ticks.
    - API nueva PAT/OTP: abre un WS OTP exclusivo para el feed.
    - Nunca cambia Volatility normal por Volatility (1s) solo por parecido.
@@ -29330,7 +29330,17 @@ async function authorizeAndSubscribeAuthenticatedFeed(socket, generation) {
 
   let resolution = null;
   try {
-    const activeRes = await wsRequest({ active_symbols: "full", product_type: "basic" }, 15000);
+    // La API PAT/OTP nueva no admite el parámetro Legacy `product_type`.
+    // En Legacy lo conservamos; si el servidor igualmente lo rechaza, reintentamos
+    // una sola vez sin ese parámetro. Esto no interrumpe el stream de ticks.
+    const activePayload = isNewPatApiMode()
+      ? { active_symbols: "full" }
+      : { active_symbols: "full", product_type: "basic" };
+    let activeRes = await wsRequest(activePayload, 15000);
+    const firstError = String(activeRes?.error?.message || "");
+    if (activeRes?.error && /product_type|properties? not allowed/i.test(firstError)) {
+      activeRes = await wsRequest({ active_symbols: "full" }, 15000);
+    }
     if (activeRes?.error) throw new Error(activeRes.error.message || "active_symbols error");
     resolution = resolveAuthenticatedFeedSymbols(activeRes);
   } catch (err) {
