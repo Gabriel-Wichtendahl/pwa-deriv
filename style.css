@@ -88,6 +88,19 @@ body.light .bgNeon{display:none}
   letter-spacing:.3px;
 }
 
+
+.feedModeStatus{
+  margin:-2px 0 8px;
+  min-height:18px;
+  font-size:12px;
+  line-height:1.35;
+  color:#a5f3fc;
+  letter-spacing:.15px;
+}
+.feedModeStatus.is-ok{color:#86efac}
+.feedModeStatus.is-warn{color:#fde68a}
+.feedModeStatus.is-error{color:#fca5a5}
+
 .topStatus{
   display:flex;
   gap:8px;

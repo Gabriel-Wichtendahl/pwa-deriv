@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.27 (UI móvil premium + GIRO++) */
+/* sw.js — Deriv Signals v113.29 (UI móvil premium + GIRO++) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-27-trades-json-0-120";
+const CACHE = "deriv-assets-v113-29-feed-autenticado";
 
 const CORE_ASSETS = [
   "./",

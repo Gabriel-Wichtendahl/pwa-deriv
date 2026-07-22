@@ -1,3 +1,4 @@
+// v113.29: feed de ticks autenticado; autoriza token/OTP antes de active_symbols y ticks, sin cambiar índices normales por (1s).
 // v113.27: el JSON de Trades incorpora ticks 0–60, siguientes 60s y serie unificada 0–120.
 // v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
 // v113.22: segunda pasada visual móvil: tarjetas más bajas, badges compactos, menos brillo y acciones superiores ordenadas.
@@ -113,7 +114,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.27";
+const APP_BUILD_VERSION = "v113.29";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -2248,6 +2249,7 @@ function pickEl(...ids) {
 }
 
 const statusEl = $("status");
+const feedModeStatusEl = $("feedModeStatus");
 const signalsEl = $("signals");
 const counterEl = $("counter");
 const feedbackEl = $("feedback"); // compat (ya no se usa en V9.4 práctica)
@@ -2567,9 +2569,15 @@ function ensureResetCacheButton() {
 /* =========================
    State
 ========================= */
-let ws;
+let ws; // V113.29: socket del feed autenticado (legacy autorizado u OTP autenticado)
 let tradeWs = null;
 let tradeWsConnectPromise = null;
+let publicWsUrlInFlight = false;
+let feedConnectionUsesToken = false;
+let feedResolutionReady = false;
+let feedResolutionWarning = "";
+let feedApiSymbolByLogical = Object.fromEntries(SYMBOLS.map((s) => [s, s]));
+let feedLogicalByApiSymbol = Object.fromEntries(SYMBOLS.map((s) => [s, s]));
 
 // V113.11: supervisión del WebSocket público. Mantiene una sola conexión,
 // manda heartbeat y recupera ticks/suscripciones al volver del background.
@@ -2982,6 +2990,7 @@ function ensureTradingAccountButton() {
     applyLiveAnalysisPauseUI();
     resetAuthState();
     resetNewApiTradingSocket();
+    forcePublicWsReconnect("account_mode_changed");
     syncAccountScopedSettingsUI();
     syncNewApiSettingsInputs();
     applyTradingAccountUI();
@@ -3114,6 +3123,7 @@ function ensureDerivApiModePanel() {
       setDerivApiMode(isNewPatApiMode() ? DERIV_API_MODE_LEGACY : DERIV_API_MODE_NEW_PAT);
       resetAuthState();
       resetNewApiTradingSocket();
+      forcePublicWsReconnect("api_mode_changed");
       syncAccountScopedSettingsUI();
       syncNewApiSettingsInputs();
       updateModalCandleStatusUI();
@@ -3125,6 +3135,7 @@ function ensureDerivApiModePanel() {
       saveNewApiSettingsFromInputs();
       resetAuthState();
       resetNewApiTradingSocket();
+      forcePublicWsReconnect("api_settings_saved");
       toast("💾 Config API guardada", 1400);
     };
   }
@@ -17905,8 +17916,9 @@ function wsRequest(payload, timeoutMs = HISTORY_TIMEOUT_MS) {
         reject(new Error("timeout"));
       }, timeoutMs);
 
-      pending.set(req_id, { resolve, reject, t, via: socket === tradeWs ? "trade" : "public" });
-      socket.send(JSON.stringify({ ...payload, req_id }));
+      pending.set(req_id, { resolve, reject, t, via: socket === tradeWs ? "trade" : "feed" });
+      const translatedPayload = translatePayloadForAuthenticatedFeed(payload, socket);
+      socket.send(JSON.stringify({ ...translatedPayload, req_id }));
     });
   })();
 }
@@ -18571,7 +18583,9 @@ function initTokenAndStakeUI() {
       saveNewApiSettingsFromInputs();
       resetAuthState();
       resetNewApiTradingSocket();
-      void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {});
+      forcePublicWsReconnect("token_saved");
+      // La autorización y el balance se reanudan desde el nuevo feed autenticado.
+      setTimeout(() => { void ensureAuthorized().then(() => refreshAccountBalance({ force: true })).then(() => updateC100PanelUI()).catch(() => {}); }, 500);
       syncAccountScopedSettingsUI();
       syncNewApiSettingsInputs();
       toast(`💾 ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} guardado ✓`, 1600);
@@ -18584,6 +18598,7 @@ function initTokenAndStakeUI() {
       clearDerivToken();
       resetAuthState();
       resetNewApiTradingSocket();
+      forcePublicWsReconnect("token_cleared");
       syncAccountScopedSettingsUI();
       syncNewApiSettingsInputs();
       toast(`🗑️ ${isNewPatApiMode() ? "PAT API nueva" : "Token " + getTradingAccountLabel()} borrado ✓`, 1600);
@@ -19273,7 +19288,7 @@ function finalizeMinute(minute) {
    Tick flow
 ========================= */
 function onTick(tick) {
-  if (appStatusText === "Conectado – Suscribiendo…") setStatus("Conectado – Analizando");
+  if (appStatusText.includes("Suscribiendo") || appStatusText.includes("consultando símbolos")) setStatus("Conectado – Analizando");
   const epochMs = Math.round(Number(tick.epoch) * 1000);
 
   lastTickLocalNowMs = Date.now();
@@ -29164,10 +29179,196 @@ function addSignal(minute, symbol, direction, ticks, extra = {}) {
 }
 
 /* =========================
+   V113.29 · Feed autenticado y resolución segura de símbolos
+   - LEGACY: autoriza el token antes de solicitar símbolos/ticks.
+   - API nueva PAT/OTP: abre un WS OTP exclusivo para el feed.
+   - Nunca cambia Volatility normal por Volatility (1s) solo por parecido.
+========================= */
+const FEED_TARGET_DISPLAY_NAMES = {
+  R_10: "Volatility 10 Index",
+  R_25: "Volatility 25 Index",
+  R_50: "Volatility 50 Index",
+  R_75: "Volatility 75 Index",
+  R_100: "Volatility 100 Index",
+};
+
+function normalizeFeedLookupText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+function getFeedActiveSymbolsArray(obj, depth = 0) {
+  if (!obj || depth > 5) return [];
+  if (Array.isArray(obj)) return obj;
+  if (typeof obj !== "object") return [];
+  const preferred = [obj.active_symbols, obj.data?.active_symbols, obj.data, obj.result, obj.items].filter(Boolean);
+  for (const value of preferred) {
+    const found = getFeedActiveSymbolsArray(value, depth + 1);
+    if (found.length) return found;
+  }
+  return [];
+}
+function getFeedActiveSymbolCode(row) {
+  const r = row && typeof row === "object" ? row : {};
+  return String(r.underlying_symbol || r.symbol || r.code || r.id || "").trim();
+}
+function getFeedActiveSymbolDisplayName(row) {
+  const r = row && typeof row === "object" ? row : {};
+  return String(r.display_name || r.name || r.market_display_name || r.display_label || "").trim();
+}
+function isOneSecondFeedSymbolRow(row) {
+  const code = getFeedActiveSymbolCode(row).toUpperCase();
+  const name = normalizeFeedLookupText(getFeedActiveSymbolDisplayName(row));
+  return code.startsWith("1HZ") || /(^| )1s( |$)/.test(name) || name.includes("1 second");
+}
+function rebuildFeedReverseSymbolMap() {
+  feedLogicalByApiSymbol = {};
+  for (const logical of SYMBOLS) {
+    const apiSymbol = String(feedApiSymbolByLogical[logical] || logical);
+    feedLogicalByApiSymbol[apiSymbol] = logical;
+    feedLogicalByApiSymbol[logical] = logical;
+  }
+}
+function resolveAuthenticatedFeedSymbols(response) {
+  const rows = getFeedActiveSymbolsArray(response).filter((x) => x && typeof x === "object");
+  const next = {};
+  const missing = [];
+
+  for (const logical of SYMBOLS) {
+    const logicalUpper = logical.toUpperCase();
+    const exactCode = rows.find((row) => getFeedActiveSymbolCode(row).toUpperCase() === logicalUpper);
+    if (exactCode) {
+      next[logical] = getFeedActiveSymbolCode(exactCode);
+      continue;
+    }
+
+    const wantedName = normalizeFeedLookupText(FEED_TARGET_DISPLAY_NAMES[logical] || logical);
+    const exactName = rows.find((row) => {
+      if (isOneSecondFeedSymbolRow(row)) return false;
+      return normalizeFeedLookupText(getFeedActiveSymbolDisplayName(row)) === wantedName;
+    });
+    if (exactName) {
+      next[logical] = getFeedActiveSymbolCode(exactName);
+      continue;
+    }
+
+    // Seguridad: no sustituimos un índice normal por el índice (1s).
+    next[logical] = "";
+    missing.push(logical);
+  }
+
+  feedApiSymbolByLogical = next;
+  rebuildFeedReverseSymbolMap();
+  feedResolutionReady = rows.length > 0;
+  feedResolutionWarning = missing.length ? `No disponibles: ${missing.join(", ")}` : "";
+  return { rows, map: { ...next }, missing };
+}
+function getFeedApiSymbol(logicalSymbol) {
+  const logical = String(logicalSymbol || "").trim();
+  return String(feedApiSymbolByLogical[logical] || logical).trim();
+}
+function getFeedLogicalSymbol(apiSymbol) {
+  const api = String(apiSymbol || "").trim();
+  return String(feedLogicalByApiSymbol[api] || api).trim();
+}
+function translatePayloadForAuthenticatedFeed(payload = {}, socket = ws) {
+  if (!payload || typeof payload !== "object" || socket !== ws) return { ...payload };
+  const out = { ...payload };
+  if (typeof out.ticks === "string") out.ticks = getFeedApiSymbol(out.ticks);
+  if (typeof out.ticks_history === "string") out.ticks_history = getFeedApiSymbol(out.ticks_history);
+  if (typeof out.contracts_for === "string") out.contracts_for = getFeedApiSymbol(out.contracts_for);
+  return out;
+}
+function normalizeAuthenticatedFeedTick(rawTick) {
+  if (!rawTick || typeof rawTick !== "object") return rawTick;
+  const apiSymbol = String(rawTick.symbol || rawTick.underlying_symbol || "").trim();
+  const logicalSymbol = getFeedLogicalSymbol(apiSymbol);
+  return {
+    ...rawTick,
+    symbol: logicalSymbol,
+    api_symbol: apiSymbol || logicalSymbol,
+  };
+}
+function getFeedMappingSummary() {
+  const changed = [];
+  for (const logical of SYMBOLS) {
+    const api = String(feedApiSymbolByLogical[logical] || "");
+    if (api && api !== logical) changed.push(`${logical}→${api}`);
+  }
+  return changed.length ? changed.join(" · ") : "símbolos originales";
+}
+function setFeedModeStatus(message = "", state = "") {
+  if (!feedModeStatusEl) return;
+  feedModeStatusEl.textContent = String(message || "");
+  feedModeStatusEl.classList.remove("is-ok", "is-warn", "is-error");
+  if (state) feedModeStatusEl.classList.add(`is-${state}`);
+}
+async function authorizeAndSubscribeAuthenticatedFeed(socket, generation) {
+  feedConnectionUsesToken = false;
+  feedResolutionReady = false;
+  feedResolutionWarning = "";
+  feedApiSymbolByLogical = Object.fromEntries(SYMBOLS.map((s) => [s, s]));
+  rebuildFeedReverseSymbolMap();
+
+  if (isNewPatApiMode()) {
+    // La URL OTP ya representa una sesión autenticada.
+    feedConnectionUsesToken = true;
+    setStatus("🔐 Feed OTP conectado – consultando símbolos…");
+    setFeedModeStatus(`🔐 Feed autenticado · ${getTradingAccountLabel()} · PAT/OTP`, "warn");
+  } else {
+    setStatus("🔐 Feed conectado – autorizando token…");
+    setFeedModeStatus(`🔐 Autorizando feed · ${getTradingAccountLabel()}…`, "warn");
+    await ensureAuthorized();
+    feedConnectionUsesToken = true;
+    setStatus("🔐 Feed autorizado – consultando símbolos…");
+  }
+
+  if (generation !== publicWsGeneration || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+
+  let resolution = null;
+  try {
+    const activeRes = await wsRequest({ active_symbols: "full", product_type: "basic" }, 15000);
+    if (activeRes?.error) throw new Error(activeRes.error.message || "active_symbols error");
+    resolution = resolveAuthenticatedFeedSymbols(activeRes);
+  } catch (err) {
+    // Si active_symbols falla, conservamos los códigos históricos, pero lo dejamos visible.
+    feedApiSymbolByLogical = Object.fromEntries(SYMBOLS.map((s) => [s, s]));
+    rebuildFeedReverseSymbolMap();
+    feedResolutionWarning = `active_symbols: ${err?.message || err}`;
+    resolution = { map: { ...feedApiSymbolByLogical }, missing: [] };
+  }
+
+  if (generation !== publicWsGeneration || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+
+  const subscribed = [];
+  for (const logical of SYMBOLS) {
+    const apiSymbol = String(resolution?.map?.[logical] || "").trim();
+    if (!apiSymbol) continue;
+    socket.send(JSON.stringify({ ticks: apiSymbol, subscribe: 1 }));
+    subscribed.push(logical);
+  }
+
+  if (!subscribed.length) {
+    throw new Error("Deriv no devolvió ninguno de los índices normales configurados");
+  }
+
+  const warning = feedResolutionWarning || (resolution?.missing?.length ? `No disponibles: ${resolution.missing.join(", ")}` : "");
+  if (warning) {
+    setFeedModeStatus(`⚠️ Feed autenticado · ${warning}`, "warn");
+  } else {
+    setFeedModeStatus(`🔐 Feed autenticado · ${getTradingAccountLabel()} · ${getFeedMappingSummary()}`, "ok");
+  }
+  setStatus("Conectado – Analizando");
+}
+
+/* =========================
    WebSocket Deriv
 ========================= */
-function handleDerivWsMessage(data, source = "public") {
-  if (source === "public") publicWsLastMessageAt = Date.now();
+function handleDerivWsMessage(data, source = "feed") {
+  if (source === "feed" || source === "public") publicWsLastMessageAt = Date.now();
   if (data && data.req_id && pending.has(data.req_id)) {
     const p = pending.get(data.req_id);
     clearTimeout(p.t);
@@ -29197,11 +29398,11 @@ function handleDerivWsMessage(data, source = "public") {
       setPendingContractPOCCooldown("proposal_open_contract_rate_limit");
       setStatus("⚠️ Deriv limitó consulta de contrato. En cooldown 90s.");
     } else {
-      setStatus(`⚠️ WS ${source === "trade" ? "trading" : "public"}: ${emsg}`);
+      setStatus(`⚠️ WS ${source === "trade" ? "trading" : "feed autenticado"}: ${emsg}`);
     }
   }
 
-  if (data.tick) onTick(data.tick);
+  if (data.tick) onTick(normalizeAuthenticatedFeedTick(data.tick));
 }
 
 function getPublicWsReadyStateLabel() {
@@ -29236,6 +29437,10 @@ function getPublicWsDiagnostics() {
     reconnect_attempts_current: publicWsReconnectAttempts,
     reconnects_total: publicWsReconnectTotal,
     last_reconnect_reason: publicWsLastReconnectReason || "",
+    feed_authenticated: !!feedConnectionUsesToken,
+    feed_resolution_ready: !!feedResolutionReady,
+    feed_symbol_map: { ...feedApiSymbolByLogical },
+    feed_warning: feedResolutionWarning || "",
   };
 }
 
@@ -29267,6 +29472,11 @@ function sendPublicWsHeartbeat(reason = "timer") {
 function forcePublicWsReconnect(reason = "forced") {
   publicWsLastReconnectReason = String(reason || "forced");
   clearPublicWsReconnectTimer();
+  if (publicWsUrlInFlight) {
+    // Invalida una URL OTP/arranque que todavía se está solicitando.
+    publicWsGeneration += 1;
+    publicWsUrlInFlight = false;
+  }
   const current = ws;
   if (current && (current.readyState === WebSocket.OPEN || current.readyState === WebSocket.CONNECTING)) {
     try { current.close(4000, String(reason || "reconnect").slice(0, 100)); } catch {}
@@ -29312,11 +29522,13 @@ function startPublicWsSupervision() {
   }, 5000);
 }
 
-function connect(reason = "connect") {
+async function connect(reason = "connect") {
   if (typeof navigator.onLine === "boolean" && !navigator.onLine) {
     setStatus("Sin internet – esperando conexión…");
+    setFeedModeStatus("⚠️ Feed autenticado · sin internet", "warn");
     return;
   }
+  if (publicWsUrlInFlight) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   clearPublicWsReconnectTimer();
@@ -29325,17 +29537,40 @@ function connect(reason = "connect") {
   publicWsReconnectAttempts += reason === "startup" ? 0 : 1;
   if (reason !== "startup") publicWsReconnectTotal += 1;
   publicWsLastReconnectReason = String(reason || "connect");
+  publicWsUrlInFlight = true;
+
+  let socketUrl = WS_URL;
+  try {
+    setStatus(publicWsReconnectAttempts ? "🔐 Reconectando feed…" : "🔐 Conectando feed autenticado…");
+    setFeedModeStatus(`🔐 Feed autenticado · ${getTradingAccountLabel()} · conectando…`, "warn");
+    if (isNewPatApiMode()) socketUrl = await getNewApiOtpWebSocketUrl(getCurrentAccountScope());
+  } catch (err) {
+    publicWsUrlInFlight = false;
+    feedConnectionUsesToken = false;
+    const msg = String(err?.message || err || "No se pudo preparar el feed autenticado");
+    setStatus(`⚠️ Feed autenticado: ${msg}`);
+    setFeedModeStatus(`⚠️ Feed autenticado · ${msg}`, "error");
+    schedulePublicWsReconnect("feed_url_error", 5000);
+    return;
+  }
+
+  if (generation !== publicWsGeneration) {
+    publicWsUrlInFlight = false;
+    return;
+  }
 
   let socket;
   try {
-    setStatus(publicWsReconnectAttempts ? "Reconectando…" : "Conectando…");
-    socket = new WebSocket(WS_URL);
+    socket = new WebSocket(socketUrl);
     ws = socket;
   } catch {
-    setStatus("Error WS – reintentando…");
+    publicWsUrlInFlight = false;
+    setStatus("Error WS autenticado – reintentando…");
+    setFeedModeStatus("⚠️ Error al abrir feed autenticado", "error");
     schedulePublicWsReconnect("constructor_error", 1500);
     return;
   }
+  publicWsUrlInFlight = false;
 
   socket.onopen = async () => {
     if (generation !== publicWsGeneration || ws !== socket) return;
@@ -29345,11 +29580,20 @@ function connect(reason = "connect") {
 
     try {
       resetAuthState();
-      if (isNewPatApiMode()) resetNewApiTradingSocket();
     } catch {}
 
-    setStatus("Conectado – Suscribiendo…");
-    SYMBOLS.forEach((sym) => socket.send(JSON.stringify({ ticks: sym, subscribe: 1 })));
+    try {
+      await authorizeAndSubscribeAuthenticatedFeed(socket, generation);
+    } catch (err) {
+      if (generation !== publicWsGeneration || ws !== socket) return;
+      feedConnectionUsesToken = false;
+      const msg = String(err?.message || err || "No se pudo iniciar el feed autenticado");
+      setStatus(`⚠️ Feed autenticado: ${msg}`);
+      setFeedModeStatus(`⚠️ Feed autenticado · ${msg}`, "error");
+      try { socket.close(4001, "authenticated_feed_failed"); } catch {}
+      return;
+    }
+
     sendPublicWsHeartbeat("open");
 
     setTimeout(() => {
@@ -29358,6 +29602,7 @@ function connect(reason = "connect") {
 
     updateDisciplineLockUI(false);
     try {
+      // En legacy ya quedó autorizado. En PAT/OTP abre, si hace falta, el WS de trading separado.
       await ensureAuthorized();
       await refreshAccountBalance({ force: true });
       updateC100PanelUI();
@@ -29372,35 +29617,40 @@ function connect(reason = "connect") {
     publicWsLastMessageAt = Date.now();
     try {
       const data = JSON.parse(e.data);
-      handleDerivWsMessage(data, "public");
+      handleDerivWsMessage(data, "feed");
     } catch (err) {
-      setStatus(`❌ Parse WS: ${err?.message || err}`);
+      setStatus(`❌ Parse WS feed: ${err?.message || err}`);
     }
   };
 
   socket.onerror = () => {
     if (generation !== publicWsGeneration || ws !== socket) return;
-    setStatus("Error WS – reconectando…");
+    setStatus("Error WS autenticado – reconectando…");
+    setFeedModeStatus("⚠️ Feed autenticado · error de conexión", "error");
   };
 
   socket.onclose = (ev) => {
     if (generation !== publicWsGeneration || ws !== socket) return;
     ws = null;
+    feedConnectionUsesToken = false;
     try {
       resetAuthState();
-      resetNewApiTradingSocket();
+      // El WS de trading PAT queda separado: una caída del feed no lo destruye.
     } catch {}
 
     for (const [id, p] of pending.entries()) {
+      // No rechazar solicitudes que pertenecen al WS de trading independiente.
+      if (p?.via === "trade" && tradeWs && tradeWs.readyState === WebSocket.OPEN) continue;
       clearTimeout(p.t);
       pending.delete(id);
       p.reject(new Error("closed"));
     }
-    contractSubs.clear();
+    if (!isNewPatApiMode()) contractSubs.clear();
 
     const code = ev?.code || 0;
     const closeReason = ev?.reason || "";
-    setStatus(`Desconectado (${code}) ${closeReason ? "– " + closeReason : ""} – reconectando…`);
+    setStatus(`Feed desconectado (${code}) ${closeReason ? "– " + closeReason : ""} – reconectando…`);
+    setFeedModeStatus("⚠️ Feed autenticado · reconectando…", "warn");
     schedulePublicWsReconnect(`onclose_${code}`, document.visibilityState === "visible" ? 500 : 1500);
   };
 }
