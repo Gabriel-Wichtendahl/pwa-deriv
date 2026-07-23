@@ -1,7 +1,7 @@
-/* sw.js — Deriv Signals v113.30 (UI móvil premium + GIRO++) */
+/* sw.js — Deriv Signals v113.31 (UI móvil premium + GIRO++) */
 "use strict";
 
-const CACHE = "deriv-assets-v113-30-active-symbols-compatible";
+const CACHE = "deriv-assets-v113-31-no-visual-pause-daily-effectiveness";
 
 const CORE_ASSETS = [
   "./",
@@ -16,7 +16,6 @@ const OPTIONAL_ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
   "./bg-neon.png",
-  "./pausa-visual-bg.png",
 ];
 
 self.addEventListener("install", (e) => {

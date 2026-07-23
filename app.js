@@ -1,3 +1,4 @@
+// v113.31: elimina la pausa visual automática y agrega efectividad diaria en los encabezados de Trades.
 // v113.30: feed autenticado estable; active_symbols adapta parámetros según API Legacy o PAT/OTP.
 // v113.27: el JSON de Trades incorpora ticks 0–60, siguientes 60s y serie unificada 0–120.
 // v113.24: exige 6 puntos netos para ejecutar trades en Señales y En vivo; Práctica conserva 4 puntos.
@@ -114,7 +115,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.30";
+const APP_BUILD_VERSION = "v113.31";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -354,6 +355,8 @@ const MENTAL_COOLDOWN_TIPS = [
 const SIGNAL_FATIGUE_COUNT_KEY = "signalFatigueCountSinceRealTrade_v1";
 const SIGNAL_FATIGUE_UNTIL_KEY = "signalFatigueUntilMs_v1";
 const SIGNAL_FATIGUE_REASON_KEY = "signalFatigueReason_v1";
+// V113.31: se elimina por completo la pausa visual automática por acumulación de señales.
+const SIGNAL_FATIGUE_ENABLED = false;
 const SIGNAL_FATIGUE_LIMIT = 15;
 const SIGNAL_FATIGUE_MS = 5 * 60 * 1000;
 const SIGNAL_FATIGUE_MAX_STORED_MS = SIGNAL_FATIGUE_MS + 90 * 1000;
@@ -1332,7 +1335,44 @@ function formatTradesDayLabel(dateKey, opts = {}) {
   const prefix = dateKey === getTradesTodayDateKey() ? "HOY · " : dateKey === getTradesYesterdayDateKey() ? "AYER · " : "";
   return `${prefix}${full}`.toLocaleUpperCase("es-AR");
 }
-function createTradesDayHeader(dateKey, count) {
+function getTradeJournalResultBadge(entry) {
+  const candidates = [
+    entry?.trade?.badge,
+    entry?.trade_badge,
+    entry?.badge,
+    entry?.result,
+  ];
+  for (const candidate of candidates) {
+    const badge = String(candidate || "").trim().toUpperCase();
+    if (badge === "ITM" || badge === "OTM") return badge;
+  }
+  return "";
+}
+function getTradesDayStats(entries = []) {
+  const list = Array.isArray(entries) ? entries : [];
+  let itm = 0;
+  let otm = 0;
+  for (const entry of list) {
+    const badge = getTradeJournalResultBadge(entry);
+    if (badge === "ITM") itm += 1;
+    else if (badge === "OTM") otm += 1;
+  }
+  const decided = itm + otm;
+  return {
+    total: list.length,
+    itm,
+    otm,
+    decided,
+    pending: Math.max(0, list.length - decided),
+    effectiveness: decided ? Math.round((itm / decided) * 100) : null,
+  };
+}
+function createTradesDayHeader(dateKey, statsInput) {
+  const stats = statsInput && typeof statsInput === "object"
+    ? statsInput
+    : { total: Number(statsInput || 0), decided: 0, effectiveness: null };
+  const totalCount = Number(stats.total || 0);
+
   const header = document.createElement("div");
   header.className = "tradesDayHeader";
   header.dataset.date = dateKey || "unknown";
@@ -1341,11 +1381,25 @@ function createTradesDayHeader(dateKey, count) {
   title.className = "tradesDayTitle";
   title.textContent = formatTradesDayLabel(dateKey);
 
+  const summary = document.createElement("span");
+  summary.className = "tradesDaySummary";
+
+  const effectiveness = document.createElement("span");
+  effectiveness.className = "tradesDayEffectiveness";
+  const hasEffectiveness = stats.effectiveness !== null && stats.effectiveness !== undefined && Number.isFinite(Number(stats.effectiveness));
+  effectiveness.textContent = hasEffectiveness
+    ? `Efectividad ${Number(stats.effectiveness)}%`
+    : "Efectividad —";
+  effectiveness.title = Number(stats.decided || 0)
+    ? `Calculada sobre ${Number(stats.decided || 0)} trades cerrados`
+    : "Todavía no hay trades cerrados en este día";
+
   const total = document.createElement("span");
   total.className = "tradesDayCount";
-  total.textContent = `${Number(count || 0)} ${Number(count || 0) === 1 ? "trade" : "trades"}`;
+  total.textContent = `${totalCount} ${totalCount === 1 ? "trade" : "trades"}`;
 
-  header.append(title, total);
+  summary.append(effectiveness, total);
+  header.append(title, summary);
   return header;
 }
 function updateTradesDateFilterControls() {
@@ -8067,11 +8121,15 @@ function renderTradesView() {
     .map((entry, index) => ({ entry, index, epochMs: getTradeJournalEntryEpochMs(entry) }))
     .sort((a, b) => (b.epochMs - a.epochMs) || (a.index - b.index))
     .map((x) => x.entry);
-  const tradesPerDay = new Map();
+  const tradesByDay = new Map();
   for (const entry of sortedVisibleTrades) {
     const key = getTradeJournalEntryDateKey(entry) || "";
-    tradesPerDay.set(key, (tradesPerDay.get(key) || 0) + 1);
+    if (!tradesByDay.has(key)) tradesByDay.set(key, []);
+    tradesByDay.get(key).push(entry);
   }
+  const tradeStatsPerDay = new Map(
+    Array.from(tradesByDay.entries()).map(([key, entries]) => [key, getTradesDayStats(entries)])
+  );
 
   const header = document.createElement("div");
   header.className = "tradesScopeNotice";
@@ -8094,7 +8152,7 @@ function renderTradesView() {
     for (const entry of sortedVisibleTrades) {
       const entryDateKey = getTradeJournalEntryDateKey(entry) || "";
       if (entryDateKey !== previousDateKey) {
-        list.appendChild(createTradesDayHeader(entryDateKey, tradesPerDay.get(entryDateKey) || 0));
+        list.appendChild(createTradesDayHeader(entryDateKey, tradeStatsPerDay.get(entryDateKey) || getTradesDayStats([])));
         previousDateKey = entryDateKey;
       }
       const merged = buildModalItemFromTradeEntry(entry) || {};
@@ -16147,6 +16205,20 @@ function startMentalCooldownAfterOtm(contractId = "", reason = "OTM registrada")
 
 
 function loadSignalFatigueCooldown() {
+  if (!SIGNAL_FATIGUE_ENABLED) {
+    signalFatigueCount = 0;
+    signalFatigueUntilMs = 0;
+    signalFatigueReason = "";
+    try {
+      localStorage.removeItem(SIGNAL_FATIGUE_COUNT_KEY);
+      localStorage.removeItem(SIGNAL_FATIGUE_UNTIL_KEY);
+      localStorage.removeItem(SIGNAL_FATIGUE_REASON_KEY);
+    } catch {}
+    const existing = document.getElementById("signalFatigueOverlay");
+    if (existing) existing.remove();
+    signalFatigueOverlayEl = null;
+    return;
+  }
   try {
     signalFatigueCount = Number(localStorage.getItem(SIGNAL_FATIGUE_COUNT_KEY) || 0) || 0;
     signalFatigueUntilMs = Number(localStorage.getItem(SIGNAL_FATIGUE_UNTIL_KEY) || 0) || 0;
@@ -16162,6 +16234,7 @@ function loadSignalFatigueCooldown() {
   }
 }
 function saveSignalFatigueCooldown() {
+  if (!SIGNAL_FATIGUE_ENABLED) return;
   try {
     localStorage.setItem(SIGNAL_FATIGUE_COUNT_KEY, String(Math.max(0, Number(signalFatigueCount || 0))));
     localStorage.setItem(SIGNAL_FATIGUE_UNTIL_KEY, String(signalFatigueUntilMs || 0));
@@ -16182,6 +16255,7 @@ function clearSignalFatigueCooldown({ silent = false, resetCount = true } = {}) 
   if (!silent) toast("👁️ Pausa visual terminada. Volvé con criterio.", 2200);
 }
 function isSignalFatigueCooldownActive() {
+  if (!SIGNAL_FATIGUE_ENABLED) return false;
   const until = Number(signalFatigueUntilMs || 0);
   if (!until) return false;
   if (isExpiryValueCorruptOrExpired(until, SIGNAL_FATIGUE_MAX_STORED_MS)) {
@@ -16191,12 +16265,19 @@ function isSignalFatigueCooldownActive() {
   return true;
 }
 function getSignalFatigueRemainingMs() {
+  if (!SIGNAL_FATIGUE_ENABLED) return 0;
   return Math.max(0, Number(signalFatigueUntilMs || 0) - Date.now());
 }
 function fmtSignalFatigueRemaining(ms) {
   return fmtMentalCooldownRemaining(ms);
 }
 function ensureSignalFatigueOverlay() {
+  if (!SIGNAL_FATIGUE_ENABLED) {
+    const existing = document.getElementById("signalFatigueOverlay");
+    if (existing) existing.remove();
+    signalFatigueOverlayEl = null;
+    return null;
+  }
   if (signalFatigueOverlayEl && signalFatigueOverlayEl.isConnected) return signalFatigueOverlayEl;
 
   let el = document.getElementById("signalFatigueOverlay");
@@ -16281,6 +16362,12 @@ function updateSignalFatigueAdviceUI(remainMs) {
   } catch {}
 }
 function updateSignalFatigueUI() {
+  if (!SIGNAL_FATIGUE_ENABLED) {
+    const existing = document.getElementById("signalFatigueOverlay");
+    if (existing) existing.remove();
+    signalFatigueOverlayEl = null;
+    return;
+  }
   const active = isSignalFatigueCooldownActive();
   const el = ensureSignalFatigueOverlay();
   if (!el) return;
@@ -16298,6 +16385,7 @@ function updateSignalFatigueUI() {
   try { setStatus(`👁️ Pausa visual · ${fmtSignalFatigueRemaining(remain)}`); } catch {}
 }
 function startSignalFatigueCooldown(reason = "15 señales sin operación REAL") {
+  if (!SIGNAL_FATIGUE_ENABLED) return false;
   // No pisa el despeje mental OTM ni la disciplina REAL de 1h.
   if (isMentalCooldownActive()) return false;
   if (isTradeLockedNow()) return false;
@@ -16310,6 +16398,7 @@ function startSignalFatigueCooldown(reason = "15 señales sin operación REAL") 
   return true;
 }
 function resetSignalFatigueCycleAfterRealTrade(contractId = "") {
+  if (!SIGNAL_FATIGUE_ENABLED) return;
   // Una operación REAL corta el ciclo de señales acumuladas.
   if (activeTradingAccount !== ACCOUNT_MODE_REAL) return;
   signalFatigueCount = 0;
@@ -16319,6 +16408,7 @@ function resetSignalFatigueCycleAfterRealTrade(contractId = "") {
   updateSignalFatigueUI();
 }
 function registerSignalForFatigueGuard(item = null) {
+  if (!SIGNAL_FATIGUE_ENABLED) return false;
   try {
     if (activeTradingAccount !== ACCOUNT_MODE_REAL) return false;
     if (isTradeLockedNow()) return false;

@@ -2731,6 +2731,27 @@ body.light .tradesDateFilterBar{background:rgba(255,255,255,.78)}
   letter-spacing:.18px;
 }
 
+.tradesDaySummary{
+  flex:0 0 auto;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px;
+  white-space:nowrap;
+}
+
+.tradesDayEffectiveness{
+  flex:0 0 auto;
+  padding:4px 8px;
+  border-radius:999px;
+  border:1px solid rgba(34,197,94,.30);
+  color:#bbf7d0;
+  background:rgba(34,197,94,.11);
+  font-size:11px;
+  font-weight:950;
+  white-space:nowrap;
+}
+
 .tradesDayCount{
   flex:0 0 auto;
   padding:4px 8px;
@@ -2757,6 +2778,11 @@ body.light .tradesDayHeader{
   background:linear-gradient(180deg, rgba(207,250,254,.98), rgba(236,254,255,.98));
   box-shadow:0 7px 20px rgba(15,23,42,.15), 0 0 12px rgba(6,182,212,.12);
 }
+body.light .tradesDayEffectiveness{
+  color:#166534;
+  border-color:rgba(22,163,74,.22);
+  background:rgba(34,197,94,.10);
+}
 body.light .tradesDayCount{
   color:#164e63;
   border-color:rgba(8,145,178,.18);
@@ -2769,4 +2795,11 @@ body.light .tradesDayCount{
   .tradesDatePickerLabel{flex-basis:100%;max-width:none}
   .tradesDateInput{width:132px;max-width:60%}
   .tradesDayTitle{font-size:12px}
+  .tradesDaySummary{gap:4px}
+  .tradesDayEffectiveness,.tradesDayCount{padding:4px 6px;font-size:10px}
+}
+
+@media (max-width:360px){
+  .tradesDayHeader{align-items:flex-start;flex-direction:column;gap:6px}
+  .tradesDaySummary{width:100%;justify-content:space-between}
 }
