@@ -1,3 +1,4 @@
+// v113.33: corrige la señal nueva para exigir DOS bloques M→G→M completos antes de avisar.
 // v113.31: elimina la pausa visual automática y agrega efectividad diaria en los encabezados de Trades.
 // v113.30: feed autenticado estable; active_symbols adapta parámetros según API Legacy o PAT/OTP.
 // v113.27: el JSON de Trades incorpora ticks 0–60, siguientes 60s y serie unificada 0–120.
@@ -115,7 +116,7 @@
 // ✅ V66: pre-proposal 56-58s: arma proposal antes y en post-58 solo compra; disciplina 3 ITM/2 OTM desactivada para pruebas.
 "use strict";
 
-const APP_BUILD_VERSION = "v113.31";
+const APP_BUILD_VERSION = "v113.33";
 
 // ✅ V92: Rise/Fall con Aceptar si es igual: CALL→CALLE y PUT→PUTE en proposals Deriv.
 
@@ -1515,7 +1516,7 @@ const RUPTURA_DEBIL_GIRO_LOGIC_VERSION = "RUPTURA_DEBIL_GIRO_CONFIRMACION_20_30S
 const ALCISTA_IRREGULAR_25S_LOGIC_VERSION = "ALCISTA_IRREGULAR_QUIEBRES_30S_CALIBRADO_V106_6_20260604";
 const ALCISTA_REDUCCION_30S_LOGIC_VERSION = "ALCISTA_REDUCCION_30S_FLEX_V106_6_20260604";
 const REDUCCION_VISUAL_25S_LOGIC_VERSION = "REDUCCION_VISUAL_30S_DOS_REDUCCIONES_CLARAS_V107_1_20260608";
-const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "MGM_DOBLE_ESTRUCTURA_CONTRARIA_V113_0_20260627";
+const REDUCCION_CONSTRUCTIVA_LOGIC_VERSION = "DOBLE_MGM_EXACTO_CONTRARIA_V113_33_20260726";
 const GIRO_POLARIDAD_CANDLES_KEY = "giroPolarityCandles_v1";
 const GIRO_POLARIDAD_MAX_CANDLES = 140;
 const GIRO_APRENDIZAJE_STORE_KEY = "giroAprendizajeExamples_v1";
@@ -12755,11 +12756,12 @@ function buildVisualReadFromItem(item) {
   const contrary = String(meta.visualReductionContraryGroup || "").toLowerCase().includes("comprador") ? "comprador" : "vendedor";
   const isConstructiveRead = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
   const qualificationRoute = String(meta.constructiveQualificationRoute || "");
-  const irregularInitialBlock = (qualificationRoute === "irregular_initial_response" || qualificationRoute.startsWith("anchored_mgm_")) && meta.irregularInitialBlock && typeof meta.irregularInitialBlock === "object"
+  const isDoubleMgmRead = qualificationRoute === "double_mgm_plus_contrary";
+  const irregularInitialBlock = (isDoubleMgmRead || qualificationRoute === "irregular_initial_response" || qualificationRoute.startsWith("anchored_mgm_")) && meta.irregularInitialBlock && typeof meta.irregularInitialBlock === "object"
     ? meta.irregularInitialBlock
     : null;
   const isIrregularRead = !!irregularInitialBlock;
-  const isAnchoredMgmRead = qualificationRoute.startsWith("anchored_mgm_");
+  const isAnchoredMgmRead = isDoubleMgmRead || qualificationRoute.startsWith("anchored_mgm_");
   let primaryLabels = Array.isArray(meta.visualReductionLabels)
     ? meta.visualReductionLabels.filter(Boolean)
     : splitPatternText(meta.visualReductionPattern);
@@ -13112,7 +13114,7 @@ function drawVisualReductionReadingOverlay(ctx, item, xOf, yOf, w, h) {
 
   const meta = item.giroPolaridad || item.snrLevel || {};
   const isConstructive = String(meta.levelMode || "") === "reduccion_constructiva_continua" || !!meta.constructiveReductionMode || normalizeSignalMode(item.mode) === MODE_REDUCCION_CONSTRUCTIVA_CONTINUA;
-  const isIrregularRead = read.qualificationRoute === "irregular_initial_response" || String(read.qualificationRoute || "").startsWith("anchored_mgm_");
+  const isIrregularRead = read.qualificationRoute === "double_mgm_plus_contrary" || read.qualificationRoute === "irregular_initial_response" || String(read.qualificationRoute || "").startsWith("anchored_mgm_");
   const formedMs = Number(meta.constructiveFormedAtMs || meta.signalFromSec * 1000 || read.evalMs || 25000);
   const evalMs = Math.max(1000, Math.min(60000, isConstructive && Number.isFinite(formedMs) ? formedMs : Number(read.evalMs || 25000)));
   const x0 = xOf(0), xEval = xOf(evalMs);
@@ -15678,6 +15680,7 @@ function normalizeSNRLevelMeta(meta) {
       : null,
     constructiveQualificationRoute: s(meta.constructiveQualificationRoute),
     constructiveQualificationLabel: s(meta.constructiveQualificationLabel),
+    doubleMgmSignal: !!meta.doubleMgmSignal,
     constructiveConfirmationPack: meta.constructiveConfirmationPack && typeof meta.constructiveConfirmationPack === "object"
       ? {
           type: s(meta.constructiveConfirmationPack.type),
@@ -17614,6 +17617,13 @@ function refreshOpenSignalStageBadges() {
   });
 }
 
+function getCompactSignalPatternTag(item) {
+  const meta = item?.giroPolaridad || item?.snrLevel || {};
+  const route = String(meta.constructiveQualificationRoute || "");
+  if (route === "double_mgm_plus_contrary" || meta.doubleMgmSignal) return "2× M→G→M";
+  return "";
+}
+
 /* =========================
    Build row
 ========================= */
@@ -17626,6 +17636,7 @@ function buildRow(item, opts = {}) {
 
   const derivUrl = makeDerivTraderUrl(item.symbol);
   const modeLabel = "DOBLE REDUCCIÓN";
+  const compactPatternTag = getCompactSignalPatternTag(item);
 
   const savedForPractice = isSignalSavedForPractice(item.id);
   // En Señales también se puede destildar/cambiar 👍 👎. Solo se bloquea si una llamada futura pide voteLocked explícito.
@@ -17648,7 +17659,7 @@ function buildRow(item, opts = {}) {
     <div class="row-main">
       <span class="row-text">
         <span class="row-time">${item.time}</span>
-        <span class="row-subtext">${item.symbol} · ${labelDir(item.direction)}</span>
+        <span class="row-subtext">${item.symbol} · ${labelDir(item.direction)}${compactPatternTag ? ` · ${compactPatternTag}` : ""}</span>
       </span>
       <div class="row-tools">
         <button class="chartBtn" type="button"></button>
@@ -27614,8 +27625,9 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         if (!(elapsed > 0) || elapsed > CONSTRUCTIVE_FLOATING_WINDOW_MS) continue;
         if (formedAtMs <= Number(structure.endMs || 0)) continue;
 
+        const exactDoubleMgm = followup.type === "mgm";
         candidates.push({
-          route: "anchored_mgm_plus_structure_and_contrary",
+          route: exactDoubleMgm ? "double_mgm_plus_contrary" : "anchored_mgm_plus_structure_and_contrary",
           reductions: [structure],
           confirmation: responsePack.close || null,
           confirmationPack: responsePack,
@@ -27629,6 +27641,7 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
           turnQualityAutoAllowed: true,
           turnQualityConditions: {
             anchoredMgm: true,
+            doubleMgm: exactDoubleMgm,
             displacementMgm: true,
             followupStructure: true,
             followupStructureType: followup.type,
@@ -27766,7 +27779,8 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
 
   const reductions = selected.reductions || [];
   const irregularBlock = selected.irregularBlock || null;
-  const isAnchoredMgmRoute = String(selected.route || "").startsWith("anchored_mgm_");
+  const isDoubleMgmRoute = selected.route === "double_mgm_plus_contrary";
+  const isAnchoredMgmRoute = isDoubleMgmRoute || String(selected.route || "").startsWith("anchored_mgm_");
   const isIrregularRoute = (selected.route === "irregular_initial_response" || isAnchoredMgmRoute) && !!irregularBlock;
   const firstReduction = reductions[0] || null;
   const secondReduction = reductions[1] || null;
@@ -27789,17 +27803,19 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
         ? (irregularBlock.labels || []).slice()
         : reductions.flatMap((b) => Array.isArray(b?.labels) ? b.labels : []));
   const reductionText = reductions.map((b) => String(b?.pattern || "—")).join(" + ");
-  const acceptedPatternText = isAnchoredMgmRoute
-    ? (reductions.length
-        ? `IRR M→G→M + ${reductionText} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
-        : `IRR M→G→M + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`)
-    : (isIrregularRoute
-        ? `IRR ${irregularBlock.pattern || acceptedLabels.join("→") || "G/M/P"} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
-        : (confirmationPack
-        ? (confirmationPack.position === "between"
-            ? `${reductions[0]?.pattern || "—"} + ${confirmationPack.label} + ${reductions[1]?.pattern || "—"}`
-            : `${reductionText} + ${confirmationPack.label}`)
-        : reductionText));
+  const acceptedPatternText = isDoubleMgmRoute
+    ? `M→G→M + M→G→M + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
+    : (isAnchoredMgmRoute
+        ? (reductions.length
+            ? `IRR M→G→M + ${reductionText} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
+            : `IRR M→G→M + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`)
+        : (isIrregularRoute
+            ? `IRR ${irregularBlock.pattern || acceptedLabels.join("→") || "G/M/P"} + RESP ${confirmationPack?.label || confirmationPack?.pattern || "contraria"}`
+            : (confirmationPack
+                ? (confirmationPack.position === "between"
+                    ? `${reductions[0]?.pattern || "—"} + ${confirmationPack.label} + ${reductions[1]?.pattern || "—"}`
+                    : `${reductionText} + ${confirmationPack.label}`)
+                : reductionText)));
 
   const reductionEndMs = isAnchoredMgmRoute
     ? Math.max(Number(irregularBlock.endMs || 0), ...reductions.map((b) => Number(b?.endMs || 0)), 0)
@@ -27837,14 +27853,14 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   const reasons = [`CALIDAD ${turnQualityClass} (${turnQualityScore} puntos de giro)`, `${groupText} inicia el primer movimiento visible`];
   if (isAnchoredMgmRoute) {
     points += 10;
-    reasons.push("M→G→M direccional usado como ancla real");
+    reasons.push(isDoubleMgmRoute ? "primer M→G→M direccional usado como ancla real" : "M→G→M direccional usado como ancla real");
     points += 5;
     reasons.push("tres impulsos con extremos crecientes, dos cortes menores y desplazamiento real");
     points += 4;
     reasons.push(`dominio ${(Number(irregularBlock.dominanceRatio || 0) * 100).toFixed(0)}%, eficiencia ${(Number(irregularBlock.efficiency || 0) * 100).toFixed(0)}% y duración ${(Number(irregularBlock.durationMs || 0) / 1000).toFixed(1)}s`);
     if (reductions.length) {
       points += 11;
-      reasons.push(`segunda estructura obligatoria: ${reductions[0]?.pattern || "estructura"}`);
+      reasons.push(isDoubleMgmRoute ? "segundo M→G→M completo, separado y no superpuesto" : `segunda estructura obligatoria: ${reductions[0]?.pattern || "estructura"}`);
     }
     if (confirmationPack) {
       points += 12;
@@ -27890,13 +27906,15 @@ function scoreConstructiveReductionContinuousSide(clean, side, evalMs, tol, loca
   if (points < 29) return null;
 
   const quality = points * 11.5 + 62 + Math.min(16, cutsBetween * 2.5) - Math.max(0, selected.elapsed - 33000) / 750;
-  const subtype = isAnchoredMgmRoute
-    ? (reductions.length ? `M→G→M inicial + ${reductions[0]?.pattern || "segunda estructura"} + ${confirmationPack?.label || "entrada contraria"}` : `M→G→M inicial + ${confirmationPack?.label || "grupo contrario"}`)
-    : (isIrregularRoute
-        ? `inicio irregular + ${confirmationPack?.label || "respuesta sana"}`
-        : (selected.route === "three_reductions"
-        ? "3 reducciones claras"
-        : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`));
+  const subtype = isDoubleMgmRoute
+    ? `2× M→G→M + ${confirmationPack?.label || "entrada contraria"}`
+    : (isAnchoredMgmRoute
+        ? (reductions.length ? `M→G→M inicial + ${reductions[0]?.pattern || "segunda estructura"} + ${confirmationPack?.label || "entrada contraria"}` : `M→G→M inicial + ${confirmationPack?.label || "grupo contrario"}`)
+        : (isIrregularRoute
+            ? `inicio irregular + ${confirmationPack?.label || "respuesta sana"}`
+            : (selected.route === "three_reductions"
+                ? "3 reducciones claras"
+                : `2 reducciones + ${confirmationPack.label} (${confirmationPack.positionLabel || "orden flexible"})`)));
 
   return {
     side,
@@ -28056,16 +28074,19 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
   const signalIsPut = best.signalDirection === "PUT";
   const level = signalIsPut ? high : low;
   const zone = Math.max(tol * 4, localRange * 0.10);
-  const isIrregularRoute = best.qualificationRoute === "irregular_initial_response" || String(best.qualificationRoute || "").startsWith("anchored_mgm_");
+  const isDoubleMgmRoute = best.qualificationRoute === "double_mgm_plus_contrary";
+  const isIrregularRoute = isDoubleMgmRoute || best.qualificationRoute === "irregular_initial_response" || String(best.qualificationRoute || "").startsWith("anchored_mgm_");
   const mainPatternText = best.acceptedChainPattern || `${best.firstReduction?.pattern || "—"} + ${best.secondReduction?.pattern || "—"}`;
   const qualityPrefix = best.turnQualityClass === "A" ? "⭐ CALIDAD A" : "🔹 CALIDAD B";
-  const isAnchoredMgmRoute = String(best.qualificationRoute || "").startsWith("anchored_mgm_");
-  const status = isAnchoredMgmRoute
-    ? `${qualityPrefix} · M→G→M INICIAL CONFIRMADO · ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
-    : (isIrregularRoute
-        ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
-        : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`);
-  const logicText = `Motor V113.0: M→G→M exige desplazamiento real, correcciones internas menores, eficiencia direccional y extremos crecientes; ignora el ruido previo y reancla todo el gráfico en el primer M válido. La ruta solo confirma si después aparece otra estructura M→G→M, G→M→P o G→M y, luego, una entrada real del grupo contrario. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de ${SIGNAL_CONFIRM_MIN} puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
+  const isAnchoredMgmRoute = isDoubleMgmRoute || String(best.qualificationRoute || "").startsWith("anchored_mgm_");
+  const status = isDoubleMgmRoute
+    ? `${qualityPrefix} · DOBLE M→G→M CONFIRMADO · ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+    : (isAnchoredMgmRoute
+        ? `${qualityPrefix} · M→G→M INICIAL CONFIRMADO · ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+        : (isIrregularRoute
+            ? `${qualityPrefix} · Inicio Irregular CONFIRMADO · ${best.groupText} ${mainPatternText}. Respuesta ${best.contraryText}; señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`
+            : `${qualityPrefix} · Reducción Reforzada CONFIRMADA · ${best.subtype}: ${best.groupText} ${mainPatternText}. Señal a ${best.signalDirection === "PUT" ? "VENTA" : "COMPRA"}.`));
+  const logicText = `Motor V113.33: la señal Doble M→G→M exige dos bloques M→G→M completos, separados y no superpuestos; un solo bloque nunca alcanza. Cada bloque exige G central dominante, hombros M comparables, dos correcciones internas reales, desplazamiento, eficiencia y extremos crecientes. La señal se confirma únicamente con una respuesta contraria real después del segundo M→G→M. La ruta reforzada anterior conserva además sus alternativas G→M→P o G→M. Calidad A y Calidad B conservan su clasificación estadística, pero ambas activan alarma completa, apertura y AUTO 58 bajo las mismas reglas de ${SIGNAL_CONFIRM_MIN} puntos. Inicio irregular: puntúa dominio ≥80%, recuperación 60–79%, confirmación original 36–40s, último impulso G y respuesta controlada 28–40s; cancela si el dominante marca un extremo nuevo claro después de 32s o si la respuesta devuelve más de 25% del rango. Dos reducciones + ataque: Calidad A si la segunda termina en P; G→M necesita tercera reducción, segundo ataque o nueva extensión contraria. ${best.reasons.join(", ")}. Validación final en ${(best.elapsedFromFirstMovementMs / 1000).toFixed(1)}s desde el primer movimiento.`;
 
   return {
     direction: best.signalDirection,
@@ -28074,9 +28095,11 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
     meta: {
       level,
       levelMode: "reduccion_constructiva_continua",
-      levelType: isIrregularRoute
-        ? (signalIsPut ? "buyer_irregular_initial" : "seller_irregular_initial")
-        : (signalIsPut ? "buyer_constructive_reduction" : "seller_constructive_reduction"),
+      levelType: isDoubleMgmRoute
+        ? (signalIsPut ? "buyer_double_mgm" : "seller_double_mgm")
+        : (isIrregularRoute
+            ? (signalIsPut ? "buyer_irregular_initial" : "seller_irregular_initial")
+            : (signalIsPut ? "buyer_constructive_reduction" : "seller_constructive_reduction")),
       direction: best.signalDirection,
       tolerance: tol,
       zone,
@@ -28127,6 +28150,7 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       thirdConstructiveReduction: best.thirdReduction ? { pattern: best.thirdReduction.pattern, startMs: best.thirdReduction.startMs, endMs: best.thirdReduction.endMs } : null,
       constructiveQualificationRoute: best.qualificationRoute,
       constructiveQualificationLabel: best.qualificationLabel,
+      doubleMgmSignal: isDoubleMgmRoute,
       anchoredMgmConfirmed: isAnchoredMgmRoute,
       anchoredMgmFollowupType: isAnchoredMgmRoute ? String(best.turnQualityConditions?.followupStructureType || "structure_plus_contrary") : "",
       constructiveConfirmationPack: best.confirmationPack,
@@ -28150,9 +28174,9 @@ function analyzeConstructiveReductionContinuousCandidate(candidate, opts = {}) {
       secondReductionRetraceRatio: Number(best.finalConfirmation?.retraceRatio || 0),
       secondReductionOppositeSteps: Number(best.finalConfirmation?.oppositeSteps || 0),
       visualDisplacementEfficiency: best.visualDisplacementEfficiency,
-      movementFilter: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "v113_0_mgm_segunda_estructura_mas_contraria" : (isIrregularRoute ? "v111_3_inicio_irregular_filtro_giro_36_40s" : "v111_3_reduccion_reforzada_filtro_giro"),
+      movementFilter: isDoubleMgmRoute ? "v113_33_doble_mgm_exacto_mas_contraria" : (String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "v113_0_mgm_segunda_estructura_mas_contraria" : (isIrregularRoute ? "v111_3_inicio_irregular_filtro_giro_36_40s" : "v111_3_reduccion_reforzada_filtro_giro")),
       priority: "OPERABLE",
-      stage: String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "mgm_doble_estructura_confirmado_v113_0" : (isIrregularRoute ? "inicio_irregular_filtro_giro_v111_3" : "reduccion_reforzada_filtro_giro_v111_3"),
+      stage: isDoubleMgmRoute ? "doble_mgm_confirmado_v113_33" : (String(best.qualificationRoute || "").startsWith("anchored_mgm_") ? "mgm_doble_estructura_confirmado_v113_0" : (isIrregularRoute ? "inicio_irregular_filtro_giro_v111_3" : "reduccion_reforzada_filtro_giro_v111_3")),
       logic: logicText,
       status,
     },
